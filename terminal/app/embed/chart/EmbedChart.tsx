@@ -10,7 +10,7 @@
  * so the client bundle never pulls the AppShell, flow desks, pine engine, or auth.
  *
  * Aesthetic is locked to the Terminal's own chart (app/globals.css v5 tokens): #131722 plot bg,
- * #26c281 / #f0566b candles, Inter labels + JetBrains-Mono numerals. See lib/embed/theme.ts.
+ * #26c281 / #f0566b candles, Inter labels + Inter tabular numerals. See lib/embed/theme.ts.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -21,6 +21,7 @@ import {
   LineSeries,
   CrosshairMode,
   ColorType,
+  LineStyle,
   type IChartApi,
   type ISeriesApi,
   type MouseEventParams,
@@ -42,7 +43,7 @@ import {
   type ThemeName,
   type Lang,
 } from "@/lib/embed/chartData";
-import { palette, type EmbedPalette } from "@/lib/embed/theme";
+import { palette, CLEAN, type EmbedPalette } from "@/lib/embed/theme";
 import { makeT } from "@/lib/embed/labels";
 
 export interface EmbedChartProps {
@@ -51,6 +52,26 @@ export interface EmbedChartProps {
   lang: Lang;
   transparent: boolean;
   initialRange: RangeKey;
+  /** hdr=0 — hide the symbol/price quote line (native hosts render their own header);
+   *  the range tabs and SMA legend stay. */
+  hideQuote?: boolean;
+  /** clean=1 — the TV symbol-sheet mini chart (docs/tv-parity/spec-symbol-detail.md §2B):
+   *  candles ONLY (no SMA overlays, no legend, no volume band), quiet canvas, TV palette,
+   *  dashed prior-close rule, TV-styled range capsules. Off ⇒ the widget is unchanged. */
+  clean?: boolean;
+  /** fs=1 — append the native "open full chart" affordance to the right end of the range
+   *  row. Posts `openFullChart` to a native host; a plain browser is a no-op. */
+  fullscreenBtn?: boolean;
+}
+
+/** Ask the native host to open the full chart. No host (browser / e2e) ⇒ silent no-op. */
+function postOpenFullChart(): void {
+  try {
+    (window as unknown as { webkit?: { messageHandlers?: { mm?: { postMessage(m: unknown): void } } } })
+      .webkit?.messageHandlers?.mm?.postMessage({ type: "openFullChart" });
+  } catch {
+    /* not hosted by a native shell */
+  }
 }
 
 type LoadState =
@@ -83,8 +104,8 @@ function useTransparentRoot(transparent: boolean): void {
   }, [transparent]);
 }
 
-export default function EmbedChart({ symbol, theme, lang, transparent, initialRange }: EmbedChartProps) {
-  const pal = useMemo<EmbedPalette>(() => palette(theme, transparent), [theme, transparent]);
+export default function EmbedChart({ symbol, theme, lang, transparent, initialRange, hideQuote, clean = false, fullscreenBtn = false }: EmbedChartProps) {
+  const pal = useMemo<EmbedPalette>(() => palette(theme, transparent, clean), [theme, transparent, clean]);
   const t = useMemo(() => makeT(lang), [lang]);
 
   const [state, setState] = useState<LoadState>({ kind: "loading" });
@@ -141,19 +162,31 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
       autoSize: true,
       layout: {
         background: { type: ColorType.Solid, color: pal.chartBg },
+        // pal.muted is already CLEAN.axisText (#B1B5BE) when clean=1 — see lib/embed/theme.ts.
         textColor: pal.muted,
-        fontSize: 11,
+        fontSize: clean ? 12 : 11,
         fontFamily: "var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
         attributionLogo: false,
       },
-      grid: { vertLines: { color: pal.grid }, horzLines: { color: pal.grid } },
+      // C11/CHART-11 — clean mode drops BOTH axes' gridlines (spec §2B: TV's symbol sheet has
+      // zero gridlines; only the verticals were gated before, so the sheet chart still ruled every
+      // price label). The candles and the dashed prior close carry the canvas.
+      grid: {
+        vertLines: { visible: !clean, color: pal.grid },
+        horzLines: { visible: !clean, color: pal.grid },
+      },
       crosshair: {
         mode: CrosshairMode.Normal,
         vertLine: { color: pal.crosshair, width: 1, labelBackgroundColor: pal.crosshairLabelBg },
         horzLine: { color: pal.crosshair, width: 1, labelBackgroundColor: pal.crosshairLabelBg },
       },
-      rightPriceScale: { borderColor: pal.axisLine, scaleMargins: { top: 0.08, bottom: 0.24 } },
-      timeScale: { borderColor: pal.axisLine, rightOffset: 4, barSpacing: 8, fixLeftEdge: true },
+      // No volume band in clean mode ⇒ no bottom reserve to hold for it.
+      rightPriceScale: {
+        borderColor: pal.axisLine,
+        borderVisible: !clean,
+        scaleMargins: { top: 0.08, bottom: clean ? 0.08 : 0.24 },
+      },
+      timeScale: { borderColor: pal.axisLine, borderVisible: !clean, rightOffset: 4, barSpacing: 8, fixLeftEdge: true },
       localization: { locale: lang === "zh" ? "zh-CN" : "en-US" },
       handleScale: { axisPressedMouseMove: { time: true, price: false } },
     });
@@ -167,45 +200,80 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
       wickDownColor: pal.down,
       borderVisible: false,
       priceLineVisible: false,
-      lastValueVisible: true,
+      // C11/CHART-12 — the filled last-value badge collides with the newest candles and duplicates
+      // the price already in the sheet header. TV's sheet has none. Default embeds keep it.
+      lastValueVisible: !clean,
       priceFormat: { type: "price", precision: 2, minMove: 0.01 },
     });
     candle.setData(bars.map((b) => ({ time: b.time as Time, open: b.open, high: b.high, low: b.low, close: b.close })));
     candleRef.current = candle;
 
-    // Volume histogram in its own overscaled band along the base (own price scale id).
-    const vol = chart.addSeries(HistogramSeries, {
-      priceFormat: { type: "volume" },
-      priceScaleId: "vol",
-      priceLineVisible: false,
-      lastValueVisible: false,
-    });
-    try {
-      chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-    } catch {}
-    vol.setData(bars.map((b) => ({ time: b.time as Time, value: b.volume, color: b.close >= b.open ? pal.volUp : pal.volDown })));
-    volRef.current = vol;
+    if (clean) {
+      // TV's dashed prior-session-close rule (spec §2B). No axis label and no title — with C11
+      // the clean price scale carries no floating tag at all, only its tick labels.
+      const prev = state.quote.prev;
+      if (prev != null && Number.isFinite(prev)) {
+        try {
+          candle.createPriceLine({
+            price: prev,
+            color: CLEAN.priorClose,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            lineVisible: true,
+            axisLabelVisible: false,
+            title: "",
+          });
+        } catch {}
+      }
+    } else {
+      // Volume histogram in its own overscaled band along the base (own price scale id).
+      const vol = chart.addSeries(HistogramSeries, {
+        priceFormat: { type: "volume" },
+        priceScaleId: "vol",
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      try {
+        chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+      } catch {}
+      vol.setData(bars.map((b) => ({ time: b.time as Time, value: b.volume, color: b.close >= b.open ? pal.volUp : pal.volDown })));
+      volRef.current = vol;
 
-    // SMA overlays (muted, thin) — created once; visibility toggled by a later effect.
-    const s50 = chart.addSeries(LineSeries, {
-      color: pal.sma50,
-      lineWidth: 1,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: false,
-    });
-    s50.setData(sma(bars, 50) as { time: Time; value: number }[]);
-    sma50Ref.current = s50;
+      // SMA overlays (muted, thin) — created once; visibility toggled by a later effect.
+      const s50 = chart.addSeries(LineSeries, {
+        color: pal.sma50,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      s50.setData(sma(bars, 50) as { time: Time; value: number }[]);
+      sma50Ref.current = s50;
 
-    const s200 = chart.addSeries(LineSeries, {
-      color: pal.sma200,
-      lineWidth: 1,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: false,
-    });
-    s200.setData(sma(bars, 200) as { time: Time; value: number }[]);
-    sma200Ref.current = s200;
+      const s200 = chart.addSeries(LineSeries, {
+        color: pal.sma200,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      s200.setData(sma(bars, 200) as { time: Time; value: number }[]);
+      sma200Ref.current = s200;
+    }
+
+    // ── C11 test hook (dev/e2e only) ───────────────────────────────────────────
+    // Candle colours, gridline visibility and the last-value badge are all canvas-drawn, so the
+    // option layer is the only assertable surface for the clean-vs-default split.
+    if (process.env.NODE_ENV !== "production") {
+      (window as any).__mmEmbedOpts = () => {
+        const o = chart.options() as any;
+        const c = candle.options() as any;
+        return {
+          up: c.upColor, down: c.downColor, lastValueVisible: c.lastValueVisible,
+          horzLines: o.grid?.horzLines?.visible ?? null, vertLines: o.grid?.vertLines?.visible ?? null,
+        };
+      };
+    }
 
     // Crosshair → header OHLC readout. Off-chart move clears it (header falls back to day quote).
     const onCrosshair = (param: MouseEventParams) => {
@@ -235,6 +303,7 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
 
     return () => {
       chart.unsubscribeCrosshairMove(onCrosshair);
+      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmEmbedOpts; } catch {} }
       chart.remove();
       chartRef.current = null;
       candleRef.current = null;
@@ -244,7 +313,7 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
     };
     // Rebuild only when the data identity or palette changes (theme/transparent). Range + SMA
     // toggles are applied imperatively below without a teardown.
-  }, [state, pal, lang]);
+  }, [state, pal, lang, clean]);
 
   // ── Apply the visible range (initial + chip changes) ──────────────────────────
   useEffect(() => {
@@ -271,7 +340,13 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
   const terminalHref = `${TERMINAL_BASE}?sym=${encodeURIComponent(symbol)}&from=embed`;
 
   return (
-    <div className="embed-root" data-theme={theme} data-transparent={transparent ? "1" : "0"}>
+    <div
+      className="embed-root"
+      data-theme={theme}
+      data-transparent={transparent ? "1" : "0"}
+      data-hdr={hideQuote ? "0" : undefined}
+      data-clean={clean ? "1" : undefined}
+    >
       <Header
         symbol={symbol}
         state={state}
@@ -280,8 +355,10 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
         t={t}
         range={range}
         onRange={setRange}
+        showFullscreen={fullscreenBtn}
         legend={
-          state.kind === "ready" ? (
+          // Clean mode is candles-only — no SMA series exist, so no legend to drive them.
+          state.kind === "ready" && !clean ? (
             <Legend
               sma50On={sma50On}
               sma200On={sma200On}
@@ -337,6 +414,7 @@ function Header({
   range,
   onRange,
   legend,
+  showFullscreen,
 }: {
   symbol: string;
   state: LoadState;
@@ -346,6 +424,8 @@ function Header({
   range: RangeKey;
   onRange: (r: RangeKey) => void;
   legend?: React.ReactNode;
+  /** fs=1 — render the native fullscreen affordance at the right end of the range row. */
+  showFullscreen?: boolean;
 }) {
   const quote = state.kind === "ready" ? state.quote : null;
   // When hovering the chart, the header becomes an OHLC status line (house pattern).
@@ -396,6 +476,28 @@ function Header({
             {rk}
           </button>
         ))}
+        {showFullscreen && (
+          /* TV's ⤢ — four corner strokes in a ~34px square at the right end of the range row.
+             Tapping asks the native host to open the full chart; a browser gets a no-op. */
+          <button
+            type="button"
+            className="embed-fs"
+            aria-label={t("fullscreen")}
+            title={t("fullscreen")}
+            onClick={postOpenFullChart}
+          >
+            <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true">
+              <path
+                d="M2.6 6.4V2.6h3.8M11.6 2.6h3.8v3.8M15.4 11.6v3.8h-3.8M6.4 15.4H2.6v-3.8"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        )}
       </nav>
       </div>
     </header>
@@ -564,13 +666,14 @@ function StyleTag({ pal }: { pal: EmbedPalette }) {
     font-family:var(--font-inter),-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
     -webkit-font-smoothing:antialiased; letter-spacing:.005em;
   }
-  .embed-root .num{font-family:var(--font-jetbrains-mono),ui-monospace,"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;}
+  .embed-root .num{font-family:var(--font-inter),-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;}
   .embed-root *{box-sizing:border-box;}
 
   /* Header — one compact line, wraps to two on narrow phones. */
   .embed-header{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
     padding:8px 12px 7px;min-height:38px;}
   .embed-head-quote{display:flex;align-items:baseline;gap:10px;min-width:0;flex:1 1 auto;}
+  .embed-root[data-hdr="0"] .embed-head-quote{display:none;}
   .embed-ticker{font-weight:700;font-size:15px;letter-spacing:.02em;color:var(--e-text);flex:none;}
   .embed-day{display:inline-flex;align-items:baseline;gap:8px;min-width:0;}
   .embed-last{font-weight:600;font-size:15px;color:var(--e-text);}
@@ -648,6 +751,42 @@ function StyleTag({ pal }: { pal: EmbedPalette }) {
   .embed-empty-body{font-size:12px;color:var(--e-muted);max-width:280px;line-height:1.5;}
   .embed-empty-link{margin-top:6px;font-size:12px;font-weight:600;}
   .embed-empty-link:hover{text-decoration:underline;}
+
+  /* ── clean=1 — TV symbol-sheet mini chart (docs/tv-parity/spec-symbol-detail.md §2B) ──
+     Everything below is scoped to [data-clean="1"]; the default widget is untouched. */
+  /* TV parks the range row at the BOTTOM of the symbol-sheet chart so a thumb never has to
+     travel to the top of the widget. .embed-root is already flex-direction:column, so the row
+     moves by flipping flex ORDER — the DOM stays put (header still owns the quote line, and
+     the tab/reading order is unchanged for assistive tech, which reads it as the widget's
+     footer controls). .embed-body keeps flex:1 1 auto, so the absolute-inset chart host still
+     sizes to whatever height is left over. Full-bleed row: the chips' own 12px padding is the
+     only inset, and the ⤢ square keeps its margin-left:auto right-end anchor. */
+  .embed-root[data-clean="1"] .embed-body{order:1;}
+  .embed-root[data-clean="1"] .embed-header{order:2;padding:2px 0 8px;min-height:0;}
+  /* clean+hdr=1: the header is now the widget's FOOTER, so the quote line needs the inset back
+     (the chips carry their own capsule padding; the quote text has none). */
+  .embed-root[data-clean="1"] .embed-head-quote{padding:0 12px;}
+  /* TV's mini chart carries no brand accent and no attribution (the app IS the brand,
+     and the attribution collides with the time-axis labels at 300pt heights). */
+  .embed-root[data-clean="1"] .embed-ribbon,
+  .embed-root[data-clean="1"] .embed-attr{display:none;}
+  /* flex-basis:100% ⇒ the chips always own a full row (the header is flex-wrap:wrap), so
+     clean+hdr=1 puts them under the quote instead of fighting it for the same line. */
+  .embed-root[data-clean="1"] .embed-head-right{flex:1 1 100%;justify-content:flex-start;gap:0;}
+  .embed-root[data-clean="1"] .embed-ranges{width:100%;gap:4px;align-items:center;}
+  /* TV capsules: Semibold 13.5px, selected #2E2E2E on #DBDBDB, unselected transparent on #8C8C8C. */
+  .embed-root[data-clean="1"] .embed-chip{
+    padding:6px 12px;border-radius:999px;border:0;background:transparent;
+    font-size:13.5px;font-weight:600;letter-spacing:.01em;color:#8c8c8c;}
+  .embed-root[data-clean="1"] .embed-chip:hover{background:transparent;color:#dbdbdb;}
+  .embed-root[data-clean="1"] .embed-chip.is-active,
+  .embed-root[data-clean="1"] .embed-chip.is-active:hover{background:#2e2e2e;color:#dbdbdb;border:0;}
+  /* fs=1 — the ⤢ corner-bracket square, pinned to the right end of the range row. */
+  .embed-fs{flex:none;margin-left:auto;width:34px;height:34px;display:inline-flex;align-items:center;
+    justify-content:center;border-radius:8px;background:transparent;border:0;color:#8c8c8c;cursor:pointer;
+    transition:color 120ms cubic-bezier(.4,0,.2,1),background 120ms cubic-bezier(.4,0,.2,1);}
+  .embed-fs:hover{color:#dbdbdb;}
+  .embed-fs:focus-visible{outline:2px solid var(--e-brand);outline-offset:1px;}
 
   /* Narrow phones (~360px): header stacks, keep everything inside the frame. */
   @media (max-width:430px){

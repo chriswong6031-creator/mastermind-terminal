@@ -9,6 +9,7 @@ import {
   adx, cvdApprox, pivotLevels, sessionLevels,
   type Bar, type DailyBar,
 } from "../intradayMath";
+import { sessionEpoch } from "../intradayShared";
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -1050,5 +1051,41 @@ describe("Integration: RVOL=1 when today equals baseline exactly", () => {
       }
     }
     expect(checked).toBeGreaterThan(0);
+  });
+});
+
+// ─── display-epoch convention (B11) ─────────────────────────────────────────
+describe("sessionEpoch — the display-epoch convention shared with etDisplay", () => {
+  it("reads the ET wall clock AS UTC (09:31 ET → 09:31Z), not the true instant", () => {
+    const e = sessionEpoch("2026-07-06", "09:31");
+    expect(new Date(e * 1000).toISOString()).toBe("2026-07-06T09:31:00.000Z");
+  });
+
+  it("matches etDisplay's arithmetic exactly", () => {
+    // etDisplay: Date.UTC(y, m-1, d, hh, mm) / 1000 from the ET wall-clock parts.
+    expect(sessionEpoch("2026-07-06", "15:56")).toBe(Date.UTC(2026, 6, 6, 15, 56) / 1000);
+  });
+
+  it("does NOT apply a UTC offset — the EDT/EST gap must not shift the series", () => {
+    const edt = sessionEpoch("2026-07-06", "09:31"); // summer
+    const est = sessionEpoch("2026-01-06", "09:31"); // winter
+    // Same wall-clock time → same time-of-day epoch component in both DST regimes.
+    expect(edt % 86400).toBe(est % 86400);
+    // And neither equals the true-UTC-instant reading, which is the bug this replaces.
+    expect(edt).not.toBe(new Date("2026-07-06T09:31:00-04:00").getTime() / 1000);
+  });
+
+  it("is strictly increasing across a session", () => {
+    const steps = ["09:31", "12:00", "15:56"];
+    const es = steps.map((s) => sessionEpoch("2026-07-06", s));
+    expect(es[1]).toBeGreaterThan(es[0]);
+    expect(es[2]).toBeGreaterThan(es[1]);
+  });
+
+  it("returns NaN on malformed input rather than plotting at the epoch", () => {
+    expect(sessionEpoch("", "09:31")).toBeNaN();
+    expect(sessionEpoch("2026-07-06", "")).toBeNaN();
+    expect(sessionEpoch("07/06/2026", "09:31")).toBeNaN();
+    expect(sessionEpoch("2026-07-06", "9:31:00")).toBeNaN();
   });
 });

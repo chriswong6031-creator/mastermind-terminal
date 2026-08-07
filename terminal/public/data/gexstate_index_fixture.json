@@ -1,0 +1,15 @@
+{
+  "schema": "options_structure.gex_state_index/v1",
+  "asof": "2026-07-05T20:10:00+00:00",
+  "n_roots": 8,
+  "rows": {
+    "SPY": { "spot": 618.29, "net_gex_bn": 4.1, "gamma_regime": "PIN", "stability_pct": 84.0, "gamma_flip": 611.5, "dist_to_flip_pct": -1.1, "call_wall": 620.0, "put_wall": 600.0, "asof": "2026-07-05" },
+    "QQQ": { "spot": 484.3, "net_gex_bn": 1.9, "gamma_regime": "TRANSITION", "stability_pct": 41.0, "gamma_flip": 482.6, "dist_to_flip_pct": -0.35, "call_wall": 500.0, "put_wall": 470.0, "asof": "2026-07-05" },
+    "NVDA": { "spot": 135.7, "net_gex_bn": -1.24, "gamma_regime": "TREND", "stability_pct": 22.0, "gamma_flip": 130.0, "dist_to_flip_pct": -4.2, "call_wall": 150.0, "put_wall": 120.0, "asof": "2026-07-05" },
+    "AAPL": { "spot": 214.9, "net_gex_bn": 0.53, "gamma_regime": "RANGE", "stability_pct": 66.0, "gamma_flip": 209.4, "dist_to_flip_pct": -2.6, "call_wall": 220.0, "put_wall": 205.0, "asof": "2026-07-05" },
+    "AMD": { "spot": 118.4, "net_gex_bn": 0.21, "gamma_regime": "DRIFT", "stability_pct": 58.0, "gamma_flip": 112.0, "dist_to_flip_pct": -5.4, "call_wall": 125.0, "put_wall": 110.0, "asof": "2026-07-05" },
+    "TSLA": { "spot": 262.1, "net_gex_bn": -0.9, "gamma_regime": "CASCADE", "stability_pct": 9.0, "gamma_flip": 271.0, "dist_to_flip_pct": 3.4, "call_wall": 280.0, "put_wall": 250.0, "asof": "2026-07-05" },
+    "META": { "spot": 550.2, "net_gex_bn": 0.7, "gamma_regime": "PIN", "stability_pct": 77.0, "gamma_flip": 541.0, "dist_to_flip_pct": -1.7, "call_wall": 560.0, "put_wall": 530.0, "asof": "2026-07-03" },
+    "MSFT": { "spot": 372.9, "net_gex_bn": 1.1, "gamma_regime": "DRIFT", "stability_pct": 61.0, "gamma_flip": 365.2, "dist_to_flip_pct": -2.1, "call_wall": 380.0, "put_wall": 360.0, "asof": "2026-07-05" }
+  }
+}

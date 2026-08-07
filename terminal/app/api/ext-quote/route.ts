@@ -14,10 +14,22 @@ export const dynamic = "force-dynamic";
 // Yahoo directly from this route — that forked the source of truth and bypassed
 // the hub's LRU/session logic).
 //
-// Response shape (UI contract): { quotes: { SYM: { extPrice, extChg, extTs } | null } }
+// Response shape (UI contract):
+//   { quotes: { SYM: { extPrice, extChg, extTs, extSession? } | null } }
+// `extSession` ('pre' | 'post' | 'overnight') is the hub's own classification of WHICH
+// out-of-hours window the print came from. The route used to strip it, which forced the UI
+// to label every ext print "Overnight" — including a 08:15 ET pre-market print. Passed through
+// only when the hub supplies it; a symbol with no ext data stays `null` as before.
 
 const HUB_PORT = process.env.HUB_PORT ?? "3100";
 const MAX_SYMS = 100;
+
+// Anything the hub sends outside this set is dropped rather than relayed — the UI maps the
+// value straight onto a label, so an unknown string would surface raw in the interface.
+const EXT_SESSIONS = ["pre", "post", "overnight"] as const;
+type ExtSession = (typeof EXT_SESSIONS)[number];
+const asExtSession = (v: unknown): ExtSession | null =>
+  (EXT_SESSIONS as readonly string[]).includes(v as string) ? (v as ExtSession) : null;
 
 export async function GET(req: Request) {
   const rl = rateLimit(req, { name: "ext-quote" });
@@ -30,7 +42,8 @@ export async function GET(req: Request) {
     .slice(0, MAX_SYMS);
   if (syms.length === 0) return NextResponse.json({ quotes: {} });
 
-  const out: Record<string, { extPrice: number; extChg: number; extTs: number } | null> = {};
+  type ExtEntry = { extPrice: number; extChg: number; extTs: number; extSession?: ExtSession };
+  const out: Record<string, ExtEntry | null> = {};
   for (const s of syms) out[s] = null;
 
   try {
@@ -43,7 +56,11 @@ export async function GET(req: Request) {
       for (const s of syms) {
         const q = j?.[s];
         if (q && typeof q.extPrice === "number" && typeof q.extChg === "number") {
-          out[s] = { extPrice: q.extPrice, extChg: q.extChg, extTs: q.extTs ?? q.ts ?? 0 };
+          const session = asExtSession(q.extSession);
+          out[s] = {
+            extPrice: q.extPrice, extChg: q.extChg, extTs: q.extTs ?? q.ts ?? 0,
+            ...(session ? { extSession: session } : {}),
+          };
         }
       }
     }

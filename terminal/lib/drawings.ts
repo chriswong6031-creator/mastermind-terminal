@@ -2,24 +2,298 @@
 // Anchors live in DATA space (bar time + price) so they survive zoom/pan/resize.
 
 export type Pt = { t: string; p: number };
-export type DrawKind = "trendline" | "ray" | "hline" | "vline" | "rect" | "fib" | "text" | "measure" | "arrow";
+export const DRAW_KINDS = [
+  // Lines, channels, and pitchforks (17)
+  "trendline",
+  "ray",
+  "infoline",
+  "extendedline",
+  "trendangle",
+  "hline",
+  "horizontalray",
+  "vline",
+  "crossline",
+  "channel",
+  "regressiontrend",
+  "flattopbottom",
+  "disjointchannel",
+  "pitchfork",
+  "schiffpitchfork",
+  "modifiedschiffpitchfork",
+  "insidepitchfork",
+  // Fibonacci and Gann (15)
+  "fib",
+  "fibtrend",
+  "fibchannel",
+  "fibtimezone",
+  "fibspeedresistancefan",
+  "trendbasedfibtime",
+  "fibcircles",
+  "fibspiral",
+  "fibspeedresistancearcs",
+  "fibwedge",
+  "pitchfan",
+  "gannbox",
+  "gannsquarefixed",
+  "gannsquare",
+  "gannfan",
+  // Chart patterns, Elliott waves, and cycles (14)
+  "xabcd",
+  "cypher",
+  "headandshoulders",
+  "abcd",
+  "trianglepattern",
+  "threedrives",
+  "elliottimpulse",
+  "elliottcorrection",
+  "elliotttriangle",
+  "elliottdoublecombo",
+  "elliotttriplecombo",
+  "cycliclines",
+  "timecycles",
+  "sineline",
+  // Forecasting, volume, and ranges (12)
+  "longposition",
+  "shortposition",
+  "forecast",
+  "ghostfeed",
+  "barpattern",
+  "sector",
+  "anchoredvwap",
+  "fixedrangevolumeprofile",
+  "pricerange",
+  "daterange",
+  "dateandpricerange",
+  "measure",
+  // Freehand (3). Legacy `path` drawings remain valid polylines; only new
+  // creation changes from sampled freehand input to segmented multi-click.
+  "brush",
+  "highlighter",
+  "path",
+  // Shapes and curves (9)
+  "rect",
+  "rotatedrect",
+  "ellipse",
+  "circle",
+  "triangle",
+  "polyline",
+  "arc",
+  "curve",
+  "doublecurve",
+  // Arrows and stylized paths (17)
+  "arrowmarker",
+  "arrow",
+  "arrowmarkleft",
+  "arrowmarkright",
+  "arrowmarktop",
+  "arrowmarkbottom",
+  "flagmark",
+  "momentum",
+  "flow",
+  "emphasis",
+  "whisper",
+  "subtle",
+  "divergence",
+  "journey",
+  "fork",
+  "threepaths",
+  "burj",
+  // Text, notes, labels, and content (10)
+  "text",
+  "anchoredtext",
+  "note",
+  "anchorednote",
+  "callout",
+  "pricelabel",
+  "pricenote",
+  "signpost",
+  "comment",
+  "image",
+  // Emoji and icons (2)
+  "emoji",
+  "icon",
+] as const;
+export type DrawKind = (typeof DRAW_KINDS)[number];
 export type Dash = "solid" | "dashed" | "dotted";
+export type DrawingSource = "user" | "detector" | "ai";
+export type DrawingExtend = "none" | "left" | "right" | "both";
+export const DRAWING_SCHEMA_VERSION = 1;
+export const MAX_DRAWINGS_PER_SYMBOL = 500;
+// A maximally dense 500 x 64-anchor collection is about 1.5 MB after
+// normalization. Keep bounded headroom for styles/text while rejecting abuse.
+export const MAX_DRAWING_PAYLOAD_BYTES = 2_000_000;
 export type Drawing = {
   id: string;
   kind: DrawKind;
   points: Pt[];
+  schemaVersion?: number;
+  source?: DrawingSource;
+  locked?: boolean;
+  hidden?: boolean;
+  z?: number;
   color?: string;
+  fillColor?: string;
+  fillOpacity?: number;
+  opacity?: number;
+  extend?: DrawingExtend;
   text?: string;
   width?: number;          // line thickness (px)
   dash?: Dash;             // line style
   fontSize?: number;       // text size (px) — for text drawings
-  auto?: boolean;          // produced by detection (vs hand-drawn)
+  auto?: boolean;          // legacy compatibility: produced by detection/AI
   meta?: Record<string, unknown>;
+};
+export type NormalizedDrawing = Drawing & {
+  schemaVersion: typeof DRAWING_SCHEMA_VERSION;
+  source: DrawingSource;
+  locked: boolean;
+  hidden: boolean;
+  z: number;
+  opacity: number;
+  extend: DrawingExtend;
 };
 export type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
 
 export const uid = () =>
   (globalThis.crypto?.randomUUID?.() ?? "d_" + Math.random().toString(36).slice(2, 11));
+
+const DRAW_KIND_SET = new Set<string>(DRAW_KINDS);
+const DASH_SET = new Set<Dash>(["solid", "dashed", "dotted"]);
+const SOURCE_SET = new Set<DrawingSource>(["user", "detector", "ai"]);
+const EXTEND_SET = new Set<DrawingExtend>(["none", "left", "right", "both"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function boundedNumber(value: unknown, min: number, max: number): number | undefined {
+  const number = finiteNumber(value);
+  return number === undefined ? undefined : Math.min(max, Math.max(min, number));
+}
+
+function normalizePoint(value: unknown): Pt | null {
+  if (!isRecord(value)) return null;
+  const price = finiteNumber(value.p);
+  const time = value.t;
+  if (price === undefined || (typeof time !== "string" && typeof time !== "number")) return null;
+  const normalizedTime = String(time).trim();
+  return normalizedTime ? { t: normalizedTime, p: price } : null;
+}
+
+function inferredSource(value: Record<string, unknown>, id: string, meta?: Record<string, unknown>): DrawingSource {
+  if (typeof value.source === "string" && SOURCE_SET.has(value.source as DrawingSource)) {
+    return value.source as DrawingSource;
+  }
+  if (value.by === "ai" || meta?.by === "ai" || id.startsWith("ai_")) return "ai";
+  return value.auto === true ? "detector" : "user";
+}
+
+function inferredExtend(kind: DrawKind): DrawingExtend {
+  if (kind === "ray" || kind === "horizontalray") return "right";
+  if (kind === "extendedline") return "both";
+  return "none";
+}
+
+/**
+ * Validate and migrate an untrusted or legacy drawing into the current durable
+ * shape. The legacy `auto` flag is retained for detector/AI drawings so older
+ * consumers continue to identify generated objects correctly.
+ */
+export function normalizeDrawing(value: unknown, fallbackZ = 0): NormalizedDrawing | null {
+  if (!isRecord(value) || typeof value.kind !== "string" || !DRAW_KIND_SET.has(value.kind)) return null;
+
+  const points = Array.isArray(value.points)
+    ? value.points.map(normalizePoint).filter((point): point is Pt => point !== null)
+    : [];
+  if (!points.length) return null;
+
+  const kind = value.kind as DrawKind;
+  const id = typeof value.id === "string" && value.id.trim() ? value.id.trim() : uid();
+  const meta = isRecord(value.meta) ? { ...value.meta } : undefined;
+  const source = inferredSource(value, id, meta);
+  const extend = typeof value.extend === "string" && EXTEND_SET.has(value.extend as DrawingExtend)
+    ? value.extend as DrawingExtend
+    : inferredExtend(kind);
+  const z = finiteNumber(value.z) ?? finiteNumber(fallbackZ) ?? 0;
+
+  const normalized: NormalizedDrawing = {
+    id,
+    kind,
+    points,
+    schemaVersion: DRAWING_SCHEMA_VERSION,
+    source,
+    locked: value.locked === true,
+    hidden: value.hidden === true,
+    z: Math.trunc(z),
+    opacity: boundedNumber(value.opacity, 0, 1) ?? 1,
+    extend,
+  };
+
+  if (typeof value.color === "string" && value.color.trim()) normalized.color = value.color.trim();
+  if (typeof value.fillColor === "string" && value.fillColor.trim()) normalized.fillColor = value.fillColor.trim();
+  const fillOpacity = boundedNumber(value.fillOpacity, 0, 1);
+  if (fillOpacity !== undefined) normalized.fillOpacity = fillOpacity;
+  if (typeof value.text === "string") normalized.text = value.text;
+  const width = boundedNumber(value.width, 0.5, 20);
+  if (width !== undefined) normalized.width = width;
+  if (typeof value.dash === "string" && DASH_SET.has(value.dash as Dash)) normalized.dash = value.dash as Dash;
+  const fontSize = boundedNumber(value.fontSize, 8, 96);
+  if (fontSize !== undefined) normalized.fontSize = fontSize;
+  if (source !== "user") normalized.auto = true;
+  if (meta) normalized.meta = meta;
+
+  return normalized;
+}
+
+/** Normalize a persisted collection while preserving its visual/input order. */
+export function normalizeDrawings(value: unknown): NormalizedDrawing[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((drawing, index) => normalizeDrawing(drawing, index))
+    .filter((drawing): drawing is NormalizedDrawing => drawing !== null);
+}
+
+/**
+ * Normalize a trusted interactive update without deep-cloning an entire chart.
+ * Chart editing is immutable: untouched drawing objects retain identity, and a
+ * style-only edit retains its (potentially 64-point) anchor array. This makes
+ * whole-document undo snapshots cheap structural views instead of 100 deep
+ * copies of as many as 32,000 points.
+ */
+export function normalizeDrawingUpdate(
+  value: unknown,
+  previous: readonly Drawing[],
+  limit = MAX_DRAWINGS_PER_SYMBOL,
+): NormalizedDrawing[] {
+  if (!Array.isArray(value)) return [];
+  // Never turn object 501 into an implicit deletion of object 1. The caller
+  // surfaces the cap and preserves its previous collection.
+  if (value.length > limit) return previous as NormalizedDrawing[];
+  const priorById = new Map(previous.map((drawing) => [drawing.id, drawing]));
+  return value
+    .map((candidate, index) => {
+      const candidateId = isRecord(candidate) && typeof candidate.id === "string"
+        ? candidate.id.trim()
+        : "";
+      const prior = candidateId ? priorById.get(candidateId) : undefined;
+      if (prior === candidate) return prior as NormalizedDrawing;
+
+      const normalized = normalizeDrawing(candidate, index);
+      if (!normalized) return null;
+      if (prior && isRecord(candidate) && candidate.points === prior.points) {
+        normalized.points = prior.points;
+      }
+      if (prior && isRecord(candidate) && candidate.meta === prior.meta) {
+        normalized.meta = prior.meta;
+      }
+      return normalized;
+    })
+    .filter((drawing): drawing is NormalizedDrawing => drawing !== null);
+}
 
 export const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
 

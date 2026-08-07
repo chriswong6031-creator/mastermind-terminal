@@ -108,7 +108,12 @@
         ],
         "properties": {
           "ts": {
-            "type": "string"
+            "type": "string",
+            "description": "ISO date used to place the event on its chart bar (the 3D bar open)"
+          },
+          "known_ts": {
+            "type": "string",
+            "description": "ISO session date when the event became observable; defaults to ts for legacy events"
           },
           "bar_index": {
             "type": "integer"
@@ -161,6 +166,19 @@
             "string",
             "null"
           ]
+        },
+        "last_scored_signal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_scored_ts": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Availability date of the last scored signal (known_ts, with legacy fallback to ts)"
         },
         "bars_since_signal": {
           "type": [

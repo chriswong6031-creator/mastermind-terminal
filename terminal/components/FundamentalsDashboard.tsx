@@ -1,14 +1,15 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useT } from "@/lib/i18n";
 
 type Pane = "overview" | "statements" | "statistics" | "dividends" | "earnings" | "revenue" | "seasonals" | "analyst";
 type Row = { name?: string; sec?: string; col?: string; mkt?: string; last?: number; chg?: number };
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
 
 const TABS: [Pane, string][] = [
-  ["overview", "Overview"], ["statements", "Statements"], ["statistics", "Statistics"], ["dividends", "Dividends"],
-  ["earnings", "Earnings"], ["revenue", "Revenue"], ["seasonals", "Seasonal"], ["analyst", "Analyst"],
+  ["overview", "fdTabOverview"], ["statements", "fdTabStatements"], ["statistics", "fdTabStatistics"], ["dividends", "fdTabDividends"],
+  ["earnings", "fdTabEarnings"], ["revenue", "fdTabRevenue"], ["seasonals", "fdTabSeasonal"], ["analyst", "fdTabAnalyst"],
 ];
 const fmt = (n: number | null | undefined, d = 2) => n == null || !isFinite(n) ? "-" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 const money = (n: number | null | undefined) => {
@@ -106,6 +107,7 @@ function SeasonalsChart({ bars }: { bars: Bar[] }) {
 }
 
 export default function FundamentalsDashboard({ symbol, row, initialPane }: { symbol: string; row?: Row; initialPane: string }) {
+  const t = useT();
   const [intel, setIntel] = useState<any>(null);
   const [bars, setBars] = useState<Bar[]>([]);
   const [period, setPeriod] = useState<"quarterly" | "annual">("quarterly");
@@ -134,23 +136,24 @@ export default function FundamentalsDashboard({ symbol, row, initialPane }: { sy
     <div className="fd-page">
       <header className="fd-head">
         <div className="fd-title"><span className="fd-logo" style={{ background: row?.col || "#76b900" }}>{symbol[0]}</span><b>{row?.name || symbol}</b><span>{headerLabel}</span></div>
-        <Link className="fd-back" href={`/terminal?sym=${encodeURIComponent(symbol)}`}>Back to chart</Link>
+        <Link className="fd-back" href={`/terminal?sym=${encodeURIComponent(symbol)}`}>{t("fdBackToChart")}</Link>
       </header>
-      <nav className="fd-tabs">{TABS.map(([k, label]) => <Link key={k} className={pane === k ? "on" : ""} href={`/terminal?pane=${k}&sym=${encodeURIComponent(symbol)}`}>{label}</Link>)}</nav>
+      <nav className="fd-tabs">{TABS.map(([k, label]) => <Link key={k} className={pane === k ? "on" : ""} href={`/terminal?pane=${k}&sym=${encodeURIComponent(symbol)}`}>{t(label)}</Link>)}</nav>
       <main className="fd-main">
-        {pane === "seasonals" && <section className="fd-section"><div className="fd-toggle"><button className="on">Chart</button><button>Table</button></div><div className="fd-toggle sub"><button className="on">Percent</button><button>Regular</button></div><SeasonalsChart bars={bars} /></section>}
+        {pane === "seasonals" && <section className="fd-section"><div className="fd-toggle"><button className="on">{t("fdChart")}</button><button>{t("fdTable")}</button></div><div className="fd-toggle sub"><button className="on">{t("fdPercent")}</button><button>{t("fdRegular")}</button></div><SeasonalsChart bars={bars} /></section>}
         {pane === "analyst" && <section className="fd-section"><FundamentalHeader ae={ae} /><MetricBlock title="EPS" period={period} setPeriod={setPeriod} labels={period === "annual" ? years : qLabels} actual={period === "annual" ? annualEps : qActual} estimate={period === "annual" ? annualEps.map((v: number) => v == null ? null : v * 1.04) : qEstimate} mode="number" color="var(--brand)" /><MetricBlock title="Revenue" period={period} setPeriod={setPeriod} labels={period === "annual" ? years : qLabels} actual={period === "annual" ? annualRev : qRev} estimate={period === "annual" ? annualRev.map((v: number) => v == null ? null : v * 1.05) : qRevEst} mode="money" color="var(--signal)" /></section>}
         {pane === "earnings" && <section className="fd-section"><FundamentalHeader ae={ae} /><div className="fd-card"><div className="fd-card-h"><b>EPS</b><PeriodToggle period={period} setPeriod={setPeriod} /></div><DotChart labels={period === "annual" ? years : qLabels} actual={period === "annual" ? annualEps : qActual} estimate={period === "annual" ? annualEps.map((v: number) => v == null ? null : v * .96) : qEstimate} /><div className="fd-legend compact"><span><i className="actual" />Actual</span><span><i className="estimate" />Estimate</span></div></div></section>}
-        {pane === "revenue" && <section className="fd-section"><MetricBlock title="Financials" period={period} setPeriod={setPeriod} labels={period === "annual" ? years : qLabels} actual={period === "annual" ? annualRev : qRev} estimate={period === "annual" ? annualIncome : qRevEst} mode="money" color="var(--brand)" /><div className="fd-legend compact"><span><i style={{ background: "var(--brand)" }} />Revenue</span><span><i style={{ background: "var(--text-2)" }} />Income</span><span><i style={{ background: "var(--signal)" }} />Margin %</span></div></section>}
+        {pane === "revenue" && <section className="fd-section"><MetricBlock title={t("fdFinancials")} period={period} setPeriod={setPeriod} labels={period === "annual" ? years : qLabels} actual={period === "annual" ? annualRev : qRev} estimate={period === "annual" ? annualIncome : qRevEst} mode="money" color="var(--brand)" /><div className="fd-legend compact"><span><i style={{ background: "var(--brand)" }} />Revenue</span><span><i style={{ background: "var(--text-2)" }} />Income</span><span><i style={{ background: "var(--signal)" }} />Margin %</span></div></section>}
         {!["seasonals", "analyst", "earnings", "revenue"].includes(pane) && <OverviewPane pane={pane} row={row} intel={intel} />}
-        <p className="fd-disclaimer"><b>Disclaimer</b><br />This is not investment advice and doesn't take into account your personal circumstances. It isn't a recommendation to buy, sell, or hold any asset. Always do your own research.</p>
+        <p className="fd-disclaimer"><b>{t("fdDisclaimer")}</b><br />{t("fdDisclaimerBody")}</p>
       </main>
     </div>
   );
 }
 
 function PeriodToggle({ period, setPeriod }: { period: "quarterly" | "annual"; setPeriod: (p: "quarterly" | "annual") => void }) {
-  return <div className="fd-toggle"><button className={period === "annual" ? "on" : ""} onClick={() => setPeriod("annual")}>Annual</button><button className={period === "quarterly" ? "on" : ""} onClick={() => setPeriod("quarterly")}>Quarterly</button></div>;
+  const t = useT();
+  return <div className="fd-toggle"><button className={period === "annual" ? "on" : ""} onClick={() => setPeriod("annual")}>{t("fdAnnual")}</button><button className={period === "quarterly" ? "on" : ""} onClick={() => setPeriod("quarterly")}>Quarterly</button></div>;
 }
 
 function MetricBlock(props: { title: string; period: "quarterly" | "annual"; setPeriod: (p: "quarterly" | "annual") => void; labels: string[]; actual: (number | null)[]; estimate: (number | null)[]; mode: "money" | "number"; color: string }) {
@@ -158,7 +161,8 @@ function MetricBlock(props: { title: string; period: "quarterly" | "annual"; set
 }
 
 function FundamentalHeader({ ae }: { ae: any }) {
-  return <div className="fd-kpis"><div><span>Next report date</span><b>{ae?.next_date || "-"}</b></div><div><span>Report period</span><b>Q2 2027</b></div><div><span>EPS estimate</span><b>{fmt(ae?.eps_forecast, 2)}</b></div><div><span>Revenue estimate</span><b>{ae?.revenue_forecast ? money(ae.revenue_forecast) : "-"}</b></div></div>;
+  const t = useT();
+  return <div className="fd-kpis"><div><span>{t("fdNextReport")}</span><b>{ae?.next_date || "-"}</b></div><div><span>{t("fdReportPeriod")}</span><b>Q2 2027</b></div><div><span>{t("fdEpsEstimate")}</span><b>{fmt(ae?.eps_forecast, 2)}</b></div><div><span>{t("fdRevEstimate")}</span><b>{ae?.revenue_forecast ? money(ae.revenue_forecast) : "-"}</b></div></div>;
 }
 
 function OverviewPane({ pane, row, intel }: { pane: Pane; row?: Row; intel: any }) {

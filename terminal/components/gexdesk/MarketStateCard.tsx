@@ -33,6 +33,10 @@ import { makeGexT } from "./gexStrings";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload } from "./GexDeskView";
 import { RingGauge } from "@/components/ui/RingGauge";
+import { Tip } from "@/components/ui/Tip";
+// R3.2: the regime colour table lives in lib/mscGlance.ts so the desk and every
+// glance surface (screener columns, watchlist dot, ticker block) read ONE table.
+import { REGIME_COLORS } from "@/lib/mscGlance";
 
 // ─── Schema (gexstate/v1) ────────────────────────────────────────────────────
 
@@ -68,6 +72,7 @@ export interface GexStatePayload {
   // Extended fields from richer fixture (tolerated-optional)
   net_gex_bn?: number | null;
   gamma_flip?: number | null;
+  dist_to_flip_pct?: number | null;   // spot's % distance from the flip level (signed: + = spot above flip)
   call_wall?: number | null;
   put_wall?: number | null;
   magnet?: number | null;
@@ -82,15 +87,15 @@ export interface GexStatePayload {
 
 // ─── Regime colors ────────────────────────────────────────────────────────────
 
-const REGIME_COLORS: Record<string, string> = {
-  PIN:        "var(--up)",
-  DRIFT:      "var(--brand-2)",
-  RANGE:      "var(--brand-2)",
-  TRANSITION: "var(--signal)",
-  TREND:      "var(--down)",
-  CASCADE:    "var(--down)",
-  UNKNOWN:    "var(--muted)",
-};
+/**
+ * Flip violet. `--cat-2` is referenced all over this desk but is defined nowhere in the
+ * token set, so every `var(--cat-2)` site silently fell back (invisible markers, plain-text
+ * values). `--ai` is defined and is the identical hue (#9d86ff) — kept behind --cat-2 so a
+ * real definition would still win.
+ */
+const FLIP_VIOLET = "var(--cat-2, var(--ai))";
+
+// (regime colours: see the REGIME_COLORS import at the top — one table for every surface)
 
 // ─── Derived metrics ──────────────────────────────────────────────────────────
 
@@ -147,6 +152,43 @@ function fmtLevel(val: number | null | undefined): string {
   return val % 1 === 0 ? String(val) : val.toFixed(1);
 }
 
+/** Which fixed scale a pin-probability FIELD is documented in — see `normalizePinProbability`. */
+export type ProbabilityScale = "percent" | "fraction" | "auto";
+
+/**
+ * Pin probability — shape guard (bug B6; scale-per-field fix follow-up).
+ *
+ * Two producers publish this field on two scales: the fixture's `pin_target.probability`
+ * is 0-100 (documented on the interface above) while the live schema's `pin_probability`
+ * is a 0..1 fraction. The scale is a property of the FIELD, never of the value in hand —
+ * so callers that know which field they are reading MUST say so via `scale`:
+ *   - `"percent"`  — `pin_target.probability`. Never multiplied.
+ *   - `"fraction"` — `pin_probability`. Always ×100.
+ *
+ * `scale: "auto"` (the default) is reserved for an UNFORESEEN third producer whose scale
+ * isn't documented anywhere yet. It applies the old value-shape heuristic (>1 ⇒ already a
+ * percent) but — unlike the original bug — never GUESSES inside the ambiguous (0, 1] seam:
+ * a percent-scale reading of 1 (meaning 1%, e.g. a low-confidence far magnet) and a
+ * fraction-scale reading of 1 (meaning 100%) are indistinguishable by value alone, and the
+ * old code silently picked the fraction reading every time — turning a 1% confidence read
+ * into a confident "100%". That range now returns null (an honest "can't tell") instead of
+ * a guess; only an explicit `scale` can resolve it.
+ *
+ * Every result is clamped to 0-100; an absent/garbage/negative value returns null so the
+ * caller can print an em dash instead of a confident "0%".
+ */
+export function normalizePinProbability(
+  raw: number | null | undefined,
+  scale: ProbabilityScale = "auto",
+): number | null {
+  if (raw == null || !Number.isFinite(raw) || raw < 0) return null;
+  if (scale === "fraction") return Math.max(0, Math.min(100, Math.round(raw * 100)));
+  if (scale === "percent") return Math.max(0, Math.min(100, Math.round(raw)));
+  // auto: unforeseen-producer heuristic — never guesses inside the ambiguous seam.
+  if (raw > 0 && raw <= 1) return null;
+  return Math.max(0, Math.min(100, Math.round(raw)));
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 /**
@@ -158,11 +200,13 @@ function StructuralRangeBar({
   high,
   spot,
   flip,
+  t,
 }: {
   low: number;
   high: number;
   spot: number | null;
   flip: number | null;
+  t: ReturnType<typeof makeGexT>;
 }) {
   const range = high - low;
   if (range <= 0) return null;
@@ -180,8 +224,8 @@ function StructuralRangeBar({
     <div style={RANGE_BAR_WRAP}>
       <div style={RANGE_BAR_LABELS}>
         <span style={RANGE_BAR_LBL}>{fmtLevel(low)}</span>
-        <span style={{ ...RANGE_BAR_LBL, opacity: 0.5 }}>PUT SUPP</span>
-        <span style={{ ...RANGE_BAR_LBL, opacity: 0.5 }}>CALL WALL</span>
+        <span style={{ ...RANGE_BAR_LBL, opacity: 0.5 }}>{t("statePutSupp")}</span>
+        <span style={{ ...RANGE_BAR_LBL, opacity: 0.5 }}>{t("stateCallWall")}</span>
         <span style={{ ...RANGE_BAR_LBL, textAlign: "right" }}>
           {fmtLevel(high)}
         </span>
@@ -213,8 +257,8 @@ function StructuralRangeBar({
             style={{
               ...RANGE_BAR_MARKER,
               left: `${flipPct}%`,
-              background: "var(--cat-2)",
-              boxShadow: "0 0 6px var(--cat-2)",
+              background: FLIP_VIOLET,
+              boxShadow: `0 0 6px ${FLIP_VIOLET}`,
             }}
           />
         )}
@@ -239,10 +283,10 @@ function StructuralRangeBar({
             style={{
               ...RANGE_BAR_SUB_LBL,
               left: `${Math.min(flipPct, 85)}%`,
-              color: "var(--cat-2)",
+              color: FLIP_VIOLET,
             }}
           >
-            FLIP
+            {t("stateFlipMark")}
           </span>
         )}
         {spotPct != null && (
@@ -254,7 +298,7 @@ function StructuralRangeBar({
               marginTop: 0,
             }}
           >
-            SPOT
+            {t("stateSpotMark")}
           </span>
         )}
       </div>
@@ -269,30 +313,37 @@ function WhatIfFlipBreaks({
   low,
   flip,
   high,
+  t,
 }: {
   low: number | null;
   flip: number | null;
   high: number | null;
+  t: ReturnType<typeof makeGexT>;
 }) {
   if (low == null && flip == null && high == null) return null;
   return (
     <div style={WHATIF_WRAP}>
-      <span style={WHATIF_TITLE}>WHAT IF FLIP BREAKS?</span>
+      <span style={WHATIF_TITLE}>{t("stateWhatIf")}</span>
       <div style={WHATIF_BOXES}>
         {low != null && (
           <div style={WHATIF_BOX}>
             <span style={{ ...WHATIF_BOX_VAL, color: "var(--down)" }}>
               {fmtLevel(low)}
             </span>
-            <span style={WHATIF_BOX_LBL}>PUT SUPP</span>
+            <span style={WHATIF_BOX_LBL}>{t("statePutSupp")}</span>
           </div>
         )}
         {flip != null && (
-          <div style={{ ...WHATIF_BOX, borderColor: "rgba(157,134,255,0.25)" }}>
-            <span style={{ ...WHATIF_BOX_VAL, color: "var(--cat-2)" }}>
+          <div
+            style={{
+              ...WHATIF_BOX,
+              borderColor: "color-mix(in srgb, var(--ai) 25%, transparent)",
+            }}
+          >
+            <span style={{ ...WHATIF_BOX_VAL, color: FLIP_VIOLET }}>
               {fmtLevel(flip)}
             </span>
-            <span style={WHATIF_BOX_LBL}>FLIP</span>
+            <span style={WHATIF_BOX_LBL}>{t("stateFlipMark")}</span>
           </div>
         )}
         {high != null && (
@@ -300,7 +351,7 @@ function WhatIfFlipBreaks({
             <span style={{ ...WHATIF_BOX_VAL, color: "var(--brand-2)" }}>
               {fmtLevel(high)}
             </span>
-            <span style={WHATIF_BOX_LBL}>CALL WALL</span>
+            <span style={WHATIF_BOX_LBL}>{t("stateCallWall")}</span>
           </div>
         )}
       </div>
@@ -350,7 +401,7 @@ export function MarketStateCard({
 
   if (!statePayload) {
     return (
-      <div className="obs-card obs-scroll" style={CARD_OUTER} data-tut="gex-state-card">
+      <div className="obs-card obs-scroll obs-gex-state" style={CARD_OUTER} data-tut="gex-state-card">
         <div className="obs-card-hd" style={CARD_HEADER}>
           <span className="obs-lbl">{t("stateTitle")}</span>
         </div>
@@ -379,9 +430,25 @@ export function MarketStateCard({
 
   const stabilityPct = Math.round(statePayload.stability_pct ?? 0);
 
-  const pin = statePayload.pin_target ?? (statePayload.magnet != null
-    ? { strike: statePayload.magnet, probability: statePayload.pin_probability != null ? Math.round(statePayload.pin_probability * 100) : 0 }
-    : null);
+  // Distance from spot to the gamma-flip level, % of spot — how close we are to a
+  // long-γ ↔ short-γ regime change (the most actionable dealer-positioning read).
+  // Prefer the published field; else derive it. Signed: + = spot above flip.
+  const distToFlipPct = statePayload.dist_to_flip_pct
+    ?? (spotRef != null && flipLevel != null && spotRef !== 0
+        ? ((spotRef - flipLevel) / spotRef) * 100
+        : null);
+
+  // Pin target: strike from either schema; probability through the B6 shape guard, keyed
+  // per FIELD (never guessed from the value) so a low-confidence percent-scale reading in
+  // (0, 1] can never be multiplied into a false near-100% read. `probability: null` is a
+  // real state (strike known, confidence not published) and renders as an em dash rather
+  // than a fabricated 0%.
+  const pinStrike = statePayload.pin_target?.strike ?? statePayload.magnet ?? null;
+  const pinProbability =
+    statePayload.pin_target?.probability != null
+      ? normalizePinProbability(statePayload.pin_target.probability, "percent")
+      : normalizePinProbability(statePayload.pin_probability, "fraction");
+  const pin = pinStrike != null ? { strike: pinStrike, probability: pinProbability } : null;
 
   const range = statePayload.structural_range ?? (
     callWall != null && putWall != null
@@ -390,68 +457,88 @@ export function MarketStateCard({
   );
 
   return (
-    <div className="obs-card" style={CARD_OUTER} data-tut="gex-state-card">
-      {/* ── Header: title + regime chip ─────────────────────────────────────── */}
+    <div className="obs-card obs-scroll obs-gex-state" style={CARD_OUTER} data-tut="gex-state-card">
+      {/* ── Header: title only ──────────────────────────────────────────────── */}
       <div className="obs-card-hd" style={CARD_HEADER}>
         <span className="obs-lbl">{t("stateTitle")}</span>
-        <span
-          style={{
-            ...REGIME_CHIP,
-            color: regimeColor,
-            borderColor: `${regimeColor}55`,
-          }}
-        >
-          {regimeLabel}
-        </span>
       </div>
 
-      {/* Large state label */}
-      <div style={{ ...STATE_HERO, color: regimeColor }}>{state}</div>
-
-      {/* Thesis */}
-      <div style={THESIS}>{thesisText}</div>
-
-      {/* ── Stability ring ──────────────────────────────────────────────────── */}
-      <div style={STAB_ROW}>
-        <RingGauge
-          value={stabilityPct}
-          size="md"
-          tone={
-            netGamma === "POSITIVE"
-              ? "brand"
+      {/* ── Regime group ─────────────────────────────────────────────────────
+          REGIME-DYNAMICS LAW: a state label never stands alone. The regime name, its
+          γ-polarity, its stability and its distance to the flip now live in ONE bounded
+          section railed in the regime's own colour — you cannot read "PIN" without
+          reading how stable it is and how far the flip sits. Nothing is recomputed: the
+          γ-polarity chip is the Net-γ readout that used to sit detached in the stats
+          column, and the regime chip that used to float in the card header is this
+          section's own hero (it said the same word twice). */}
+      <div style={{ ...REGIME_GROUP, borderLeftColor: regimeColor } as React.CSSProperties}>
+        <div style={REGIME_HEAD}>
+          {/* Large state label — the translated regime name, not the raw enum key. In EN
+              the two read identically (PIN/PIN); in ZH the chip said 锁定 while the hero
+              still said "PIN", the last English leak on this card. */}
+          <span style={{ ...STATE_HERO, color: regimeColor }}>{regimeLabel}</span>
+          {/* γ polarity — the sign that produces the regime, riding with its name.
+              --up/--down (not brand/--down): under html[data-updown="east"] the old pair
+              left POSITIVE blue while NEGATIVE turned green, so the two stopped reading
+              as opposites. */}
+          <span
+            className="obs-tag"
+            style={{
+              "--c":
+                netGamma === "POSITIVE"
+                  ? "var(--up)"
+                  : netGamma === "NEGATIVE"
+                  ? "var(--down)"
+                  : "var(--muted)",
+              marginLeft: "auto",
+            } as React.CSSProperties}
+          >
+            {t("stateNetGamma")}{" "}
+            {netGamma === "POSITIVE"
+              ? t("stateGammaPos")
               : netGamma === "NEGATIVE"
-              ? "down"
-              : "muted"
-          }
-          label={t("stateStability")}
-        />
-        <div style={STAB_META}>
-          <div style={STAB_STAT}>
-            <span className="obs-lbl">{t("stateNetGamma")}</span>
-            <span
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                color:
-                  netGamma === "POSITIVE"
-                    ? "var(--brand-2)"
-                    : netGamma === "NEGATIVE"
-                    ? "var(--down)"
-                    : "var(--muted)",
-              }}
-            >
-              {netGamma === "POSITIVE"
-                ? t("stateGammaPos")
+              ? t("stateGammaNeg")
+              : "—"}
+          </span>
+        </div>
+
+        {/* Thesis */}
+        <div style={THESIS}>{thesisText}</div>
+
+        {/* ── Stability ring ────────────────────────────────────────────────── */}
+        <div style={STAB_ROW}>
+          <RingGauge
+            value={stabilityPct}
+            size="md"
+            tone={
+              netGamma === "POSITIVE"
+                ? "up"
                 : netGamma === "NEGATIVE"
-                ? t("stateGammaNeg")
-                : "—"}
-            </span>
-          </div>
-          <div style={STAB_STAT}>
-            <span className="obs-lbl">{t("stateStability")}</span>
-            <span className="num" style={{ fontSize: 11, color: "var(--text-2)" }}>
-              {stabilityPct}%
-            </span>
+                ? "down"
+                : "muted"
+            }
+            label={t("stateStability")}
+          />
+          <div style={STAB_META}>
+            <div style={STAB_STAT}>
+              <span className="obs-lbl">{t("stateStability")}</span>
+              <span className="num" style={STAB_VAL}>
+                {stabilityPct}%
+              </span>
+            </div>
+            {distToFlipPct != null && (
+              <div style={STAB_STAT}>
+                <Tip label={t("stateDistToFlipTip")} side="left" size="card">
+                  <span className="obs-lbl" style={{ cursor: "help" }}>{t("stateDistToFlip")}</span>
+                </Tip>
+                <span className="num" style={{ ...STAB_VAL, fontWeight: 700 }}>
+                  {Math.abs(distToFlipPct).toFixed(2)}%{" "}
+                  <span style={{ color: "var(--muted)", fontWeight: 400 }}>
+                    {distToFlipPct >= 0 ? t("stateAboveFlip") : t("stateBelowFlip")}
+                  </span>
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -467,6 +554,7 @@ export function MarketStateCard({
             high={range.high}
             spot={spotRef}
             flip={flipLevel}
+            t={t}
           />
         </div>
       )}
@@ -477,6 +565,7 @@ export function MarketStateCard({
           low={putWall}
           flip={flipLevel}
           high={callWall}
+          t={t}
         />
       </div>
 
@@ -484,7 +573,7 @@ export function MarketStateCard({
 
       {/* ── γ POLARITY block ─────────────────────────────────────────────────── */}
       <div style={METRIC_BLOCK}>
-        <span className="obs-lbl">γ POLARITY</span>
+        <span className="obs-lbl">{t("statePolarity")}</span>
         <div style={METRIC_BLOCK_BODY}>
           <span
             style={{
@@ -500,15 +589,15 @@ export function MarketStateCard({
             {gammaPolarity == null
               ? "—"
               : gammaPolarity.isLong
-              ? "LONG γ DOMINANT"
-              : "SHORT γ DOMINANT"}
+              ? t("statePolarityLong")
+              : t("statePolarityShort")}
           </span>
-          <span style={METRIC_BLOCK_CAPTION}>Net dealer gamma regime.</span>
+          <span style={METRIC_BLOCK_CAPTION}>{t("statePolarityCaption")}</span>
           {gammaPolarity != null && (
             <span
               className="num"
               style={{
-                fontSize: 13,
+                fontSize: "var(--fs-body)",
                 fontWeight: 700,
                 color: gammaPolarity.isLong ? "var(--up)" : "var(--down)",
               }}
@@ -523,28 +612,31 @@ export function MarketStateCard({
 
       {/* ── HEDGE PRESSURE block ─────────────────────────────────────────────── */}
       <div style={METRIC_BLOCK}>
-        <span className="obs-lbl">HEDGE PRESSURE</span>
+        <span className="obs-lbl">{t("stateHedgePressure")}</span>
         <div style={METRIC_BLOCK_BODY}>
           <span
             style={{
               ...METRIC_BLOCK_HERO,
+              /* Hedge pressure is a MAGNITUDE (health), not a direction — so it must not
+                 ride --up/--down. LOW used to render in the bull hue, which inverted under
+                 the East-Asian flip and read as a directional call either way. */
               color:
                 hedgePressure.level === "HIGH"
                   ? "var(--signal)"
-                  : "var(--up)",
+                  : "var(--text-2)",
             }}
           >
-            {hedgePressure.level}
+            {hedgePressure.level === "HIGH" ? t("stateHedgeHigh") : t("stateHedgeLow")}
           </span>
           <span style={METRIC_BLOCK_CAPTION}>
-            Size of dealer hedging flow.
+            {t("stateHedgeCaption")}
           </span>
           {hedgePressure.absVal != null && (
             <span
               className="num"
-              style={{ fontSize: 10, color: "var(--muted)" }}
+              style={{ fontSize: "var(--fs-micro)", color: "var(--muted)" }}
             >
-              |net γ| {fmtBn(hedgePressure.absVal)}
+              {t("stateHedgeAbs")} {fmtBn(hedgePressure.absVal)}
             </span>
           )}
         </div>
@@ -554,28 +646,33 @@ export function MarketStateCard({
 
       {/* ── PIN TARGET block ─────────────────────────────────────────────────── */}
       <div style={METRIC_BLOCK}>
-        <span className="obs-lbl">PIN TARGET</span>
+        <span className="obs-lbl">{t("statePinTarget")}</span>
         <div style={METRIC_BLOCK_BODY}>
           {pin ? (
             <>
               <span
                 className="num"
-                style={{ ...METRIC_BLOCK_HERO, color: "var(--cat-2)" }}
+                style={{ ...METRIC_BLOCK_HERO, color: FLIP_VIOLET }}
               >
                 {fmtLevel(pin.strike)}
               </span>
               <span style={METRIC_BLOCK_CAPTION}>
-                Strike dealers pin toward.
+                {t("statePinCaption")}
               </span>
-              <span
-                className="num"
-                style={{ fontSize: 10, color: "var(--muted)" }}
-              >
-                {pin.probability}% prob
-              </span>
+              {/* Not a calibrated probability — see statePinProbTip. The glance-tier
+                  number stays; the hover carries the honesty disclosure. */}
+              <Tip label={t("statePinProbTip")} side="left" size="card">
+                <span
+                  className="num"
+                  style={{ fontSize: "var(--fs-micro)", color: "var(--muted)", cursor: "help" }}
+                >
+                  {pin.probability == null ? t("statePinNone") : `${pin.probability}%`}{" "}
+                  {t("statePinProb")}
+                </span>
+              </Tip>
             </>
           ) : (
-            <span style={{ fontSize: 12, color: "var(--muted)" }}>—</span>
+            <span style={{ fontSize: "var(--fs-ui)", color: "var(--muted)" }}>{t("statePinNone")}</span>
           )}
         </div>
       </div>
@@ -607,10 +704,10 @@ function PassportBlock({
         className="obs-note"
         style={{
           margin: 0,
-          padding: "8px 10px",
-          fontSize: 10,
+          padding: "var(--sp-2) var(--sp-3)",
+          fontSize: "var(--fs-micro)",
           lineHeight: 1.5,
-          borderRadius: 8,
+          borderRadius: "var(--r-tile)",
         }}
       >
         {passportText}
@@ -629,64 +726,79 @@ function PassportBlock({
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
+/**
+ * CONTAINMENT (v7b, re-homed in §5.3): the rail's width, left edge and — critically —
+ * its bounded scroll region now live ONE level up, on GexDeskView's RIGHT_RAIL, because
+ * the rail holds two cards (HeatSeeker + this one) instead of one. The invariant is
+ * unchanged and still load-bearing: the rail is sized only by the desk's two-pane row,
+ * so a drawer opening in the LEFT column can never change this card's scroll geometry —
+ * that was what left it "pushed up" with its header parked off-screen after a collapse.
+ * `minHeight:0` here lets the card shrink inside that rail rather than forcing it taller.
+ */
 const CARD_OUTER: React.CSSProperties = {
-  borderLeft: "1px solid rgba(255,255,255,0.09)",
   borderRadius: 0,
   display: "flex",
   flexDirection: "column",
-  minWidth: 300,
-  width: 340,
-  flexShrink: 0,
-  overflowY: "auto",
-  scrollbarWidth: "thin" as const,
-  scrollbarColor: "rgba(255,255,255,0.13) transparent",
+  minWidth: 0,
+  maxWidth: "100%",
+  minHeight: 0,
 };
 
 const CARD_HEADER: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
+  gap: "var(--sp-2)",
 };
 
-const REGIME_CHIP: React.CSSProperties = {
-  fontSize: 9,
-  fontWeight: 800,
-  letterSpacing: "0.12em",
-  textTransform: "uppercase",
-  border: "1px solid",
-  borderRadius: "var(--r-pill)",
-  padding: "2px 7px",
-  marginLeft: "auto",
+/**
+ * One bounded section holding the regime name AND everything that qualifies it
+ * (γ-polarity, stability, distance to flip). The 2px rail carries the regime's own
+ * colour, so the group reads as a single verdict rather than a label with orphaned
+ * statistics scattered below it.
+ */
+const REGIME_GROUP: React.CSSProperties = {
+  /* Full-bleed so the 3px rail lands on the card edge; inner rows carry --sp-3, which
+     puts their text at 15px — level with the --sp-4 sections below. */
+  borderLeft: "3px solid var(--muted)",
+  background: "color-mix(in srgb, var(--panel-2) 55%, transparent)",
+  paddingBottom: "var(--sp-1)",
+};
+
+const REGIME_HEAD: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "var(--sp-2)",
+  padding: "var(--sp-2) var(--sp-3) 0",
+  flexWrap: "wrap",
 };
 
 const STATE_HERO: React.CSSProperties = {
-  fontSize: 22,
+  fontSize: "var(--fs-num)",
   fontWeight: 900,
   letterSpacing: "0.05em",
-  padding: "4px 14px 0",
   lineHeight: 1.1,
   textTransform: "uppercase",
 };
 
 const THESIS: React.CSSProperties = {
-  fontSize: 10.5,
+  fontSize: "var(--fs-label)",
   color: "var(--text-2)",
   lineHeight: 1.5,
-  padding: "6px 14px 10px",
+  padding: "var(--sp-1) var(--sp-3) var(--sp-2)",
   fontStyle: "italic",
 };
 
 const STAB_ROW: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 12,
-  padding: "8px 14px",
+  gap: "var(--sp-3)",
+  padding: "0 var(--sp-3) var(--sp-2)",
 };
 
 const STAB_META: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 5,
+  gap: "var(--sp-1)",
   flex: 1,
   minWidth: 0,
 };
@@ -695,69 +807,81 @@ const STAB_STAT: React.CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
-  gap: 4,
+  gap: "var(--sp-1)",
+};
+
+const STAB_VAL: React.CSSProperties = {
+  fontSize: "var(--fs-label)",
+  fontFamily: "var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
+  color: "var(--text-2)",
 };
 
 const SECTION_PAD: React.CSSProperties = {
-  padding: "8px 14px 4px",
+  padding: "var(--sp-2) var(--sp-4) var(--sp-1)",
 };
 
 const METRIC_BLOCK: React.CSSProperties = {
-  padding: "8px 14px",
+  padding: "var(--sp-2) var(--sp-4)",
 };
 
 const METRIC_BLOCK_BODY: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 2,
-  marginTop: 4,
+  gap: "var(--sp-1)",
+  marginTop: "var(--sp-1)",
 };
 
 const METRIC_BLOCK_HERO: React.CSSProperties = {
-  fontSize: 13,
+  fontSize: "var(--fs-body)",
   fontWeight: 800,
   letterSpacing: "0.04em",
   lineHeight: 1.2,
 };
 
 const METRIC_BLOCK_CAPTION: React.CSSProperties = {
-  fontSize: 9.5,
+  fontSize: "var(--fs-micro)",
   color: "var(--muted)",
   lineHeight: 1.4,
 };
 
 // Structural range bar
 const RANGE_BAR_WRAP: React.CSSProperties = {
-  marginTop: 6,
+  marginTop: "var(--sp-2)",
 };
 
 const RANGE_BAR_LABELS: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "auto 1fr 1fr auto",
-  gap: 2,
-  marginBottom: 3,
+  gap: "var(--sp-1)",
+  marginBottom: "var(--sp-1)",
 };
 
 const RANGE_BAR_LBL: React.CSSProperties = {
-  fontSize: 9,
+  fontSize: "var(--fs-micro)",
   color: "var(--muted)",
+  fontFamily: "var(--font-num)",
   fontVariantNumeric: "tabular-nums",
 };
 
 const RANGE_BAR_TRACK: React.CSSProperties = {
   position: "relative",
   height: 8,
-  background: "rgba(255,255,255,0.06)",
-  borderRadius: 4,
+  background: "var(--line-2)",
+  borderRadius: "var(--r-pill)",
   overflow: "hidden",
 };
 
+/* The two halves of the track are the long-γ and short-γ sides of the flip — a gamma
+   SIGN pair, so they ride --up/--down and flip together under data-updown="east".
+   Previously hardcoded rgba(77,130,255)/rgba(240,86,107): the negative half flipped
+   hue in East mode while the positive half stayed blue. */
 const RANGE_BAR_FILL_POS: React.CSSProperties = {
   position: "absolute",
   top: 0,
   bottom: 0,
   background:
-    "linear-gradient(90deg, rgba(77,130,255,0.18), rgba(77,130,255,0.38))",
+    "linear-gradient(90deg, rgba(var(--up-rgb),0.18), rgba(var(--up-rgb),0.38))",
 };
 
 const RANGE_BAR_FILL_NEG: React.CSSProperties = {
@@ -766,7 +890,7 @@ const RANGE_BAR_FILL_NEG: React.CSSProperties = {
   top: 0,
   bottom: 0,
   background:
-    "linear-gradient(90deg, rgba(240,86,107,0.18), rgba(240,86,107,0.12))",
+    "linear-gradient(90deg, rgba(var(--down-rgb),0.18), rgba(var(--down-rgb),0.12))",
 };
 
 const RANGE_BAR_MARKER: React.CSSProperties = {
@@ -781,7 +905,7 @@ const RANGE_BAR_MARKER: React.CSSProperties = {
 const RANGE_BAR_SUB_LBL: React.CSSProperties = {
   position: "absolute",
   top: 0,
-  fontSize: 8,
+  fontSize: "var(--fs-micro)",
   fontWeight: 700,
   letterSpacing: "0.06em",
   transform: "translateX(-50%)",
@@ -789,22 +913,22 @@ const RANGE_BAR_SUB_LBL: React.CSSProperties = {
 
 // What-if boxes
 const WHATIF_WRAP: React.CSSProperties = {
-  marginTop: 4,
+  marginTop: "var(--sp-1)",
 };
 
 const WHATIF_TITLE: React.CSSProperties = {
-  fontSize: 8.5,
+  fontSize: "var(--fs-micro)",
   fontWeight: 700,
   letterSpacing: "0.1em",
   textTransform: "uppercase",
   color: "var(--muted)",
   display: "block",
-  marginBottom: 5,
+  marginBottom: "var(--sp-1)",
 };
 
 const WHATIF_BOXES: React.CSSProperties = {
   display: "flex",
-  gap: 4,
+  gap: "var(--sp-1)",
 };
 
 const WHATIF_BOX: React.CSSProperties = {
@@ -812,26 +936,29 @@ const WHATIF_BOX: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
-  gap: 2,
-  padding: "5px 4px",
-  background: "rgba(255,255,255,0.03)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: "var(--r-sm, 6px)",
+  gap: "var(--sp-1)",
+  padding: "var(--sp-2) var(--sp-1)",
+  background: "var(--panel-2)",
+  border: "1px solid var(--hairline)",
+  borderRadius: "var(--r-tile)",
 };
 
 const WHATIF_BOX_VAL: React.CSSProperties = {
-  fontSize: 13,
+  fontSize: "var(--fs-body)",
   fontWeight: 800,
+  fontFamily: "var(--font-num)",
   fontVariantNumeric: "tabular-nums",
   lineHeight: 1,
 };
 
 const WHATIF_BOX_LBL: React.CSSProperties = {
-  fontSize: 7.5,
+  /* was 7.5px — below the desk's 10px legibility floor. */
+  fontSize: "var(--fs-micro)",
   color: "var(--muted)",
-  letterSpacing: "0.08em",
+  letterSpacing: "0.06em",
   textTransform: "uppercase",
   textAlign: "center",
+  lineHeight: 1.2,
 };
 
 const PLACEHOLDER: React.CSSProperties = {
@@ -839,11 +966,11 @@ const PLACEHOLDER: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  padding: 16,
+  padding: "var(--sp-4)",
 };
 
 const PLACEHOLDER_TEXT: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--fs-label)",
   color: "var(--muted)",
   fontStyle: "italic",
   textAlign: "center",
@@ -851,6 +978,6 @@ const PLACEHOLDER_TEXT: React.CSSProperties = {
 };
 
 const PASSPORT_BLOCK: React.CSSProperties = {
-  padding: "8px 10px",
+  padding: "var(--sp-2) var(--sp-3)",
   marginTop: "auto",
 };

@@ -13,7 +13,7 @@
  * Props: {fund, zh}
  */
 import type { Fund, SegmentSeries } from "../../lib/fund"
-import { fmtNum, fmtPct, pick } from "../../lib/finFormat"
+import { fmtNum, fmtPct, fmtDate, pick } from "../../lib/finFormat"
 import { StackedBars, type Series } from "./FinCharts"
 
 export interface RevenuePageProps {
@@ -35,11 +35,13 @@ const SEG_COLORS = [
 // ── one segmentation module (By source / By country) ─────────────────────────
 
 function SegmentModule({
+  eyebrow,
   title,
   seg,
   ccy,
   zh,
 }: {
+  eyebrow: string
   title: string
   seg: SegmentSeries
   ccy: string
@@ -63,7 +65,13 @@ function SegmentModule({
 
   return (
     <div className="fin-sec">
-      <div className="fin-sec-h">{title}</div>
+      <div className="fin-eyebrow">{eyebrow}</div>
+      <div
+        className="fin-sec-h fin-rail fin-rule"
+        style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+      >
+        {title}
+      </div>
 
       {/* Stacked bar chart (last 7 periods) */}
       {chartPeriods.length > 0 && (
@@ -137,7 +145,13 @@ function EstimatesSection({
 
   return (
     <div className="fin-sec">
-      <div className="fin-sec-h">{pick(!!zh, "Revenue estimates", "营收预期")}</div>
+      <div className="fin-eyebrow">{pick(!!zh, "SELL-SIDE CONSENSUS", "卖方一致预期")}</div>
+      <div
+        className="fin-sec-h fin-rail fin-rule"
+        style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+      >
+        {pick(!!zh, "Revenue estimates", "营收预期")}
+      </div>
       <div className="fin-earn-meta">
         <span>{pick(!!zh, "Metrics", "指标")}</span>
         <span className="fin-earn-ccy">{pick(!!zh, "Currency: " + ccy, "货币: " + ccy)}</span>
@@ -203,17 +217,24 @@ function EstimatesSection({
         <div className="fin-rev-growth">
           <span className="fin-rev-growth-lbl">{pick(!!zh, "Revenue growth (YoY est.)", "营收增长（同比预期）")}</span>
           <span
-            className="fin-chip"
+            className="fin-tag num"
             style={{
-              // Growth IS directional → tokens (never hardcoded green/red). The
-              // --up-rgb/--down-rgb triplets flip with the east red-up theme, so
-              // text and border stay in lockstep across locales.
-              color: (est.growth.rev_yoy ?? 0) >= 0 ? "var(--up)" : "var(--down)",
-              borderColor: (est.growth.rev_yoy ?? 0) >= 0 ? "rgba(var(--up-rgb),.3)" : "rgba(var(--down-rgb),.3)",
-            }}
+              // Growth IS directional → the tint formula rides the --up/--down
+              // tokens (never hardcoded green/red), so background, ring and text
+              // flip together under html[data-updown="east"].
+              "--c": (est.growth.rev_yoy ?? 0) >= 0 ? "var(--up)" : "var(--down)",
+            } as React.CSSProperties}
           >
             {fmtPct(est.growth.rev_yoy, { sign: true })}
           </span>
+        </div>
+      )}
+      {fund.asof && (
+        <div className="fin-asof">
+          {pick(!!zh,
+            `Consensus estimates · as of ${fmtDate(fund.asof)}`,
+            `一致预期数据 · 截至 ${fmtDate(fund.asof)}`
+          )}
         </div>
       )}
     </div>
@@ -228,7 +249,7 @@ export default function RevenuePage({ fund, zh, sym }: RevenuePageProps) {
       <div className="fin-body">
         <div className="fin-empty fin-empty-lg" role="status">
           <span className="fin-empty-title">{pick(!!zh, "Fundamentals not yet covered", "尚未覆盖基本面数据")}</span>
-          <span>{pick(!!zh,
+          <span className="fin-empty-why">{pick(!!zh,
             `Revenue data for ${sym ?? "this symbol"} hasn't been collected yet.`,
             `${sym ?? "该标的"} 的营收数据尚未采集。`
           )}</span>
@@ -246,6 +267,7 @@ export default function RevenuePage({ fund, zh, sym }: RevenuePageProps) {
       <div className="fin-body">
         {segs.by_source && (
           <SegmentModule
+            eyebrow={pick(!!zh, "REVENUE MIX", "营收构成")}
             title={pick(!!zh, "By source", "按来源")}
             seg={segs.by_source}
             ccy={ccy}
@@ -254,11 +276,20 @@ export default function RevenuePage({ fund, zh, sym }: RevenuePageProps) {
         )}
         {segs.by_country && (
           <SegmentModule
+            eyebrow={pick(!!zh, "GEOGRAPHIC MIX", "地区构成")}
             title={pick(!!zh, "By country", "按地区")}
             seg={segs.by_country}
             ccy={ccy}
             zh={zh}
           />
+        )}
+        {fund.asof && (
+          <div className="fin-asof">
+            {pick(!!zh,
+              `Segment breakdown · as of ${fmtDate(fund.asof)}`,
+              `分部数据 · 截至 ${fmtDate(fund.asof)}`
+            )}
+          </div>
         )}
       </div>
     )
@@ -268,13 +299,20 @@ export default function RevenuePage({ fund, zh, sym }: RevenuePageProps) {
   return (
     <div className="fin-body">
       <div className="fin-sec">
-        <div className="fin-card fin-rev-deferred">
-          <div className="fin-card-h">{pick(!!zh, "Revenue breakdown", "营收分部")}</div>
-          <div className="fin-rev-deferred-body">
+        <div className="fin-eyebrow">{pick(!!zh, "REVENUE MIX", "营收构成")}</div>
+        <div
+          className="fin-sec-h fin-rail fin-rule"
+          style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+        >
+          {pick(!!zh, "Revenue breakdown", "营收分部")}
+        </div>
+        <div className="fin-empty fin-empty-lg fin-rev-deferred" role="status">
+          <div className="fin-empty-title">{pick(!!zh, "No segment breakdown", "暂无营收分部")}</div>
+          <div className="fin-empty-why">
             {pick(
               !!zh,
-              "Revenue segment breakdown is not yet available for this security.",
-              "该证券的营收分部数据暂未开放。"
+              "The segment collector has not emitted a by-source or by-country split for this listing. Total revenue is still reported on the Statements tab.",
+              "分部采集器尚未为该标的输出按来源或按地区的拆分。营收总额仍可在「财务报表」标签中查看。"
             )}
           </div>
         </div>

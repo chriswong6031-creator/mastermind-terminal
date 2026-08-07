@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 // ── Boot-trace helper — mirrors the one in TerminalShell (?boottrace=1) ──────
 const _cpStart = typeof performance !== "undefined" ? performance.now() : 0;
@@ -15,23 +15,47 @@ import {
   CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries, BaselineSeries,
   createSeriesMarkers, type ISeriesMarkersPluginApi,
   createTextWatermark,
-  CrosshairMode, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
+  CrosshairMode, ColorType, LineStyle, LineType, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
 } from "lightweight-charts";
 import { createEngine, type ChartEngine } from "@/lib/chart-engine";
 import { clampAxisZoom, axisZoomMargins, wheelDeltaToZoomStep, type AxisMargins } from "@/lib/chart-engine/axisZoom";
+import { DEFAULT_CHART_RIGHT_OFFSET, normalizedChartLogicalRange } from "@/lib/chart-engine/viewReset";
+import { keepIndicatorPaneAxisLabelsOnly } from "@/lib/indicatorPaneSeries";
 import { runPine, type RunResult } from "@/lib/pine-engine";
 import { createPineHost, type PineHost, type PineResult } from "@/lib/pine-engine/host";
 import { ORACLE_V1_PINE } from "@/lib/pine";
-import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
+import { DRAWING_SCHEMA_VERSION, MAX_DRAWING_PAYLOAD_BYTES, type Drawing, type DrawKind, type Bar as DBar, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
+import { drawingToolFromShortcut, getDrawingTool, type DrawingToolCapability } from "@/lib/drawingTools";
+import { DRAWING_RENDERER_FAMILY, materializeSemanticPoints } from "@/lib/drawing-engine/geometry";
+import { calculateAnchoredVwap, calculateFixedRangeVolumeProfile, calculateRegressionChannel, generateGhostFeed } from "@/lib/drawing-engine/analytics";
+import { cloneDrawing, constrainScreenAngle, translateDrawingAnchors } from "@/lib/drawing-engine/interaction";
+import { calculatePositionMetrics, fibonacciSettings, positionSettings, type FibonacciLabelMode } from "@/lib/drawing-engine/settings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
+import { priceTagTop, crosshairLabelHalf } from "@/lib/priceTagPlacement";
 import { setActivePaneCoords, getActivePaneCoords } from "@/lib/paneCoords";
 import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataCache";
 import { parseComposite, alignAndSum } from "@/lib/composite";
 import { CMP_PALETTE, type CmpCfg, defaultCmpCfg, cmpKey } from "@/lib/compare";
 import { isIntradayTf, classify, tfMinutes, type Market } from "@/lib/intradaySources";
+import { isMacroSymbol, macroOnEtAxis } from "@/lib/macroSymbols";
 import { sessionVwap, openingRange, sessionLevels, pivotLevels, rvolSeries, ttmSqueeze, adx as calcAdx, cvdApprox, type Bar as IMBar, type DailyBar } from "@/lib/intradayMath";
 import { attachSessionShading, detachSessionShading, type SessionShadingPrimitive } from "@/lib/sessionShading";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
+import { flowGet } from "@/lib/flowClientCache";
+import { deriveOptLevels, sessionsOldEt, type OptLevelsResult } from "@/lib/optionsLevels";
+import { computeSuite, resolveSuiteColors } from "@/lib/indicator-canvas/host";
+import { renderPrims, ensureTooltipHost } from "@/lib/indicator-canvas/render";
+import { paintCandleData } from "@/lib/indicator-canvas/candlePaint";
+import { paintSnapshotTables } from "@/lib/chartSnapshotTables";
+import { SUITE_DEFS, getSuiteDef, isSuiteKey as isSuiteKeyReg, paneSuiteKeys } from "@/lib/suites/registry";
+import {
+  enabledModulesForSuite,
+  parseSuiteModuleId,
+  suiteModuleCatalogFor,
+  type SuiteModuleCatalogEntry,
+} from "@/lib/suites/catalog";
+import type { SuiteRenderBundle, SuiteTier, SuiteColors, CoordMapper, TableSpec } from "@/lib/indicator-canvas/types";
+import ChartTables from "@/components/ChartTables";
 import { crossUps, crossDowns, crossUpsBelow, crossDownsAbove } from "@/lib/crossSignals";
 import { SOFT_Q, anchorSignal } from "@/lib/signalVerdict";
 import { makeNearestBarIndex } from "@/lib/barSnap";
@@ -40,14 +64,102 @@ import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/Cha
 import DayStatsStrip from "@/components/DayStatsStrip";
 import { tPlain } from "@/lib/i18n";
 import { listTemplates } from "@/lib/chartTemplates";
+import { announceTerminalVisualReady } from "@/lib/terminalBoot";
+import { assetInitial, assetLogoPath } from "@/lib/assetLogos";
+import { DEFAULT_CHART_SETTINGS, type ChartSettings } from "@/components/ChartFrameBar";
+import { chartTimeAxisOptions, chartTimeSpanDays } from "@/lib/chartTimeAxis";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
-export type DetectCmd = { kind: "trendlines" | "fib" | "sr" | "mtfa" | "clear" | "clearAll"; nonce: number } | null;
+
+const DRAWING_IMAGE_MAX_FILE_BYTES = 700 * 1024;
+const DRAWING_IMAGE_MAX_EDGE = 4096;
+const DRAWING_IMAGE_MAX_PIXELS = 12_000_000;
+const DRAWING_IMAGE_PAYLOAD_BUDGET = Math.floor(MAX_DRAWING_PAYLOAD_BYTES * .9);
+const DRAWING_IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/webp"]);
+const DRAWING_IMAGE_DATA_RE = /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/]+={0,2}$/i;
+
+type DrawingMediaIcon = {
+  id: string;
+  label: string;
+  path: string;
+  filled?: boolean;
+};
+
+const DRAWING_MEDIA_EMOJIS = [
+  { glyph: "😀", label: "Smile" },
+  { glyph: "👍", label: "Thumbs up" },
+  { glyph: "🔥", label: "Fire" },
+  { glyph: "🚀", label: "Rocket" },
+  { glyph: "💡", label: "Idea" },
+  { glyph: "⚡", label: "Lightning" },
+  { glyph: "🎯", label: "Target" },
+  { glyph: "👀", label: "Watching" },
+  { glyph: "💰", label: "Money" },
+  { glyph: "📈", label: "Chart up" },
+  { glyph: "📉", label: "Chart down" },
+  { glyph: "⚠️", label: "Warning" },
+] as const;
+
+const DRAWING_MEDIA_ICONS: readonly DrawingMediaIcon[] = [
+  { id: "star", label: "Star", filled: true, path: "M12 2.4l2.92 5.92 6.53.95-4.72 4.6 1.12 6.5L12 17.3l-5.85 3.07 1.12-6.5-4.72-4.6 6.53-.95z" },
+  { id: "heart", label: "Heart", filled: true, path: "M12 20.5S3.5 15.6 3.5 9.2A4.7 4.7 0 0 1 12 6.4a4.7 4.7 0 0 1 8.5 2.8c0 6.4-8.5 11.3-8.5 11.3z" },
+  { id: "bolt", label: "Bolt", filled: true, path: "M13.4 2.5L5.8 13h5.1l-.4 8.5L18.2 11h-5.1z" },
+  { id: "flag", label: "Flag", path: "M6 21V4m0 1h10l-1.8 3L16 11H6" },
+  { id: "check", label: "Check", path: "M4.5 12.5l4.2 4.2L19.5 6" },
+  { id: "warning", label: "Warning", path: "M12 3l9 17H3L12 3zm0 5v5m0 3.5v.1" },
+  { id: "pin", label: "Pin", filled: true, path: "M12 21s6-6.2 6-11a6 6 0 1 0-12 0c0 4.8 6 11 6 11zm0-8.4a2.6 2.6 0 1 1 0-5.2 2.6 2.6 0 0 1 0 5.2z" },
+  { id: "target", label: "Target", path: "M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5m-5 0 8-8m0 0v5m0-5h-5" },
+] as const;
+
+function isSafeDrawingImageDataUrl(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length <= Math.ceil(DRAWING_IMAGE_MAX_FILE_BYTES * 4 / 3) + 128
+    && DRAWING_IMAGE_DATA_RE.test(value);
+}
+
+function drawingMediaIcon(value: unknown): DrawingMediaIcon {
+  const id = typeof value === "string" ? value : "";
+  return DRAWING_MEDIA_ICONS.find((icon) => icon.id === id) ?? DRAWING_MEDIA_ICONS[0];
+}
+export type DetectCmd = {
+  kind: "trendlines" | "fib" | "sr" | "mtfa" | "clear" | "clearAll";
+  nonce: number;
+  /** Pane that owned the command when it was dispatched; prevents replay after an active-pane switch. */
+  targetPane: number;
+} | null;
+const VALUE_CHART_TYPES = new Set(["line", "line-markers", "step", "area", "baseline"]);
+const isValueChartType = (chartType: string) => VALUE_CHART_TYPES.has(chartType);
+const priceSeriesFamily = (chartType: string) => {
+  if (chartType === "bars") return "bars";
+  if (chartType === "hollow") return "hollow";
+  if (isValueChartType(chartType)) return chartType;
+  return "candle"; // candles + Heikin Ashi share the same LWC series family
+};
 
 // Optional live/delayed snapshot threaded ChartPane → ChartPanel for the R11 live-bar splice.
 // `ts` is a unix epoch in SECONDS (from the quote hub); `basis` gates whether we splice at all.
-export type LiveQuote = { last?: number; open?: number; high?: number; low?: number; vol?: number; ts?: number; basis?: string } | null | undefined;
+export type LiveQuote = {
+  last?: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  vol?: number;
+  ts?: number;
+  basis?: string;
+  market?: Market;
+  chg?: number;
+  prevSessionChg?: number;
+  marketSession?: "pre" | "rth" | "post" | "overnight";
+  regularSessionDate?: string;
+  regularSession?: "rth" | "closed";
+  extPrice?: number;
+  extChg?: number;
+  extTs?: number;
+  extSession?: "pre" | "post" | "overnight";
+  extSource?: string;
+  extBasis?: string;
+} | null | undefined;
 
 // Which markets can show intraday TFs (R12): everyone but Canadian `.TO` (no Polygon intraday leg).
 // Exported so the shell can gate its TF picker per active symbol.
@@ -231,9 +343,49 @@ function heikin(rows: Bar[]): Bar[] { const out: Bar[] = []; let po = 0, pc = 0;
 const NS = "http://www.w3.org/2000/svg";
 const mk = (tag: string, attrs: Record<string, any>) => { const e = document.createElementNS(NS, tag); for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, String(attrs[k])); return e; };
 
+/** Native shell renders TV-parity axis chips: the VALUE pill only. LWC draws a second filled
+ *  label for a series `title`, which duplicates the DOM legend and triples the axis ink.
+ *  Web is unchanged. (D5) */
+const shellAxis = () =>
+  typeof document !== "undefined" && document.documentElement.getAttribute("data-shell") === "app";
+const axTitle = (s: string) => (shellAxis() ? "" : s);
+
+/** C3/C7 — the ONE regular-width breakpoint. Must stay byte-identical to the `@media (min-width:700px)`
+ *  branch at the end of globals.css's D-block, or the type ramp and the grid pitch step apart. */
+const SHELL_WIDE_MQ = "(min-width:700px)";
+const shellWide = () =>
+  typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(SHELL_WIDE_MQ).matches;
+/** C2 — TV keeps the horizontal time-axis rule but lighter than ours: measured `#2A2D38` at
+ *  x=300, y2133–2135 (vs our `--line` #23262F). The price scale gets NO rule at all. */
+const SHELL_TIME_AXIS_LINE = "#2a2d38";
+const axisLineColor = (fallback: string) => (shellAxis() ? SHELL_TIME_AXIS_LINE : fallback);
+/** C3 — LWC's minimum price-label pitch is `ceil(fontSize * tickMarkDensity)`. TV measures 47 CSS px,
+ *  so 12 × 3.9 = 47 exactly. Web keeps the library default (2.5 — passing it is a no-op).
+ *  The 4.6 regular-width value is an invention (§4-A20.12). */
+const shellTickDensity = () => (shellAxis() ? (shellWide() ? 4.6 : 3.9) : 2.5);
+/** C7 — the axis font rides the same breakpoint as the CSS type ramp. */
+const shellAxisFontSize = () => (shellAxis() && shellWide() ? 13 : 12);
+
 // ── color-token snapshot (re-read on mount and on the up/down color flip, Effect 5) ──
-type Tokens = { up: string; down: string; grid: string; line: string; p3: string; link: string; warn: string; buy: string; sell: string; mut: string; brand2: string };
-const readTokens = (): Tokens => ({ up: css("--up"), down: css("--down"), grid: css("--grid"), line: css("--line"), p3: css("--panel-3"), link: css("--link"), warn: css("--warn"), buy: css("--buy"), sell: css("--sell"), mut: css("--muted"), brand2: css("--brand-2") });
+// `axis`/`grid` resolve through the --chart-axis-text / --chart-grid indirection whose :root
+// defaults reproduce --muted / --grid exactly; only the native shell retunes them (D6).
+type Tokens = { up: string; down: string; grid: string; axis: string; line: string; p3: string; link: string; warn: string; buy: string; sell: string; mut: string; brand2: string };
+const readTokens = (): Tokens => ({ up: css("--up"), down: css("--down"), grid: css("--chart-grid") || css("--grid"), axis: css("--chart-axis-text") || css("--muted"), line: css("--line"), p3: css("--panel-3"), link: css("--link"), warn: css("--warn"), buy: css("--buy"), sell: css("--sell"), mut: css("--muted"), brand2: css("--brand-2") });
+
+// Directional tint. LWC paints to canvas and cannot resolve var(--up)/var(--down), so every shaded
+// directional band has to be built in JS from the LIVE token — hardcoding the green/red rgba is what
+// kept these bands on the western convention under html[data-updown="east"]. Non-color input (and
+// any notation this doesn't parse) passes through untouched rather than drawing transparent.
+const withAlpha = (col: string, a: number): string => {
+  const s = (col || "").trim();
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(s);
+  if (hex) {
+    const h = hex[1].length === 3 ? hex[1].split("").map((c) => c + c).join("") : hex[1];
+    return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
+  }
+  const m = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i.exec(s);
+  return m ? `rgba(${+m[1]},${+m[2]},${+m[3]},${a})` : s;
+};
 
 // ── the canonical sub-pane order (parity with the base's sequential pane assignment) ──
 // overlays (ema/bb/vwap/vol + new DT overlays) always live in pane 0.
@@ -243,16 +395,16 @@ const SUBPANE_ORDER = ["rsi", "stochrsi", "macd", "rsistack", "accum", "rvol", "
 // Bases that carry a fresher-than-EOD price we can splice onto the last daily bar.
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
-export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
+export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, toolActivation = 0, drawingSticky = false, drawingCreationDisabled = false, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = "off", compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
-  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "" }:
+  instrumentName, instrumentMarket, instrumentColor, onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "", userTier = "free" }:
   { symbol: string; companyName?: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
+    tool?: DrawKind | null; toolActivation?: number; drawingSticky?: boolean; drawingCreationDisabled?: boolean; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: "off" | "weak" | "strong" | boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
-    chartSettings?: { mode?: number; invertScale?: boolean; scaleLeft?: boolean; autoScale?: boolean; priceLineVisible?: boolean; lastValueVisible?: boolean;
-      gridHVisible?: boolean; gridVVisible?: boolean;
-      candleUpColor?: string; candleDownColor?: string; candleUpBorder?: string; candleDownBorder?: string; candleUpWick?: string; candleDownWick?: string;
-      showWatermark?: boolean; showOHLC?: boolean; showBarChange?: boolean; showSymbolName?: boolean; };
+    chartSettings?: Partial<ChartSettings>;
+    instrumentName?: string;
+    instrumentMarket?: string;
+    instrumentColor?: string;
     onChartApi?: (api: IChartApi | null) => void; extHours?: boolean;
     onAddAlert?: (price: number) => void;
     onTableView?: () => void;
@@ -266,6 +418,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     dayMode?: boolean;
     /** B3: fires whenever the number of non-price sub-panes changes, so TerminalShell can grow the container. */
     onPaneCount?: (n: number) => void;
+    /** Entitlement tier (UI gate for premium suite modules — authority stays server-side). */
+    userTier?: SuiteTier;
   }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
@@ -275,6 +429,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // bridge handle the not-yet-migrated call sites still speak (P2 drives it out).
   const engineRef = useRef<ChartEngine | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const visibleCalendarSpanDays = () => {
+    try {
+      const range = chartRef.current?.timeScale().getVisibleRange();
+      return range ? chartTimeSpanDays(range.from, range.to) : null;
+    } catch {
+      return null;
+    }
+  };
   const priceSeriesRef = useRef<ISeriesApi<any> | null>(null);
   const priceFamilyRef = useRef<string | null>(null);   // which series family is on the chart now
   const indSeriesRef = useRef<Map<string, ISeriesApi<any>[]>>(new Map());   // indKey → its series
@@ -361,7 +523,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const viewSavedRef = useRef<{ from: number; to: number } | null>(null);
   // SSR-safe: seed with empty tokens (this client component still renders on the server for initial
   // HTML, where getComputedStyle/document are unavailable). Effect 1 populates real tokens on mount.
-  const tokensRef = useRef<Tokens>({ up: "", down: "", grid: "", line: "", p3: "", link: "", warn: "", buy: "", sell: "", mut: "", brand2: "" });
+  const tokensRef = useRef<Tokens>({ up: "", down: "", grid: "", axis: "", line: "", p3: "", link: "", warn: "", buy: "", sell: "", mut: "", brand2: "" });
   const chartTypeRef = useRef<string>(chartType);
   const timeframeRef = useRef<string>(timeframe);
   const compareRef = useRef<string[]>(compare || []);
@@ -371,6 +533,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const replayIdxRef = useRef<number | null>(replayIdx);   // live replayIdx so Effect 2 doesn't build against a stale closure if replay starts mid-fetch
   const liveQuoteRef = useRef<LiveQuote>(liveQuote);       // latest live quote, so Effect 2's tail can re-apply the splice after setData
   const renderRef = useRef<() => void>(() => {});
+  const cancelPendingDrawingRef = useRef<() => void>(() => {});
+  const cancelMediaToolRef = useRef<(activeTool?: DrawKind | null) => void>(() => {});
   const renderTagRef = useRef<(() => void) | null>(null);   // updates the last-price + bar-close-countdown axis tag
   const symbolRef = useRef(symbol);                          // current symbol (Effect 1 mounts once; symbol changes in Effect 2)
   const companyNameRef = useRef(companyName);                 // proper name for the snapshot header (zh preferred over English)
@@ -382,11 +546,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ── indicator-legend + pane-management plumbing (grafted onto the persistent-chart model) ──
   // one entry per chart pane (price pane + each sub-pane); pane KEY is the sub-pane store key
   // ("__price__" | "rsi" | "macd" | …) so it survives an incremental sub-pane rebuild / reorder.
-  const panesMeta = useRef<{ key: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[]>([]);
+  const panesMeta = useRef<{ key: string; removeKey?: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[]>([]);
   // collapse/maximize/resize state, keyed by pane key — survives reorder + indicator churn
   const paneCtl = useRef<{ collapsed: Set<string>; maximized: string | null; normal: Map<string, number> }>({ collapsed: new Set(), maximized: null, normal: new Map() });
   const hiddenRef = useRef<Set<string>>(hidden); hiddenRef.current = hidden;
   const indParamsRef = useRef<Record<string, any>>(indParams); indParamsRef.current = indParams;
+  // ── Premium suites (IndicatorCanvas) ── lazy per-frame compute via the host's memo; refs only.
+  const userTierRef = useRef<SuiteTier>(userTier); userTierRef.current = userTier;
+  const suiteColorsRef = useRef<SuiteColors | null>(null);          // resolved once per mount + on updown flip
+  const suitePaintKeyRef = useRef<string>("");                      // last applied suite candle-paint signature
+  const suiteTablesSigRef = useRef<string>("");                     // dashboard tables change-signature
+  const suiteTablesRef = useRef<TableSpec[]>([]);                   // synchronous snapshot source
+  const [suiteTables, setSuiteTables] = useState<TableSpec[]>([]);  // rendered by <ChartTables> (DOM, not SVG)
+  suiteTablesRef.current = suiteTables;
   const wrapElRef = useRef<HTMLElement | null>(null);
   const paneLayoutRef = useRef<PaneInfo[]>([]);
   const hoveredKeyRef = useRef<string | null>(null);   // pane under cursor, tracked by stable key
@@ -419,6 +591,35 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   );
   const onPaneCountRef = useRef(onPaneCount); onPaneCountRef.current = onPaneCount;
   const lastPaneCountRef = useRef<number>(-1);   // last reported count to avoid redundant calls
+
+  // `insider` is the pre-rename name for `essential`; still ranked so a stale cached tier can
+  // never fail CLOSED here (the renderer refusing to draw) while the picker fails OPEN.
+  const suiteTierRank = (tier: SuiteTier | "insider"): number =>
+    tier === "pro" ? 2 : tier === "essential" || tier === "insider" ? 1 : 0;
+  const canRenderSuiteModule = (entry: SuiteModuleCatalogEntry): boolean =>
+    suiteTierRank(userTierRef.current) >= suiteTierRank(entry.tier);
+  const activeSuiteModules = (suiteKey: string): SuiteModuleCatalogEntry[] =>
+    enabledModulesForSuite(suiteKey, indicatorsRef.current, indParamsRef.current).filter(canRenderSuiteModule);
+  const suiteLegendLabel = (entry: SuiteModuleCatalogEntry): string =>
+    `${entry.suiteTag} · ${entry.label}`;
+  const isLegendEntryHidden = (key: string): boolean => {
+    const parsed = parseSuiteModuleId(key);
+    return hiddenRef.current.has(key) || !!parsed && hiddenRef.current.has(parsed.suiteKey);
+  };
+  // Per-module eye state remains UI-only. The suite host still computes one shared context, but
+  // hidden modules are disabled in the render snapshot so their prims, paint, tables and events
+  // disappear together without mutating the user's saved module selection.
+  const suiteRenderParams = (suiteKey: string): Record<string, any> | undefined => {
+    const current = indParamsRef.current[suiteKey] as Record<string, any> | undefined;
+    const hideSuite = hiddenRef.current.has(suiteKey);
+    let next: Record<string, any> | undefined = current;
+    for (const entry of suiteModuleCatalogFor(suiteKey)) {
+      if (!hideSuite && !hiddenRef.current.has(entry.id)) continue;
+      if (next === current) next = { ...(current ?? {}) };
+      next![`${entry.moduleKey}.on`] = false;
+    }
+    return next;
+  };
   // B1: double-tap + synthetic-hover suppression refs
   const lastDblHandledRef = useRef<number>(0);   // performance.now() of last touch-driven double-tap
   const lastTouchTsRef = useRef<number>(0);       // performance.now() of last touch pointerdown
@@ -428,7 +629,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ── existing DOM / interaction refs (unchanged) ──
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drawRef = useRef<Drawing[]>(drawings);
-  const toolRef = useRef<string | null>(tool);
+  const drawingTransactionRef = useRef(false);
+  const toolRef = useRef<DrawKind | null>(tool);
+  const toolActivationRef = useRef(toolActivation);
+  const drawingStickyRef = useRef(drawingSticky);
+  const drawingCreationDisabledRef = useRef(drawingCreationDisabled);
+  const clearDrawingSelectionRef = useRef<() => void>(() => {});
   const styleRef = useRef(drawStyle);
   const onChangeRef = useRef(onDrawingsChange);
   const magnetRef = useRef(magnet);
@@ -440,20 +646,40 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // CMX W3: this pane's live coordinate resolver (set inside the chart effect once xOf/yOf exist).
   const cmxCoordResolverRef = useRef<import("@/lib/paneCoords").PaneCoordResolver | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
+  const creationPaletteRef = useRef<HTMLDivElement | null>(null);
+  const mediaPickerRef = useRef<HTMLDivElement | null>(null);
+  const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const ctxRef = useRef<HTMLDivElement | null>(null);
   const textEditRef = useRef<HTMLInputElement | null>(null);
   const sigRef = useRef<SVGSVGElement | null>(null);
   const priceTagRef = useRef<HTMLDivElement | null>(null);  // TradingView-style last-price + countdown tag on the right axis
   const tagTimerRef = useRef<number | null>(null);          // 1s ticker so the bar-close countdown stays live
+  // y (price-pane coords) of the crosshair's axis price label, null when no crosshair is on the price
+  // pane — renderPriceTag slides the badge clear of it so the hovered price is never covered.
+  const crossLabelYRef = useRef<number | null>(null);
   const watermarkPluginRef = useRef<{ applyOptions: (opts: Record<string, any>) => void } | null>(null); // v5 text watermark plugin
+  const brandBugRef = useRef<HTMLDivElement | null>(null);  // C5 — shell-only DOM brand bug (never created on web)
+  // Mirrors the last `visible` passed to the watermark plugin. The plugin API is write-only
+  // (IPanePrimitiveWrapper exposes applyOptions, never options), and the wordmark is canvas-drawn,
+  // so this is the only assertable surface for C5's "plugin off in shell" contract.
+  const watermarkVisibleRef = useRef<boolean>(true);
   const lastValueVisibleRef = useRef<boolean>(true);        // mirrors chartSettings.lastValueVisible; gates the custom priceTag
+  const countdownVisibleRef = useRef<boolean>(true);
+  const chartSettingsRef = useRef<Partial<ChartSettings>>(chartSettings ?? {});
   // status-line visibility knobs (chartSettings.showOHLC/showBarChange/showSymbolName)
   const showOHLCRef = useRef<boolean>(true);
   const showBarChangeRef = useRef<boolean>(true);
   const showSymbolNameRef = useRef<boolean>(true);
+  const showLogoRef = useRef<boolean>(true);
+  const titleModeRef = useRef<ChartSettings["titleMode"]>("name");
+  const showVolumeRef = useRef<boolean>(false);
+  const showLastDayChangeRef = useRef<boolean>(false);
+  const instrumentNameRef = useRef<string>(instrumentName || symbol);
+  const instrumentMarketRef = useRef<string>(instrumentMarket || "");
+  const instrumentColorRef = useRef<string>(instrumentColor || "#64748b");
   // intraday dead-end empty-state overlay ("Back to Daily") — built in Effect 1, toggled from Effect 2
   const emptyRef = useRef<HTMLDivElement | null>(null);
-  const showEmptyRef = useRef<(msg: string) => void>(() => {});
+  const showEmptyRef = useRef<(msg: string, action?: "daily" | null) => void>(() => {});
   const hideEmptyRef = useRef<() => void>(() => {});
   // SVG layer for indicator overlays (ichimoku cloud, ribbon fill, vprofile, volbox)
   const indSvgRef = useRef<SVGSVGElement | null>(null);
@@ -464,6 +690,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Price lines created on the price series for slevels / pivots — must be removed explicitly on clear.
   // Keyed per indicator so removing ONE of slevels/pivots doesn't clear the survivor's lines.
   const indPriceLinesRef = useRef<Map<string, IPriceLine[]>>(new Map());
+  const extendedPriceLineRef = useRef<IPriceLine | null>(null);
   const pushIndPriceLine = (key: string, pl: IPriceLine) => {
     const m = indPriceLinesRef.current;
     if (!m.has(key)) m.set(key, []);
@@ -478,6 +705,39 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       m.delete(k);
     }
   };
+  const clearExtendedPriceLine = () => {
+    const line = extendedPriceLineRef.current;
+    if (!line) return;
+    try { priceSeriesRef.current?.removePriceLine(line); } catch {}
+    extendedPriceLineRef.current = null;
+  };
+  const applyExtendedPriceLine = () => {
+    clearExtendedPriceLine();
+    const priceSeries = priceSeriesRef.current;
+    const quote = liveQuoteRef.current;
+    const settings = chartSettingsRef.current;
+    if (!priceSeries || isIntradayRef.current || replayIdxRef.current != null) return;
+    if (chartDataSymRef.current !== symbolRef.current) return;   // never annotate another symbol's series
+    if (classify(symbolRef.current) !== "us" || isMacroSymbol(symbolRef.current)) return;
+    if (settings.extendedLineVisible === false) return;
+    if (!quote?.extSession || quote.extPrice == null || !Number.isFinite(quote.extPrice) || quote.extPrice <= 0) return;
+    const color = quote.extSession === "pre"
+      ? settings.preMarketColor || "#ff9800"
+      : quote.extSession === "post"
+        ? settings.postMarketColor || "#2962ff"
+        : settings.overnightColor || "#9c27b0";
+    const title = quote.extSession === "pre" ? "PRE" : quote.extSession === "post" ? "AH" : "ON";
+    try {
+      extendedPriceLineRef.current = priceSeries.createPriceLine({
+        price: quote.extPrice,
+        color,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        axisLabelVisible: true,
+        title,
+      });
+    } catch {}
+  };
   // Session shading primitive attached to the candle series (intraday + market has sessions + dayMode).
   const shadingPrimRef = useRef<SessionShadingPrimitive | null>(null);
   // Countdown chip DOM element + its 1s timer (mounted in Effect 1, driven by dayMode effect).
@@ -485,10 +745,39 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Daily OHLC bars cached for slevels/pivots (fetched async during intraday builds; keyed by symbol).
   const dailyCacheRef = useRef<{ sym: string; bars: DailyBar[] } | null>(null);
+  // Options Levels overlay (R3.1): fetched gex+moves derivation, keyed by symbol so a stale
+  // root's levels can never draw on another ticker's chart. status: "loading" (fetch in
+  // flight), "ok"/"empty" (derivation result), "unavailable" (fetch returned null — the
+  // /api/flow entitlement 403 or a transient failure), "ineligible" (non-US symbol).
+  const optLevelsStateRef = useRef<{
+    sym: string;
+    status: "loading" | "ok" | "empty" | "unavailable" | "ineligible";
+    res: OptLevelsResult | null;
+  } | null>(null);
+  // The symbol whose bars are ACTUALLY on the price series (stamped at each setData).
+  // symbolRef flips the instant the prop renders — long before Effect 2's bars land — so a
+  // cache-hit gex fetch resolving in a microtask would otherwise draw the NEW root's levels
+  // over the OLD symbol's candles (permanently, when the bars fetch dead-ends).
+  const chartDataSymRef = useRef<string>("");
+  // US options only — same market gate the extended-hours line uses.
+  const optLevelsEligible = (sym: string) => classify(sym) === "us" && !isMacroSymbol(sym);
 
   // rebuild the CHART STYLE (not the chart) when the up/down color scheme flips (Effect 5)
   const [csNonce, setCsNonce] = useState(0);
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
+  // suite colors resolve from CSS tokens — drop the cache on an up/down flip so the next frame re-reads
+  useEffect(() => { const h = () => { suiteColorsRef.current = null; }; window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
+  // Options Levels bakes tPlain() titles into canvas price-line labels at build time — rebuild on a
+  // language flip or zh axis titles persist into the EN view (LEX law: no cross-language leaks).
+  useEffect(() => {
+    const h = () => {
+      if (!indicatorsRef.current.has("optlevels")) return;
+      try { buildOptLevels(); applyHidden(); rebuildPaneMeta(); } catch {}
+    };
+    window.addEventListener("mm:lang", h);
+    return () => window.removeEventListener("mm:lang", h);
+    // eslint-disable-next-line
+  }, []);
   // CMX W3: keep the active-pane coordinate registration in sync with isActive (the chart mount effect
   // only re-runs on symbol/tf changes). Register when active, and clear our entry on deactivate/unmount
   // only if it's still ours (last-writer-wins — never clobber another pane that became active after us).
@@ -498,13 +787,37 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (getActivePaneCoords() === cmxCoordResolverRef.current) setActivePaneCoords(null);
     };
   }, [isActive]);
-  drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
+  // Live quote/language updates can rerender React in the middle of a pointer
+  // drag or native color/range transaction. Do not replace that in-flight
+  // draft with the last committed prop snapshot.
+  if (!drawingTransactionRef.current) drawRef.current = drawings;
+  toolRef.current = tool; toolActivationRef.current = toolActivation; drawingStickyRef.current = drawingSticky; drawingCreationDisabledRef.current = drawingCreationDisabled; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
   chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol; companyNameRef.current = companyName;
   lastValueVisibleRef.current = chartSettings?.lastValueVisible !== false;
+  countdownVisibleRef.current = chartSettings?.countdownVisible !== false;
+  chartSettingsRef.current = chartSettings ?? {};
   showOHLCRef.current = chartSettings?.showOHLC !== false;
   showBarChangeRef.current = chartSettings?.showBarChange !== false;
   showSymbolNameRef.current = chartSettings?.showSymbolName !== false;
+  showLogoRef.current = chartSettings?.showLogo !== false;
+  titleModeRef.current = chartSettings?.titleMode ?? "name";
+  showVolumeRef.current = chartSettings?.showVolume === true;
+  showLastDayChangeRef.current = chartSettings?.showLastDayChange === true;
+  instrumentNameRef.current = instrumentName || symbol;
+  instrumentMarketRef.current = instrumentMarket || "";
+  instrumentColorRef.current = instrumentColor || "#64748b";
+
+  // Creating a new drawing and inspecting an existing object are mutually
+  // exclusive. On narrow charts those controls intentionally share one lane.
+  useEffect(() => {
+    if (tool) clearDrawingSelectionRef.current();
+  }, [tool]);
+  useEffect(() => {
+    const dismiss = () => clearDrawingSelectionRef.current();
+    window.addEventListener("mm:drawing-dismiss-selection", dismiss);
+    return () => window.removeEventListener("mm:drawing-dismiss-selection", dismiss);
+  }, []);
 
   // ────────────────────────────────────────────────────────────────────────────
   // Shared helpers (module-level within the component, referenced from every effect).
@@ -520,21 +833,61 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Build price-series data for the current chartType from a bar set.
   const priceData = (rows: Bar[]) => {
     const display = chartTypeRef.current === "heikin" ? heikin(rows) : rows;
-    if (chartTypeRef.current === "line" || chartTypeRef.current === "area") return display.map((r) => ({ time: r.time, value: r.c }));
-    return display.map((r) => ({ time: r.time, open: r.o, high: r.h, low: r.l, close: r.c }));
+    if (isValueChartType(chartTypeRef.current)) return display.map((r) => ({ time: r.time, value: r.c }));
+    const byPreviousClose = chartSettingsRef.current.colorBarsPrevClose && chartTypeRef.current !== "bars" && chartTypeRef.current !== "hollow";
+    return display.map((r, index) => {
+      const point: Record<string, any> = { time: r.time, open: r.o, high: r.h, low: r.l, close: r.c };
+      if (byPreviousClose) {
+        const previous = display[index - 1]?.c ?? r.o;
+        const up = r.c >= previous;
+        const settings = chartSettingsRef.current;
+        const color = up
+          ? settings.candleUpColor || tokensRef.current.up
+          : settings.candleDownColor || tokensRef.current.down;
+        point.color = settings.candleBodyVisible === false ? "rgba(0,0,0,0)" : color;
+        point.borderColor = up ? settings.candleUpBorder || color : settings.candleDownBorder || color;
+        point.wickColor = up ? settings.candleUpWick || color : settings.candleDownWick || color;
+      }
+      return point;
+    });
   };
 
   // Create the price series (removed+re-added when the chartType actually changes).
   const addPriceSeries = (chart: IChartApi, t: Tokens) => {
     const pf = priceFmt();
-    if (chartTypeRef.current === "line") return chart.addSeries(LineSeries, { color: t.brand2, lineWidth: 2, priceFormat: pf, lastValueVisible: false, priceLineVisible: true }, 0);
-    if (chartTypeRef.current === "area") return chart.addSeries(AreaSeries, { lineColor: t.brand2, topColor: "rgba(41,98,255,.30)", bottomColor: "rgba(41,98,255,.02)", lineWidth: 2, priceFormat: pf, lastValueVisible: false, priceLineVisible: true }, 0);
-    if (chartTypeRef.current === "bars") return chart.addSeries(BarSeries, { upColor: t.up, downColor: t.down, priceFormat: pf, lastValueVisible: false, priceLineVisible: true }, 0);
-    return chart.addSeries(CandlestickSeries, { upColor: t.up, downColor: t.down, wickUpColor: t.up, wickDownColor: t.down, borderVisible: false, priceFormat: pf, lastValueVisible: false, priceLineVisible: true }, 0);
+    const settings = chartSettingsRef.current;
+    const common = { priceFormat: pf, lastValueVisible: false, priceLineVisible: settings.priceLineVisible !== false };
+    if (chartTypeRef.current === "line") return chart.addSeries(LineSeries, { ...common, color: t.brand2, lineWidth: 2 }, 0);
+    if (chartTypeRef.current === "line-markers") return chart.addSeries(LineSeries, { ...common, color: t.brand2, lineWidth: 2, pointMarkersVisible: true, pointMarkersRadius: 2.5 }, 0);
+    if (chartTypeRef.current === "step") return chart.addSeries(LineSeries, { ...common, color: t.brand2, lineWidth: 2, lineType: LineType.WithSteps }, 0);
+    if (chartTypeRef.current === "area") return chart.addSeries(AreaSeries, { ...common, lineColor: t.brand2, topColor: "rgba(41,98,255,.30)", bottomColor: "rgba(41,98,255,.02)", lineWidth: 2 }, 0);
+    if (chartTypeRef.current === "baseline") return chart.addSeries(BaselineSeries, {
+      ...common,
+      baseValue: { type: "price", price: 0 }, relativeGradient: true, lineWidth: 2,
+      topLineColor: t.up, topFillColor1: withAlpha(t.up, 0.28), topFillColor2: withAlpha(t.up, 0.03),
+      bottomLineColor: t.down, bottomFillColor1: withAlpha(t.down, 0.03), bottomFillColor2: withAlpha(t.down, 0.28),
+    }, 0);
+    if (chartTypeRef.current === "bars") return chart.addSeries(BarSeries, { ...common, upColor: settings.candleUpColor || t.up, downColor: settings.candleDownColor || t.down }, 0);
+    return chart.addSeries(CandlestickSeries, {
+      ...common,
+      upColor: settings.candleBodyVisible === false || chartTypeRef.current === "hollow" ? "rgba(0,0,0,0)" : settings.candleUpColor || t.up,
+      downColor: settings.candleBodyVisible === false ? "rgba(0,0,0,0)" : settings.candleDownColor || t.down,
+      wickUpColor: settings.candleUpWick || settings.candleUpColor || t.up,
+      wickDownColor: settings.candleDownWick || settings.candleDownColor || t.down,
+      borderUpColor: settings.candleUpBorder || settings.candleUpColor || t.up,
+      borderDownColor: settings.candleDownBorder || settings.candleDownColor || t.down,
+      borderVisible: settings.candleBordersVisible !== false,
+      wickVisible: settings.candleWicksVisible !== false,
+    }, 0);
   };
 
-  // per-indicator params merged over the registry defaults (drives the Settings dialog + the math/style)
+  // per-indicator params merged over the registry defaults (drives the Settings dialog + the math/style).
+  // withDefaults() also resolves directional style colors against the active Up/Down setting.
   const P = (k: string) => withDefaults(k, indParamsRef.current[k]);
+  // Live --up/--down for canvas-painted indicator colors. tokensRef is filled on mount (Effect 1)
+  // and re-read on the Up/Down flip (Effect 5); the literals cover only the pre-mount window.
+  const dirUp = () => tokensRef.current.up || "#26c281";
+  const dirDown = () => tokensRef.current.down || "#f0566b";
   const labelOf = (k: string) => (isIndKey(k) ? IND_DEFS[k].label : k);
 
   // ── indicator builders (param-driven; params flow from the Settings dialog via indParams) ──
@@ -569,24 +922,30 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       priceLineVisible: false,
       lastValueVisible: false,
     }, 0);
-    try { chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } }); } catch {}
+    // C4/CHART-04 — 22% of the price pane is a slab that buries MA-200 and the brand bug; TV's
+    // sliver is ~3.5%. 12% (top 0.88) is a deliberate midpoint, not a match (§4-A20.13). The alpha
+    // in lib/indicators.ts moves WITH this: it was explicitly a compensator for the oversized band.
+    try { chart.priceScale("volume").applyOptions({ scaleMargins: { top: shellAxis() ? 0.88 : 0.78, bottom: 0 } }); } catch {}
     vs.setData(volData(rows));
     return [vs];
   };
   // rsi and stochrsi each get their own pane (formerly combined into one shared "osc" pane)
   const buildRsiPane = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
-    const p = P("rsi"); const rS = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lastValueVisible: true, title: "RSI" }, pane);
+    const p = P("rsi"); const rS = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lastValueVisible: true, title: axTitle("RSI") }, pane);
     rS.setData(toLine(rows, rsi(closes, p.length)));
     if (p.showLevels) { try { rS.createPriceLine({ price: p.obLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); rS.createPriceLine({ price: p.osLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {} }
     return [rS];
   };
   // CM_Stochastic crossover-highlight bars (Pine bgcolor port): value 1 (full-pane
   // via the fixed 0..1 autoscale on scale "stochsig") at a bullish/bearish cross,
-  // whitespace elsewhere so only signal bars draw. Green when %K crosses ABOVE %D
-  // while %K < lowLine; red when %K crosses BELOW %D while %K > upLine.
+  // whitespace elsewhere so only signal bars draw. A bull cross (%K crosses ABOVE %D while
+  // %K < lowLine) rides --up and a bear cross (%K crosses BELOW %D while %K > upLine) rides
+  // --down, so the bars follow the Up/Down colors setting (red-up under data-updown="east")
+  // exactly like the candles — they used to be hardcoded green/red.
   const stochHiData = (rows: Bar[], k: (number | null)[], d: (number | null)[], upLine: number, lowLine: number) => {
     const bull = crossUpsBelow(k, d, lowLine); const bear = crossDownsAbove(k, d, upLine);
-    return rows.map((r, i) => (bull[i] ? { time: r.time, value: 1, color: "rgba(38,194,129,0.22)" } : bear[i] ? { time: r.time, value: 1, color: "rgba(240,86,107,0.22)" } : { time: r.time }));
+    const bullCol = withAlpha(dirUp(), 0.22), bearCol = withAlpha(dirDown(), 0.22);
+    return rows.map((r, i) => (bull[i] ? { time: r.time, value: 1, color: bullCol } : bear[i] ? { time: r.time, value: 1, color: bearCol } : { time: r.time }));
   };
   const buildStochRsiPane = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
     const p = P("stochrsi"); const sr = cmStoch(rows.map(r => r.h), rows.map(r => r.l), closes, p.length, p.smoothK, p.smoothD);
@@ -594,11 +953,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const hlS = chart.addSeries(HistogramSeries, { priceScaleId: "stochsig", base: 0, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 1 } }) }, pane);
     try { chart.priceScale("stochsig").applyOptions({ scaleMargins: { top: 0, bottom: 0 } }); } catch {}   // full-pane-height bars (default overlay margins are 0.2/0.1)
     hlS.setData(stochHiData(rows, sr.k, sr.d, p.upLine, p.lowLine) as any);
-    const kS = chart.addSeries(LineSeries, { color: p.kCol, lineWidth: p.width as any, lastValueVisible: true, title: "%K" }, pane);
-    const dS = chart.addSeries(LineSeries, { color: p.dCol, lineWidth: 1, lastValueVisible: true, title: "%D" }, pane);
+    const kS = chart.addSeries(LineSeries, { color: p.kCol, lineWidth: p.width as any, lastValueVisible: true, title: axTitle("%K") }, pane);
+    const dS = chart.addSeries(LineSeries, { color: p.dCol, lineWidth: 1, lastValueVisible: true, title: axTitle("%D") }, pane);
     kS.setData(toLine(rows, sr.k)); dS.setData(toLine(rows, sr.d));
-    // CM_Stochastic_MTF upper/lower/mid guide lines (80 / 20 / 50 by default)
-    try { kS.createPriceLine({ price: p.upLine, color: "rgba(240,86,107,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: p.lowLine, color: "rgba(38,194,129,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: 50, color: "rgba(214,218,227,.15)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
+    // CM_Stochastic_MTF upper/lower/mid guide lines (80 / 20 / 50 by default). Overbought is the
+    // down side and oversold the up side, so both ride the tokens and flip with the setting.
+    try { kS.createPriceLine({ price: p.upLine, color: withAlpha(dirDown(), 0.25), lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: p.lowLine, color: withAlpha(dirUp(), 0.25), lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: 50, color: "rgba(214,218,227,.15)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
     // Return order keeps kS@0/dS@1 stable for the in-place update path; the highlight histogram rides at [2]
     // (a real series → the teardown loops removeSeries it for free).
     return [kS, dS, hlS];
@@ -611,14 +971,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const up = crossUps(line, sig); const dn = crossDowns(line, sig); const markers: any[] = [];
     for (let i = 0; i < rows.length; i++) {
       if (!up[i] && !dn[i]) continue;
-      markers.push({ time: rows[i].time, position: "atPriceMiddle", price: (line[i]! + sig[i]!) / 2, shape: "circle", size: 1, color: up[i] ? "rgba(38,194,129,1)" : "rgba(240,86,107,1)" });
+      markers.push({ time: rows[i].time, position: "atPriceMiddle", price: (line[i]! + sig[i]!) / 2, shape: "circle", size: 1, color: up[i] ? dirUp() : dirDown() });
     }
     try { macdMarkersRef.current = createSeriesMarkers(lineSeries, markers as any); } catch {}
   };
   const buildMacd = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
     const p = P("macd"); const m = rsiMacd(closes, p.rsiLen, p.fastLen, p.baseLen, p.signalLen);
     const hs = chart.addSeries(HistogramSeries, {}, pane); hs.setData(rows.map((r, i) => (m.hist[i] != null ? { time: r.time, value: m.hist[i]!, color: m.hist[i]! >= 0 ? p.upHist : p.downHist } : null)).filter(Boolean) as any);
-    const lS = chart.addSeries(LineSeries, { color: p.macdCol, lineWidth: p.width as any, title: "MACD-RSI" }, pane); const sS = chart.addSeries(LineSeries, { color: p.signalCol, lineWidth: 1, title: "signal" }, pane);
+    const lS = chart.addSeries(LineSeries, { color: p.macdCol, lineWidth: p.width as any, title: axTitle("MACD-RSI") }, pane); const sS = chart.addSeries(LineSeries, { color: p.signalCol, lineWidth: 1, title: axTitle("signal") }, pane);
     lS.setData(toLine(rows, m.line)); sS.setData(toLine(rows, m.sig));
     try { lS.createPriceLine({ price: 0, color: "rgba(214,218,227,.2)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
     applyMacdMarkers(lS, rows, m.line, m.sig);
@@ -800,8 +1160,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (ich.spanA[i] != null) spAData.push({ time: ich.futureTimes[i], value: ich.spanA[i]! });
       if (ich.spanB[i] != null) spBData.push({ time: ich.futureTimes[i], value: ich.spanB[i]! });
     }
-    const spAS = chart.addSeries(LineSeries, { color: "rgba(38,194,129,0.6)", lineWidth: 1 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "Span A" }, 0);
-    const spBS = chart.addSeries(LineSeries, { color: "rgba(240,86,107,0.6)", lineWidth: 1 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "Span B" }, 0);
+    // Span A is the bullish edge of the cloud and Span B the bearish one — both ride the Up/Down
+    // setting via p.spanACol/p.spanBCol (the fill params, opaque-ified here for the rails).
+    const spAS = chart.addSeries(LineSeries, { color: withAlpha(p.spanACol, 0.6), lineWidth: 1 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "Span A" }, 0);
+    const spBS = chart.addSeries(LineSeries, { color: withAlpha(p.spanBCol, 0.6), lineWidth: 1 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "Span B" }, 0);
     spAS.setData(spAData); spBS.setData(spBData);
     // Store cloud data for SVG polygon rendering
     indOverlayRef.current["ichimoku"] = { ich, futureTimes: ich.futureTimes };
@@ -827,12 +1189,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const applyRibbonCandleColors = (rows: Bar[], rb: ReturnType<typeof trendRibbon>, p: Record<string, any>) => {
     const priceS = priceSeriesRef.current; if (!priceS) return;
     const chartTyp = chartTypeRef.current;
-    if (chartTyp === "line" || chartTyp === "area") return;
+    if (isValueChartType(chartTyp)) return;
     const colored = rows.map((r, i) => {
       const st = rb.state[i], su = rb.shortUp[i];
       let col: string;
-      if (st === "ribbonUp") col = su ? "#26c281" : "rgba(38,194,129,0.45)";
-      else if (st === "ribbonDown") col = su === false ? "#f0566b" : "rgba(240,86,107,0.45)";
+      // p.colUp/p.colDn already carry the Up/Down setting (and any user override); the weak
+      // states are the same hue at 0.45 rather than a second hardcoded green/red.
+      if (st === "ribbonUp") col = su ? p.colUp : withAlpha(p.colUp, 0.45);
+      else if (st === "ribbonDown") col = su === false ? p.colDn : withAlpha(p.colDn, 0.45);
       else col = "#8b93a3";
       return chartTyp === "bars"
         ? { time: r.time, open: r.o, high: r.h, low: r.l, close: r.c, color: col }
@@ -845,8 +1209,48 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const restoreNormalCandleColors = (rows: Bar[]) => {
     const priceS = priceSeriesRef.current; if (!priceS) return;
     const chartTyp = chartTypeRef.current;
-    if (chartTyp === "line" || chartTyp === "area") return;
+    if (isValueChartType(chartTyp)) return;
     try { priceS.setData(priceData(rows) as any); } catch {}
+  };
+
+  // Premium suites: per-bar candle repaint (e.g. Structure Candles). Mirrors the ribbon pattern.
+  // Key-guarded so the per-frame call from renderIndOverlays is a no-op unless the paint changed;
+  // if ribbon colorCandles and a suite paint are both active, last writer wins (documented W0 limit).
+  const applySuitePaint = () => {
+    const priceS = priceSeriesRef.current; if (!priceS) return;
+    const rows = barsRef.current; if (!rows.length) return;
+    const chartTyp = chartTypeRef.current;
+    if (isValueChartType(chartTyp) || chartTyp === "heikin") { suitePaintKeyRef.current = ""; return; }
+    const active = Object.keys(SUITE_DEFS).filter((k) => indicatorsRef.current.has(k));
+    let paint: { i: number; color?: string; borderColor?: string; wickColor?: string }[] = [];
+    if (active.length) {
+      if (!suiteColorsRef.current) suiteColorsRef.current = resolveSuiteColors();
+      const lang = typeof document !== "undefined" && document.documentElement.getAttribute("data-lang") === "zh" ? "zh" as const : "en" as const;
+      for (const k of active) {
+        const def = SUITE_DEFS[k]; if (!def) continue;
+        try {
+          const b = computeSuite(def, suiteRenderParams(k), { bars: rows as any, tf: timeframeRef.current, symbol: symbolRef.current, isIntraday: isIntradayRef.current, lang }, userTierRef.current, suiteColorsRef.current!);
+          if (b.candlePaint.length) paint = paint.concat(b.candlePaint);
+        } catch { /* module errors surface via the render path */ }
+      }
+    }
+    const last = rows[rows.length - 1];
+    // djb2 over every entry (index, colors, channel presence) — a mode switch that repaints the same
+    // bars with different colors must produce a different key (review finding W1-1)
+    let ph = 5381;
+    for (let n = 0; n < paint.length; n++) {
+      const e = paint[n];
+      ph = ((ph * 33) ^ e.i) >>> 0;
+      ph = ((ph * 33) ^ ((e.borderColor ? 1 : 0) | (e.wickColor ? 2 : 0))) >>> 0;
+      const c = (e.color ?? "") + (e.borderColor ?? "") + (e.wickColor ?? "");
+      for (let ci = 0; ci < c.length; ci++) ph = ((ph * 33) ^ c.charCodeAt(ci)) >>> 0;
+    }
+    const key = paint.length ? `${rows.length}:${String(last?.time)}:${paint.length}:${ph}` : "";
+    if (key === suitePaintKeyRef.current) return;
+    const hadPaint = suitePaintKeyRef.current !== "";
+    suitePaintKeyRef.current = key;
+    if (!paint.length) { if (hadPaint) restoreNormalCandleColors(rows); return; }
+    try { priceS.setData(paintCandleData(rows as any, paint, chartTyp === "bars" ? "bars" : "candles") as any); } catch {}
   };
 
   // SuperTrend: two line series (up/down rails with null gaps at flips).
@@ -868,7 +1272,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const anchorKey = anchors[Math.min(3, Math.max(0, Math.round(p.anchor)))] ?? "swing_low";
     const vals = computeAvwap(rows, anchorKey, p.lookback);
     const title = anchorKey === "vol_spike" ? "AVWAP (vol-spike, earnings proxy)" : "AVWAP";
-    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lineStyle: 1 /* dashed */, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title }, 0);
+    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lineStyle: 1 /* dashed */, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: axTitle(title) }, 0);
     ln.setData(toLine(rows, vals));
     return [ln];
   };
@@ -877,7 +1281,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const buildRvwap = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
     const p = P("rvwap");
     const vals = rollingVwap(rows, p.length);
-    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: `RVWAP ${p.length}` }, 0);
+    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: axTitle(`RVWAP ${p.length}`) }, 0);
     ln.setData(toLine(rows, vals));
     return [ln];
   };
@@ -886,7 +1290,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const buildWvwap = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
     const p = P("wvwap");
     const vals = weekAnchoredVwap(rows);
-    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: "WVWAP" }, 0);
+    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: axTitle("WVWAP") }, 0);
     ln.setData(toLine(rows, vals));
     return [ln];
   };
@@ -911,9 +1315,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const buildRsiStack = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
     const p = P("rsistack");
     const rs = rsiStack(rows, p.len1, p.len2, p.len3);
-    const s1 = chart.addSeries(LineSeries, { color: p.col1, lineWidth: p.width as any, lastValueVisible: true, title: `RSI${p.len1}` }, pane);
-    const s2 = chart.addSeries(LineSeries, { color: p.col2, lineWidth: p.width as any, lastValueVisible: true, title: `RSI${p.len2}` }, pane);
-    const s3 = chart.addSeries(LineSeries, { color: p.col3, lineWidth: p.width as any, lastValueVisible: true, title: `RSI${p.len3}` }, pane);
+    const s1 = chart.addSeries(LineSeries, { color: p.col1, lineWidth: p.width as any, lastValueVisible: true, title: axTitle(`RSI${p.len1}`) }, pane);
+    const s2 = chart.addSeries(LineSeries, { color: p.col2, lineWidth: p.width as any, lastValueVisible: true, title: axTitle(`RSI${p.len2}`) }, pane);
+    const s3 = chart.addSeries(LineSeries, { color: p.col3, lineWidth: p.width as any, lastValueVisible: true, title: axTitle(`RSI${p.len3}`) }, pane);
     s1.setData(toLine(rows, rs.r1)); s2.setData(toLine(rows, rs.r2)); s3.setData(toLine(rows, rs.r3));
     if (p.showLevels) {
       try { s2.createPriceLine({ price: p.ob, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
@@ -926,7 +1330,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const buildAccum = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
     const p = P("accum");
     const vals = accumPct(rows, p.win);
-    const ln = chart.addSeries(LineSeries, { color: "#4d82ff", lineWidth: 1.4 as any, lastValueVisible: true, title: "Accum%" }, pane);
+    const ln = chart.addSeries(LineSeries, { color: "#4d82ff", lineWidth: 1.4 as any, lastValueVisible: true, title: axTitle("Accum%") }, pane);
     ln.setData(toLine(rows, vals));
     if (p.showBands) {
       for (const band of [75, 50, 35]) {
@@ -1081,6 +1485,46 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return [];
   };
 
+  // buildOptLevels: Options Levels (R3.1) as createPriceLine on the price series.
+  // Draws from optLevelsStateRef (populated by the fetch effect) — data-fed, so unlike
+  // slevels/pivots there is nothing to compute from `rows`; the guard against a stale
+  // root is the sym key on the state ref. Colors resolve from the options desk's level
+  // convention at build time (LWC renders to canvas and cannot resolve var()); put wall
+  // rides var(--down) so the East-Asian flip stays correct (directional-color law).
+  const buildOptLevels = (): ISeriesApi<any>[] => {
+    removeIndPriceLines("optlevels");   // defensive: never double-draw this key's lines
+    const priceS = priceSeriesRef.current; if (!priceS) return [];
+    const st = optLevelsStateRef.current;
+    if (!st || st.sym !== symbolRef.current || st.status !== "ok" || !st.res) return [];
+    // Never draw until this symbol's bars are on the canvas (see chartDataSymRef) — the
+    // Effect-2 build path re-runs this builder right after setData, so nothing is lost.
+    if (chartDataSymRef.current !== symbolRef.current) return [];
+    const p = P("optlevels");
+    const css = (n: string, fb: string) =>
+      getComputedStyle(document.documentElement).getPropertyValue(n).trim() || fb;
+    const style: Record<string, { on: boolean; color: string; lineStyle: number; lineWidth: number; title: string }> = {
+      call_wall: { on: p.cw !== false, color: css("--brand-2", "#4d82ff"), lineStyle: 0, lineWidth: 1, title: tPlain("olCw") },
+      put_wall: { on: p.pw !== false, color: css("--down", "#f0566b"), lineStyle: 0, lineWidth: 1, title: tPlain("olPw") },
+      gamma_flip: { on: p.flip !== false, color: css("--ai", "#9d86ff"), lineStyle: 2 /* dashed — signed estimate */, lineWidth: 1, title: tPlain("olFlip") },
+      abs_gamma: { on: p.ags !== false, color: css("--signal", "#e8b339"), lineStyle: 1 /* dotted */, lineWidth: 1, title: tPlain("olAgs") },
+      em_hi: { on: p.em !== false, color: css("--muted", "#8b93a3"), lineStyle: 1, lineWidth: 1, title: tPlain("olEmHi") },
+      em_lo: { on: p.em !== false, color: css("--muted", "#8b93a3"), lineStyle: 1, lineWidth: 1, title: tPlain("olEmLo") },
+    };
+    for (const lv of st.res.levels) {
+      const s = style[lv.key];
+      if (!s || !s.on) continue;
+      try {
+        const pl = priceS.createPriceLine({
+          price: lv.price, color: s.color, lineWidth: s.lineWidth,
+          lineStyle: s.lineStyle, axisLabelVisible: true, title: s.title,
+        } as any);
+        pushIndPriceLine("optlevels", pl);
+      } catch {}
+    }
+    // no LWC series — sentinel entry keeps OVERLAY_KEYS / Effect 3 tracking consistent
+    return [];
+  };
+
   // buildRvol: Relative Volume — histogram (slot) + line (cum) + 1.0 reference line.
   const buildRvol = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
     if (!isIntradayRef.current) return [];
@@ -1091,7 +1535,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const out: ISeriesApi<any>[] = [];
     if (rv.sessionsUsed < 3) {
       // Insufficient history — return a dummy LineSeries with empty data so the pane renders
-      const dummy = chart.addSeries(LineSeries, { lastValueVisible: true, title: "RVOL" }, pane);
+      const dummy = chart.addSeries(LineSeries, { lastValueVisible: true, title: axTitle("RVOL") }, pane);
       dummy.setData([]);
       out.push(dummy);
       indOverlayRef.current["rvol_nobase"] = true;
@@ -1106,7 +1550,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     out.push(histS);
     const lineS = chart.addSeries(LineSeries, {
       color: p.lineCol as string, lineWidth: p.width as any,
-      lastValueVisible: true, title: "RVOL",
+      lastValueVisible: true, title: axTitle("RVOL"),
     }, pane);
     lineS.setData(toLine(rows, rv.cum));
     out.push(lineS);
@@ -1166,7 +1610,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const out: ISeriesApi<any>[] = [];
     const adxS = chart.addSeries(LineSeries, {
       color: p.col as string, lineWidth: p.width as any,
-      lastValueVisible: true, title: "ADX",
+      lastValueVisible: true, title: axTitle("ADX"),
     }, pane);
     adxS.setData(toLine(rows, res.adx));
     // 20 / 25 hlines
@@ -1176,9 +1620,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (p.showDi as boolean) {
       const upC = getComputedStyle(document.documentElement).getPropertyValue("--up").trim() || "#26c281";
       const dnC = getComputedStyle(document.documentElement).getPropertyValue("--down").trim() || "#f0566b";
-      const diPlusS = chart.addSeries(LineSeries, { color: upC, lineWidth: 1 as any, lastValueVisible: true, title: "+DI" }, pane);
+      const diPlusS = chart.addSeries(LineSeries, { color: upC, lineWidth: 1 as any, lastValueVisible: true, title: axTitle("+DI") }, pane);
       diPlusS.setData(toLine(rows, res.diPlus));
-      const diMinusS = chart.addSeries(LineSeries, { color: dnC, lineWidth: 1 as any, lastValueVisible: true, title: "-DI" }, pane);
+      const diMinusS = chart.addSeries(LineSeries, { color: dnC, lineWidth: 1 as any, lastValueVisible: true, title: axTitle("-DI") }, pane);
       diMinusS.setData(toLine(rows, res.diMinus));
       out.push(diPlusS, diMinusS);
     }
@@ -1196,7 +1640,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       baseValue: { type: "price", price: 0 },
       topLineColor: upC, topFillColor1: upC + "33", topFillColor2: upC + "11",
       bottomLineColor: dnC, bottomFillColor1: dnC + "11", bottomFillColor2: dnC + "33",
-      lastValueVisible: true, title: "Est. CVD",
+      lastValueVisible: true, title: axTitle("Est. CVD"),
     } as any, pane);
     cvdS.setData(toLine(rows, vals));
     return [cvdS];
@@ -1215,6 +1659,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (inds.has("ttmsq")) out.push("ttmsq");
     if (inds.has("adx")) out.push("adx");
     if (inds.has("cvd")) out.push("cvd");
+    // Premium pane suites still share one runtime pane per family. A table-only MTF dashboard does
+    // not create an empty oscillator pane; as soon as any enabled module draws in the pane, the
+    // family gets its single shared anchor.
+    for (const k of paneSuiteKeys()) {
+      if (inds.has(k) && activeSuiteModules(k).some((entry) => entry.surface === "pane")) out.push(k);
+    }
     return out;
   };
 
@@ -1289,7 +1739,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // legacy call-site name kept: every builder path calls normalizeStretch(). It now rebuilds the pane
   // registry (from the freshly-assigned paneMapRef), sizes via applyStretch, and re-applies the
   // eye/tf visibility to the freshly-built series.
-  const normalizeStretch = () => { rebuildPaneMeta(); applyStretch(); applyHidden(); };
+  // C3 — createEngine only reaches the price pane's scale; every oscillator pane creates its own,
+  // so an added indicator would ship the dense default pitch next to the thinned price axis.
+  // Shell-only and a no-op on web, so the browser render is untouched.
+  const applyPaneTickDensity = () => {
+    if (!shellAxis()) return;
+    const chart = chartRef.current; if (!chart) return;
+    const tickMarkDensity = shellTickDensity();
+    try { for (const p of chart.panes()) { try { p.priceScale("right").applyOptions({ tickMarkDensity } as any); } catch {} } } catch {}
+  };
+  const normalizeStretch = () => { rebuildPaneMeta(); applyStretch(); applyHidden(); applyPaneTickDensity(); };
 
   // a genuine separator drag (normal mode only) becomes the new baseline; ignore programmatic sizing
   const captureNormal = () => { const ctl = paneCtl.current; if (ctl.maximized) return; for (const m of panesMeta.current) { if (ctl.collapsed.has(m.key)) continue; try { ctl.normal.set(m.key, m.pane.getStretchFactor()); } catch {} } };
@@ -1332,6 +1791,33 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Gaps & Demand: signal-layer overlay (no plotted series, like the oracle) — drawn in renderSignals.
     // Registry-backed, so it keeps its Settings/Source/eye/remove menu.
     if (inds.has("gaps")) overlayEntries.push({ key: "gaps", label: labelOf("gaps"), kind: "overlay", isPine: false });
+    // Options Levels (R3.1): data-fed price-line overlay — no plotted series. The legend row is
+    // the overlay's provenance surface (discoverability law: annotate, never vanish): EOD session
+    // date + the Tier-B "signed estimate" disclosure when drawn, otherwise WHY nothing is drawn
+    // (non-US symbol, no coverage, entitlement, loading). Nightly EOD data — never a LIVE badge.
+    if (inds.has("optlevels")) {
+      const st = optLevelsStateRef.current;
+      const fresh = st && st.sym === symbolRef.current ? st : null;
+      let note: string;
+      if (!optLevelsEligible(symbolRef.current)) note = tPlain("olUsOnly");
+      else if (!fresh || fresh.status === "loading") note = tPlain("olLoading");
+      else if (fresh.status === "ok" && fresh.res) {
+        const d = fresh.res.asofDate;
+        const age = d ? sessionsOldEt(d) : 0;
+        // Tier discipline (§4.1): "signed estimate" rides ONLY when a dealer-signed level
+        // (wall/flip) is drawn; an EM-only set is Tier A arithmetic and carries no disclosure.
+        const parts = [
+          d ? tPlain("olEod").replace("{date}", d.slice(5)) : "",
+          fresh.res.signed ? tPlain("olSigned") : "",
+          age > 3 ? tPlain("olStale").replace("{n}", String(age)) : "",
+        ].filter(Boolean);
+        // Undated + unsigned (a Tier-A-only set with a malformed asof): still say SOMETHING
+        // about provenance rather than rendering a bare, unqualified row.
+        note = parts.length ? parts.join(" · ") : tPlain("olNoDate");
+      } else if (fresh.status === "empty") note = tPlain("olNoCov");
+      else note = userTierRef.current === "free" ? tPlain("olGate") : tPlain("olUnavail");
+      overlayEntries.push({ key: "optlevels", label: note ? `${labelOf("optlevels")} — ${note}` : labelOf("optlevels"), kind: "overlay", isPine: false });
+    }
     // Lab signals: descriptive research markers (default OFF, drawn in renderSignals).
     // Intraday-only SUB-PANE indicators (rvol/cvd) on daily TFs: their builders return [] so the
     // sub-pane meta loop below has no pane to anchor a row to — surface them here in the price-pane
@@ -1355,22 +1841,44 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (hasPane) continue;   // sub-pane script → handled in the sub-pane loop
       overlayEntries.push(pineLegendEntry(s, "overlay", series, err));
     }
+    // Premium modules are first-class legend rows. Overlay/candle/dashboard modules live with the
+    // price pane; oscillator-drawing modules are grouped into their suite's one shared sub-pane.
+    for (const sk of Object.keys(SUITE_DEFS)) {
+      if (!inds.has(sk)) continue;
+      const sdef = SUITE_DEFS[sk]; if (!sdef) continue;
+      for (const entry of activeSuiteModules(sk)) {
+        if (sdef.kind === "pane" && entry.surface === "pane") continue;
+        overlayEntries.push({ key: entry.id, label: suiteLegendLabel(entry), kind: "overlay", isPine: false, noSource: true });
+      }
+    }
     // compare overlays: append to overlay entries so they appear as real legend rows in the price pane.
     const cmp = compareRef.current || []; const cfgM = compareCfgRef.current || {};
     for (let ci = 0; ci < cmp.length && ci < 4; ci++) { const cs = cmp[ci]; if (!cs || cs === symbol) continue; const cfg = cfgM[cs]; overlayEntries.push({ key: cmpKey(cs), label: cs, kind: "overlay", isPine: false, isCompare: true, color: cfg?.color || CMP_PALETTE[ci % CMP_PALETTE.length] }); }
-    const metas: { key: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[] = [];
+    const metas: { key: string; removeKey?: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[] = [];
     metas.push({ key: "__price__", isPrice: true, entries: overlayEntries, pane: priceS.getPane() });
-    for (const key of SUBPANE_ORDER) {
+    for (const key of [...SUBPANE_ORDER, ...paneSuiteKeys()]) {
       const arr = indSeriesRef.current.get(key); if (!arr || !arr.length) continue;
-      const entries: Omit<LegendEntry, "hidden">[] = [{
+      const sdefPane = getSuiteDef(key);
+      const entries: Omit<LegendEntry, "hidden">[] = sdefPane
+        ? activeSuiteModules(key)
+            .filter((entry) => entry.surface === "pane")
+            .map((entry) => ({ key: entry.id, label: suiteLegendLabel(entry), kind: "pane" as const, isPine: false, noSource: true }))
+        : [{
+            key,
+            // rvol with an insufficient baseline (<3 prior sessions) carries the honest-null note
+            label: key === "rvol" && indOverlayRef.current["rvol_nobase"]
+              ? `${labelOf(key)} — ${tPlain("rvolNoBase")}`
+              : labelOf(key),
+            kind: "pane" as const, isPine: false,
+          }];
+      if (!entries.length) continue;
+      metas.push({
         key,
-        // rvol with an insufficient baseline (<3 prior sessions) carries the honest-null note
-        label: key === "rvol" && indOverlayRef.current["rvol_nobase"]
-          ? `${labelOf(key)} — ${tPlain("rvolNoBase")}`
-          : labelOf(key),
-        kind: "pane", isPine: false,
-      }];
-      metas.push({ key, isPrice: false, entries, pane: arr[0].getPane() });
+        ...(sdefPane ? { removeKey: `suite-pane:${key}` } : {}),
+        isPrice: false,
+        entries,
+        pane: arr[0].getPane(),
+      });
     }
     // pine SUB-PANE scripts, in their assigned-pane order
     for (const s of pineScriptsRef.current) {
@@ -1410,7 +1918,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // applyStretch() after the swap re-runs applyMaximizeDom so the row-hiding tracks the panes'
   // NEW positions if anything ever moves a pane while maximized (the ops buttons are gated off
   // in that state, but programmatic paths stay safe).
-  const doMove = (pi: number, dir: -1 | 1) => { const ch = chartRef.current; if (!ch) return; const tgt = pi + dir; let n = 1; try { n = ch.panes().length; } catch {} if (tgt < 0 || tgt >= n) return; try { ch.swapPanes(pi, tgt); } catch {} applyStretch(); requestAnimationFrame(measure); };
+  const doMove = (pi: number, dir: -1 | 1) => { const ch = chartRef.current; if (!ch) return; const tgt = pi + dir; let n = 1; try { n = ch.panes().length; } catch {} if (tgt < 0 || tgt >= n) return; try { ch.swapPanes(pi, tgt); } catch {  rerenderOverlays();   // pane y-bands changed — suite prims must remap (review W2-1)
+  } applyStretch(); requestAnimationFrame(measure); };
   // moves are disabled while a pane is maximized: the overlay layout is filtered to the single
   // visible pane then (up/down would disagree), and reordering an invisible stack is meaningless.
   const canMoveUp = (pi: number) => !paneCtl.current.maximized && pi > 0;
@@ -1428,6 +1937,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const h = hiddenRef.current; const SB = indSeriesRef.current;
     for (const [k, arr] of SB) {
       const vis = !h.has(k) && tfVisible(k); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} }
+    }
+    // price-line-only overlays (slevels/pivots/optlevels) plot no series — the eye must flip
+    // their pooled IPriceLines directly or the toggle silently no-ops on them.
+    for (const [k, lines] of indPriceLinesRef.current) {
+      const vis = !h.has(k) && tfVisible(k);
+      for (const pl of lines) { try { pl.applyOptions({ lineVisible: vis, axisLabelVisible: vis } as any); } catch {} }
     }
     // custom scripts: eye toggle by scriptId (no tf-visibility gating — scripts don't declare _vis)
     for (const [id, arr] of pineSeriesRef.current) { const vis = !h.has(id); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} } }
@@ -1450,8 +1965,27 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
   // Build the full indicator set from scratch in canonical order onto `rows`.
   // Overlays first (pane 0), then sub-panes appended sequentially → assigns paneMapRef.
+  // Pane-suite anchor: one transparent series pinning the suite's fixed y-range (autoscaleInfoProvider)
+  // plus its static guide lines. All suite chrome renders in the SVG pass with pane-local mapping.
+  const buildSuitePane = (chart: IChartApi, rows: Bar[], key: string, pane: number): ISeriesApi<any>[] => {
+    const def = getSuiteDef(key); if (!def || def.kind !== "pane" || !def.pane || !rows.length) return [];
+    const { min, max } = def.pane;
+    const anchor = chart.addSeries(LineSeries, {
+      color: "rgba(0,0,0,0)", lineWidth: 1 as any, lastValueVisible: false, priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      autoscaleInfoProvider: () => ({ priceRange: { minValue: min, maxValue: max } }),
+    } as any, pane);
+    const mid = (min + max) / 2;
+    try { anchor.setData([{ time: rows[0].time as any, value: mid }, { time: rows[rows.length - 1].time as any, value: mid }]); } catch {}
+    for (const ln of def.pane.lines ?? []) {
+      try { anchor.createPriceLine({ price: ln.p, color: "rgba(214,218,227,.22)", lineWidth: 1, lineStyle: ln.dashed ? 2 : 0, axisLabelVisible: true, title: ln.label ?? String(ln.p) } as any); } catch {}
+    }
+    return [anchor];
+  };
+
   const buildAllIndicators = (rows: Bar[], closes: number[]) => {
     const chart = chartRef.current; if (!chart) return; const inds = indicatorsRef.current;
+    suitePaintKeyRef.current = "";   // series data was just (re)set — force suite paint re-evaluation
     // Clear SVG overlay data for overlays being rebuilt
     indOverlayRef.current = {};
     if (inds.has("ema")) indSeriesRef.current.set("ema", buildEma(chart, rows, closes));
@@ -1472,6 +2006,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (inds.has("orb")) indSeriesRef.current.set("orb", buildOrb(rows));
     if (inds.has("slevels")) indSeriesRef.current.set("slevels", buildSlevels(rows));
     if (inds.has("pivots")) indSeriesRef.current.set("pivots", buildPivots(rows));
+    if (inds.has("optlevels")) indSeriesRef.current.set("optlevels", buildOptLevels());
     // If ribbon is NOT active, ensure normal candle colors
     if (!inds.has("ribbon")) restoreNormalCandleColors(rows);
     let pane = 1;
@@ -1486,6 +2021,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       else if (key === "ttmsq") series = buildTtmsq(chart, rows, pane);
       else if (key === "adx") series = buildAdx(chart, rows, pane);
       else if (key === "cvd") series = buildCvd(chart, rows, pane);
+      else if (isSuiteKeyReg(key)) series = buildSuitePane(chart, rows, key, pane);
+      series = keepIndicatorPaneAxisLabelsOnly(series);
       indSeriesRef.current.set(key, series);
       // Claim the pane index (and advance the counter) ONLY when the builder actually rendered ≥1 series.
       // rvol/cvd return [] on daily (intraday-only). Setting paneMapRef + incrementing `pane` for an empty
@@ -1509,6 +2046,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const updateAllIndicators = (rows: Bar[], closes: number[]) => {
     const inds = indicatorsRef.current; const SB = indSeriesRef.current;
     if (!SB.size) return;  // nothing to update (no indicators active)
+    // NOTE: pane suites never reach this in-place path (INPLACE_KEYS excludes suite keys), so the
+    // TF-switch re-span happens via the full rebuild in buildSuitePane — do not add a loop here.
     // overlays
     if (inds.has("ema")) {
       const sArr = SB.get("ema"); const p = P("ema");
@@ -1717,9 +2256,42 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const showBarChange = showBarChangeRef.current;
       const ch = last.c - prev.c, cp = (ch / prev.c) * 100, u = ch >= 0, f = (x: number) => x.toFixed(prec);
       let html = "";
-      if (showOHLC) html += `<span class="mut">O</span><b>${f(last.o)}</b> <span class="mut">H</span><b>${f(last.h)}</b> <span class="mut">L</span><b>${f(last.l)}</b> <span class="mut">C</span><b>${f(last.c)}</b>`;
-      if (showBarChange) { if (html) html += " "; html += `<b class="${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`; }
+      const currentSymbol = symbolRef.current;
+      const fallbackColor = /^#[0-9a-f]{3,8}$/i.test(instrumentColorRef.current) ? instrumentColorRef.current : "#64748b";
+      const logoSrc = assetLogoPath(currentSymbol, instrumentMarketRef.current);
+      let identityHtml = showLogoRef.current
+        ? `<span class="status-symbol-logo" style="--status-logo-fallback:${fallbackColor}"><span>${escH(assetInitial(currentSymbol))}</span><img src="${escH(logoSrc)}" alt="" referrerpolicy="origin"></span>`
+        : "";
+      if (showSymbolNameRef.current) {
+        const name = instrumentNameRef.current || currentSymbol;
+        const title = titleModeRef.current === "ticker"
+          ? currentSymbol
+          : titleModeRef.current === "both" && name !== currentSymbol
+            ? `${name} · ${currentSymbol}`
+            : name;
+        const identity = [title, timeframeRef.current, instrumentMarketRef.current].filter(Boolean).map(escH).join(" · ");
+        const basis = liveQuoteRef.current?.basis;
+        identityHtml += `<b class="status-symbol-name">${identity}</b><i class="status-market-dot ${basis === "LIVE" ? "is-live" : basis === "DELAYED_15M" ? "is-delayed" : ""}"></i>`;
+      }
+      if (identityHtml) html += `<span class="status-identity">${identityHtml}</span>`;
+      let valuesHtml = "";
+      // D2 — the OHLC / Vol / Day runs are wrapped so the native shell can suppress them as a
+      // unit (TV shows them only on crosshair scrub). The wrappers are inert on web.
+      if (showOHLC) valuesHtml += `<span class="status-ohlc"><span class="mut">O</span><b>${f(last.o)}</b><span class="mut">H</span><b>${f(last.h)}</b><span class="mut">L</span><b>${f(last.l)}</b><span class="mut">C</span><b>${f(last.c)}</b></span>`;
+      // shell-only last price — display:none on web via the base .status-last rule.
+      valuesHtml += `<b class="status-last">${f(last.c)}</b>`;
+      if (showBarChange) valuesHtml += `<b class="status-change ${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`;
+      if (showVolumeRef.current) valuesHtml += `<span class="status-vol"><span class="mut">Vol</span><b>${last.v.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 2 })}</b></span>`;
+      if (showLastDayChangeRef.current) {
+        const dayChange = liveQuoteRef.current?.prevSessionChg ?? liveQuoteRef.current?.chg;
+        if (dayChange != null && Number.isFinite(dayChange)) {
+          valuesHtml += `<span class="status-day"><span class="mut">Day</span><b class="${dayChange >= 0 ? "up" : "down"}">${dayChange >= 0 ? "+" : ""}${dayChange.toFixed(2)}%</b></span>`;
+        }
+      }
+      if (valuesHtml) html += `<span class="status-values">${valuesHtml}</span>`;
       statusRef.current.innerHTML = html;
+      const logoImage = statusRef.current.querySelector<HTMLImageElement>(".status-symbol-logo img");
+      logoImage?.addEventListener("error", () => { logoImage.hidden = true; }, { once: true });
     }
     // Gate oracle verdict text on whether the _oracle indicator is active. The chip's display:none
     // is controlled by oracleVisible in JSX; this guard prevents stale text from painting in the
@@ -1743,7 +2315,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       verdictRef.current.textContent = `GOLDEN ORACLE · ${v === "RECLAIM" ? "RE-ENTRY" : v}`;
       verdictRef.current.style.color = buy ? t.buy : t.sell;
       const w = verdictRef.current.parentElement as HTMLElement;
-      if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; }
+      // Token-derived so the chip tracks the shell palette (byte-identical output on web, where
+      // --buy/--sell still resolve to the locked v5 hexes).
+      if (w) {
+        w.style.background = `color-mix(in srgb, ${buy ? t.buy : t.sell} 12%, transparent)`;
+        w.style.borderColor = `color-mix(in srgb, ${buy ? t.buy : t.sell} 30%, transparent)`;
+      }
     }
   };
 
@@ -1754,12 +2331,44 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // barsRef/fullBarsRef so the status line, sig-mark snapping and pane-sync map stay consistent.
   // Guards (any → no-op): no chart/series, intraday TF, replay active, basis not spliceable,
   // no quote/last, or the daily source is empty.
+  /**
+   * Roll the pane back to EMPTY. A symbol whose bars never arrive (no `/data/<sym>.json`, an empty
+   * composite, a dead intraday feed) used to leave the PREVIOUS symbol's series on screen under the
+   * new symbol's badge — and the live-quote splice then printed the new symbol's price onto those
+   * bars (000001.SS's 3,878 spliced onto 300363.SZ's ~17 CNY candles: one giant candle, a 0–4400
+   * scale, and a status line reading +1881%). Clearing `chartDataSymRef` also tells every
+   * symbol-guarded consumer (splice, options levels, drawings) that this pane is unpainted.
+   */
+  const clearChartData = () => {
+    barsRef.current = []; fullBarsRef.current = []; dailyBarsRef.current = []; closesRef.current = [];
+    barIdxRef.current = { src: null, map: new Map() };
+    sliceRef.current = null; sigMarksRef.current = []; earlyDotsRef.current = []; warnMarksRef.current = [];
+    chartDataSymRef.current = "";
+    clearExtendedPriceLine();
+    clearAllIndicators();
+    const chart = chartRef.current;
+    if (chart) for (const s of cmpSeriesRef.current.values()) { try { chart.removeSeries(s); } catch {} }
+    cmpSeriesRef.current.clear();
+    try { priceSeriesRef.current?.setData([]); } catch {}
+    rebuildPaneMeta();             // the legend must not advertise studies that are no longer drawn
+    if (onMeta) onMeta({ total: 0 });
+    renderTagRef.current?.();      // no bars → the last-price badge hides itself
+    renderSignalsRef.current();    // drop the previous symbol's markers / gap zones
+    renderRef.current();
+  };
+
   const applyLiveSplice = () => {
     const priceS = priceSeriesRef.current; if (!priceS) return;
+    // The bars on the canvas must belong to THIS symbol (see clearChartData) — a quote must never
+    // be spliced onto another symbol's series.
+    if (chartDataSymRef.current !== symbolRef.current) return;
     if (isIntradayRef.current) return;                     // intraday is already live
     if (replayIdxRef.current != null) return;              // never splice under replay
     const q = liveQuoteRef.current;
     if (!q || q.last == null || !isFinite(q.last)) return;
+    // US extended prints live on a separate line. Never create or patch a
+    // regular daily candle while the exchange is outside RTH.
+    if (classify(symbolRef.current) === "us" && !isMacroSymbol(symbolRef.current) && q.marketSession !== "rth") return;
     if (!SPLICE_BASES.has(q.basis || "")) return;          // EOD / missing basis → no splice
     const daily = dailyBarsRef.current; if (!daily.length) return;
     const tf = timeframeRef.current;
@@ -1791,7 +2400,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // heikin falls through to the OHLC mapping (raw candle acceptable per spec caveat) — passing the
     // raw {o,h,l,c,v} bucket to a candlestick series is read as a whitespace point (no `open` key)
     // and BLANKS the live candle. Map to {open,high,low,close} like the candle/bars family.
-    try { priceS.update((chartTypeRef.current === "line" || chartTypeRef.current === "area" ? { time: bucket.time, value: bucket.c } : { time: bucket.time, open: bucket.o, high: bucket.h, low: bucket.l, close: bucket.c }) as any); } catch { return; }
+    try { priceS.update(isValueChartType(chartTypeRef.current) ? { time: bucket.time, value: bucket.c } : { time: bucket.time, open: bucket.o, high: bucket.h, low: bucket.l, close: bucket.c }); } catch { return; }
     // keep the in-memory bar sets in step with what's on the chart (last bucket only)
     const fb = fullBarsRef.current;
     const bs = barsRef.current;
@@ -1833,8 +2442,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Apply the default view (recent ~240 window in normal mode; fit the slice in replay).
   const applyView = (rows: Bar[], replay: number | null) => {
     const chart = chartRef.current; if (!chart) return;
-    const DEFAULT_VIEW = 240, n = rows.length;
-    try { if (replay == null && n > DEFAULT_VIEW) chart.timeScale().setVisibleLogicalRange({ from: n - DEFAULT_VIEW, to: n - 1 + 6 }); else chart.timeScale().fitContent(); } catch {}
+    let plotWidth: number | undefined;
+    try { plotWidth = chart.timeScale().width(); } catch {}
+    const range = normalizedChartLogicalRange(rows.length, replay != null, plotWidth);
+    try { if (range) chart.timeScale().setVisibleLogicalRange(range); else chart.timeScale().fitContent(); } catch {}
   };
 
   // ────────────────────────────────────────────────────────────────────────────
@@ -1853,15 +2464,33 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Reads live refs so labels match the on-screen state.
     // Scale: takeScreenshot() returns a canvas at lightweight-charts' own pixel ratio (may be 1:1).
     // We derive realScale from src.width / wrap.clientWidth and upscale the output to TARGET_SCALE (2x)
-    // for crispness. Drawing overlays (sigSvg z-index:3, drawSvg z-index:4) are composited separately.
+    // for crispness. Custom indicators (z-index:2), signals (z-index:3), and user drawings
+    // (z-index:4) are composited separately in the same order as the live chart.
     const TARGET_SCALE = 2;
+    const SNAPSHOT_SVG_VARS = [
+      "--bg", "--panel", "--panel-2", "--panel-3", "--line", "--line-3",
+      "--text", "--text-2", "--text-dim", "--muted", "--brand", "--brand-2",
+      "--up", "--down", "--buy", "--sell", "--signal", "--warn",
+      "--font-inter", "--font-ui", "--font-num", "--font-code",
+    ] as const;
     // Serialize an SVG element to a bitmap at the given CSS dimensions scaled to TARGET_SCALE.
     const svgToImage = (svgEl: SVGSVGElement, cssW: number, cssH: number): Promise<HTMLImageElement | null> => {
       return new Promise((resolve) => {
         try {
           const clone = svgEl.cloneNode(true) as SVGSVGElement;
+          // The live overlays inherit theme variables and use CSS-pixel coordinates. A blob-loaded
+          // SVG has neither the page cascade nor a useful viewport unless we make both explicit.
+          clone.style.cssText = "background:transparent;overflow:visible";
+          const rootStyle = getComputedStyle(document.documentElement);
+          for (const name of SNAPSHOT_SVG_VARS) {
+            const value = rootStyle.getPropertyValue(name).trim();
+            if (value) clone.style.setProperty(name, value);
+          }
+          clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+          clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
           clone.setAttribute("width", String(cssW * TARGET_SCALE));
           clone.setAttribute("height", String(cssH * TARGET_SCALE));
+          clone.setAttribute("viewBox", `0 0 ${cssW} ${cssH}`);
           const xml = new XMLSerializer().serializeToString(clone);
           const blob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });
           const url = URL.createObjectURL(blob);
@@ -1877,6 +2506,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const action: string = (ev as CustomEvent)?.detail?.action || "download";
       (async () => {
         try {
+          // Repaint the DOM overlay layer immediately before capture so a just-added indicator,
+          // live-bar update, or settings change cannot export the previous render.
+          renderSignalsRef.current?.();
+          renderRef.current?.();
           const src = chartRef.current!.takeScreenshot();   // HTMLCanvasElement — all panes (lightweight-charts' own px ratio)
           const wrap = wrapElRef.current;
           const cssW = wrap ? wrap.clientWidth : src.width;
@@ -1897,6 +2530,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           const mut = tokensRef.current.mut || css("--muted") || "#5a616f";
           const brand2 = tokensRef.current.brand2 || css("--brand-2") || "#4d82ff";
           const fam = css("--font-ui") || "system-ui, sans-serif";
+          const numFam = css("--font-num") || fam;
           // ── background ──
           g.fillStyle = bg;
           g.fillRect(0, 0, out.width, out.height);
@@ -1930,18 +2564,39 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             } catch {}
           }
           if (!srcDrawn) g.drawImage(src, 0, HDR, chartW, chartH);
-          // ── composite drawing overlays (signal markers z:3, user drawings z:4) ──
+          // ── composite SVG overlays in their live stacking order ──
           // Each SVG occupies the full wrap (inset:0 100% 100%), so we draw them at (0, HDR).
           if (wrap) {
+            const indicatorSvgEl = indSvgRef.current;
             const sigSvgEl = sigRef.current;
             const drawSvgEl = svgRef.current;
-            const [sigImg, drawImg] = await Promise.all([
+            const [indicatorImg, sigImg, drawImg] = await Promise.all([
+              indicatorSvgEl ? svgToImage(indicatorSvgEl, cssW, cssH) : Promise.resolve(null),
               sigSvgEl ? svgToImage(sigSvgEl, cssW, cssH) : Promise.resolve(null),
               drawSvgEl ? svgToImage(drawSvgEl, cssW, cssH) : Promise.resolve(null),
             ]);
+            if (indicatorImg) g.drawImage(indicatorImg, 0, HDR, chartW, chartH);
             if (sigImg) g.drawImage(sigImg, 0, HDR, chartW, chartH);
             if (drawImg) g.drawImage(drawImg, 0, HDR, chartW, chartH);
           }
+          // Premium Market/MTF dashboards are live DOM tables rather than chart/SVG primitives.
+          // Repaint their current TableSpec data directly so every first-class indicator surface
+          // participates in the export without depending on a lagging React commit or DOM rasterizer.
+          paintSnapshotTables(g, suiteTablesRef.current, {
+            outputWidth: out.width,
+            outputHeight: out.height,
+            scale: dpr,
+            chartBodyTop: HDR,
+            palette: {
+              panel: css("--panel") || "#101217",
+              line: css("--line-3") || "#30343d",
+              text,
+              text2: css("--text-2") || "#b8beca",
+              textDim: css("--text-dim") || "#747b89",
+              muted: mut,
+            },
+            fonts: { ui: fam, numeric: numFam },
+          });
           // ── header band ──
           const tf = timeframeRef.current;
           const pad = Math.round(14 * dpr);
@@ -1978,15 +2633,24 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           g.font = `500 ${Math.round(9 * dpr)}px ${fam}`;
           g.fillText("TERMINAL", logoRight, Math.round(HDR / 2 + 6 * dpr));
           // symbol + tf (right of logo) — full timestamp right-aligned
+          // Effect 1 mounts once and the panel is deliberately NOT keyed by symbol, so the `symbol`
+          // prop captured here is frozen at mount. Read symbolRef (synced every render) or a
+          // snapshot taken after switching tickers stamps the header with the mount-time symbol.
+          const snapSym = symbolRef.current || symbol;
           const symX = logoRight + g.measureText("MASTERMIND").width + Math.round(18 * dpr);
           g.fillStyle = text;
           g.font = `700 ${Math.round(13 * dpr)}px ${fam}`;
           g.textBaseline = "middle";
-          g.fillText(symbol, symX, Math.round(HDR / 2 - 4 * dpr));
-          const symW2 = g.measureText(symbol).width;
+          g.fillText(snapSym, symX, Math.round(HDR / 2 - 4 * dpr));
+          const symW2 = g.measureText(snapSym).width;
           g.fillStyle = mut;
           g.font = `500 ${Math.round(10 * dpr)}px ${fam}`;
           g.fillText(`  ${tf}`, symX + symW2, Math.round(HDR / 2 - 4 * dpr));
+          // The header band is canvas-painted, so the exported ticker has no DOM to assert against.
+          // Expose what was stamped (dev/e2e only) — the stale-symbol regression is invisible otherwise.
+          if (process.env.NODE_ENV !== "production") {
+            (window as unknown as { __mmSnapshotHeader?: { symbol: string; timeframe: string } }).__mmSnapshotHeader = { symbol: snapSym, timeframe: tf };
+          }
           // full timestamp in viewer's local timezone
           const now = new Date();
           const tzOffset = -now.getTimezoneOffset() / 60;
@@ -2053,7 +2717,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             }
           }
           const date = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}`;
-          const fname = `${symbol}_${tf}_${date}.png`;
+          const fname = `${snapSym}_${tf}_${date}.png`;
           const statusFeedback = (msg: string) => {
             const sEl = statusRef.current;
             if (sEl) { const prev = sEl.innerHTML; sEl.innerHTML = `<b class="up">${msg}</b>`; setTimeout(() => { if (statusRef.current === sEl) paintStatus(barsRef.current, sliceRef.current); else sEl.innerHTML = prev; }, 2500); }
@@ -2088,6 +2752,67 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     window.addEventListener("mm:snapshot", snapshot);
 
+    // ── D5 test hook (dev/e2e only) ────────────────────────────────────────────
+    // lightweight-charts renders axis labels on canvas, so the "no series-name pill" contract
+    // has no DOM to assert against. Expose every axis-labelled series' `title` option instead.
+    if (process.env.NODE_ENV !== "production") {
+      (window as any).__mmChartSeriesTitles = () => {
+        const out: string[] = [];
+        for (const list of indSeriesRef.current.values()) {
+          for (const s of list) {
+            try {
+              const o = s.options() as any;
+              if (o?.lastValueVisible) out.push(String(o.title ?? ""));
+            } catch {}
+          }
+        }
+        return out;
+      };
+      // C2/C3/C4/C7 test hook — the axis rule, the label pitch, the volume band and the axis font
+      // are all canvas-rendered, so the option layer is the only assertable surface.
+      (window as any).__mmChartAxisOpts = () => {
+        const c = chartRef.current; if (!c) return null;
+        const g = (fn: () => any) => { try { return fn(); } catch { return null; } };
+        const right = g(() => c.priceScale("right").options());
+        return {
+          priceBorderVisible: right?.borderVisible ?? null,
+          tickMarkDensity: right?.tickMarkDensity ?? null,
+          paneTickMarkDensity: g(() => c.panes().map((p) => p.priceScale("right").options().tickMarkDensity)) ?? [],
+          timeBorderColor: g(() => c.timeScale().options().borderColor) ?? null,
+          fontSize: g(() => (c.options() as any).layout?.fontSize) ?? null,
+          volumeTop: g(() => c.priceScale("volume").options().scaleMargins?.top) ?? null,
+          watermarkVisible: watermarkVisibleRef.current,
+          rowCount: barsRef.current.length,
+          timeframe: timeframeRef.current,
+          visibleRange: g(() => c.timeScale().getVisibleLogicalRange()),
+          priceAutoScale: g(() => priceSeriesRef.current?.priceScale().options().autoScale) ?? null,
+          lastBarX: g(() => {
+            const last = barsRef.current[barsRef.current.length - 1];
+            return last ? c.timeScale().timeToCoordinate(last.time as any) : null;
+          }),
+          priceTagLeft: g(() => {
+            const tag = priceTagRef.current, wrap = wrapElRef.current;
+            return tag && wrap
+              ? tag.getBoundingClientRect().left - wrap.getBoundingClientRect().left
+              : null;
+          }),
+        };
+      };
+      // Crosshair-dodge test hook. The crosshair is canvas-drawn and its coordinate lives in a
+      // ref, so a test driving it with synthetic pointer moves has no way to know the move
+      // REGISTERED — it can only sleep and hope. That raced on CI (a tablet run asserted the
+      // dodge one frame before the crosshair landed and read the badge still on the price).
+      // Exposing the two numbers the dodge is computed from lets the test wait for the state
+      // it is asserting about instead of a timeout.
+      (window as any).__mmCrosshairDodge = () => {
+        const tag = priceTagRef.current;
+        return {
+          crossY: crossLabelYRef.current,                          // null = no crosshair on the price pane
+          tagTop: tag ? parseFloat(tag.style.top || "0") : null,   // pane-space anchor the badge renders at
+        };
+      };
+    }
+
     // ── create the ONE chart (the hard invariant — exactly one renderer instance — now
     // lives behind createEngine; docs/CHART_ENGINE_MASTERPLAN.md P1) ──
     cpMark(`chart-create[${symbol}]`);
@@ -2095,11 +2820,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const t = tokensRef.current;
     const engine = createEngine(el, {
       width: el.clientWidth || 900, height: el.clientHeight || 600,
-      layout: { background: { color: "transparent" }, textColor: t.mut, fontSize: 11, attributionLogo: false, panes: { separatorColor: css("--pane-sep"), separatorHoverColor: css("--pane-sep-h") } },
+      // fontSize matches the settings effect (Effect 7) so the axis does not reflow one frame after mount.
+      layout: { background: { color: "transparent" }, textColor: t.axis, fontSize: shellAxisFontSize(), attributionLogo: false, panes: { separatorColor: css("--pane-sep"), separatorHoverColor: css("--pane-sep-h") } },
       grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
       crosshair: { mode: CrosshairMode.Normal, vertLine: { color: "rgba(214,218,227,.32)", width: 1, labelBackgroundColor: t.p3 }, horzLine: { color: "rgba(214,218,227,.32)", width: 1, labelBackgroundColor: t.p3 } },
-      rightPriceScale: { borderColor: t.line, scaleMargins: { top: 0.1, bottom: 0.08 } },
-      timeScale: { borderColor: t.line, rightOffset: 6, barSpacing: 8 },
+      // C2 — TV draws no price-scale border (row y=700 across x1010–1050 is uniform canvas); the axis
+      // labels float. C3 — tickMarkDensity thins the label/gridline run to TV's measured 47 CSS px.
+      rightPriceScale: { borderVisible: !shellAxis(), borderColor: t.line, tickMarkDensity: shellTickDensity(), scaleMargins: { top: 0.1, bottom: 0.08 } },
+      timeScale: {
+        borderColor: axisLineColor(t.line),
+        rightOffset: chartSettingsRef.current.rightOffsetBars ?? DEFAULT_CHART_RIGHT_OFFSET,
+        barSpacing: 8,
+        ...chartTimeAxisOptions(chartSettingsRef.current.hourFormat ?? "24", visibleCalendarSpanDays),
+      },
       // momentum glide on pan release (LWC ships mouse:false — that reads as a hard stop)
       kineticScroll: { mouse: true, touch: true },
     });
@@ -2108,19 +2841,30 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // migrates behind the contract in P2, and this unwrap dies with the last one.
     const chart = engine.unwrap<IChartApi>();
     chartRef.current = chart;
-
     // ── v5 text watermark (createTextWatermark plugin — chart.applyOptions({ watermark }) removed in v5) ──
     // Created once on mount; Effect 7 toggles visibility via applyOptions on the plugin instance.
     try {
       const pane = chart.panes()[0];
       if (pane) {
+        // C5 (revises D10) — the plugin's bottom-left placement puts the shell brand bug INSIDE the
+        // volume overlay, and TextWatermarkOptions carries no padding/offset field, so the inset is
+        // unreachable through it. Shell mode keeps the plugin off and paints the .mm-brandbug DOM
+        // node below instead; web keeps the centred ghost wordmark byte-for-byte.
+        const wmShell = shellAxis();
         const wm = createTextWatermark(pane, {
-          visible: true,
+          visible: !wmShell,
           horzAlign: "center",
           vertAlign: "center",
-          lines: [{ text: "Mastermind Terminal", color: "rgba(214,218,227,0.04)", fontSize: 48, fontStyle: "bold", fontFamily: "var(--font-ui, system-ui, sans-serif)" }],
+          lines: [{
+            text: "Mastermind Terminal",
+            color: chartSettingsRef.current?.watermarkColor || "rgba(214,218,227,0.04)",
+            fontSize: 48,
+            fontStyle: "bold",
+            fontFamily: "var(--font-ui, system-ui, sans-serif)",
+          }],
         });
         watermarkPluginRef.current = wm;
+        watermarkVisibleRef.current = !wmShell;
       }
     } catch {}
 
@@ -2132,22 +2876,39 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // signal-marker layer (below the user-drawing layer); custom TradingView-style badges
     const sigSvg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(sigSvg); sigRef.current = sigSvg;
-    const svg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none" }) as SVGSVGElement;
+    const svg = mk("svg", { class: "drawing-layer", "data-drawing-layer": "1", style: "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(svg); svgRef.current = svg;
+    ensureTooltipHost(wrap);   // shared hover tooltip for premium-suite prims (ic-tip)
+    // C5 — shell brand bug. A DOM node, not the LWC watermark: the plugin has no offset field, so
+    // it cannot be lifted clear of the volume overlay. Never created on web (zero DOM delta there);
+    // all geometry lives in globals.css's .mm-brandbug rule.
+    if (shellAxis()) {
+      const bug = document.createElement("div");
+      bug.className = "mm-brandbug";
+      bug.textContent = "MASTERMIND";
+      wrap.appendChild(bug); brandBugRef.current = bug;
+    }
 
     // ── last-price tag (symbol · price · bar-close countdown) on the right axis ──
     // Replaces lightweight-charts' built-in last-value label (disabled on the price series). The
     // countdown differs per timeframe: exact for intraday, calendar-boundary for daily+ (see periodCloseTs).
+    // D9: classNames only — every cssText string is unchanged, so web renders identically; the
+    // shell block in globals.css uses these hooks to collapse the badge to TV's single line.
     const priceTag = document.createElement("div");
+    priceTag.className = "mm-ptag";
     priceTag.style.cssText = "position:absolute;z-index:5;right:1px;display:none;flex-direction:row;align-items:center;gap:2px;pointer-events:none;transform:translateY(-50%);white-space:nowrap";
     const tagSym = document.createElement("div");
-    tagSym.style.cssText = "padding:2px 5px;border-radius:3px;color:#fff;font:700 10px/1 var(--font-num);letter-spacing:.02em";
+    tagSym.className = "mm-ptag-sym";
+    tagSym.style.cssText = "padding:2px 5px;border-radius:3px;color:#fff;font:700 10px/1 var(--font-num);letter-spacing:.02em;font-variant-numeric:tabular-nums";
     const tagVal = document.createElement("div");
+    tagVal.className = "mm-ptag-val";
     tagVal.style.cssText = "display:flex;flex-direction:column;align-items:flex-end;padding:2px 6px;border-radius:3px;color:#fff;text-align:right";
     const tagPrice = document.createElement("div");
-    tagPrice.style.cssText = "font:700 11px/1.15 var(--font-num)";
+    tagPrice.className = "mm-ptag-px";
+    tagPrice.style.cssText = "font:700 11px/1.15 var(--font-num);font-variant-numeric:tabular-nums";
     const tagCd = document.createElement("div");
-    tagCd.style.cssText = "font:600 9px/1.15 var(--font-num);opacity:.85";
+    tagCd.className = "mm-ptag-cd";
+    tagCd.style.cssText = "font:600 9px/1.15 var(--font-num);opacity:.85;font-variant-numeric:tabular-nums";
     tagVal.appendChild(tagPrice); tagVal.appendChild(tagCd);
     priceTag.appendChild(tagSym); priceTag.appendChild(tagVal);
     wrap.appendChild(priceTag); priceTagRef.current = priceTag;
@@ -2156,6 +2917,28 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // price-pane coordinates (signal pills, gap zones, drawings, ichimoku/ribbon fills, the
     // last-price tag) must clear/hide itself instead of painting over the maximized pane.
     const priceProjHidden = () => { const c = paneCtl.current; return c.maximized != null && c.maximized !== "__price__"; };
+
+    // ── crosshair dodge (the badge NEVER covers the price you are pointing at) ──
+    // Placement geometry lives in lib/priceTagPlacement (pure + unit-tested); this side owns the
+    // measurements it needs. See that module's header for why the badge yields to the crosshair label.
+    const priceIdx = () => { try { return priceSeriesRef.current?.getPane()?.paneIndex() ?? 0; } catch { return 0; } };
+    const axisFontSize = () => { try { return (chart.options() as any).layout?.fontSize || 12; } catch { return 12; } };
+    // Half-extents of the badge around its anchor. It is centred on `top` via translateY(-50%), but
+    // in shell mode globals.css lifts the countdown OUT of the badge box (position:absolute), so the
+    // occupied band is the union of both rects. Cached on the countdown-visibility key: a rect read
+    // per crosshair frame would force a layout flush on every mouse move.
+    let tagBox = { up: 0, down: 0, key: "" };
+    const measureTagBox = (tag: HTMLElement, cdShown: boolean) => {
+      const key = cdShown ? "cd" : "-";
+      if (tagBox.key === key && tagBox.up > 0) return tagBox;
+      const r = tag.getBoundingClientRect();
+      if (!r.height) return tagBox;
+      const mid = r.top + r.height / 2;
+      let top = r.top, bot = r.bottom;
+      if (cdShown) { const rc = tagCd.getBoundingClientRect(); if (rc.height) { top = Math.min(top, rc.top); bot = Math.max(bot, rc.bottom); } }
+      tagBox = { up: mid - top, down: bot - mid, key };
+      return tagBox;
+    };
     const renderPriceTag = () => {
       const tag = priceTagRef.current, s = priceSeriesRef.current;
       if (!tag || !s || dead) return;
@@ -2182,11 +2965,49 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         }
         if (rem != null && isFinite(rem)) cd = fmtCountdown(rem, isIntradayRef.current);
       }
-      tagCd.textContent = cd; tagCd.style.display = cd ? "block" : "none";
+      tagCd.textContent = cd;
+      const cdShown = !!cd && countdownVisibleRef.current;
+      tagCd.style.display = cdShown ? "block" : "none";
       tagSym.style.background = col; tagVal.style.background = col;
-      tag.style.top = Math.round(y) + "px"; tag.style.display = lastValueVisibleRef.current ? "flex" : "none";
+      const shown = lastValueVisibleRef.current;
+      tag.style.display = shown ? "flex" : "none";
+      // dodge the crosshair label when the two boxes collide (see crosshair-dodge note above)
+      const cy = shown ? crossLabelYRef.current : null;
+      let top = y;
+      if (cy != null) {
+        const box = measureTagBox(tag, cdShown);
+        // an unmeasurable badge (never laid out yet) would dodge off a zero-height box — leave it put
+        if (box.up > 0) {
+          let paneH = 0; try { paneH = chart.paneSize(priceIdx()).height; } catch {}
+          top = priceTagTop(y, cy, box, crosshairLabelHalf(axisFontSize()), paneH);
+        }
+      }
+      tag.style.top = Math.round(top) + "px";
     };
     renderTagRef.current = renderPriceTag;
+    // `point.y` is PANE-relative — the same space priceToCoordinate returns — so the crosshair
+    // coordinate and the badge anchor compare directly. Magnet mode snaps the DRAWN label to the
+    // hovered bar's close, so mirror that snap here or the badge would dodge a band nothing is in.
+    const onTagCrosshair = (p: any) => {
+      let y: number | null = null;
+      const pt = p?.point;
+      if (pt && Number.isFinite(pt.y) && (p.paneIndex == null || p.paneIndex === priceIdx())) {
+        y = pt.y;
+        if (chartSettingsRef.current.crosshairMode === 1) {
+          const idx = p.time != null ? (barIdxMap().get(p.time) ?? barIdxMap().get(String(p.time))) : null;
+          const bar = idx != null ? barsRef.current[idx] : null;
+          const s = priceSeriesRef.current;
+          const snapped = bar && s ? (s.priceToCoordinate(bar.c) as number | null) : null;
+          if (snapped != null && Number.isFinite(snapped)) y = snapped;
+        }
+      }
+      const prev = crossLabelYRef.current;
+      if (y == null && prev == null) return;
+      if (y != null && prev != null && Math.abs(prev - y) < 0.5) return;
+      crossLabelYRef.current = y;
+      renderPriceTag();
+    };
+    chart.subscribeCrosshairMove(onTagCrosshair);
     tagTimerRef.current = window.setInterval(() => { if (!dead) renderPriceTag(); }, 1000);
 
     // ── coordinate helpers (read *Ref.current so they stay valid across reloads) ──
@@ -2445,111 +3266,1136 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     renderSignalsRef.current = renderSignals;
 
-    const snap = (px: number, py: number) => {
-      const prec = precRef.current; const bars = barsRef.current; let bt = bars[bars.length - 1]?.time, bd = 1e18;
-      for (const b of bars) { const xc = xOf(b.time); if (xc == null) continue; const dd = Math.abs(xc - px); if (dd < bd) { bd = dd; bt = b.time; } }
-      const ps = priceSeriesRef.current; let p = ps ? (ps.coordinateToPrice(py) as number | null) : null; if (p == null) p = bars[bars.length - 1]?.c ?? 0;
-      if (magnetRef.current) { const bar = bars[barIndex(bt!)]; if (bar) { const cand = [bar.o, bar.h, bar.l, bar.c]; p = cand.reduce((a, v) => Math.abs(v - (p as number)) < Math.abs(a - (p as number)) ? v : a, cand[0]); } }
-      return { t: bt, p: +(p as number).toFixed(prec) } as { t: string; p: number };
+    let snapTarget: { x: number; y: number } | null = null;
+    type PaneAnchor = { x: number; y: number };
+    const clampUnit = (value: number) => Math.max(0, Math.min(1, value));
+    const paneAnchorOf = (meta: Drawing["meta"]): PaneAnchor | null => {
+      const anchor = meta?.paneAnchor;
+      if (!anchor || typeof anchor !== "object" || Array.isArray(anchor)) return null;
+      const x = (anchor as Record<string, unknown>).x;
+      const y = (anchor as Record<string, unknown>).y;
+      if (typeof x !== "number" || !Number.isFinite(x) || typeof y !== "number" || !Number.isFinite(y)) return null;
+      return { x: clampUnit(x), y: clampUnit(y) };
     };
-    let pending: { kind: string; a: { t: string; p: number } } | null = null;
+    const paneMetaAt = (x: number, y: number, meta?: Drawing["meta"]): Drawing["meta"] => ({
+      ...(meta ?? {}),
+      paneAnchor: {
+        x: clampUnit(x / Math.max(1, el!.clientWidth)),
+        y: clampUnit(y / Math.max(1, el!.clientHeight)),
+      },
+    });
+    const snap = (px: number, py: number, modifier?: { ctrlKey?: boolean; metaKey?: boolean }) => {
+      const prec = precRef.current;
+      const bars = barsRef.current;
+      // LWC logical coordinates map directly to the loaded bar array. This replaces the
+      // former O(bars) scan on every pointer event with one projection + clamp.
+      const logical = chart.timeScale().coordinateToLogical(px);
+      const bi = Math.max(0, Math.min(bars.length - 1, Math.round(logical == null ? bars.length - 1 : logical)));
+      const bar = bars[bi];
+      const bt = bar?.time ?? bars[bars.length - 1]?.time;
+      const ps = priceSeriesRef.current;
+      let p = ps ? (ps.coordinateToPrice(py) as number | null) : null;
+      if (p == null) p = bars[bars.length - 1]?.c ?? 0;
+      const configuredMode = magnetRef.current === true ? "strong" : magnetRef.current === false ? "off" : magnetRef.current;
+      // OpenMarket's precision modifier is deliberately reversible: Ctrl/Cmd
+      // supplies Strong magnet while Off is configured, but temporarily frees
+      // the cursor when Weak/Strong is already active.
+      const modifierDown = Boolean(modifier?.ctrlKey || modifier?.metaKey);
+      const mode = modifierDown ? (configuredMode === "off" ? "strong" : "off") : configuredMode;
+      snapTarget = null;
+      if (bar && mode !== "off") {
+        const candidates = [bar.o, bar.h, bar.l, bar.c];
+        const best = candidates.reduce((a, v) => Math.abs(v - (p as number)) < Math.abs(a - (p as number)) ? v : a, candidates[0]);
+        const bestY = yOf(best);
+        // Weak magnet is intentionally forgiving but never \"teleports\" an anchor: it only
+        // engages inside an 8px desktop / 14px coarse-pointer halo. Strong always snaps.
+        const weakRadius = matchMedia("(pointer:coarse)").matches ? 14 : 8;
+        if (mode === "strong" || (bestY != null && Math.abs(bestY - py) <= weakRadius)) {
+          p = best;
+          const sx = xOf(String(bt));
+          if (sx != null && bestY != null) snapTarget = { x: sx, y: bestY };
+        }
+      }
+      return { t: String(bt), p: +(p as number).toFixed(prec) };
+    };
+    const constrainedSnap = (
+      origin: Drawing["points"][number] | undefined,
+      px: number,
+      py: number,
+      modifier?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean },
+    ) => {
+      if (!origin || !modifier?.shiftKey) return snap(px, py, modifier);
+      const ox = xOf(origin.t), oy = yOf(origin.p);
+      if (ox == null || oy == null) return snap(px, py, modifier);
+      const constrained = constrainScreenAngle({ x: ox, y: oy }, { x: px, y: py });
+      return snap(constrained.x, constrained.y, modifier);
+    };
+    type PendingDrawing = {
+      kind: Drawing["kind"];
+      // Bind the gesture to the exact toolbar activation that began it. The
+      // same tool can be re-armed before a native pointerup/text/media callback
+      // runs, so sampling the mutable ref at commit time could retire the newer
+      // selection instead of the transaction that actually produced the object.
+      activation: number;
+      points: Drawing["points"];
+      mode: "point" | "text" | "drag" | "multi" | "freehand";
+      pointerId?: number;
+      candidate?: Drawing["points"][number];
+      awaitingSecond?: boolean;
+      meta?: Drawing["meta"];
+    };
+    let pending: PendingDrawing | null = null;
+    cancelPendingDrawingRef.current = () => {
+      const current = pending;
+      pending = null;
+      if (creationPaletteRef.current) creationPaletteRef.current.style.pointerEvents = "auto";
+      if (current?.pointerId != null) {
+        try { if (svg.hasPointerCapture(current.pointerId)) svg.releasePointerCapture(current.pointerId); } catch {}
+      }
+      renderDraw();
+    };
     let sel: string | null = null;
 
-    function shape(d: Drawing, preview = false) {
+    function shape(
+      d: Drawing,
+      preview = false,
+      projectX: (time: string) => number | null = xOf,
+      projectY: (price: number) => number | null = yOf,
+    ) {
+      type XY = { x: number; y: number; p?: number };
       const prec = precRef.current;
-      const col = dcol(d); const W = el!.clientWidth, H = el!.clientHeight, op = preview ? 0.7 : 1; const on = d.id === sel && !preview;
-      const g = mk("g", { "data-id": d.id, opacity: op, "pointer-events": preview ? "none" : "all", style: "cursor:pointer" });
-      // CMX W3: stroke-and-draw entrance for AI-session objects. Fires ONCE per object (played-set),
-      // only while a paced session is animating (<html data-cmx-anim="on">, set by ChartConductor —
-      // absent under reduced-motion / pace 0 so objects just appear). The class self-removes on
-      // animationend so pan/zoom re-renders (which rebuild this <g>) never re-trigger it.
+      const col = dcol(d); const W = el!.clientWidth, H = el!.clientHeight, op = preview ? 0.7 : (d.opacity ?? 1);
+      const replayLocked = replayIdxRef.current != null;
+      const on = d.id === sel && !preview && !replayLocked;
+      const family = DRAWING_RENDERER_FAMILY[d.kind];
+      const g = mk("g", {
+        "data-id": d.id,
+        "data-drawing-id": d.id,
+        "data-drawing-kind": d.kind,
+        "data-renderer-family": family,
+        "data-locked": d.locked ? "true" : "false",
+        "data-replay-locked": replayLocked ? "true" : "false",
+        opacity: op,
+        "pointer-events": preview || d.hidden || replayLocked ? "none" : "all",
+        style: d.hidden ? "display:none" : (d.locked || replayLocked ? "cursor:default" : "cursor:pointer"),
+      });
       if (!preview && (d.meta as any)?.by === "ai" &&
           typeof document !== "undefined" && document.documentElement.getAttribute("data-cmx-anim") === "on" &&
           !cmxPlayedRef.current.has(d.id)) {
         const cls = d.kind === "rect" ? "cmx-enter-zone"
           : d.kind === "fib" ? "cmx-enter-fib"
-          : (d.kind === "text") ? "cmx-enter-pop"
-          : "cmx-enter-line"; // trendline / ray / hline
-        g.classList.add(cls);
-        cmxPlayedRef.current.add(d.id);
+          : family === "annotation" || family === "media" ? "cmx-enter-pop"
+          : "cmx-enter-line";
+        g.classList.add(cls); cmxPlayedRef.current.add(d.id);
         g.addEventListener("animationend", () => { try { g.classList.remove(cls); } catch { /* noop */ } }, { once: true });
       }
-      const fat = (x1: number, y1: number, x2: number, y2: number) => g.appendChild(mk("line", { x1, y1, x2, y2, stroke: "transparent", "stroke-width": 12 }));
-      const grip = (pts: { x: number; y: number }[]) => { if (on) pts.forEach((p) => g.appendChild(mk("circle", { cx: p.x, cy: p.y, r: 4.5, fill: "var(--bg)", stroke: col, "stroke-width": 2 }))); };
+      let geometryCount = 0;
+      const add = (tag: string, attrs: Record<string, any>) => {
+        geometryCount += 1;
+        const node = mk(tag, { ...attrs, "data-geometry": "1" }); g.appendChild(node); return node;
+      };
+      const fat = (x1: number, y1: number, x2: number, y2: number) => g.appendChild(mk("line", { x1, y1, x2, y2, stroke: "transparent", "stroke-width": 14, "stroke-linecap": "round", "data-segment": "1" }));
+      const line = (x1: number, y1: number, x2: number, y2: number, attrs: Record<string, any> = {}) => {
+        const { hit = true, ...svgAttrs } = attrs;
+        add("line", { x1, y1, x2, y2, stroke: col, "stroke-width": lw(1.5, .75), "stroke-dasharray": dash, ...svgAttrs });
+        if (hit) fat(x1, y1, x2, y2);
+      };
+      const polyline = (points: XY[], attrs: Record<string, any> = {}) => {
+        if (points.length < 2) return;
+        const value = points.map((point) => `${point.x},${point.y}`).join(" ");
+        add("polyline", { points: value, fill: "none", stroke: col, "stroke-width": lw(1.8, .7), "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": dash, ...attrs });
+        g.appendChild(mk("polyline", { points: value, fill: "none", stroke: "transparent", "stroke-width": 14, "stroke-linecap": "round", "stroke-linejoin": "round", "data-segment": "1" }));
+      };
+      const path = (value: string, attrs: Record<string, any> = {}) => {
+        add("path", { d: value, fill: "none", stroke: col, "stroke-width": lw(1.7, .7), "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": dash, ...attrs });
+        g.appendChild(mk("path", { d: value, fill: "none", stroke: "transparent", "stroke-width": 14, "stroke-linecap": "round", "stroke-linejoin": "round", "data-segment": "1" }));
+      };
+      const grip = (pts: XY[]) => {
+        if (!on || d.locked) return;
+        pts.forEach((point, i) => g.appendChild(mk("circle", {
+          cx: point.x, cy: point.y, r: 5, fill: "var(--panel)", stroke: col, "stroke-width": 2,
+          "data-handle": i, "data-drawing-handle": i, style: "cursor:grab",
+        })));
+      };
+      const pill = (x: number, y: number, label: string, fg = "#11151d", bg = "#f7f9fc") => {
+        const w = Math.max(54, label.length * 6.15 + 16), h = 22;
+        const px = Math.max(4, Math.min(W - w - 4, x - w / 2));
+        const py = Math.max(4, Math.min(H - h - 4, y - h / 2));
+        add("rect", { x: px, y: py, width: w, height: h, rx: 11, fill: bg, stroke: "rgba(0,0,0,.18)", "stroke-width": 1, "data-semantic-pill": "1" });
+        const tx = mk("text", { x: px + w / 2, y: py + 14.5, fill: fg, "font-size": 10.5, "font-weight": 700, "text-anchor": "middle", "font-family": "var(--font-num)", style: "font-variant-numeric:tabular-nums" });
+        tx.textContent = label; g.appendChild(tx);
+      };
+      const text = (x: number, y: number, value: string, attrs: Record<string, any> = {}) => {
+        const node = mk("text", { x, y, fill: col, "font-size": 10, "font-family": "var(--font-ui)", ...attrs }); node.textContent = value; g.appendChild(node); return node;
+      };
+      const projected = (points = d.points): XY[] => points.flatMap((point) => {
+        const x = projectX(point.t), y = projectY(point.p);
+        return x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y) ? [] : [{ x, y, p: point.p }];
+      });
       const A = d.points[0], B = d.points[1];
       const dash = d.dash === "dashed" ? "7 5" : d.dash === "dotted" ? "2 4" : d.dash === "solid" ? "" : (d.auto ? "5 4" : "");
       const lw = (base: number, boost: number) => (d.width ?? base) + (on ? boost : 0);
-      const ax = A ? xOf(A.t) : null, ay = A ? yOf(A.p) : null;
-      if (d.kind === "hline") {
-        if (ay == null) return g;
-        const sw = (d.width ?? (d.meta && (d.meta as any).strength ? 0.4 + 1.0 * (d.meta as any).strength : 1.3)) + (on ? 1 : 0);
-        g.appendChild(mk("line", { x1: 0, y1: ay, x2: W, y2: ay, stroke: col, "stroke-width": sw, "stroke-dasharray": dash }));
-        fat(0, ay, W, ay);
-        const label = (d.meta as any)?.label || A.p.toFixed(prec);
-        const tx = mk("text", { x: W - 6, y: ay - 4, fill: col, "font-size": 10, "text-anchor": "end", "font-family": "var(--font-num)" }); tx.textContent = String(label);
-        g.appendChild(tx); grip([{ x: W / 2, y: ay }]); return g;
+      const paneAnchor = getDrawingTool(d.kind)?.creation.anchorSpace === "pane" ? paneAnchorOf(d.meta) : null;
+      const ax = paneAnchor ? paneAnchor.x * W : A ? projectX(A.t) : null;
+      const ay = paneAnchor ? paneAnchor.y * H : A ? projectY(A.p) : null;
+      const bx = B ? projectX(B.t) : null, by = B ? projectY(B.p) : null;
+      const projectedAnchors = projected();
+      const anchorXY = paneAnchor && ax != null && ay != null
+        ? [{ x: ax, y: ay, p: A?.p }, ...projectedAnchors.slice(1)]
+        : projectedAnchors;
+      const measurementLabel = () => {
+        if (!A || !B) return "";
+        const bars = Math.abs(barIndex(B.t) - barIndex(A.t)), delta = B.p - A.p, pct = A.p ? delta / A.p * 100 : 0;
+        return `${bars} ${tPlain("drawingBars")} × ${delta >= 0 ? "+" : ""}${delta.toFixed(prec)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`;
+      };
+      const done = (handles: XY[] = anchorXY, semanticPill = false) => {
+        if (geometryCount === 0 && ax != null && ay != null) {
+          g.setAttribute("data-renderer-fallback", "true");
+          add("circle", { cx: ax, cy: ay, r: 7, fill: d.fillColor || col, "fill-opacity": .24, stroke: col, "stroke-width": lw(1.4, .5) });
+          if (bx != null && by != null) line(ax, ay, bx, by);
+        }
+        if (geometryCount === 0) g.setAttribute("data-renderer-state", "unprojected");
+        if (on && !semanticPill && ax != null && ay != null && bx != null && by != null) pill((ax + bx) / 2, Math.min(ay, by) - 18, measurementLabel());
+        grip(handles); return g;
+      };
+      const fill = d.fillColor || col, fillOpacity = d.fillOpacity ?? .09;
+
+      // One-anchor axis tools remain pane-spanning and retain generous transparent hit regions.
+      if (family === "axis") {
+        if (d.kind === "hline" && ay != null) {
+          const sw = (d.width ?? ((d.meta as any)?.strength ? .4 + Number((d.meta as any).strength) : 1.3)) + (on ? 1 : 0);
+          line(0, ay, W, ay, { "stroke-width": sw }); text(W - 6, ay - 4, String((d.meta as any)?.label || A.p.toFixed(prec)), { "text-anchor": "end", "font-family": "var(--font-num)" });
+          return done([{ x: W / 2, y: ay }]);
+        }
+        if (d.kind === "vline" && ax != null) { line(ax, 0, ax, H); return done([{ x: ax, y: H / 2 }]); }
+        if (d.kind === "horizontalray" && ax != null && ay != null) { line(ax, ay, W, ay); return done([{ x: ax, y: ay }]); }
+        if (d.kind === "crossline" && ax != null && ay != null) { line(0, ay, W, ay); line(ax, 0, ax, H); return done([{ x: ax, y: ay }]); }
+        return done();
       }
-      if (d.kind === "vline") {
-        if (ax == null) return g;
-        g.appendChild(mk("line", { x1: ax, y1: 0, x2: ax, y2: H, stroke: col, "stroke-width": lw(1.3, 1), "stroke-dasharray": dash }));
-        fat(ax, 0, ax, H); grip([{ x: ax, y: H / 2 }]); return g;
+
+      // Text, notes and price labels render before the two-anchor guard.
+      if (family === "annotation" && ax != null && ay != null) {
+        const label = d.text || (d.kind === "text" || d.kind === "anchoredtext" ? tPlain("drawingTextFallback") : getDrawingTool(d.kind)?.label || "Note");
+        const fs = d.fontSize ?? 13;
+        if (d.kind === "text" || d.kind === "anchoredtext") {
+          add("rect", { x: ax - 4, y: ay - fs - 3, width: Math.max(42, label.length * fs * .6 + 8), height: fs + 8, rx: 3, fill: "transparent", stroke: d.kind === "anchoredtext" ? col : "transparent", "stroke-dasharray": d.kind === "anchoredtext" ? "3 3" : "" });
+          text(ax, ay, label, { "font-size": fs }); return done([{ x: ax, y: ay - fs / 2 }]);
+        }
+        if (d.kind === "callout" && bx != null && by != null) {
+          const w = Math.max(82, label.length * 7 + 22), h = 34, left = bx >= ax ? bx : bx - w, top = by - h / 2;
+          add("path", { d: `M${left} ${top}h${w}v${h}h-${Math.max(18, w * .66)}L${ax} ${ay}l${Math.max(6, w * .08)}-${h / 2}H${left}z`, fill, "fill-opacity": Math.max(.12, fillOpacity), stroke: col, "stroke-width": lw(1.2, .5) });
+          text(left + 10, top + 21, label, { "font-size": fs }); return done(anchorXY);
+        }
+        const w = Math.max(72, label.length * 6.4 + 18), h = 30;
+        if (d.kind === "pricelabel" || d.kind === "pricenote") {
+          add("path", { d: `M${ax} ${ay}l9-10h${w}v20H${ax + 9}z`, fill, "fill-opacity": Math.max(.15, fillOpacity), stroke: col, "stroke-width": 1.2 });
+          text(ax + 17, ay + 4, d.kind === "pricelabel" ? A.p.toFixed(prec) : label, { "font-size": fs });
+        } else if (d.kind === "signpost") {
+          line(ax, ay - 18, ax, ay + 24); add("path", { d: `M${ax} ${ay - 16}h${w}l8 11-8 11h-${w}z`, fill, "fill-opacity": Math.max(.15, fillOpacity), stroke: col }); text(ax + 9, ay - 1, label, { "font-size": fs });
+        } else {
+          add("rect", { x: ax, y: ay - h, width: w, height: h, rx: 6, fill, "fill-opacity": Math.max(.12, fillOpacity), stroke: col, "stroke-width": 1.2, "stroke-dasharray": d.kind === "anchorednote" ? "3 3" : "" });
+          if (d.kind === "comment") add("path", { d: `M${ax + 14} ${ay}l-8 9 2-9z`, fill, stroke: col });
+          text(ax + 9, ay - 10, label, { "font-size": fs });
+        }
+        return done([{ x: ax, y: ay }]);
       }
-      const bx = B ? xOf(B.t) : null, by = B ? yOf(B.p) : null;
-      if (d.kind === "text") { if (ax == null || ay == null) return g; const fs = d.fontSize ?? 13; g.appendChild(mk("rect", { x: ax - 3, y: ay - fs - 1, width: Math.max(40, (d.text || "").length * fs * 0.6), height: fs + 6, fill: "transparent" })); const tx = mk("text", { x: ax, y: ay, fill: col, "font-size": fs, "font-family": "var(--font-ui)" }); tx.textContent = d.text || "text"; g.appendChild(tx); grip([{ x: ax, y: ay - fs / 2 }]); return g; }
-      if (ax == null || ay == null || bx == null || by == null) return g;
-      if (d.kind === "trendline" || d.kind === "ray" || d.kind === "measure" || d.kind === "arrow") {
-        let ex = bx, ey = by;
-        if (d.kind === "ray" && bx !== ax) { const m = (by - ay) / (bx - ax); ex = W; ey = ay + m * (W - ax); }
-        g.appendChild(mk("line", { x1: ax, y1: ay, x2: ex, y2: ey, stroke: col, "stroke-width": lw(1.6, 0.8), "stroke-dasharray": dash }));
-        fat(ax, ay, ex, ey);
-        if (d.kind === "arrow") { const an = Math.atan2(by - ay, bx - ax), h = 9; g.appendChild(mk("path", { d: `M${bx} ${by} L${bx + h * Math.cos(an + Math.PI - 0.45)} ${by + h * Math.sin(an + Math.PI - 0.45)} M${bx} ${by} L${bx + h * Math.cos(an + Math.PI + 0.45)} ${by + h * Math.sin(an + Math.PI + 0.45)}`, stroke: col, "stroke-width": lw(1.6, 0.8), fill: "none" })); }
-        if (d.kind === "measure") { const pc = ((B.p - A.p) / A.p) * 100; const di = Math.abs(barIndex(B.t) - barIndex(A.t)); const lab = mk("text", { x: (ax + bx) / 2, y: Math.min(ay, by) - 8, fill: col, "font-size": 11, "text-anchor": "middle", "font-family": "var(--font-num)" }); lab.textContent = `${pc >= 0 ? "+" : ""}${pc.toFixed(2)}% · ${di} bars`; g.appendChild(lab); }
-        grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
+
+      if (family === "media" && ax != null && ay != null) {
+        if (d.kind === "emoji") {
+          const glyph = d.text || "🙂";
+          text(ax, ay + 10, glyph, { "font-size": d.fontSize ?? 30, "text-anchor": "middle", "data-media-choice": glyph });
+          add("circle", { cx: ax, cy: ay, r: 20, fill: "transparent", "data-media-hit": "1" });
+          return done([{ x: ax, y: ay }]);
+        }
+        if (d.kind === "icon") {
+          const icon = drawingMediaIcon((d.meta as Record<string, unknown> | undefined)?.iconId ?? d.text);
+          add("path", {
+            d: icon.path,
+            transform: `translate(${ax - 15} ${ay - 15}) scale(1.25)`,
+            fill: icon.filled ? fill : "none",
+            "fill-opacity": icon.filled ? Math.max(.5, fillOpacity) : 0,
+            "fill-rule": "evenodd",
+            stroke: col,
+            "stroke-width": icon.filled ? 1.1 : 1.8,
+            "stroke-linecap": "round",
+            "stroke-linejoin": "round",
+            "vector-effect": "non-scaling-stroke",
+            "data-media-choice": icon.id,
+          });
+          add("circle", { cx: ax, cy: ay, r: 20, fill: "transparent", "data-media-hit": "1" });
+          return done([{ x: ax, y: ay }]);
+        }
+        if (bx != null && by != null) {
+          const x = Math.min(ax, bx), y = Math.min(ay, by), w = Math.max(20, Math.abs(bx - ax)), h = Math.max(20, Math.abs(by - ay));
+          const meta = d.meta as Record<string, unknown> | undefined;
+          const imageSrc = isSafeDrawingImageDataUrl(meta?.imageSrc) ? meta.imageSrc : null;
+          const fallback: SVGElement[] = [];
+          fallback.push(add("rect", { x, y, width: w, height: h, rx: 5, fill, "fill-opacity": Math.max(.08, fillOpacity), "data-media-fallback": "1" }));
+          fallback.push(add("circle", { cx: x + w * .72, cy: y + h * .28, r: Math.max(2, Math.min(7, w * .06)), fill: col, opacity: .82, "data-media-fallback": "1" }));
+          fallback.push(add("path", {
+            d: `M${x + 4} ${y + h - 5}L${x + w * .34} ${y + h * .52}L${x + w * .53} ${y + h * .7}L${x + w * .73} ${y + h * .44}L${x + w - 4} ${y + h - 5}`,
+            fill: "none", stroke: col, "stroke-width": lw(1.7, .7), "stroke-linecap": "round", "stroke-linejoin": "round", opacity: .82, "data-media-fallback": "1",
+          }));
+          if (imageSrc) {
+            const image = add("image", {
+              x, y, width: w, height: h, href: imageSrc,
+              preserveAspectRatio: "xMidYMid slice",
+              decoding: "async",
+              style: "clip-path:inset(0 round 5px)",
+              "data-media-image": "1",
+              "aria-label": typeof meta?.imageName === "string" ? meta.imageName : "Drawing image",
+            });
+            image.addEventListener("load", () => {
+              fallback.forEach((node) => node.setAttribute("display", "none"));
+              g.setAttribute("data-media-state", "loaded");
+            }, { once: true });
+            image.addEventListener("error", () => {
+              image.setAttribute("display", "none");
+              g.setAttribute("data-media-state", "error");
+            }, { once: true });
+          } else {
+            g.setAttribute("data-media-state", "placeholder");
+          }
+          add("rect", { x, y, width: w, height: h, rx: 5, fill: "transparent", stroke: col, "stroke-width": 1.3, "data-media-border": "1" });
+          add("rect", { x, y, width: w, height: h, rx: 5, fill: "transparent", "data-media-hit": "1" });
+          return done(anchorXY);
+        }
+        return done();
       }
-      if (d.kind === "rect") { g.appendChild(mk("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay), fill: col, "fill-opacity": 0.08, stroke: col, "stroke-width": lw(1, 1), "stroke-dasharray": dash })); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g; }
-      if (d.kind === "fib") {
-        const hi = Math.max(A.p, B.p), lo = Math.min(A.p, B.p), x1 = Math.min(ax, bx);
-        FIB.forEach((f) => { const price = hi - (hi - lo) * f; const y = yOf(price); if (y == null) return; g.appendChild(mk("line", { x1, y1: y, x2: W, y2: y, stroke: col, "stroke-width": 1, "stroke-dasharray": "4 4", opacity: 0.6 })); const tx = mk("text", { x: x1 + 4, y: y - 3, fill: col, "font-size": 9.5, "font-family": "var(--font-num)", opacity: 0.85 }); tx.textContent = `${(f * 100).toFixed(1)}%  ${price.toFixed(prec)}`; g.appendChild(tx); });
-        fat(x1, yOf(hi) ?? 0, x1, yOf(lo) ?? 0); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
+
+      if (family === "mark" && ax != null && ay != null) {
+        const size = 12;
+        if (d.kind === "flagmark") {
+          line(ax, ay + 18, ax, ay - 20); add("path", { d: `M${ax} ${ay - 18}h25l-7 8 7 8H${ax}z`, fill, "fill-opacity": .28, stroke: col, "stroke-width": 1.4 });
+        } else {
+          const direction = d.kind === "arrowmarkleft" ? Math.PI : d.kind === "arrowmarktop" ? -Math.PI / 2 : d.kind === "arrowmarkbottom" ? Math.PI / 2 : 0;
+          const tipX = ax + Math.cos(direction) * size, tipY = ay + Math.sin(direction) * size;
+          const backX = ax - Math.cos(direction) * size * .75, backY = ay - Math.sin(direction) * size * .75;
+          const nx = -Math.sin(direction) * size * .62, ny = Math.cos(direction) * size * .62;
+          add("polygon", { points: `${tipX},${tipY} ${backX + nx},${backY + ny} ${ax - Math.cos(direction) * 2},${ay - Math.sin(direction) * 2} ${backX - nx},${backY - ny}`, fill, "fill-opacity": d.kind === "arrowmarker" ? .75 : .24, stroke: col, "stroke-width": 1.4 });
+        }
+        return done([{ x: ax, y: ay }]);
       }
-      return g;
+
+      if (family === "anchored-vwap" && A && ax != null && ay != null) {
+        const start = Math.max(0, barIndex(A.t));
+        const series = calculateAnchoredVwap(barsRef.current.slice(start));
+        const projectSeries = (priceAt: (row: (typeof series)[number]) => number): XY[] => series.flatMap((row) => {
+          const x = projectX(row.time), y = projectY(priceAt(row));
+          return x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y) ? [] : [{ x, y }];
+        });
+        const center = projectSeries((row) => row.vwap);
+        const upper = [0, 1, 2].map((index) => projectSeries((row) => row.upper[index]));
+        const lower = [0, 1, 2].map((index) => projectSeries((row) => row.lower[index]));
+        for (let index = 2; index >= 0; index -= 1) {
+          if (upper[index].length < 2 || lower[index].length < 2) continue;
+          add("polygon", {
+            points: [...upper[index], ...lower[index].slice().reverse()].map((point) => `${point.x},${point.y}`).join(" "),
+            fill,
+            "fill-opacity": Math.max(.018, fillOpacity * (.22 + (2 - index) * .12)),
+            stroke: "none",
+            "pointer-events": "none",
+          });
+        }
+        for (let index = 2; index >= 0; index -= 1) {
+          const bandDash = index === 0 ? "" : index === 1 ? "6 5" : "2 4";
+          for (const points of [upper[index], lower[index]]) {
+            if (points.length < 2) continue;
+            add("polyline", {
+              points: points.map((point) => `${point.x},${point.y}`).join(" "),
+              fill: "none", stroke: col, "stroke-width": lw(1.05, .25),
+              "stroke-dasharray": bandDash, opacity: index === 0 ? .76 : index === 1 ? .56 : .38,
+              "pointer-events": "none",
+            });
+          }
+        }
+        if (center.length >= 2) polyline(center, { "stroke-width": lw(1.9, .6) });
+        add("circle", { cx: ax, cy: ay, r: 4, fill: col });
+        const labelPoint = center.at(-1) ?? { x: ax, y: ay };
+        text(labelPoint.x + 8, labelPoint.y - 8, "VWAP · ±1/2/3σ", { "font-size": 9, "font-weight": 700 });
+        return done([{ x: ax, y: ay }]);
+      }
+
+      if (ax == null || ay == null || bx == null || by == null || !A || !B) return done();
+
+      if (family === "line" || family === "arrow") {
+        let sx = ax, sy = ay, ex = bx, ey = by;
+        if (d.kind === "ray" || d.kind === "extendedline" || d.extend === "right" || d.extend === "both") {
+          if (Math.abs(bx - ax) < .01) { ex = ax; ey = by >= ay ? H : 0; if (d.kind === "extendedline" || d.extend === "both") { sy = 0; ey = H; } }
+          else { const slope = (by - ay) / (bx - ax); ex = bx >= ax ? W : 0; ey = ay + slope * (ex - ax); if (d.kind === "extendedline" || d.extend === "both") { sx = bx >= ax ? 0 : W; sy = ay + slope * (sx - ax); } }
+        }
+        line(sx, sy, ex, ey);
+        if (family === "arrow") {
+          const angle = Math.atan2(by - ay, bx - ax), head = 10 + (d.width ?? 1.5);
+          path(`M${bx} ${by}L${bx + head * Math.cos(angle + Math.PI - .5)} ${by + head * Math.sin(angle + Math.PI - .5)}M${bx} ${by}L${bx + head * Math.cos(angle + Math.PI + .5)} ${by + head * Math.sin(angle + Math.PI + .5)}`);
+        }
+        if (d.kind === "trendangle") {
+          line(ax, ay, bx, ay, { opacity: .55, "stroke-dasharray": "3 4" });
+          const angle = Math.atan2(ay - by, bx - ax) * 180 / Math.PI; pill((ax + bx) / 2, ay - 13, `${Math.abs(angle).toFixed(1)}°`);
+        }
+        if (d.kind === "infoline") pill((ax + bx) / 2, Math.min(ay, by) - 15, measurementLabel());
+        return done(anchorXY, d.kind === "infoline" || d.kind === "trendangle");
+      }
+
+      if (family === "channel") {
+        if (d.kind === "regressiontrend") {
+          const i1 = Math.max(0, Math.min(barIndex(A.t), barIndex(B.t)));
+          const i2 = Math.min(barsRef.current.length - 1, Math.max(barIndex(A.t), barIndex(B.t)));
+          const regression = calculateRegressionChannel(barsRef.current.slice(i1, i2 + 1), 2);
+          if (!regression) return done(anchorXY);
+          const x1 = projectX(regression.startTime), x2 = projectX(regression.endTime);
+          const meanY1 = projectY(regression.start), meanY2 = projectY(regression.end);
+          const upperY1 = projectY(regression.upperStart), upperY2 = projectY(regression.upperEnd);
+          const lowerY1 = projectY(regression.lowerStart), lowerY2 = projectY(regression.lowerEnd);
+          if ([x1, x2, meanY1, meanY2, upperY1, upperY2, lowerY1, lowerY2].some((value) => value == null || !Number.isFinite(value))) return done(anchorXY);
+          const rx1 = x1 as number, rx2 = x2 as number;
+          const my1 = meanY1 as number, my2 = meanY2 as number;
+          const uy1 = upperY1 as number, uy2 = upperY2 as number;
+          const ly1 = lowerY1 as number, ly2 = lowerY2 as number;
+          add("polygon", { points: `${rx1},${uy1} ${rx2},${uy2} ${rx2},${ly2} ${rx1},${ly1}`, fill, "fill-opacity": Math.max(.06, fillOpacity), stroke: "none" });
+          line(rx1, uy1, rx2, uy2, { hit: false, opacity: .72, "stroke-dasharray": "6 5" });
+          line(rx1, ly1, rx2, ly2, { hit: false, opacity: .72, "stroke-dasharray": "6 5" });
+          line(rx1, my1, rx2, my2);
+          pill((rx1 + rx2) / 2, Math.min(uy1, uy2) - 14, `R ${regression.pearsonR.toFixed(3)} · σ ${regression.standardDeviation.toFixed(prec)}`);
+          return done(anchorXY, true);
+        }
+        const C = d.points[2], D = d.points[3], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null, dx4 = D ? projectX(D.t) : null, dy4 = D ? projectY(D.p) : null;
+        if (d.kind === "flattopbottom" && cx != null && cy != null) { line(ax, ay, bx, ay); line(bx, by, cx, cy); line(ax, ay, cx, cy, { opacity: .45, "stroke-dasharray": "4 4" }); return done(anchorXY); }
+        if (d.kind === "disjointchannel" && cx != null && cy != null && dx4 != null && dy4 != null) { line(ax, ay, bx, by); line(cx, cy, dx4, dy4); add("polygon", { points: `${ax},${ay} ${bx},${by} ${dx4},${dy4} ${cx},${cy}`, fill, "fill-opacity": fillOpacity, stroke: "none" }); return done(anchorXY); }
+        if (cx != null && cy != null) {
+          const dx = bx - ax, dy = by - ay, endX = cx + dx, endY = cy + dy;
+          add("polygon", { points: `${ax},${ay} ${bx},${by} ${endX},${endY} ${cx},${cy}`, fill, "fill-opacity": fillOpacity, stroke: "none" });
+          line(ax, ay, bx, by); line(cx, cy, endX, endY); line(ax, ay, cx, cy, { opacity: .48, "stroke-dasharray": "4 4" });
+        }
+        return done(anchorXY);
+      }
+
+      if (family === "pitchfork") {
+        const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
+        if (cx == null || cy == null) return done();
+        let ox = ax, oy = ay;
+        if (d.kind === "schiffpitchfork") ox = (ax + bx) / 2;
+        if (d.kind === "modifiedschiffpitchfork") { ox = (ax + bx) / 2; oy = (ay + by) / 2; }
+        const mx = (bx + cx) / 2, my = (by + cy) / 2, vx = mx - ox, vy = my - oy;
+        const scale = Math.max(1, Math.abs(vx) < 1 ? H / Math.max(1, Math.abs(vy)) : Math.abs((vx > 0 ? W - ox : -ox) / vx));
+        const ex = ox + vx * scale, ey = oy + vy * scale;
+        line(ox, oy, ex, ey);
+        const forkScale = d.kind === "insidepitchfork" ? .5 : 1;
+        line(bx, by, bx + vx * scale * forkScale, by + vy * scale * forkScale);
+        line(cx, cy, cx + vx * scale * forkScale, cy + vy * scale * forkScale);
+        add("polygon", { points: `${bx},${by} ${bx + vx * scale * forkScale},${by + vy * scale * forkScale} ${cx + vx * scale * forkScale},${cy + vy * scale * forkScale} ${cx},${cy}`, fill, "fill-opacity": fillOpacity * .75, stroke: "none" });
+        return done(anchorXY);
+      }
+
+      if (family === "fib") {
+        const settings = fibonacciSettings(d.meta);
+        const startPrice = settings.reverse ? B.p : A.p;
+        const endPrice = settings.reverse ? A.p : B.p;
+        const x1 = Math.min(ax, bx), spanW = Math.max(48, Math.abs(bx - ax));
+        const levels = settings.levels
+          .filter((level) => level.visible)
+          .map((level) => ({ ratio: level.value, color: level.color, price: startPrice + (endPrice - startPrice) * level.value }));
+        for (let i = 0; i < levels.length - 1; i++) { const y1 = projectY(levels[i].price), y2 = projectY(levels[i + 1].price); if (y1 != null && y2 != null) add("rect", { x: x1, y: Math.min(y1, y2), width: spanW, height: Math.abs(y2 - y1), fill: levels[i + 1].color, "fill-opacity": d.fillOpacity ?? .065, "pointer-events": "none" }); }
+        levels.forEach((level) => {
+          const y = projectY(level.price); if (y == null) return;
+          const ratio = String(Number(level.ratio.toFixed(3))), price = level.price.toFixed(prec);
+          const label = settings.labels === "ratio" ? ratio : settings.labels === "price" ? price : `${ratio} (${price})`;
+          line(x1, y, x1 + spanW, y, { stroke: level.color, "stroke-width": lw(level.ratio === 0 || level.ratio === 1 ? 1.5 : 1.15, .3), "pointer-events": "none", hit: false });
+          text(x1 - 5, y + 3, label, { fill: level.color, "font-size": 9.5, "font-weight": 700, "text-anchor": "end", "font-family": "var(--font-num)", "pointer-events": "none" });
+        });
+        line(ax, ay, bx, by, { "stroke-dasharray": d.dash === "solid" || d.dash == null ? "7 5" : dash, opacity: .85 });
+        return done(anchorXY, true);
+      }
+
+      if (family === "fib-grid") {
+        const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
+        if (cx == null || cy == null) return done();
+        const dx = bx - ax, dy = by - ay, offX = cx - ax, offY = cy - ay;
+        const levels = [0, .236, .382, .5, .618, .786, 1];
+        levels.forEach((ratio) => { const sx = ax + offX * ratio, sy = ay + offY * ratio; line(sx, sy, sx + dx, sy + dy, { opacity: ratio === 0 || ratio === 1 ? 1 : .8 }); text(sx - 4, sy - 3, String(ratio), { "font-size": 8.5, "text-anchor": "end" }); });
+        add("polygon", { points: `${ax},${ay} ${bx},${by} ${bx + offX},${by + offY} ${cx},${cy}`, fill, "fill-opacity": fillOpacity, stroke: "none" }); return done(anchorXY);
+      }
+
+      if (family === "fib-time") {
+        const startX = d.kind === "trendbasedfibtime" && d.points[2] ? projectX(d.points[2].t) ?? ax : ax;
+        const unit = Math.max(5, Math.abs(bx - ax)), seq = [0, 1, 2, 3, 5, 8, 13, 21];
+        seq.forEach((factor, i) => { const x = startX + Math.sign(bx - ax || 1) * unit * factor; if (x < -4 || x > W + 4) return; line(x, 0, x, H, { opacity: i < 2 ? .9 : .55, "stroke-dasharray": i ? "4 4" : dash }); text(x + 3, 14, String(factor), { "font-size": 8.5 }); });
+        return done(anchorXY);
+      }
+
+      if (family === "fan") {
+        const C = d.points[2], cx = C ? projectX(C.t) : bx, cy = C ? projectY(C.p) : by;
+        if (d.kind === "pitchfan" && cx != null && cy != null) {
+          const ratios = [0, .236, .382, .5, .618, .786, 1];
+          ratios.forEach((ratio) => line(
+            ax,
+            ay,
+            bx + (cx - bx) * ratio,
+            by + (cy - by) * ratio,
+            { opacity: ratio === 0 || ratio === 1 ? 1 : .66 },
+          ));
+          return done(anchorXY);
+        }
+        const endX = cx ?? bx, endY = cy ?? by, ratios = d.kind === "gannfan" ? [.125, .25, .333, .5, 1, 2, 3, 4, 8] : [.236, .382, .5, .618, .786, 1];
+        ratios.forEach((ratio) => line(ax, ay, endX, ay + (endY - ay) * ratio, { opacity: ratio === 1 ? 1 : .66 })); return done(anchorXY);
+      }
+
+      if (family === "radial") {
+        const C = d.points[2], cx = C ? projectX(C.t) : bx, cy = C ? projectY(C.p) : by;
+        const rx = Math.max(4, Math.abs(bx - ax)), ry = Math.max(4, Math.abs(by - ay)), ratios = [.236, .382, .5, .618, .786, 1];
+        if (d.kind === "fibspiral") {
+          const pts: XY[] = []; const turns = Math.PI * 4.5;
+          for (let i = 0; i <= 56; i++) { const angle = i / 56 * turns, radius = Math.pow(1.618, angle / (Math.PI / 2) - turns / (Math.PI / 2)) * Math.max(rx, ry); pts.push({ x: ax + Math.cos(angle) * radius, y: ay + Math.sin(angle) * radius }); }
+          polyline(pts); line(ax, ay, bx, by, { opacity: .45, "stroke-dasharray": "4 4" });
+        } else if (d.kind === "fibwedge") {
+          line(ax, ay, bx, by); line(ax, ay, cx ?? bx, cy ?? by);
+          ratios.forEach((ratio) => path(`M${ax + (bx - ax) * ratio} ${ay + (by - ay) * ratio}A${rx * ratio} ${ry * ratio} 0 0 1 ${ax + ((cx ?? bx) - ax) * ratio} ${ay + ((cy ?? by) - ay) * ratio}`, { opacity: .7 }));
+        } else {
+          ratios.forEach((ratio) => {
+            if (d.kind === "fibcircles") add("ellipse", { cx: ax, cy: ay, rx: rx * ratio, ry: ry * ratio, fill: ratio === 1 ? fill : "none", "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.1, .25), opacity: .82 });
+            else path(`M${ax - rx * ratio} ${ay}A${rx * ratio} ${ry * ratio} 0 0 1 ${ax + rx * ratio} ${ay}`, { opacity: .82 });
+          });
+        }
+        return done(anchorXY);
+      }
+
+      if (family === "gann") {
+        const x = Math.min(ax, bx), y = Math.min(ay, by), w = Math.max(2, Math.abs(bx - ax)), h = Math.max(2, Math.abs(by - ay));
+        add("rect", { x, y, width: w, height: h, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.3, .5) });
+        for (const ratio of [.25, .5, .75]) { line(x + w * ratio, y, x + w * ratio, y + h, { opacity: .45 }); line(x, y + h * ratio, x + w, y + h * ratio, { opacity: .45 }); }
+        line(x, y, x + w, y + h); line(x + w, y, x, y + h); return done(anchorXY);
+      }
+
+      if (family === "pattern") {
+        const points = anchorXY;
+        const labelsByKind: Partial<Record<DrawKind, string[]>> = {
+          xabcd: ["X", "A", "B", "C", "D"], cypher: ["X", "A", "B", "C", "D"], abcd: ["A", "B", "C", "D"],
+          headandshoulders: ["0", "LS", "N", "H", "N", "RS", "0"], threedrives: ["0", "1", "A", "2", "B", "3", "C"],
+          elliottimpulse: ["0", "1", "2", "3", "4", "5"], elliottcorrection: ["0", "A", "B", "C"], elliotttriangle: ["0", "A", "B", "C", "D", "E"],
+          elliottdoublecombo: ["W", "X", "Y", "Z"], elliotttriplecombo: ["W", "X", "Y", "X", "Z", "0"], trianglepattern: ["A", "B", "C", "D"],
+        };
+        polyline(points, { fill: d.kind === "trianglepattern" && points.length >= 3 ? fill : "none", "fill-opacity": fillOpacity });
+        const labels = labelsByKind[d.kind] ?? points.map((_, i) => String(i + 1));
+        points.forEach((point, i) => { text(point.x, point.y + (i % 2 ? 17 : -9), labels[i] ?? String(i + 1), { fill: "#f7f9fc", "font-size": 9.5, "font-weight": 800, "text-anchor": "middle" }); if (d.kind === "xabcd" && i >= 2) { const p0 = d.points[i - 2], p1 = d.points[i - 1], p2 = d.points[i], den = Math.abs(p1.p - p0.p); pill((point.x + points[i - 1].x) / 2, (point.y + points[i - 1].y) / 2, (den ? Math.abs(p2.p - p1.p) / den : 0).toFixed(3), "#f7f9fc", col); } });
+        return done(points, d.kind === "xabcd");
+      }
+
+      if (family === "cycle") {
+        const x1 = Math.min(ax, bx), x2 = Math.max(ax, bx), width = Math.max(8, x2 - x1);
+        if (d.kind === "cycliclines") { const step = Math.max(8, width); for (let x = x1, i = 0; x <= W + step && i < 40; x += step, i++) line(x, 0, x, H, { opacity: i ? .45 : .9, "stroke-dasharray": i ? "4 4" : dash }); }
+        else if (d.kind === "timecycles") { const count = Math.max(1, Math.min(24, Math.ceil((W - x1) / width))); for (let i = 0; i < count; i++) add("ellipse", { cx: x1 + width * (i + .5), cy: (ay + by) / 2, rx: width / 2, ry: Math.max(12, Math.abs(by - ay) / 2), fill: "none", stroke: col, "stroke-width": lw(1.2, .4), "stroke-dasharray": dash }); }
+        else { const points: XY[] = []; const amplitude = Math.max(8, Math.abs(by - ay) / 2), center = (ay + by) / 2; for (let i = 0; i <= 48; i++) points.push({ x: ax + (bx - ax) * i / 48, y: center + Math.sin(i / 48 * Math.PI * 4) * amplitude }); polyline(points); }
+        return done(anchorXY);
+      }
+
+      if (family === "position") {
+        const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
+        if (!C || cx == null || cy == null) return done();
+        const metrics = calculatePositionMetrics(d.points, d.meta);
+        const x1 = Math.min(ax, bx, cx), x2 = Math.max(ax + 80, bx, cx), entryY = ay, targetY = by, stopY = cy, targetCol = tokensRef.current.up, stopCol = tokensRef.current.down;
+        add("rect", { x: x1, y: Math.min(entryY, targetY), width: x2 - x1, height: Math.max(1, Math.abs(targetY - entryY)), fill: targetCol, "fill-opacity": d.fillOpacity ?? .2, stroke: targetCol, "stroke-opacity": .55 });
+        add("rect", { x: x1, y: Math.min(entryY, stopY), width: x2 - x1, height: Math.max(1, Math.abs(stopY - entryY)), fill: stopCol, "fill-opacity": d.fillOpacity ?? .2, stroke: stopCol, "stroke-opacity": .55 });
+        const compact = (value: number) => new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 2 }).format(value);
+        line(x1, entryY, x2, entryY);
+        const rr = metrics?.rewardRisk ?? 0, targetProfit = metrics?.targetProfit ?? 0, riskBudget = metrics?.riskBudget ?? 0;
+        pill((x1 + x2) / 2, targetY - 15, `${tPlain("drawingTarget")} ${B.p.toFixed(prec)} (${((B.p - A.p) / A.p * 100).toFixed(2)}%) · +${compact(targetProfit)}`);
+        pill((x1 + x2) / 2, stopY + 15, `${tPlain("drawingStop")} ${C.p.toFixed(prec)} (${((C.p - A.p) / A.p * 100).toFixed(2)}%) · -${compact(riskBudget)}`);
+        pill((x1 + x2) / 2, entryY, `${tPlain("drawingRiskReward")} ${rr.toFixed(2)} · ${compact(metrics?.quantity ?? 0)} @ ${compact(metrics?.positionValue ?? 0)}`); return done(anchorXY, true);
+      }
+
+      if (family === "forecast") {
+        if (d.kind === "ghostfeed") {
+          const controls = d.points.flatMap((point) => {
+            const x = projectX(point.t), y = projectY(point.p);
+            return x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y) ? [] : [{ x, y, p: point.p }];
+          });
+          if (controls.length < 2) return done(anchorXY);
+          const pathLength = controls.slice(1).reduce((sum, point, index) => sum + Math.hypot(point.x - controls[index].x, point.y - controls[index].y), 0);
+          const candleCount = Math.max(8, Math.min(48, Math.round(pathLength / 10)));
+          const sourceEnd = Math.max(0, barIndex(d.points[0].t));
+          const history = barsRef.current.slice(Math.max(0, sourceEnd - 63), sourceEnd + 1);
+          const feed = generateGhostFeed(history, controls.map((point) => point.p), candleCount);
+          if (!feed) return done(controls);
+          const pointAtProgress = (progress: number) => {
+            const scaled = progress * (controls.length - 1);
+            const index = Math.min(controls.length - 2, Math.floor(scaled));
+            const local = scaled - index;
+            return {
+              x: controls[index].x + (controls[index + 1].x - controls[index].x) * local,
+              y: controls[index].y + (controls[index + 1].y - controls[index].y) * local,
+            };
+          };
+          const candleX = feed.candles.map((candle) => pointAtProgress(candle.progress).x);
+          const spacings = candleX.slice(1).map((x, index) => Math.abs(x - candleX[index])).filter((value) => value > .5).sort((a, b) => a - b);
+          const medianSpacing = spacings.length ? spacings[Math.floor(spacings.length / 2)] : 5;
+          const bodyWidth = Math.max(2, Math.min(8, medianSpacing * .62));
+          feed.candles.forEach((candle, index) => {
+            const x = candleX[index];
+            const openY = projectY(candle.o), highY = projectY(candle.h), lowY = projectY(candle.l), closeY = projectY(candle.c);
+            if ([openY, highY, lowY, closeY].some((value) => value == null || !Number.isFinite(value))) return;
+            const candleColor = candle.c >= candle.o ? tokensRef.current.up : tokensRef.current.down;
+            add("line", {
+              x1: x, y1: highY as number, x2: x, y2: lowY as number,
+              stroke: candleColor, "stroke-width": Math.max(1, bodyWidth * .22),
+              "pointer-events": "none", "data-ghost-wick": String(index),
+            });
+            add("rect", {
+              x: x - bodyWidth / 2,
+              y: Math.min(openY as number, closeY as number),
+              width: bodyWidth,
+              height: Math.max(1.2, Math.abs((closeY as number) - (openY as number))),
+              rx: Math.min(1.2, bodyWidth * .18),
+              fill: candleColor,
+              stroke: candleColor,
+              "stroke-width": .65,
+              "pointer-events": "none",
+              "data-ghost-candle": String(index),
+            });
+          });
+          g.appendChild(mk("polyline", {
+            points: controls.map((point) => `${point.x},${point.y}`).join(" "),
+            fill: "none", stroke: "transparent", "stroke-width": 16,
+            "stroke-linecap": "round", "stroke-linejoin": "round", "data-segment": "1",
+          }));
+          return done(controls);
+        }
+        const points = anchorXY;
+        polyline(points);
+        if (d.kind === "forecast") { const angle = Math.atan2(by - ay, bx - ax), head = 10; path(`M${bx} ${by}L${bx + head * Math.cos(angle + Math.PI - .5)} ${by + head * Math.sin(angle + Math.PI - .5)}M${bx} ${by}L${bx + head * Math.cos(angle + Math.PI + .5)} ${by + head * Math.sin(angle + Math.PI + .5)}`); pill((ax + bx) / 2, Math.min(ay, by) - 15, measurementLabel()); }
+        return done(points, d.kind === "forecast");
+      }
+
+      if (family === "bar-pattern") {
+        const x1 = Math.min(ax, bx), y1 = Math.min(ay, by), w = Math.max(24, Math.abs(bx - ax)), h = Math.max(24, Math.abs(by - ay));
+        const i1 = Math.max(0, Math.min(barIndex(A.t), barIndex(B.t))), i2 = Math.min(barsRef.current.length - 1, Math.max(barIndex(A.t), barIndex(B.t))), rows = barsRef.current.slice(i1, i2 + 1);
+        const sample = rows.length > 18 ? rows.filter((_, i) => i % Math.ceil(rows.length / 18) === 0) : rows;
+        const lo = Math.min(...sample.map((row) => row.l), A.p, B.p), hi = Math.max(...sample.map((row) => row.h), A.p, B.p), span = Math.max(1e-9, hi - lo);
+        sample.forEach((row, i) => { const x = x1 + (i + .5) / Math.max(1, sample.length) * w, yy = (price: number) => y1 + (hi - price) / span * h; line(x, yy(row.h), x, yy(row.l), { "stroke-width": 1 }); add("rect", { x: x - Math.max(1.5, w / Math.max(8, sample.length) * .25), y: Math.min(yy(row.o), yy(row.c)), width: Math.max(3, w / Math.max(8, sample.length) * .5), height: Math.max(1, Math.abs(yy(row.o) - yy(row.c))), fill: row.c >= row.o ? tokensRef.current.up : tokensRef.current.down, stroke: "none" }); });
+        return done(anchorXY);
+      }
+
+      if (family === "sector") {
+        const C = d.points[2], cx = C ? projectX(C.t) : bx, cy = C ? projectY(C.p) : by, radius = Math.max(6, Math.hypot(bx - ax, by - ay));
+        const a1 = Math.atan2(by - ay, bx - ax), a2 = Math.atan2((cy ?? by) - ay, (cx ?? bx) - ax), ex2 = ax + Math.cos(a2) * radius, ey2 = ay + Math.sin(a2) * radius, large = Math.abs(a2 - a1) > Math.PI ? 1 : 0;
+        add("path", { d: `M${ax} ${ay}L${bx} ${by}A${radius} ${radius} 0 ${large} 1 ${ex2} ${ey2}Z`, fill, "fill-opacity": Math.max(.12, fillOpacity), stroke: col, "stroke-width": lw(1.3, .5) }); return done(anchorXY);
+      }
+
+      if (family === "volume-profile") {
+        const x1 = Math.min(ax, bx), x2 = Math.max(ax, bx), y1 = Math.min(ay, by), y2 = Math.max(ay, by);
+        const i1 = Math.max(0, Math.min(barIndex(A.t), barIndex(B.t))), i2 = Math.min(barsRef.current.length - 1, Math.max(barIndex(A.t), barIndex(B.t)));
+        const profile = calculateFixedRangeVolumeProfile(barsRef.current.slice(i1, i2 + 1), A.p, B.p, 24, .7);
+        if (!profile) return done(anchorXY);
+        const maxVolume = Math.max(...profile.bins.map((bin) => bin.volume), 1e-9);
+        profile.bins.forEach((bin, index) => {
+          const top = projectY(bin.high), bottom = projectY(bin.low);
+          if (top == null || bottom == null || !Number.isFinite(top) || !Number.isFinite(bottom)) return;
+          const width = Math.max(.5, (x2 - x1) * bin.volume / maxVolume);
+          add("rect", {
+            x: x2 - width,
+            y: Math.min(top, bottom) + .5,
+            width,
+            height: Math.max(1, Math.abs(bottom - top) - 1),
+            fill: col,
+            "fill-opacity": bin.isPoc ? .82 : bin.inValueArea ? .46 : .17,
+            stroke: bin.isPoc ? col : "none",
+            "stroke-width": bin.isPoc ? .8 : 0,
+            "pointer-events": "none",
+            "data-profile-bin": String(index),
+            "data-value-area": bin.inValueArea ? "true" : "false",
+            "data-poc": bin.isPoc ? "true" : "false",
+          });
+        });
+        const pocY = projectY(profile.pocPrice), vahY = projectY(profile.valueAreaHigh), valY = projectY(profile.valueAreaLow);
+        if (vahY != null) line(x1, vahY, x2, vahY, { hit: false, opacity: .46, "stroke-dasharray": "3 4" });
+        if (valY != null) line(x1, valY, x2, valY, { hit: false, opacity: .46, "stroke-dasharray": "3 4" });
+        if (pocY != null) {
+          line(x1, pocY, x2, pocY, { hit: false, "stroke-width": lw(1.8, .45), "stroke-dasharray": "" });
+          pill(x1 + (x2 - x1) * .68, pocY - 14, `POC ${profile.pocPrice.toFixed(prec)}`);
+        }
+        add("rect", { x: x1, y: y1, width: Math.max(1, x2 - x1), height: Math.max(1, y2 - y1), fill: "none", stroke: col, "stroke-width": 1, "stroke-dasharray": dash });
+        return done(anchorXY, true);
+      }
+
+      if (family === "range") {
+        const bars = Math.abs(barIndex(B.t) - barIndex(A.t)), delta = B.p - A.p, pct = A.p ? delta / A.p * 100 : 0, x = Math.min(ax, bx), y = Math.min(ay, by), w = Math.max(1, Math.abs(bx - ax)), h = Math.max(1, Math.abs(by - ay));
+        if (d.kind === "measure") { line(ax, ay, bx, by); pill((ax + bx) / 2, y - 15, measurementLabel()); }
+        else if (d.kind === "daterange") { add("rect", { x, y: 0, width: w, height: H, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-opacity": .5, "stroke-dasharray": dash }); pill((ax + bx) / 2, H - 34, `${bars} ${tPlain("drawingBars")}`); }
+        else { add("rect", { x, y, width: w, height: h, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-opacity": .62, "stroke-dasharray": dash }); const label = d.kind === "dateandpricerange" ? `${bars} ${tPlain("drawingBars")} · ${delta >= 0 ? "+" : ""}${delta.toFixed(prec)} (${pct.toFixed(2)}%)` : `${delta >= 0 ? "+" : ""}${delta.toFixed(prec)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`; pill((ax + bx) / 2, y - 15, label); }
+        return done(anchorXY, true);
+      }
+
+      if (family === "freehand") {
+        // Drawing opacity already lives on the root group. Applying it again to
+        // the Highlighter stroke squared the alpha (.28 -> .078) and made the
+        // mark look broken on dark charts.
+        polyline(anchorXY, { "stroke-width": lw(d.kind === "highlighter" ? 8 : d.kind === "brush" ? 2.6 : 1.8, .7) }); return done(anchorXY);
+      }
+
+      if (family === "shape") {
+        if (d.kind === "rect") add("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.max(1, Math.abs(bx - ax)), height: Math.max(1, Math.abs(by - ay)), fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.2, .6), "stroke-dasharray": dash });
+        else if (d.kind === "circle") { const radius = Math.max(2, Math.hypot(bx - ax, by - ay)); add("circle", { cx: ax, cy: ay, r: radius, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.3, .6), "stroke-dasharray": dash }); }
+        else if (d.kind === "ellipse") { const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null, centerX = (ax + bx) / 2, centerY = (ay + by) / 2, angle = cx != null && cy != null ? Math.atan2(cy - centerY, cx - centerX) * 180 / Math.PI : 0; add("ellipse", { cx: centerX, cy: centerY, rx: Math.max(2, Math.abs(bx - ax) / 2), ry: Math.max(2, Math.abs(by - ay) / 2), transform: `rotate(${angle} ${centerX} ${centerY})`, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.3, .6), "stroke-dasharray": dash }); }
+        else if (d.kind === "rotatedrect") { const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null; if (cx != null && cy != null) add("polygon", { points: `${ax},${ay} ${bx},${by} ${cx + bx - ax},${cy + by - ay} ${cx},${cy}`, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.3, .6), "stroke-dasharray": dash }); }
+        else { const C = d.points[2], cx = C ? projectX(C.t) : (ax + bx) / 2, cy = C ? projectY(C.p) : Math.min(ay, by); add("polygon", { points: `${ax},${ay} ${bx},${by} ${cx},${cy}`, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.3, .6), "stroke-dasharray": dash }); }
+        return done(anchorXY);
+      }
+
+      if (family === "curve") {
+        const C = d.points[2], D = d.points[3], cx = C ? projectX(C.t) : (ax + bx) / 2, cy = C ? projectY(C.p) : (ay + by) / 2, dx = D ? projectX(D.t) : null, dy = D ? projectY(D.p) : null;
+        if (d.kind === "arc") path(`M${ax} ${ay}Q${cx} ${cy} ${bx} ${by}`);
+        else if (d.kind === "doublecurve" && dx != null && dy != null) { path(`M${ax} ${ay}Q${cx} ${cy} ${bx} ${by}`); path(`M${ax} ${ay}Q${dx} ${dy} ${bx} ${by}`); }
+        else path(`M${ax} ${ay}Q${cx} ${cy} ${bx} ${by}`);
+        return done(anchorXY);
+      }
+
+      if (family === "stylized") {
+        const C = d.points[2], D = d.points[3], E = d.points[4], F = d.points[5];
+        const c = C ? { x: projectX(C.t), y: projectY(C.p) } : null, q = D ? { x: projectX(D.t), y: projectY(D.p) } : null, e = E ? { x: projectX(E.t), y: projectY(E.p) } : null, f = F ? { x: projectX(F.t), y: projectY(F.p) } : null;
+        if (d.kind === "divergence" && c?.x != null && c.y != null && q?.x != null && q.y != null) { line(ax, ay, bx, by); line(c.x, c.y, q.x, q.y); }
+        else if (d.kind === "journey" && c?.x != null && c.y != null && q?.x != null && q.y != null && e?.x != null && e.y != null && f?.x != null && f.y != null) polyline([{ x: ax, y: ay }, c as XY, q as XY, e as XY, f as XY, { x: bx, y: by }]);
+        else if (d.kind === "fork" && c?.x != null && c.y != null && q?.x != null && q.y != null && e?.x != null && e.y != null) { line(ax, ay, c.x, c.y); line(c.x, c.y, bx, by); line(c.x, c.y, q.x, q.y); line(c.x, c.y, e.x, e.y); }
+        else if (d.kind === "threepaths" && c?.x != null && c.y != null && q?.x != null && q.y != null && e?.x != null && e.y != null) { line(ax, ay, bx, by); line(c.x, c.y, q.x, q.y); line(e.x, e.y, bx, by); }
+        else if (d.kind === "burj" && c?.x != null && c.y != null) { add("polygon", { points: `${ax},${ay} ${c.x},${c.y} ${bx},${by}`, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.5, .6) }); line((ax + bx) / 2, (ay + by) / 2, c.x, c.y); }
+        else if (d.kind === "momentum") polyline([{ x: ax, y: ay }, { x: ax + (bx - ax) * .34, y: ay + (by - ay) * .2 }, { x: ax + (bx - ax) * .48, y: ay + (by - ay) * .76 }, { x: ax + (bx - ax) * .68, y: ay + (by - ay) * .42 }, { x: bx, y: by }]);
+        else if (d.kind === "emphasis") { line(ax, ay, bx, by, { "stroke-width": lw(3.2, .8) }); line(ax + 5, ay + 7, bx + 5, by + 7, { opacity: .42 }); }
+        else { const bend = d.kind === "whisper" || d.kind === "subtle" ? .14 : .32, cx1 = ax + (bx - ax) * .35, cy1 = ay - Math.abs(by - ay || 30) * bend, cx2 = ax + (bx - ax) * .65, cy2 = by + Math.abs(by - ay || 30) * bend; path(`M${ax} ${ay}C${cx1} ${cy1} ${cx2} ${cy2} ${bx} ${by}`, { opacity: d.kind === "whisper" || d.kind === "subtle" ? .58 : 1 }); }
+        return done(anchorXY);
+      }
+
+      // This is deliberately loud and test-addressable. The exhaustive family map
+      // makes this exceptional, but malformed/off-spec data still gets a visible,
+      // editable object instead of a silent empty SVG group.
+      g.setAttribute("data-renderer-fallback", "true");
+      line(ax, ay, bx, by); return done(anchorXY);
     }
 
     // floating style/delete toolbar over the selected drawing
-    const bar = document.createElement("div"); bar.className = "draw-bar"; bar.style.display = "none"; wrap.appendChild(bar); barRef.current = bar;
+    const bar = document.createElement("div");
+    bar.className = "draw-bar"; bar.style.display = "none"; bar.setAttribute("role", "toolbar");
+    bar.setAttribute("aria-label", tPlain("drawingSelectionToolbar")); wrap.appendChild(bar); barRef.current = bar;
+    const barTip = document.createElement("div");
+    barTip.className = "tip tip-mini draw-bar-hover-tip";
+    barTip.setAttribute("role", "tooltip");
+    barTip.dataset.open = "0";
+    barTip.style.display = "none";
+    document.body.appendChild(barTip);
+    let barTipTimer: number | null = null;
+    let lastBarTouchAt = -Infinity;
+    const hideBarTip = () => {
+      if (barTipTimer !== null) window.clearTimeout(barTipTimer);
+      barTipTimer = null;
+      barTip.dataset.open = "0";
+      barTip.style.display = "none";
+    };
+    const showBarTip = (target: HTMLElement, immediate = false) => {
+      const label = target.getAttribute("aria-label");
+      if (!label) return;
+      if (barTipTimer !== null) window.clearTimeout(barTipTimer);
+      barTipTimer = window.setTimeout(() => {
+        barTipTimer = null;
+        if (!target.isConnected || bar.style.display === "none") return;
+        barTip.textContent = label;
+        barTip.style.display = "flex";
+        barTip.dataset.open = "0";
+        const anchor = target.getBoundingClientRect();
+        const tipRect = barTip.getBoundingClientRect();
+        const edge = 8, gap = 8;
+        const left = Math.max(edge, Math.min(window.innerWidth - tipRect.width - edge, anchor.left + anchor.width / 2 - tipRect.width / 2));
+        const above = anchor.top - tipRect.height - gap;
+        const top = above >= edge ? above : Math.min(window.innerHeight - tipRect.height - edge, anchor.bottom + gap);
+        barTip.dataset.side = above >= edge ? "top" : "bottom";
+        barTip.style.left = Math.round(left) + "px";
+        barTip.style.top = Math.round(top) + "px";
+        requestAnimationFrame(() => { if (barTip.style.display !== "none") barTip.dataset.open = "1"; });
+      }, immediate ? 0 : 200);
+    };
+    bar.addEventListener("pointerover", (event) => {
+      if (event.pointerType === "touch") return;
+      const target = (event.target as Element).closest<HTMLElement>("[aria-label]");
+      if (target && bar.contains(target)) showBarTip(target);
+    });
+    bar.addEventListener("pointerout", (event) => {
+      const from = (event.target as Element).closest<HTMLElement>("[aria-label]");
+      const to = (event.relatedTarget as Element | null)?.closest?.<HTMLElement>("[aria-label]");
+      if (from !== to) hideBarTip();
+    });
+    bar.addEventListener("focusin", (event) => {
+      if (performance.now() - lastBarTouchAt < 700) return;
+      const target = (event.target as Element).closest<HTMLElement>("[aria-label]");
+      if (target) showBarTip(target, true);
+    });
+    bar.addEventListener("focusout", hideBarTip);
+    window.addEventListener("resize", hideBarTip);
+    document.addEventListener("scroll", hideBarTip, true);
     const COLORS = ["#4d82ff", "#26c281", "#f0566b", "#e8b339", "#d6dae3"];
-    const styled = new Set(["trendline", "ray", "vline", "hline", "arrow", "rect"]);
+    const RECENT_COLOR_KEY = "mm.drawing.recentColors.v1";
+    const normalizeHexColor = (value: unknown) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)
+      ? value.toLowerCase()
+      : null;
+    const readRecentColors = () => {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(RECENT_COLOR_KEY) || "[]");
+        if (!Array.isArray(parsed)) return [] as string[];
+        return parsed.flatMap((value) => normalizeHexColor(value) ?? []).filter((value, index, all) => all.indexOf(value) === index).slice(0, 8);
+      } catch { return [] as string[]; }
+    };
+    let recentColors = readRecentColors();
+    const rememberRecentColor = (color: unknown, previous?: unknown) => {
+      const values = [normalizeHexColor(color), normalizeHexColor(previous), ...recentColors].filter((value): value is string => value !== null);
+      recentColors = values.filter((value, index) => values.indexOf(value) === index).slice(0, 8);
+      try { localStorage.setItem(RECENT_COLOR_KEY, JSON.stringify(recentColors)); } catch {}
+    };
+    const quickBarColors = (value: unknown) => {
+      const current = normalizeHexColor(value) || COLORS[0];
+      const candidates = [current, ...recentColors, ...COLORS.map((color) => color.toLowerCase())];
+      return candidates.filter((color, index) => candidates.indexOf(color) === index).slice(0, 3);
+    };
+    const creationPalette = document.createElement("div");
+    creationPalette.className = "drawing-creation-palette";
+    creationPalette.setAttribute("role", "toolbar");
+    creationPalette.setAttribute("aria-label", "Drawing color");
+    creationPalette.style.cssText = "position:absolute;z-index:9;display:none;align-items:center;gap:5px;padding:6px 7px 5px;border:1px solid rgba(148,163,184,.22);border-radius:10px;background:rgba(14,18,27,.9);box-shadow:0 10px 28px rgba(0,0,0,.32);backdrop-filter:blur(14px);pointer-events:auto;transform:translateZ(0)";
+    const creationSwatches = document.createElement("div"); creationSwatches.style.cssText = "display:flex;align-items:center;gap:4px";
+    for (const color of COLORS) {
+      const swatch = document.createElement("button"); swatch.type = "button"; swatch.dataset.creationColor = color; swatch.setAttribute("aria-label", color);
+      swatch.style.cssText = `width:17px;height:17px;padding:0;border:1px solid rgba(255,255,255,.18);border-radius:4px;background:${color};cursor:pointer;box-sizing:border-box`;
+      creationSwatches.appendChild(swatch);
+    }
+    const creationCaption = document.createElement("span");
+    creationCaption.className = "drawing-creation-palette-caption";
+    creationCaption.textContent = document.documentElement.lang.toLowerCase().startsWith("zh") ? "滚动切换" : "Scroll to Change";
+    creationCaption.style.cssText = "display:block;margin-top:3px;color:rgba(226,232,240,.68);font:600 8px/1.1 var(--font-ui,system-ui);text-align:center;white-space:nowrap";
+    const creationInner = document.createElement("div"); creationInner.append(creationSwatches, creationCaption); creationPalette.appendChild(creationInner); wrap.appendChild(creationPalette); creationPaletteRef.current = creationPalette;
+    const updateCreationPaletteSelection = () => {
+      const selected = styleRef.current?.color || getDrawingTool(toolRef.current)?.defaults.color || COLORS[0];
+      creationSwatches.querySelectorAll<HTMLElement>("[data-creation-color]").forEach((swatch) => {
+        const active = swatch.dataset.creationColor === selected;
+        swatch.setAttribute("aria-pressed", active ? "true" : "false");
+        swatch.style.outline = active ? "2px solid rgba(248,250,252,.96)" : "none";
+        swatch.style.outlineOffset = active ? "2px" : "0";
+      });
+    };
+    const setCreationColor = (color: string) => {
+      const current = styleRef.current ?? { color: COLORS[0], width: 1.5, dash: "solid" as const };
+      styleRef.current = { ...current, color }; updateCreationPaletteSelection();
+      try { window.dispatchEvent(new CustomEvent("mm:drawing-style", { detail: { color } })); } catch {}
+      renderDraw();
+    };
+    creationPalette.addEventListener("pointerdown", (event) => {
+      const swatch = (event.target as Element).closest<HTMLElement>("[data-creation-color]"); if (!swatch?.dataset.creationColor) return;
+      event.preventDefault(); event.stopPropagation(); setCreationColor(swatch.dataset.creationColor);
+    });
+    const positionCreationPalette = (clientX: number, clientY: number) => {
+      if (!toolRef.current || !matchMedia("(pointer:fine)").matches || matchMedia("(max-width:860px)").matches) { creationPalette.style.display = "none"; return; }
+      const rect = wrap.getBoundingClientRect(); creationPalette.style.display = "flex"; updateCreationPaletteSelection();
+      const width = creationPalette.offsetWidth || 132, height = creationPalette.offsetHeight || 43;
+      const left = Math.max(6, Math.min(el!.clientWidth - width - 6, clientX - rect.left + 16));
+      const top = Math.max(6, Math.min(el!.clientHeight - height - 6, clientY - rect.top + 16));
+      creationPalette.style.left = `${left}px`; creationPalette.style.top = `${top}px`;
+    };
+    svg.addEventListener("pointerleave", () => { creationPalette.style.display = "none"; });
     const DASHES: [string, string][] = [["solid", "M2 6h16"], ["dashed", "M2 6h4M8 6h4M14 6h4"], ["dotted", "M2 6h.5M6 6h.5M10 6h.5M14 6h.5M18 6h.5"]];
     const buildBar = (d: Drawing) => {
+      hideBarTip();
+      bar.dataset.drawingId = d.id;
       const sw = (a: boolean) => (a ? " on" : "");
-      let h = COLORS.map((cc) => `<button data-c="${cc}" class="dsw${sw((d.color || "#4d82ff") === cc)}" style="background:${cc}" title="${cc}"></button>`).join("");
-      if (d.kind === "text") {
-        h += `<span class="bar-sep"></span>` + [["12", "S"], ["16", "M"], ["22", "L"]].map(([fs, l]) => `<button data-fs="${fs}" class="dfi${sw((d.fontSize ?? 13) === +fs)}">${l}</button>`).join("");
-      } else if (styled.has(d.kind)) {
-        h += `<span class="bar-sep"></span>` + [1.5, 2.5, 4].map((w) => `<button data-w="${w}" class="dwi${sw((d.width ?? 1.6) === w)}" title="${w}px"><i style="height:${Math.max(1, Math.round(w - 0.5))}px"></i></button>`).join("");
-        h += `<span class="bar-sep"></span>` + DASHES.map(([k, p]) => `<button data-dash="${k}" class="ddi${sw((d.dash || "solid") === k)}" title="${k}"><svg viewBox="0 0 20 12"><path d="${p}"/></svg></button>`).join("");
+      const currentColor = normalizeHexColor(d.color) || COLORS[0];
+      // The colour controls share one wrapper so a narrow layout can cluster them into a single
+      // slot instead of spending four. `display:contents` keeps every wider layout unchanged.
+      let h = `<span class="bar-colors">${quickBarColors(currentColor).map((cc, index) => `<button data-c="${cc}" data-color-role="${index === 0 ? "current" : "recent"}" class="dsw${sw(index === 0)}" style="background:${cc}" aria-label="${escH(tPlain("drawingColorValue").replace("{color}", cc))}"></button>`).join("")}</span>`;
+      if (getDrawingTool(d.kind)?.capabilities.includes("fontSize")) {
+        h += `<span class="bar-sep"></span>` + [["12", "S"], ["16", "M"], ["22", "L"]].map(([fs, l]) => `<button data-fs="${fs}" class="dfi${sw((d.fontSize ?? 13) === +fs)}" aria-label="${escH(tPlain("drawingTextSizeOption").replace("{size}", l))}">${l}</button>`).join("");
+      } else if (getDrawingTool(d.kind)?.capabilities.some((cap) => cap === "width" || cap === "dash")) {
+        h += `<span class="bar-sep"></span>` + [1.5, 2.5, 4].map((w) => `<button data-w="${w}" class="dwi${sw((d.width ?? 1.6) === w)}" aria-label="${escH(tPlain("drawingUseWidth").replace("{width}", String(w)))}"><i style="height:${Math.max(1, Math.round(w - 0.5))}px"></i></button>`).join("");
+        h += `<span class="bar-sep"></span>` + DASHES.map(([k, p]) => `<button data-dash="${k}" class="ddi${sw((d.dash || "solid") === k)}" aria-label="${escH(tPlain(k === "solid" ? "drawingDashSolid" : k === "dashed" ? "drawingDashDashed" : "drawingDashDotted"))}"><svg viewBox="0 0 20 12"><path d="${p}"/></svg></button>`).join("");
       }
-      h += `<span class="bar-sep"></span><button class="bar-del" data-del="1" title="Delete"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/></svg></button>`;
+      h += `<span class="bar-sep"></span><button class="bar-del" data-del="1" aria-label="${tPlain("drawingDelete")}"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/></svg></button>`;
       bar.innerHTML = h;
+      const picker = document.createElement("label");
+      picker.className = "bar-color-picker";
+      picker.setAttribute("aria-label", tPlain("drawingCustomColorAria"));
+      picker.setAttribute("data-color-role", "picker");
+      const pickerPreview = document.createElement("span");
+      pickerPreview.className = "bar-color-picker-preview";
+      pickerPreview.style.background = currentColor;
+      const pickerPlus = document.createElement("span");
+      pickerPlus.className = "bar-color-picker-plus";
+      pickerPlus.textContent = "+";
+      const gripEl = document.createElement("button");
+      gripEl.className = "bar-grip"; gripEl.type = "button"; gripEl.setAttribute("aria-label", tPlain("drawingDragProperties")); gripEl.setAttribute("data-bar-grip", "1");
+      gripEl.textContent = "⠿"; bar.prepend(gripEl);
+      const custom = document.createElement("input");
+      custom.className = "bar-custom-color"; custom.type = "color"; custom.value = currentColor; custom.dataset.previousColor = currentColor;
+      custom.setAttribute("aria-label", tPlain("drawingCustomColorAria")); custom.setAttribute("data-custom-color", "1");
+      picker.append(pickerPreview, pickerPlus, custom);
+      (bar.querySelector(".bar-colors") ?? bar).appendChild(picker);
+      const lock = document.createElement("button");
+      lock.className = "bar-act" + (d.locked ? " on" : ""); lock.type = "button";
+      lock.setAttribute("aria-label", d.locked ? tPlain("drawingUnlock") : tPlain("drawingLock")); lock.setAttribute("data-lock", "1"); lock.textContent = d.locked ? "●" : "○"; bar.appendChild(lock);
+      const duplicate = document.createElement("button");
+      duplicate.className = "bar-act"; duplicate.type = "button"; duplicate.setAttribute("aria-label", tPlain("drawingDuplicate"));
+      duplicate.setAttribute("data-duplicate", "1"); duplicate.textContent = "⧉"; bar.appendChild(duplicate);
+      const settings = document.createElement("button");
+      settings.className = "bar-act"; settings.type = "button"; settings.setAttribute("aria-label", tPlain("drawingMoreProperties"));
+      settings.setAttribute("data-settings", "1"); settings.textContent = "⚙"; bar.appendChild(settings);
+      const panel = document.createElement("div");
+      panel.className = "draw-settings";
+      panel.dataset.settingsKind = d.kind;
+      const opacityLabel = document.createElement("label"); opacityLabel.textContent = tPlain("drawingOpacity");
+      const opacity = document.createElement("input"); opacity.type = "range"; opacity.min = "15"; opacity.max = "100"; opacity.step = "5"; opacity.value = String(Math.round((d.opacity ?? 1) * 100)); opacity.setAttribute("data-opacity", "1");
+      opacityLabel.appendChild(opacity); panel.appendChild(opacityLabel);
+      if (getDrawingTool(d.kind)?.capabilities.includes("fill")) {
+        const fillLabel = document.createElement("label"); fillLabel.textContent = tPlain("drawingFill");
+        const fill = document.createElement("input"); fill.type = "range"; fill.min = "0"; fill.max = "45"; fill.step = "1"; fill.value = String(Math.round((d.fillOpacity ?? .08) * 100)); fill.setAttribute("data-fill-opacity", "1");
+        fillLabel.appendChild(fill); panel.appendChild(fillLabel);
+      }
+      if (d.kind === "fib") {
+        const fib = fibonacciSettings(d.meta);
+        const heading = document.createElement("div"); heading.className = "draw-settings-heading"; heading.textContent = tPlain("drawingFibLevels"); panel.appendChild(heading);
+        const controls = document.createElement("div"); controls.className = "draw-settings-grid";
+        const reverseLabel = document.createElement("label"); reverseLabel.textContent = tPlain("drawingFibReverse");
+        const reverse = document.createElement("input"); reverse.type = "checkbox"; reverse.checked = fib.reverse; reverse.setAttribute("data-fib-reverse", "1"); reverseLabel.appendChild(reverse); controls.appendChild(reverseLabel);
+        const labelModeLabel = document.createElement("label"); labelModeLabel.textContent = tPlain("drawingFibLabels");
+        const labelMode = document.createElement("select"); labelMode.setAttribute("data-fib-labels", "1");
+        (["ratio", "price", "both"] as const).forEach((value) => {
+          const option = document.createElement("option"); option.value = value;
+          option.textContent = tPlain(value === "ratio" ? "drawingFibRatio" : value === "price" ? "drawingFibPrice" : "drawingFibBoth");
+          option.selected = fib.labels === value; labelMode.appendChild(option);
+        });
+        labelModeLabel.appendChild(labelMode); controls.appendChild(labelModeLabel); panel.appendChild(controls);
+        const levels = document.createElement("div"); levels.className = "draw-fib-levels"; levels.setAttribute("role", "group"); levels.setAttribute("aria-label", tPlain("drawingFibLevels"));
+        fib.levels.forEach((level, index) => {
+          const row = document.createElement("label"); row.className = "draw-fib-level";
+          const visible = document.createElement("input"); visible.type = "checkbox"; visible.checked = level.visible; visible.setAttribute("data-fib-level", String(index));
+          const value = document.createElement("input"); value.type = "number"; value.min = "-100"; value.max = "100"; value.step = ".001"; value.value = String(level.value); value.setAttribute("data-fib-value", String(index)); value.setAttribute("aria-label", tPlain("drawingFibLevelValue").replace("{value}", String(level.value)));
+          const color = document.createElement("input"); color.type = "color"; color.value = level.color; color.setAttribute("data-fib-color", String(index)); color.setAttribute("aria-label", `${level.value} ${tPlain("drawingCustomColor")}`);
+          row.append(visible, value, color); levels.appendChild(row);
+        });
+        panel.appendChild(levels);
+        const reset = document.createElement("button"); reset.type = "button"; reset.className = "draw-settings-reset"; reset.setAttribute("data-reset-tool-settings", "fib"); reset.textContent = tPlain("drawingResetDefaults"); panel.appendChild(reset);
+      }
+      if (d.kind === "longposition" || d.kind === "shortposition") {
+        const position = positionSettings(d.meta);
+        const metrics = calculatePositionMetrics(d.points, d.meta);
+        const heading = document.createElement("div"); heading.className = "draw-settings-heading"; heading.textContent = getDrawingTool(d.kind)?.label || "Position"; panel.appendChild(heading);
+        const controls = document.createElement("div"); controls.className = "draw-settings-grid";
+        const accountLabel = document.createElement("label"); accountLabel.textContent = tPlain("drawingAccountSize");
+        const account = document.createElement("input"); account.type = "number"; account.min = "1"; account.max = "1000000000000"; account.step = "100"; account.value = String(position.accountSize); account.setAttribute("data-position-account", "1"); accountLabel.appendChild(account); controls.appendChild(accountLabel);
+        const riskModeLabel = document.createElement("label"); riskModeLabel.textContent = tPlain("drawingRiskMode");
+        const riskMode = document.createElement("select"); riskMode.setAttribute("data-position-risk-mode", "1");
+        (["percent", "money"] as const).forEach((mode) => {
+          const option = document.createElement("option"); option.value = mode; option.selected = position.riskMode === mode;
+          option.textContent = tPlain(mode === "percent" ? "drawingRiskModePercent" : "drawingRiskModeMoney"); riskMode.appendChild(option);
+        });
+        riskModeLabel.appendChild(riskMode); controls.appendChild(riskModeLabel);
+        const riskLabel = document.createElement("label"); riskLabel.textContent = tPlain(position.riskMode === "money" ? "drawingRiskAmount" : "drawingRiskPercent");
+        const risk = document.createElement("input"); risk.type = "number"; risk.min = ".01"; risk.max = position.riskMode === "money" ? String(position.accountSize) : "100"; risk.step = position.riskMode === "money" ? "1" : ".1"; risk.value = String(position.riskMode === "money" ? position.riskAmount : position.riskPercent); risk.setAttribute(position.riskMode === "money" ? "data-position-risk-amount" : "data-position-risk", "1"); riskLabel.appendChild(risk); controls.appendChild(riskLabel); panel.appendChild(controls);
+        if (metrics) {
+          const summary = document.createElement("div"); summary.className = "draw-position-summary";
+          summary.innerHTML = `<span>${escH(tPlain("drawingRiskAmount"))}<b>${metrics.riskBudget.toLocaleString(undefined, { maximumFractionDigits: 2 })}</b></span><span>${escH(tPlain("drawingPositionSize"))}<b>${metrics.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}</b></span>`;
+          panel.appendChild(summary);
+        }
+        const reset = document.createElement("button"); reset.type = "button"; reset.className = "draw-settings-reset"; reset.setAttribute("data-reset-tool-settings", "position"); reset.textContent = tPlain("drawingResetDefaults"); panel.appendChild(reset);
+      }
+      bar.appendChild(panel);
     };
+    let barManual: { x: number; y: number } | null = null, barManualFor: string | null = null;
     bar.addEventListener("pointerdown", (e) => {
-      e.stopPropagation(); const tg = (e.target as HTMLElement)?.closest("button") as HTMLElement | null; if (!tg || !sel) return;
-      if (tg.getAttribute("data-del")) { const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); return; }
-      const cc = tg.getAttribute("data-c"), w = tg.getAttribute("data-w"), dd = tg.getAttribute("data-dash"), fs = tg.getAttribute("data-fs");
-      const patch = cc ? { color: cc } : w ? { width: +w } : dd ? { dash: dd as any } : fs ? { fontSize: +fs } : null;
-      if (patch) { drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, ...patch } : d); onChangeRef.current?.([...drawRef.current]); }
+      if (replayIdxRef.current != null) return;
+      e.stopPropagation();
+      if (e.pointerType === "touch") lastBarTouchAt = performance.now();
+      const target = e.target as HTMLElement;
+      if (target.closest("[data-bar-grip]") && sel) {
+        e.preventDefault();
+        const r = bar.getBoundingClientRect(), host = wrap.getBoundingClientRect();
+        const pointerId = e.pointerId;
+        const startX = e.clientX, startY = e.clientY, baseX = r.left - host.left, baseY = r.top - host.top;
+        const move = (ev: PointerEvent) => {
+          if (ev.pointerId !== pointerId) return;
+          barManual = {
+            x: Math.max(4, Math.min(el!.clientWidth - bar.offsetWidth - 4, baseX + ev.clientX - startX)),
+            y: Math.max(4, Math.min(el!.clientHeight - bar.offsetHeight - 4, baseY + ev.clientY - startY)),
+          };
+          barManualFor = sel;
+          bar.style.left = barManual.x + "px"; bar.style.top = barManual.y + "px";
+        };
+        const cleanupGrip = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", up);
+          if (dragCleanup === cleanupGrip) dragCleanup = null;
+        };
+        const up = (ev: PointerEvent) => { if (ev.pointerId === pointerId) cleanupGrip(); };
+        dragCleanup?.();
+        dragCleanup = cleanupGrip;
+        window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up); return;
+      }
     });
+    // Click, rather than pointerdown, keeps every inspector action operable with
+    // Enter/Space while retaining delegated mouse and touch behavior.
+    bar.addEventListener("click", (e) => {
+      if (replayIdxRef.current != null) return;
+      e.stopPropagation();
+      const target = e.target as HTMLElement;
+      const tg = target.closest("button") as HTMLElement | null; if (!tg || !sel) return;
+      if (tg.getAttribute("data-settings")) { bar.classList.toggle("settings-open"); return; }
+      const resetSettings = tg.getAttribute("data-reset-tool-settings");
+      if (resetSettings) {
+        drawRef.current = drawRef.current.map((drawing) => {
+          if (drawing.id !== sel) return drawing;
+          const meta = { ...(drawing.meta ?? {}) };
+          if (resetSettings === "fib") {
+            delete meta.fibLevels; delete meta.fibLevelStyles; delete meta.fibReverse; delete meta.fibLabels;
+          } else {
+            delete meta.accountSize; delete meta.riskMode; delete meta.riskPercent; delete meta.riskAmount;
+          }
+          return { ...drawing, ...(Object.keys(meta).length ? { meta } : { meta: undefined }) };
+        });
+        barSig = ""; onChangeRef.current?.([...drawRef.current]); return;
+      }
+      if (tg.getAttribute("data-del")) { const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); return; }
+      if (tg.getAttribute("data-lock")) {
+        drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, locked: !d.locked } : d);
+        barSig = ""; onChangeRef.current?.([...drawRef.current]); return;
+      }
+      if (tg.getAttribute("data-duplicate")) {
+        const src = drawRef.current.find((d) => d.id === sel); if (!src) return;
+        const bars = barsRef.current;
+        const points = src.points.map((pt) => {
+          const i = Math.max(0, barIndex(pt.t)), ni = Math.min(bars.length - 1, i + 2);
+          return { t: String(bars[ni]?.time ?? pt.t), p: +(pt.p * 1.002).toFixed(precRef.current) };
+        });
+        const paneAnchor = paneAnchorOf(src.meta);
+        const copy = {
+          ...src,
+          id: uid(),
+          locked: false,
+          points,
+          ...(paneAnchor ? { meta: { ...(src.meta ?? {}), paneAnchor: { x: clampUnit(paneAnchor.x + .025), y: clampUnit(paneAnchor.y + .025) } } } : {}),
+          z: (src.z ?? drawRef.current.length) + 1,
+        };
+        sel = copy.id; drawRef.current = [...drawRef.current, copy]; onChangeRef.current?.([...drawRef.current]); return;
+      }
+      const cc = tg.getAttribute("data-c"), w = tg.getAttribute("data-w"), dd = tg.getAttribute("data-dash"), fs = tg.getAttribute("data-fs");
+      const selectedDrawing = drawRef.current.find((drawing) => drawing.id === sel);
+      if (cc && selectedDrawing) rememberRecentColor(cc, selectedDrawing.color);
+      const selectedCanFill = getDrawingTool(selectedDrawing?.kind)?.capabilities.includes("fill") ?? false;
+      const patch = cc ? { color: cc, ...(selectedCanFill ? { fillColor: cc } : {}) }
+        : w ? { width: +w }
+        : dd ? { dash: dd as any }
+        : fs ? { fontSize: +fs }
+        : null;
+      if (patch) {
+        drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, ...patch } : d);
+        if (selectedDrawing) {
+          try { window.dispatchEvent(new CustomEvent("mm:drawing-style", { detail: { kind: selectedDrawing.kind, ...patch } })); } catch {}
+        }
+        onChangeRef.current?.([...drawRef.current]);
+      }
+    });
+    const inspectorPatch = (input: HTMLInputElement | HTMLSelectElement): Partial<Drawing> | null => {
+      if (input.hasAttribute("data-custom-color")) {
+        const selectedDrawing = drawRef.current.find((drawing) => drawing.id === sel);
+        const canFill = getDrawingTool(selectedDrawing?.kind)?.capabilities.includes("fill") ?? false;
+        return { color: input.value, ...(canFill ? { fillColor: input.value } : {}) };
+      }
+      if (input.hasAttribute("data-opacity")) return { opacity: +input.value / 100 };
+      if (input.hasAttribute("data-fill-opacity")) return { fillOpacity: +input.value / 100 };
+      const selectedDrawing = drawRef.current.find((drawing) => drawing.id === sel);
+      if (!selectedDrawing) return null;
+      if (input.hasAttribute("data-fib-reverse")) return { meta: { ...(selectedDrawing.meta ?? {}), fibReverse: (input as HTMLInputElement).checked } };
+      if (input.hasAttribute("data-fib-labels")) {
+        const labels = input.value as FibonacciLabelMode;
+        if (labels !== "ratio" && labels !== "price" && labels !== "both") return null;
+        return { meta: { ...(selectedDrawing.meta ?? {}), fibLabels: labels } };
+      }
+      const fibLevel = input.getAttribute("data-fib-level"), fibColor = input.getAttribute("data-fib-color"), fibValue = input.getAttribute("data-fib-value");
+      if (fibLevel !== null || fibColor !== null || fibValue !== null) {
+        const index = Number(fibLevel ?? fibColor ?? fibValue);
+        const fib = fibonacciSettings(selectedDrawing.meta);
+        if (!Number.isInteger(index) || !fib.levels[index]) return null;
+        fib.levels[index] = fibLevel !== null
+          ? { ...fib.levels[index], visible: (input as HTMLInputElement).checked }
+          : fibColor !== null
+            ? { ...fib.levels[index], color: input.value }
+            : { ...fib.levels[index], value: Math.max(-100, Math.min(100, Number.isFinite(Number(input.value)) ? +Number(input.value).toFixed(6) : fib.levels[index].value)) };
+        return { meta: {
+          ...(selectedDrawing.meta ?? {}),
+          fibLevels: fib.levels.filter((level) => level.visible).map((level) => level.value),
+          fibLevelStyles: fib.levels,
+        } };
+      }
+      if (input.hasAttribute("data-position-risk-mode")) {
+        const riskMode = input.value === "money" ? "money" : "percent";
+        return { meta: { ...(selectedDrawing.meta ?? {}), riskMode } };
+      }
+      if (input.hasAttribute("data-position-account") || input.hasAttribute("data-position-risk") || input.hasAttribute("data-position-risk-amount")) {
+        const current = positionSettings(selectedDrawing.meta);
+        const raw = Number(input.value);
+        const accountSize = input.hasAttribute("data-position-account") ? Math.max(1, Math.min(1_000_000_000_000, raw || current.accountSize)) : current.accountSize;
+        const riskPercent = input.hasAttribute("data-position-risk") ? Math.max(.01, Math.min(100, raw || current.riskPercent)) : current.riskPercent;
+        const riskAmount = input.hasAttribute("data-position-risk-amount") ? Math.max(.01, Math.min(accountSize, raw || current.riskAmount)) : current.riskAmount;
+        return { meta: { ...(selectedDrawing.meta ?? {}), accountSize, riskPercent, riskAmount } };
+      }
+      return null;
+    };
+    const barSignature = (d: Drawing) => `${d.id}|${d.kind}|${d.color}|${d.fillColor}|${d.width}|${d.dash}|${d.fontSize}|${JSON.stringify(d.meta ?? {})}`;
     let barSig = "";
+    bar.addEventListener("input", (e) => {
+      if (replayIdxRef.current != null) return;
+      e.stopPropagation(); if (!sel) return;
+      const input = e.target as HTMLInputElement | HTMLSelectElement;
+      const patch = inspectorPatch(input);
+      if (patch) {
+        drawingTransactionRef.current = true;
+        drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, ...patch } : d);
+        // Color is part of the inspector signature. Keep the live input mounted
+        // through its later `change` event instead of rebuilding it mid-gesture.
+        const selected = drawRef.current.find((d) => d.id === sel);
+        if (selected) barSig = barSignature(selected);
+        scheduleDraw();
+      }
+    });
+    bar.addEventListener("change", (e) => {
+      if (replayIdxRef.current != null) return;
+      e.stopPropagation(); if (!sel) return;
+      const input = e.target as HTMLInputElement | HTMLSelectElement;
+      const patch = inspectorPatch(input);
+      if (patch) {
+        if (input.hasAttribute("data-custom-color")) {
+          rememberRecentColor(input.value, (input as HTMLInputElement).dataset.previousColor);
+          (input as HTMLInputElement).dataset.previousColor = input.value;
+        }
+        drawingTransactionRef.current = false;
+        barSig = "";
+        onChangeRef.current?.([...drawRef.current]);
+        renderDraw();
+      }
+    });
+    bar.addEventListener("pointercancel", () => { drawingTransactionRef.current = false; });
     const positionBar = () => {
+      if (replayIdxRef.current != null) {
+        bar.style.display = "none"; barSig = "";
+        return;
+      }
       const d = drawRef.current.find((x) => x.id === sel);
       if (sel && d && d.points[0]) {
-        const ax = xOf(d.points[0].t), ay = yOf(d.points[0].p);
+        const paneAnchor = getDrawingTool(d.kind)?.creation.anchorSpace === "pane" ? paneAnchorOf(d.meta) : null;
+        const ax = paneAnchor ? paneAnchor.x * el!.clientWidth : xOf(d.points[0].t);
+        const ay = paneAnchor ? paneAnchor.y * el!.clientHeight : yOf(d.points[0].p);
         if (ax != null && ay != null) {
-          const sig = `${d.id}|${d.kind}|${d.color}|${d.width}|${d.dash}|${d.fontSize}`;
+          const sig = barSignature(d);
           if (sig !== barSig) { buildBar(d); barSig = sig; }
-          bar.style.display = "flex";
-          bar.style.left = Math.max(4, Math.min(el!.clientWidth - bar.offsetWidth - 4, ax - 8)) + "px";
-          bar.style.top = Math.max(4, ay - 46) + "px";
+          // Clear rather than pin to flex — the stylesheet owns the layout (the phone stands the
+          // inspector up as a two-column grid), and an inline display would outrank it. Hiding
+          // still uses inline `none`, which is what the visibility checks read.
+          bar.style.display = "";
+          if (barManualFor !== sel) { barManual = null; barManualFor = sel; }
+          bar.style.left = (barManual?.x ?? Math.max(4, Math.min(el!.clientWidth - bar.offsetWidth - 4, ax - 8))) + "px";
+          const naturalTop = getDrawingTool(d.kind)?.capabilities.includes("fontSize")
+            ? ay + (d.fontSize ?? 13) + 8
+            : ay - 50;
+          bar.style.top = (barManual?.y ?? Math.max(4, Math.min(el!.clientHeight - bar.offsetHeight - 4, naturalTop))) + "px";
           return;
         }
       }
@@ -2557,12 +4403,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     // inline, editable text box — type directly on the chart
     let textEditEl: HTMLInputElement | null = null;
-    const openTextEditor = (at: { t: string; p: number }, existing?: Drawing) => {
+    const openTextEditor = (
+      at: { t: string; p: number },
+      existing?: Drawing,
+      newKind: DrawKind = "text",
+      newPoints: Drawing["points"] = [at],
+      newMeta?: Drawing["meta"],
+      activation = toolActivationRef.current,
+    ) => {
       if (textEditEl) { try { textEditEl.remove(); } catch {} textEditEl = null; } textEditRef.current = null;
-      const ax = xOf(at.t), ay = yOf(at.p); if (ax == null || ay == null) return;
+      const paneAnchor = paneAnchorOf(existing?.meta ?? newMeta);
+      const ax = paneAnchor ? paneAnchor.x * el!.clientWidth : xOf(at.t);
+      const ay = paneAnchor ? paneAnchor.y * el!.clientHeight : yOf(at.p);
+      if (ax == null || ay == null) return;
       const fs = existing?.fontSize ?? 13;
       const inp = document.createElement("input");
-      inp.className = "text-edit"; inp.value = existing?.text || ""; inp.placeholder = "Add text";
+      inp.className = "text-edit"; inp.value = existing?.text || ""; inp.placeholder = tPlain("drawingAddText");
       inp.style.left = ax + "px"; inp.style.top = (ay - fs - 4) + "px"; inp.style.fontSize = fs + "px";
       inp.style.color = existing ? dcol(existing) : css("--text");
       wrap.appendChild(inp); textEditEl = inp; textEditRef.current = inp;
@@ -2573,7 +4429,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         try { inp.remove(); } catch {} textEditEl = null; if (textEditRef.current === inp) textEditRef.current = null;
         if (!save) return;
         if (existing) onChangeRef.current?.(val ? drawRef.current.map((d) => d.id === existing.id ? { ...d, text: val } : d) : drawRef.current.filter((d) => d.id !== existing.id));
-        else if (val) onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "text", points: [at], text: val, fontSize: fs }]);
+        else if (val) {
+          const next: Drawing = { id: uid(), kind: newKind, points: newPoints, text: val, fontSize: fs, ...applyStyle(newKind), ...(newMeta ? { meta: newMeta } : {}) };
+          sel = drawingStickyRef.current ? null : next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit(newKind, activation);
+        }
       };
       inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); commit(true); } else if (e.key === "Escape") { e.preventDefault(); commit(false); } });
       inp.addEventListener("blur", () => commit(true));
@@ -2616,7 +4475,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         <div data-a="copypx" class="ctx-row"><span class="ctx-ico">${icoCopy}</span><span class="ctx-lbl">${escH("Copy price")} <strong>${pxLabel}</strong></span></div>
         <div data-a="paste" class="ctx-row ctx-dis"><span class="ctx-ico">${icoPaste}</span><span class="ctx-lbl">${escH("Paste")}</span><span class="ctx-kbd">⌘V</span></div>
         <div class="sep"></div>
-        <div data-a="alert" class="ctx-row"><span class="ctx-ico">${icoBell}</span><span class="ctx-lbl">Add alert on <b>${escH(sym)}</b> at ${pxLabel}&hellip;</span><span class="ctx-kbd">⌥A</span></div>
+        <div data-a="alert" class="ctx-row"><span class="ctx-ico">${icoBell}</span><span class="ctx-lbl">${escH(tPlain("cpAddAlertOn", "Add alert on"))} <b>${escH(sym)}</b> @ ${pxLabel}&hellip;</span><span class="ctx-kbd">⌥A</span></div>
         <div class="sep"></div>
         ${ctxRow("lockv", icoLock, escH("Lock vertical cursor line by time"), "", locked ? " ctx-checked" : "")}
         <div class="sep"></div>
@@ -2630,8 +4489,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     onCtx = (e: MouseEvent) => {
       e.preventDefault();
+      // Right-click is the fast escape hatch from an armed/stay-active drawing
+      // tool. Do not stack the chart context menu over a half-finished gesture.
+      if (toolRef.current) {
+        cancelPendingDrawingRef.current();
+        try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: null })); } catch {}
+        return;
+      }
       const r = wrap.getBoundingClientRect(); const x = e.clientX - r.left, y = e.clientY - r.top;
-      ctxPt = snap(x, y);
+      ctxPt = snap(x, y, e);
       buildCtxMenu();
       // measure after building (display:block first so offsetWidth/Height are real)
       ctxm.style.display = "block";
@@ -2673,7 +4539,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       hideCtx();
       if (!a) return;
-      if (a === "reset") { try { chart.timeScale().fitContent(); } catch {} }
+      if (a === "reset") normalizeChartView();
       else if (a === "copypx") { try { navigator.clipboard.writeText(String(ctxPt.p)); } catch {} }
       else if (a === "alert") { onAddAlertRef.current?.(ctxPt.p); }
       else if (a === "lockv") {
@@ -2703,10 +4569,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     //    `mm:set-tf` (TerminalShell owns the listener → setTf on the active pane). Kept out of the CSS
     //    files (styling is inline) so it lives entirely in this component. ──
     const empty = document.createElement("div"); empty.className = "chart-empty"; empty.style.cssText = "position:absolute;inset:0;z-index:6;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:24px;pointer-events:auto";
-    empty.innerHTML = `<div class="ce-msg" style="color:var(--text-2);font-size:13px;max-width:320px;line-height:1.5"></div><button class="ce-btn" style="cursor:pointer;font:600 12px var(--font-ui),system-ui;color:var(--text);background:var(--panel-2);border:1px solid var(--line-3);border-radius:6px;padding:7px 14px">Back to Daily</button>`;
+    empty.innerHTML = `<div class="ce-msg" style="color:var(--text-2);font-size:13px;max-width:320px;line-height:1.5"></div><button class="ce-btn" style="cursor:pointer;font:600 12px var(--font-ui),system-ui;color:var(--text);background:var(--panel-2);border:1px solid var(--line-3);border-radius:6px;padding:7px 14px">${tPlain("cpBackToDaily", "Back to Daily")}</button>`;
     wrap.appendChild(empty); emptyRef.current = empty;
     empty.querySelector(".ce-btn")!.addEventListener("pointerdown", (e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent("mm:set-tf", { detail: { tf: "D" } })); });
-    showEmptyRef.current = (msg: string) => { const e2 = emptyRef.current; if (!e2) return; const m = e2.querySelector(".ce-msg"); if (m) m.textContent = msg; e2.style.display = "flex"; };
+    // `action` gates the CTA: the intraday dead-end offers "Back to Daily", but the DAILY dead-end
+    // (no /data file for this symbol) must not — the daily timeframe is where the user already is.
+    showEmptyRef.current = (msg: string, action: "daily" | null = "daily") => {
+      const e2 = emptyRef.current; if (!e2) return;
+      const m = e2.querySelector(".ce-msg"); if (m) m.textContent = msg;
+      const b = e2.querySelector<HTMLElement>(".ce-btn"); if (b) b.style.display = action === "daily" ? "" : "none";
+      e2.style.display = "flex";
+    };
     hideEmptyRef.current = () => { const e2 = emptyRef.current; if (e2) e2.style.display = "none"; };
 
     // ── Countdown-to-bar-close chip (Day Trade Mode feature) ──
@@ -2766,7 +4639,89 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const renderIndOverlays = () => {
       const svgEl = indSvgRef.current; if (!svgEl) return;
       while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
-      if (priceProjHidden()) return;   // sub-pane maximized → price-anchored fills stay cleared
+      // dashboards collected from every suite bundle this frame; flushed to React only on change
+      const collectedTables: TableSpec[] = [];
+      const flushTables = () => {
+        const nextTables = collectedTables.slice();
+        suiteTablesRef.current = nextTables;
+        const sig = collectedTables.length ? JSON.stringify(collectedTables) : "";
+        if (sig === suiteTablesSigRef.current) return;
+        suiteTablesSigRef.current = sig;
+        setSuiteTables(nextTables);
+      };
+      // ── premium PANE suites — pane-local coordinate space, clipped per pane; must run even while a
+      //    sub-pane is maximized (that is exactly when the user is looking at the suite pane) ──
+      {
+        const indsP = indicatorsRef.current;
+        const paneKeys = paneSuiteKeys().filter((k) =>
+          indsP.has(k) && activeSuiteModules(k).some((entry) => entry.surface === "pane")
+        );
+        if (paneKeys.length && barsRef.current.length) {
+          if (!suiteColorsRef.current) suiteColorsRef.current = resolveSuiteColors();
+          const WP = el!.clientWidth;
+          const tsP = chart.timeScale();
+          let lrP: { from: number; to: number } | null = null;
+          try { const r = tsP.getVisibleLogicalRange(); if (r) lrP = { from: r.from as number, to: r.to as number }; } catch { /* no range yet */ }
+          const xiP = (i: number): number | null => { try { const v = tsP.logicalToCoordinate(i as any); return v == null || !isFinite(v as number) ? null : (v as number); } catch { return null; } };
+          const xaP = xiP(0), xbP = xiP(1);
+          const barWP = xaP != null && xbP != null ? Math.max(0.5, xbP - xaP) : 6;
+          const wrapRect = wrapElRef.current?.getBoundingClientRect();
+          const langP = typeof document !== "undefined" && document.documentElement.getAttribute("data-lang") === "zh" ? "zh" as const : "en" as const;
+          for (const k of paneKeys) {
+            const def = SUITE_DEFS[k]; if (!def) continue;
+            const anchor = indSeriesRef.current.get(k)?.[0]; if (!anchor || !wrapRect) continue;
+            let paneTop = 0, paneH = 0;
+            try { const paneEl = anchor.getPane().getHTMLElement(); if (!paneEl) continue; const rct = paneEl.getBoundingClientRect(); paneTop = rct.top - wrapRect.top; paneH = rct.height; } catch { continue; }
+            if (paneH < 12) continue;   // collapsed/hidden pane
+            const yP = (pv: number): number | null => { try { const v = anchor.priceToCoordinate(pv); return v == null || !isFinite(v as number) ? null : (v as number) + paneTop; } catch { return null; } };
+            try {
+              const bundle = computeSuite(def, suiteRenderParams(k), {
+                bars: barsRef.current as any, tf: timeframeRef.current, symbol: symbolRef.current,
+                isIntraday: isIntradayRef.current, lang: langP,
+              }, userTierRef.current, suiteColorsRef.current!);
+              // clip id must be DOCUMENT-unique: multi-chart layouts mount several ChartPanels and
+              // url(#…) resolves against the whole document, not this SVG
+              const clipId = `ic-clip-${syncIdRef.current ?? "x"}-${k}`;
+              const defsEl = mk("defs", {});
+              const cp = mk("clipPath", { id: clipId });
+              cp.appendChild(mk("rect", { x: 0, y: paneTop, width: WP, height: paneH }));
+              defsEl.appendChild(cp);
+              const g = mk("g", { "clip-path": `url(#${clipId})` }) as SVGGElement;
+              svgEl.appendChild(defsEl); svgEl.appendChild(g);
+              renderPrims(g, bundle, { xi: xiP, y: yP, W: WP, H: paneH, i0: lrP ? lrP.from : 0, i1: lrP ? lrP.to : barsRef.current.length - 1, barW: barWP });
+              if (bundle.tables.length) collectedTables.push(...bundle.tables);
+            } catch (e) { console.warn(`[suite:${k}] pane render skipped:`, e); }
+          }
+        }
+      }
+      // A dashboard can be selected without any oscillator plot from its family. Compute those
+      // table-only suites here so the dashboard remains useful without manufacturing an empty pane.
+      {
+        const tableOnlyKeys = paneSuiteKeys().filter((k) => {
+          if (!indicatorsRef.current.has(k)) return false;
+          const modules = activeSuiteModules(k);
+          return modules.some((entry) => entry.surface === "dashboard")
+            && !modules.some((entry) => entry.surface === "pane");
+        });
+        if (tableOnlyKeys.length && barsRef.current.length) {
+          if (!suiteColorsRef.current) suiteColorsRef.current = resolveSuiteColors();
+          const lang = typeof document !== "undefined" && document.documentElement.getAttribute("data-lang") === "zh" ? "zh" as const : "en" as const;
+          for (const k of tableOnlyKeys) {
+            const def = SUITE_DEFS[k]; if (!def) continue;
+            try {
+              const bundle = computeSuite(def, suiteRenderParams(k), {
+                bars: barsRef.current as any,
+                tf: timeframeRef.current,
+                symbol: symbolRef.current,
+                isIntraday: isIntradayRef.current,
+                lang,
+              }, userTierRef.current, suiteColorsRef.current!);
+              if (bundle.tables.length) collectedTables.push(...bundle.tables);
+            } catch (e) { console.warn(`[suite:${k}] dashboard render skipped:`, e); }
+          }
+        }
+      }
+      if (priceProjHidden()) { flushTables(); return; }   // sub-pane maximized → price-anchored fills stay cleared
       const inds = indicatorsRef.current;
       const W = el!.clientWidth, H = el!.clientHeight;
       const priceS = priceSeriesRef.current;
@@ -2790,8 +4745,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             pts.push({ x, yA, yB });
           }
           if (pts.length >= 2) {
-            // Draw two polygons: one for where spanA > spanB (green), one for spanA < spanB (red)
-            // Approach: walk forward along spanA top, then backward along spanB — split at crossovers
+            // Draw two polygons: one for where spanA > spanB (bullish cloud), one for spanA < spanB
+            // (bearish). Approach: walk forward along spanA top, then backward along spanB — split at
+            // crossovers. The fills come from the indicator's own Span A/B params, which carry the
+            // Up/Down colors setting; they used to be hardcoded green/red and ignored the params.
+            const ip = P("ichimoku");
             const greenPts: string[] = [], redPts: string[] = [];
             // Simple approach: draw rectangle per segment
             for (let i = 0; i < pts.length - 1; i++) {
@@ -2800,7 +4758,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
               const isGreen = avgA <= avgB; // yA < yB means spanA price > spanB price (higher price = lower y)
               const poly = mk("polygon", {
                 points: `${p0.x},${p0.yA} ${p1.x},${p1.yA} ${p1.x},${p1.yB} ${p0.x},${p0.yB}`,
-                fill: isGreen ? "rgba(38,194,129,0.18)" : "rgba(240,86,107,0.18)",
+                fill: isGreen ? ip.spanACol : ip.spanBCol,
                 stroke: "none",
               });
               svgEl.appendChild(poly);
@@ -2814,6 +4772,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const data = indOverlayRef.current["ribbon"];
         if (data) {
           const { rb, rows: rbRows } = data as { rb: ReturnType<typeof trendRibbon>; rows: Bar[] };
+          // fillUp/fillDn carry the Up/Down colors setting; the neutral state is hue-less by design.
+          const rp = P("ribbon");
           const pts: { x: number; yF: number; yS: number; state: string }[] = [];
           for (let i = 0; i < rbRows.length; i++) {
             const f = rb.emaFast[i], s = rb.emaSlow[i]; if (f == null || s == null) continue;
@@ -2823,7 +4783,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           }
           for (let i = 0; i < pts.length - 1; i++) {
             const p0 = pts[i], p1 = pts[i + 1];
-            const fill = p0.state === "ribbonUp" ? "rgba(38,194,129,0.12)" : p0.state === "ribbonDown" ? "rgba(240,86,107,0.12)" : "rgba(139,147,163,0.07)";
+            const fill = p0.state === "ribbonUp" ? rp.fillUp : p0.state === "ribbonDown" ? rp.fillDn : "rgba(139,147,163,0.07)";
             svgEl.appendChild(mk("polygon", {
               points: `${p0.x},${p0.yF} ${p1.x},${p1.yF} ${p1.x},${p1.yS} ${p0.x},${p0.yS}`,
               fill, stroke: "none",
@@ -2996,14 +4956,102 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           }
         }
       }
+
+      // ── Premium suite draw-lists (IndicatorCanvas) — host-memoized compute, generic renderer ──
+      {
+        const activeSuites = Object.keys(SUITE_DEFS).filter((k) => SUITE_DEFS[k]?.kind !== "pane" && inds.has(k));
+        if (activeSuites.length && barsRef.current.length) {
+          if (!suiteColorsRef.current) suiteColorsRef.current = resolveSuiteColors();
+          const ts = chart.timeScale();
+          let lr: { from: number; to: number } | null = null;
+          try { const r = ts.getVisibleLogicalRange(); if (r) lr = { from: r.from as number, to: r.to as number }; } catch { /* no range yet */ }
+          const xi = (i: number): number | null => { try { const v = ts.logicalToCoordinate(i as any); return v == null || !isFinite(v as number) ? null : (v as number); } catch { return null; } };
+          const xa = xi(0), xb = xi(1);
+          const barW = xa != null && xb != null ? Math.max(0.5, xb - xa) : 6;
+          // IndicatorCanvas overlay suites use price-pane coordinates, but the SVG spans the
+          // entire multi-pane chart. Without a price-pane clip, off-scale TP/SL labels can land
+          // below pane 0 and visibly bleed into RSI/Stoch/etc. Resolve the live pane band (pane
+          // order is user-movable), offset pane-local price coordinates into root-SVG space, and
+          // render every price suite through one shared clip group.
+          let pricePaneTop = 0, pricePaneH = H;
+          try {
+            const paneEl = priceS.getPane().getHTMLElement();
+            const wrapRect = wrapElRef.current?.getBoundingClientRect();
+            if (paneEl && wrapRect) {
+              const paneRect = paneEl.getBoundingClientRect();
+              pricePaneTop = paneRect.top - wrapRect.top;
+              pricePaneH = paneRect.height;
+            }
+          } catch { /* retain the single-pane fallback */ }
+          const priceSuiteY = (p: number): number | null => {
+            const y = p2y(p);
+            return y == null ? null : y + pricePaneTop;
+          };
+          const priceClipId = `ic-price-clip-${syncIdRef.current ?? "x"}`;
+          const priceDefs = mk("defs", {});
+          const priceClip = mk("clipPath", { id: priceClipId });
+          priceClip.appendChild(mk("rect", { x: 0, y: pricePaneTop, width: W, height: pricePaneH }));
+          priceDefs.appendChild(priceClip);
+          const priceSuiteGroup = mk("g", { "clip-path": `url(#${priceClipId})` }) as SVGGElement;
+          svgEl.appendChild(priceDefs);
+          svgEl.appendChild(priceSuiteGroup);
+          const m: CoordMapper = {
+            xi, y: priceSuiteY, W, H: pricePaneTop + pricePaneH,
+            i0: lr ? lr.from : 0, i1: lr ? lr.to : barsRef.current.length - 1, barW,
+          };
+          const lang = typeof document !== "undefined" && document.documentElement.getAttribute("data-lang") === "zh" ? "zh" as const : "en" as const;
+          for (const k of activeSuites) {
+            const def = SUITE_DEFS[k]; if (!def) continue;
+            try {
+              const bundle = computeSuite(def, suiteRenderParams(k), {
+                bars: barsRef.current as any, tf: timeframeRef.current, symbol: symbolRef.current,
+                isIntraday: isIntradayRef.current, lang,
+              }, userTierRef.current, suiteColorsRef.current);
+              renderPrims(priceSuiteGroup, bundle, m);
+              if (bundle.tables.length) collectedTables.push(...bundle.tables);
+            } catch (e) { console.warn(`[suite:${k}] render skipped:`, e); }
+          }
+        }
+        applySuitePaint();   // key-guarded no-op unless suite candle paint actually changed
+      }
+      flushTables();
     };
 
     const renderDraw = () => {
       const svgEl = svgRef.current; if (!svgEl) return;
-      renderIndOverlays();
       while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
       if (priceProjHidden()) { positionBar(); renderPriceTag(); return; }   // drawings stay cleared while a sub-pane is maximized
-      for (const d of drawRef.current) svgEl.appendChild(shape(d));
+      // Build one projection context per document render. Logical-index X is
+      // equivalent to snapped timeToCoordinate but materially cheaper for long
+      // paths; the normal price scale is affine, so two chart-API samples give
+      // a safe fast Y mapper. Log/custom modes retain the authoritative API.
+      const xCache = new Map<string, number | null>();
+      const yCache = new Map<number, number | null>();
+      const timeScale = chart.timeScale();
+      const projectX = (time: string) => {
+        const key = String(time); if (xCache.has(key)) return xCache.get(key)!;
+        const index = barIndex(time);
+        const coordinate = index < 0 ? null : timeScale.logicalToCoordinate(index as any) as number | null;
+        xCache.set(key, coordinate); return coordinate;
+      };
+      let affineY: ((price: number) => number) | null = null;
+      try {
+        const series = priceSeriesRef.current;
+        const mode = series?.priceScale().options().mode;
+        const base = barsRef.current[barsRef.current.length - 1]?.c ?? 1;
+        const step = Math.max(Math.abs(base) * .001, .01);
+        const y0 = series?.priceToCoordinate(base), y1 = series?.priceToCoordinate(base + step);
+        if (mode === 0 && y0 != null && y1 != null && Number.isFinite(y0) && Number.isFinite(y1)) {
+          const slope = (y1 - y0) / step;
+          affineY = (price) => y0 + (price - base) * slope;
+        }
+      } catch { /* use authoritative per-price projection below */ }
+      const projectY = (price: number) => {
+        if (affineY) return affineY(price);
+        if (yCache.has(price)) return yCache.get(price)!;
+        const coordinate = yOf(price); yCache.set(price, coordinate); return coordinate;
+      };
+      for (const d of [...drawRef.current].sort((a, b) => (a.z ?? 0) - (b.z ?? 0))) svgEl.appendChild(shape(d, false, projectX, projectY));
       // ── D2 locked vertical line overlay ──
       const lvt = lockedVLineRef.current;
       if (lvt) {
@@ -3028,6 +5076,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       renderPriceTag();   // keep the last-price + countdown tag in step with every data/pan/style render
     };
     renderRef.current = renderDraw;
+    clearDrawingSelectionRef.current = () => {
+      if (!sel) return;
+      sel = null;
+      renderDraw();
+    };
     // CMX W3: when THIS is the active pane, publish a coordinate resolver so ChartConductor's ghost
     // cursor can map an op's first anchor (epoch-seconds + price) into pane pixels via the exact
     // DrawLayer transform (xOf/yOf). Registration is refreshed on the active-pane effect below; here we
@@ -3041,7 +5094,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     if (activeRef.current) setActivePaneCoords(cmxCoordResolverRef.current);
     // coalesce the overlay rebuild to one paint per frame on the hot pan/zoom path
-    const scheduleRender = () => { if (rafId != null) return; rafId = requestAnimationFrame(() => { rafId = null; if (!dead) { renderSignals(); renderDraw(); } }); };
+    const scheduleRender = () => { if (rafId != null) return; rafId = requestAnimationFrame(() => { rafId = null; if (!dead) { renderSignals(); renderIndOverlays(); renderDraw(); } }); };
     // Draw-only rAF coalescer for the drawing drag / shape-creation pointermove paths: those fire on
     // every raw pointer event and previously called renderDraw() (→ full SVG clear + renderIndOverlays
     // re-projecting every ichimoku/ribbon/vwap point) synchronously per event. Batching to one rebuild
@@ -3054,10 +5107,71 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       drawRaf = requestAnimationFrame(() => { drawRaf = null; if (dead) { drawTrailer = null; return; } renderDraw(); const t = drawTrailer; drawTrailer = null; if (t) t(); });
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleRender);
-    // Re-project SVG overlays on vertical price-scale drags (LWC repaints candles but not SVG;
-    // crosshairMove fires on any mouse interaction including Y-axis drag — chart.remove() cleans up).
-    chart.subscribeCrosshairMove(scheduleRender);
-    renderSignals(); renderDraw();
+    // Static drawing geometry must not rebuild on ordinary crosshair hover: a
+    // path-heavy document can contain thousands of data-space anchors. LWC does
+    // emit crosshairMove during canvas drags, so only use it while an actual
+    // chart-canvas pointer gesture is active (vertical price panning included).
+    let projectionPointerId: number | null = null;
+    const onProjectionPointerDown = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (toolRef.current || target?.tagName.toLowerCase() !== "canvas") return;
+      projectionPointerId = event.pointerId;
+    };
+    const onProjectionPointerEnd = (event: PointerEvent) => {
+      if (projectionPointerId !== event.pointerId) return;
+      projectionPointerId = null; scheduleRender();
+    };
+    const onCrosshairProjection = () => { if (projectionPointerId != null) scheduleRender(); };
+    // C6/CHART-06 — scrub OHLC. D2 hid Row B's OHLC run on the premise that TV shows it only under
+    // the crosshair, but the scrub replacement was never built, so the shell strictly LOST data the
+    // web terminal shows at rest. Writes into the existing .status-ohlc <b> nodes via textContent —
+    // a paintStatus() re-render would rebuild the identity <img> and flicker the logo on every
+    // crosshair frame. Shell-only: `.is-scrub` never appears on web.
+    // Crosshair events also fire from programmatic sources (pane sync, setCrosshairPosition),
+    // which carry a valid time with no pointer anywhere near the chart — in headless CI that
+    // latched `.is-scrub` at rest on every viewport. Scrub is a POINTER verb: gate it on a
+    // real pointer being over the chart, tracked on the wrap itself.
+    let scrubPointerLive = false;
+    const onScrubEnter = () => { scrubPointerLive = true; };
+    const onScrubLeave = () => {
+      scrubPointerLive = false;
+      statusRef.current?.closest(".statusline")?.classList.remove("is-scrub");
+    };
+    const scrubStatus = (p: any) => {
+      const st = statusRef.current; if (!st) return;
+      // statusRef is the Row-A/Row-B <span> INSIDE .statusline; the D-block rules key off
+      // .statusline, so the flag belongs on the wrapper.
+      const line = st.closest(".statusline"); if (!line) return;
+      const tm = p?.time ?? null;
+      const on = tm != null && scrubPointerLive;
+      if (on) {
+        const idx = barIdxMap().get(tm as any) ?? barIdxMap().get(String(tm));
+        const bar = idx != null ? barsRef.current[idx] : undefined;
+        const vals = st.querySelectorAll<HTMLElement>(".status-ohlc b");
+        if (!bar || vals.length !== 4) { line.classList.remove("is-scrub"); return; }
+        const f = (x: number) => x.toFixed(precRef.current);
+        vals[0].textContent = f(bar.o); vals[1].textContent = f(bar.h);
+        vals[2].textContent = f(bar.l); vals[3].textContent = f(bar.c);
+      }
+      line.classList.toggle("is-scrub", on);
+    };
+    wrap.addEventListener("pointerdown", onProjectionPointerDown, true);
+    window.addEventListener("pointerup", onProjectionPointerEnd);
+    window.addEventListener("pointercancel", onProjectionPointerEnd);
+    chart.subscribeCrosshairMove(onCrosshairProjection);
+    if (shellAxis()) {
+      // pointermove/pointerdown are the presence signals, not just pointerenter: headless
+      // Chromium (CI) synthesizes moves without reliable boundary events, and a real
+      // crosshair drag always bubbles move events through the wrap. Programmatic
+      // crosshair sources fire no DOM pointer events at all, so the guard stays sound.
+      wrap.addEventListener("pointerenter", onScrubEnter);
+      wrap.addEventListener("pointermove", onScrubEnter);
+      wrap.addEventListener("pointerdown", onScrubEnter);
+      wrap.addEventListener("pointerleave", onScrubLeave);
+      wrap.addEventListener("pointercancel", onScrubLeave);
+      chart.subscribeCrosshairMove(scrubStatus);
+    }
+    renderSignals(); renderIndOverlays(); renderDraw();
 
     // ── pane geometry measurement → drives the legend/pane-menu overlay layer (ChartOverlays) ──
     const measureImpl = () => {
@@ -3081,7 +5195,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (ctl.maximized && m.key !== ctl.maximized) continue;
         let top = 0, height = 0;
         try { const pe = paneApi.getHTMLElement(); if (pe) { const r = pe.getBoundingClientRect(); top = r.top - wr.top; height = r.height; } } catch {}
-        layout.push({ key: m.key, paneIndex: pi, isPrice: m.isPrice, top, height, collapsed: ctl.collapsed.has(m.key), maximized: ctl.maximized === m.key, entries: m.entries.map((e) => ({ ...e, hidden: hiddenRef.current.has(e.key) })) });
+        layout.push({
+          key: m.key,
+          ...(m.removeKey ? { removeKey: m.removeKey } : {}),
+          paneIndex: pi,
+          isPrice: m.isPrice,
+          top,
+          height,
+          collapsed: ctl.collapsed.has(m.key),
+          maximized: ctl.maximized === m.key,
+          entries: m.entries.map((e) => ({ ...e, hidden: isLegendEntryHidden(e.key) })),
+        });
       }
       layout.sort((a, b) => a.paneIndex - b.paneIndex);
       paneLayoutRef.current = layout; setPaneLayout(layout);
@@ -3146,6 +5270,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       st.zoom = clampAxisZoom(st.base, st.zoom + wheelDeltaToZoomStep(e.deltaY, e.deltaMode));
       scale.applyOptions({ scaleMargins: axisZoomMargins(st.base, st.zoom) });
+      scheduleRender();
     };
     const onAxisDbl = (e: MouseEvent) => {
       const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect();
@@ -3155,7 +5280,26 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const st = axisZoomState.get(pane.key); if (!st) return;  // never wheel-scaled → nothing to reset
       st.zoom = 0;
       try { paneScale(pane.key, pane.paneIndex)?.applyOptions({ scaleMargins: { ...st.base } }); } catch {}
+      scheduleRender();
     };
+    function normalizeChartView() {
+      const panes = paneLayoutRef.current.length
+        ? paneLayoutRef.current
+        : [{ key: "__price__", paneIndex: 0 }];
+      for (const pane of panes) {
+        const scale = paneScale(pane.key, pane.paneIndex); if (!scale) continue;
+        const st = axisZoomState.get(pane.key);
+        try {
+          scale.applyOptions(st
+            ? { autoScale: true, scaleMargins: { ...st.base } }
+            : { autoScale: true });
+        } catch {}
+      }
+      axisZoomState.clear();
+      applyView(barsRef.current, replayIdxRef.current);
+      scheduleRender();
+      scheduleMeasure();
+    }
     // B1: touch double-tap handler — two qualifying taps (down→up <300ms, <12px displacement) within
     // 350ms and <40px of each other → trigger the same pane maximize-toggle as dblclick.
     const onTouchDown = (e: PointerEvent) => {
@@ -3219,56 +5363,664 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
     const rectXY = (ev: PointerEvent) => { const r = svg.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
     const idAt = (ev: Event) => (ev.target as Element)?.closest?.("g[data-id]")?.getAttribute("data-id") || null;
-    const TWO = new Set(["trendline", "ray", "rect", "fib", "measure", "arrow"]);
-    // pre-draw style (color/width/dash) applied to each new styleable drawing; arrow keeps solid
-    const STYLE_KINDS = new Set(["trendline", "ray", "arrow", "rect", "hline", "vline"]);
-    const applyStyle = (kind: string): Partial<Drawing> => {
-      const s = styleRef.current; if (!s || !STYLE_KINDS.has(kind)) return {};
-      return { color: s.color, width: s.width, dash: kind === "arrow" ? "solid" : s.dash };
+    // Registry-backed defaults and capabilities are the sole pre-draw style contract.
+    const applyStyle = (kind: Drawing["kind"]): Partial<Drawing> => {
+      const spec = getDrawingTool(kind), defaults = spec?.defaults;
+      const s = styleRef.current;
+      const can = (cap: DrawingToolCapability) => spec?.capabilities.includes(cap) ?? false;
+      return {
+        schemaVersion: DRAWING_SCHEMA_VERSION,
+        source: "user",
+        locked: false,
+        hidden: false,
+        z: drawRef.current.length,
+        color: s && can("stroke") ? s.color : defaults?.color,
+        width: s && can("width") ? s.width : defaults?.width,
+        dash: s && can("dash") ? s.dash : defaults?.dash,
+        opacity: defaults?.opacity ?? 1,
+        extend: defaults?.extend ?? "none",
+        fillColor: s && can("fill") ? s.color : defaults?.fillColor,
+        fillOpacity: defaults?.fillOpacity,
+        fontSize: defaults?.fontSize,
+      };
     };
+    const announceCommit = (kind: Drawing["kind"], activation = toolActivationRef.current) => {
+      // Include the committed tool so the controlled shell can retire only the
+      // selection that produced this object. Under a busy concurrent render an
+      // older one-shot update must never clear a newer tool choice.
+      try { window.dispatchEvent(new CustomEvent("mm:drawing-committed", { detail: { kind, activation } })); } catch {}
+    };
+    let semanticTimesCache: { signature: string; times: string[] } = { signature: "", times: [] };
+    const semanticTimes = () => {
+      const rows = barsRef.current, signature = `${rows.length}|${rows[0]?.time ?? ""}|${rows[rows.length - 1]?.time ?? ""}`;
+      if (semanticTimesCache.signature !== signature) semanticTimesCache = { signature, times: rows.map((row) => String(row.time)) };
+      return semanticTimesCache.times;
+    };
+    const materializePoints = (kind: Drawing["kind"], points: Drawing["points"]) =>
+      getDrawingTool(kind)?.creation.semanticPointCount
+        ? materializeSemanticPoints(kind, points, semanticTimes(), precRef.current)
+        : points;
+    const commitDrawing = (kind: Drawing["kind"], points: Drawing["points"], meta: Drawing["meta"] | undefined, activation: number) => {
+      const next: Drawing = { id: uid(), kind, points: materializePoints(kind, points), ...applyStyle(kind), ...(meta ? { meta } : {}) };
+      sel = drawingStickyRef.current ? null : next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit(kind, activation);
+    };
+
+    // Media tools deliberately pause between geometry placement and persistence.
+    // OpenMarket exposes a real choice surface for markers, while Image opens the
+    // native file chooser only after its box exists. Keeping this DOM chart-local
+    // avoids the mobile double-palette collision and makes teardown deterministic.
+    let mediaSurfaceCleanup: (() => void) | null = null;
+    let mediaSurfaceKind: "emoji" | "icon" | "image" | null = null;
+    let mediaFileReader: FileReader | null = null;
+    let mediaFocusReturn: HTMLElement | null = null;
+    const closeMediaSurface = (restoreFocus = false) => {
+      const cleanup = mediaSurfaceCleanup; mediaSurfaceCleanup = null;
+      if (mediaFileReader?.readyState === FileReader.LOADING) {
+        try { mediaFileReader.abort(); } catch {}
+      }
+      mediaFileReader = null;
+      cleanup?.();
+      if (restoreFocus && mediaFocusReturn?.isConnected) window.setTimeout(() => mediaFocusReturn?.focus({ preventScroll: true }), 0);
+      mediaFocusReturn = null;
+      mediaSurfaceKind = null;
+    };
+    cancelMediaToolRef.current = (activeTool) => {
+      // The tool-change effect runs after React commits. A very fast pointer can
+      // already have opened the new tool's picker by then; only dismiss a surface
+      // that belongs to the tool we just left.
+      if (mediaSurfaceKind && mediaSurfaceKind === activeTool) return;
+      closeMediaSurface(false);
+    };
+
+    const mediaCopy = () => document.documentElement.lang.toLowerCase().startsWith("zh") ? {
+      emojiTitle: "选择表情",
+      iconTitle: "选择图标",
+      imageTitle: "添加图片",
+      imageHelp: "PNG、JPG 或 WebP · 最大 700 KB",
+      browse: "选择图片",
+      cancel: "取消",
+      close: "关闭",
+      chooseError: "请选择 PNG、JPG 或 WebP 图片。",
+      sizeError: "图片必须小于 700 KB。",
+      dimensionError: "图片尺寸必须不超过 4096 × 4096 和 1200 万像素。",
+      decodeError: "无法读取这张图片，请选择另一张。",
+      payloadError: "图片会使绘图存储超过安全上限，请选择更小的图片。",
+      loading: "正在处理图片…",
+      cancelled: "未选择图片。你可以重试或取消。",
+    } : {
+      emojiTitle: "Choose an emoji",
+      iconTitle: "Choose an icon",
+      imageTitle: "Add image",
+      imageHelp: "PNG, JPG or WebP · 700 KB maximum",
+      browse: "Choose image",
+      cancel: "Cancel",
+      close: "Close",
+      chooseError: "Choose a PNG, JPG or WebP image.",
+      sizeError: "Image must be smaller than 700 KB.",
+      dimensionError: "Image must be at most 4096 × 4096 and 12 megapixels.",
+      decodeError: "This image could not be read. Choose another one.",
+      payloadError: "This image would exceed the drawing storage limit. Choose a smaller one.",
+      loading: "Processing image…",
+      cancelled: "No image selected. Try again or cancel.",
+    };
+
+    const createMediaSurface = (kind: "emoji" | "icon" | "image", title: string, x: number, y: number) => {
+      closeMediaSurface(false);
+      mediaSurfaceKind = kind;
+      mediaFocusReturn = document.querySelector<HTMLElement>(`[data-tool-id="${kind}"]`) ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      const panel = document.createElement("div");
+      panel.className = "drawing-media-picker";
+      panel.dataset.mediaKind = kind;
+      panel.dataset.testid = "drawing-media-picker";
+      panel.setAttribute("role", "dialog");
+      panel.tabIndex = -1;
+      const titleId = `drawing-media-title-${uid()}`;
+      panel.setAttribute("aria-labelledby", titleId);
+      const head = document.createElement("div"); head.className = "drawing-media-picker-head";
+      const heading = document.createElement("div"); heading.className = "drawing-media-picker-title"; heading.id = titleId; heading.textContent = title;
+      const close = document.createElement("button"); close.type = "button"; close.className = "drawing-media-picker-close"; close.setAttribute("aria-label", mediaCopy().close); close.textContent = "×";
+      const body = document.createElement("div"); body.className = "drawing-media-picker-body";
+      const status = document.createElement("div"); status.className = "drawing-media-picker-status"; status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+      head.append(heading, close); panel.append(head, body, status); wrap.appendChild(panel); mediaPickerRef.current = panel;
+      const stop = (event: Event) => event.stopPropagation();
+      panel.addEventListener("pointerdown", stop);
+      panel.addEventListener("click", stop);
+      const onOutside = (event: PointerEvent) => {
+        if (panel.contains(event.target as Node)) return;
+        // A chart click is dismissal, not the first press of another marker.
+        // Consume it before the still-armed SVG handler can immediately reopen
+        // this surface (or the native file chooser) on pointerup.
+        if ((event.target as Element | null)?.closest?.(".drawing-layer")) {
+          event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
+        }
+        closeMediaSurface(false);
+      };
+      const onEscape = (event: KeyboardEvent) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault(); event.stopPropagation(); closeMediaSurface(true);
+      };
+      window.addEventListener("pointerdown", onOutside, true);
+      window.addEventListener("keydown", onEscape, true);
+      panel.addEventListener("keydown", (event) => {
+        if (event.key !== "Tab") return;
+        const focusable = Array.from(panel.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+        if (!focusable.length) { event.preventDefault(); panel.focus({ preventScroll: true }); return; }
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus({ preventScroll: true }); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus({ preventScroll: true }); }
+      });
+      close.addEventListener("click", () => closeMediaSurface(true));
+      mediaSurfaceCleanup = () => {
+        window.removeEventListener("pointerdown", onOutside, true);
+        window.removeEventListener("keydown", onEscape, true);
+        try { panel.remove(); } catch {}
+        if (mediaPickerRef.current === panel) mediaPickerRef.current = null;
+        const input = mediaInputRef.current;
+        if (input) { try { input.remove(); } catch {} mediaInputRef.current = null; }
+      };
+      panel.style.left = `${Math.max(8, x + 14)}px`;
+      panel.style.top = `${Math.max(8, y + 14)}px`;
+      requestAnimationFrame(() => {
+        if (!panel.isConnected || matchMedia("(max-width:860px)").matches) return;
+        const width = panel.offsetWidth, height = panel.offsetHeight;
+        panel.style.left = `${Math.max(8, Math.min(el!.clientWidth - width - 8, x + 14))}px`;
+        panel.style.top = `${Math.max(8, Math.min(el!.clientHeight - height - 8, y + 14))}px`;
+      });
+      return { panel, body, status, close };
+    };
+
+    const appendMediaDrawing = (next: Drawing, activation: number) => {
+      closeMediaSurface(false);
+      sel = drawingStickyRef.current ? null : next.id;
+      drawRef.current = [...drawRef.current, next];
+      onChangeRef.current?.([...drawRef.current]);
+      announceCommit(next.kind, activation);
+    };
+
+    const openMediaChoicePicker = (kind: "emoji" | "icon", point: Drawing["points"][number], x: number, y: number, activation = toolActivationRef.current) => {
+      const copy = mediaCopy();
+      const { panel, body } = createMediaSurface(kind, kind === "emoji" ? copy.emojiTitle : copy.iconTitle, x, y);
+      body.classList.add("drawing-media-choice-grid");
+      const choices = kind === "emoji" ? DRAWING_MEDIA_EMOJIS : DRAWING_MEDIA_ICONS;
+      const buttons: HTMLButtonElement[] = [];
+      choices.forEach((choice, index) => {
+        const button = document.createElement("button"); button.type = "button"; button.className = "drawing-media-choice";
+        button.dataset.mediaChoice = kind === "emoji" ? String(index) : (choice as DrawingMediaIcon).id;
+        button.dataset.testid = `drawing-media-choice-${kind}-${index}`;
+        const label = choice.label; button.setAttribute("aria-label", label);
+        if (kind === "emoji") {
+          const glyph = document.createElement("span"); glyph.className = "drawing-media-choice-glyph"; glyph.setAttribute("aria-hidden", "true"); glyph.textContent = (choice as typeof DRAWING_MEDIA_EMOJIS[number]).glyph;
+          const caption = document.createElement("span"); caption.className = "drawing-media-choice-label"; caption.textContent = label;
+          button.append(glyph, caption);
+          button.addEventListener("click", () => {
+            const emoji = choice as typeof DRAWING_MEDIA_EMOJIS[number];
+            appendMediaDrawing({
+              id: uid(), kind: "emoji", points: [point], ...applyStyle("emoji"),
+              text: emoji.glyph, fontSize: 30,
+              meta: { mediaType: "emoji", emojiLabel: emoji.label },
+            }, activation);
+          });
+        } else {
+          const icon = choice as DrawingMediaIcon;
+          const glyph = document.createElementNS(NS, "svg"); glyph.setAttribute("viewBox", "0 0 24 24"); glyph.setAttribute("aria-hidden", "true"); glyph.classList.add("drawing-media-choice-icon");
+          glyph.appendChild(mk("path", { d: icon.path, fill: icon.filled ? "currentColor" : "none", stroke: "currentColor", "stroke-width": icon.filled ? 1 : 1.8, "stroke-linecap": "round", "stroke-linejoin": "round", "fill-rule": "evenodd" }));
+          const caption = document.createElement("span"); caption.className = "drawing-media-choice-label"; caption.textContent = icon.label;
+          button.append(glyph, caption);
+          button.addEventListener("click", () => appendMediaDrawing({
+            id: uid(), kind: "icon", points: [point], ...applyStyle("icon"), text: icon.id,
+            meta: { mediaType: "icon", iconId: icon.id, iconLabel: icon.label },
+          }, activation));
+        }
+        buttons.push(button); body.appendChild(button);
+      });
+      panel.addEventListener("keydown", (event) => {
+        const current = document.activeElement instanceof HTMLButtonElement ? buttons.indexOf(document.activeElement) : -1;
+        if (current < 0) return;
+        const columns = matchMedia("(max-width:420px)").matches ? 3 : 4;
+        const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : event.key === "ArrowDown" ? columns : event.key === "ArrowUp" ? -columns : 0;
+        if (!delta && event.key !== "Home" && event.key !== "End") return;
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : Math.max(0, Math.min(buttons.length - 1, current + delta));
+        buttons[next]?.focus({ preventScroll: true });
+      });
+      window.setTimeout(() => {
+        if (!panel.contains(document.activeElement)) buttons[0]?.focus({ preventScroll: true });
+      }, 0);
+    };
+
+    const probeImage = (src: string) => new Promise<{ width: number; height: number }>((resolve, reject) => {
+      const probe = new Image();
+      probe.onload = () => resolve({ width: probe.naturalWidth, height: probe.naturalHeight });
+      probe.onerror = () => reject(new Error("decode"));
+      probe.src = src;
+    });
+
+    const openImageUpload = (points: Drawing["points"], x: number, y: number, activation = toolActivationRef.current) => {
+      const copy = mediaCopy();
+      const { panel, body, status } = createMediaSurface("image", copy.imageTitle, x, y);
+      const help = document.createElement("p"); help.className = "drawing-media-picker-help"; help.textContent = copy.imageHelp;
+      const actions = document.createElement("div"); actions.className = "drawing-media-picker-actions";
+      const browse = document.createElement("button"); browse.type = "button"; browse.className = "drawing-media-picker-primary"; browse.textContent = copy.browse; browse.dataset.testid = "drawing-image-browse";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "drawing-media-picker-secondary"; cancel.textContent = copy.cancel;
+      actions.append(browse, cancel); body.append(help, actions);
+      const input = document.createElement("input"); input.type = "file"; input.accept = "image/png,image/jpeg,image/webp"; input.className = "drawing-media-file-input"; input.dataset.testid = "drawing-image-input"; input.setAttribute("aria-label", copy.browse);
+      wrap.appendChild(input); mediaInputRef.current = input;
+      const setStatus = (message: string, state: "idle" | "loading" | "error" = "idle") => {
+        status.textContent = message; status.dataset.state = state;
+      };
+      const choose = () => { input.value = ""; input.click(); };
+      browse.addEventListener("click", choose);
+      cancel.addEventListener("click", () => closeMediaSurface(true));
+      input.addEventListener("cancel", () => { setStatus(copy.cancelled); browse.focus({ preventScroll: true }); });
+      input.addEventListener("change", () => {
+        const file = input.files?.[0];
+        if (!file) { setStatus(copy.cancelled); browse.focus({ preventScroll: true }); return; }
+        if (!DRAWING_IMAGE_MIME.has(file.type)) { setStatus(copy.chooseError, "error"); browse.focus({ preventScroll: true }); return; }
+        if (file.size <= 0 || file.size > DRAWING_IMAGE_MAX_FILE_BYTES) { setStatus(copy.sizeError, "error"); browse.focus({ preventScroll: true }); return; }
+        setStatus(copy.loading, "loading"); browse.disabled = true; cancel.disabled = true;
+        const reader = new FileReader(); mediaFileReader = reader;
+        reader.onerror = () => { if (!panel.isConnected) return; mediaFileReader = null; browse.disabled = false; cancel.disabled = false; setStatus(copy.decodeError, "error"); browse.focus({ preventScroll: true }); };
+        reader.onabort = () => { mediaFileReader = null; };
+        reader.onload = async () => {
+          mediaFileReader = null;
+          if (!panel.isConnected) return;
+          const src = reader.result;
+          if (!isSafeDrawingImageDataUrl(src)) { browse.disabled = false; cancel.disabled = false; setStatus(copy.decodeError, "error"); browse.focus({ preventScroll: true }); return; }
+          try {
+            const dimensions = await probeImage(src);
+            if (!panel.isConnected) return;
+            if (dimensions.width <= 0 || dimensions.height <= 0 || dimensions.width > DRAWING_IMAGE_MAX_EDGE || dimensions.height > DRAWING_IMAGE_MAX_EDGE || dimensions.width * dimensions.height > DRAWING_IMAGE_MAX_PIXELS) {
+              browse.disabled = false; cancel.disabled = false; setStatus(copy.dimensionError, "error"); browse.focus({ preventScroll: true }); return;
+            }
+            const safeName = file.name.trim().slice(0, 96) || "image";
+            const next: Drawing = {
+              id: uid(), kind: "image", points, ...applyStyle("image"),
+              meta: { mediaType: "image", imageSrc: src, imageName: safeName, imageMime: file.type, imageWidth: dimensions.width, imageHeight: dimensions.height },
+            };
+            const payloadBytes = new TextEncoder().encode(JSON.stringify([...drawRef.current, next])).byteLength;
+            if (payloadBytes > DRAWING_IMAGE_PAYLOAD_BUDGET) {
+              browse.disabled = false; cancel.disabled = false; setStatus(copy.payloadError, "error"); browse.focus({ preventScroll: true }); return;
+            }
+            appendMediaDrawing(next, activation);
+          } catch {
+            if (!panel.isConnected) return;
+            browse.disabled = false; cancel.disabled = false; setStatus(copy.decodeError, "error"); browse.focus({ preventScroll: true });
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+      // Keep this call synchronous with pointerup so Safari/iOS considers it a
+      // trusted user gesture. The visible Browse action remains if it is blocked.
+      choose();
+      requestAnimationFrame(() => { if (panel.isConnected) browse.focus({ preventScroll: true }); });
+    };
+
+    // PointerEvent.detail is always 0 in Chromium. Track presses by stable drawing id so
+    // a real double-click still edits text after the first press rebuilds the SVG node.
+    let lastTextPress: { id: string; at: number; x: number; y: number } | null = null;
+    const setInspectorMoving = (moving: boolean) => bar.classList.toggle("is-drawing-moving", moving);
 
     // select + drag existing drawings in cursor mode (capture phase; runs before creation)
     svg.addEventListener("pointerdown", (ev) => {
-      if (toolRef.current || !activeRef.current) return; const id = idAt(ev); if (!id) { if (sel) { sel = null; renderDraw(); } return; }
-      ev.stopPropagation(); sel = id; renderDraw();
-      const d0 = drawRef.current.find((x) => x.id === id); if (!d0) return;
+      if (replayIdxRef.current != null || toolRef.current || !activeRef.current || !ev.isPrimary || ev.button !== 0) return; const hitId = idAt(ev); if (!hitId) { if (sel) { sel = null; renderDraw(); } return; }
+      const source = drawRef.current.find((x) => x.id === hitId); if (!source) return;
+      const handleAttr = (ev.target as Element)?.closest?.("[data-handle]")?.getAttribute("data-handle");
+      let id = hitId;
+      let d0 = source;
+      // Cmd/Ctrl-drag clones the object before movement. The clone is detached,
+      // unlocked and selected; pointercancel removes it without touching source.
+      const commandClone = Boolean((ev.metaKey || ev.ctrlKey) && handleAttr == null && !source.locked);
+      if (commandClone) {
+        d0 = cloneDrawing(source, uid());
+        d0.z = Math.max(drawRef.current.length, ...drawRef.current.map((drawing) => drawing.z ?? 0)) + 1;
+        id = d0.id;
+        drawRef.current = [...drawRef.current, d0];
+      }
+      const pointerId = ev.pointerId;
+      ev.stopPropagation();
+      if (getDrawingTool(d0.kind)?.capabilities.includes("textInput") && !d0.locked) {
+        const now = performance.now();
+        const isDoublePress = lastTextPress?.id === id
+          && now - lastTextPress.at <= 500
+          && Math.hypot(ev.clientX - lastTextPress.x, ev.clientY - lastTextPress.y) <= 12;
+        if (isDoublePress) {
+          lastTextPress = null;
+          ev.preventDefault(); sel = id; renderDraw(); openTextEditor(d0.points[0], d0); return;
+        }
+        lastTextPress = { id, at: now, x: ev.clientX, y: ev.clientY };
+      } else {
+        lastTextPress = null;
+      }
+      sel = id; renderDraw();
+      if (d0.locked) return;
       const prec = precRef.current;
-      const s0 = rectXY(ev); const start = snap(s0.x, s0.y); const orig = d0.points.map((p) => ({ ...p }));
+      if (handleAttr != null) {
+        const handleIndex = Number(handleAttr);
+        if (Number.isInteger(handleIndex) && d0.points[handleIndex]) {
+          drawingTransactionRef.current = true;
+          setInspectorMoving(true);
+          const moveHandle = (e: PointerEvent) => {
+            if (e.pointerId !== pointerId) return;
+            const m0 = rectXY(e);
+            const angleOrigin = d0.points.length === 2
+              ? d0.points[handleIndex === 0 ? 1 : 0]
+              : handleIndex > 0 ? d0.points[0] : undefined;
+            const pt = constrainedSnap(angleOrigin, m0.x, m0.y, e);
+            const paneAnchored = getDrawingTool(d0.kind)?.creation.anchorSpace === "pane" && handleIndex === 0;
+            drawRef.current = drawRef.current.map((x) => x.id !== id ? x : {
+              ...x,
+              points: x.points.map((p, i) => i === handleIndex ? pt : p),
+              ...(paneAnchored ? { meta: paneMetaAt(m0.x, m0.y, x.meta) } : {}),
+            });
+            scheduleDraw();
+          };
+          const cleanupHandle = () => {
+            window.removeEventListener("pointermove", moveHandle); window.removeEventListener("pointerup", endHandle); window.removeEventListener("pointercancel", cancelHandle);
+            setInspectorMoving(false);
+          };
+          const endHandle = (e: PointerEvent) => {
+            if (e.pointerId !== pointerId) return;
+            cleanupHandle();
+            dragCleanup = null; drawingTransactionRef.current = false; onChangeRef.current?.([...drawRef.current]);
+          };
+          const cancelHandle = (e: PointerEvent) => {
+            if (e.pointerId !== pointerId) return;
+            cleanupHandle(); dragCleanup = null; drawingTransactionRef.current = false;
+            drawRef.current = drawRef.current.map((x) => x.id === id ? d0 : x);
+            renderDraw();
+          };
+          dragCleanup = cleanupHandle;
+          window.addEventListener("pointermove", moveHandle); window.addEventListener("pointerup", endHandle); window.addEventListener("pointercancel", cancelHandle); return;
+        }
+      }
+      const s0 = rectXY(ev); const start = snap(s0.x, s0.y, ev); const orig = d0.points.map((p) => ({ ...p }));
+      const origPaneAnchor = getDrawingTool(d0.kind)?.creation.anchorSpace === "pane" ? paneAnchorOf(d0.meta) : null;
+      drawingTransactionRef.current = true;
+      setInspectorMoving(true);
+      const origIndices = orig.map((point) => barIndex(point.t));
+      const minOrigIndex = Math.min(...origIndices), maxOrigIndex = Math.max(...origIndices);
       const move = (e: PointerEvent) => {
-        const m0 = rectXY(e); const cur = snap(m0.x, m0.y); const dp = cur.p - start.p, di = barIndex(cur.t!) - barIndex(start.t!), bars = barsRef.current;
-        drawRef.current = drawRef.current.map((x) => x.id !== id ? x : { ...x, points: orig.map((pt) => { const ni = Math.max(0, Math.min(bars.length - 1, barIndex(pt.t) + di)); return { t: bars[ni]?.time || pt.t, p: +(pt.p + dp).toFixed(prec) }; }) });
+        if (e.pointerId !== pointerId) return;
+        const m0 = rectXY(e), cur = snap(m0.x, m0.y, e), bars = barsRef.current;
+        if (origPaneAnchor) {
+          const nextAnchor = {
+            x: clampUnit(origPaneAnchor.x + (m0.x - s0.x) / Math.max(1, el!.clientWidth)),
+            y: clampUnit(origPaneAnchor.y + (m0.y - s0.y) / Math.max(1, el!.clientHeight)),
+          };
+          const point = snap(nextAnchor.x * el!.clientWidth, nextAnchor.y * el!.clientHeight, e);
+          drawRef.current = drawRef.current.map((x) => x.id !== id ? x : {
+            ...x,
+            points: x.points.map((existingPoint, index) => index === 0 ? point : existingPoint),
+            meta: { ...(x.meta ?? {}), paneAnchor: nextAnchor },
+          });
+          scheduleDraw();
+          return;
+        }
+        const dp = cur.p - start.p;
+        const requestedDi = barIndex(cur.t!) - barIndex(start.t!);
+        // Clamp one shared translation delta so every anchor moves rigidly at
+        // the data boundary instead of independently collapsing the geometry.
+        const di = Math.max(-minOrigIndex, Math.min(bars.length - 1 - maxOrigIndex, requestedDi));
+        drawRef.current = drawRef.current.map((x) => x.id !== id ? x : { ...x, points: orig.map((pt, index) => { const ni = origIndices[index] + di; return { t: bars[ni]?.time || pt.t, p: +(pt.p + dp).toFixed(prec) }; }) });
         scheduleDraw();   // rAF-coalesced: one renderDraw() per frame instead of per raw pointermove
       };
-      const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); dragCleanup = null; onChangeRef.current?.([...drawRef.current]); };
-      dragCleanup = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
-      window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+      const cleanupMove = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", cancelMove); setInspectorMoving(false); };
+      const up = (e: PointerEvent) => { if (e.pointerId !== pointerId) return; cleanupMove(); dragCleanup = null; drawingTransactionRef.current = false; onChangeRef.current?.([...drawRef.current]); };
+      const cancelMove = (e: PointerEvent) => {
+        if (e.pointerId !== pointerId) return;
+        cleanupMove(); dragCleanup = null; drawingTransactionRef.current = false;
+        drawRef.current = commandClone
+          ? drawRef.current.filter((x) => x.id !== id)
+          : drawRef.current.map((x) => x.id === id ? d0 : x);
+        if (commandClone) sel = hitId;
+        renderDraw();
+      };
+      dragCleanup = cleanupMove;
+      window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", cancelMove);
     }, true);
+
+    // Hover a drawing and scroll to rotate through the quick palette—the same
+    // precision shortcut surfaced by OpenMarket's endpoint palette. Only a
+    // drawing hit consumes the wheel; normal chart zoom remains untouched.
+    let lastPaletteWheel = 0;
+    svg.addEventListener("wheel", (event) => {
+      if (!activeRef.current || replayIdxRef.current != null) return;
+      if (toolRef.current) {
+        if (!matchMedia("(pointer:fine)").matches) return;
+        const now = performance.now(); if (now - lastPaletteWheel < 90) return;
+        lastPaletteWheel = now; event.preventDefault(); event.stopPropagation();
+        const current = COLORS.findIndex((color) => color === (styleRef.current?.color || getDrawingTool(toolRef.current)?.defaults.color));
+        const direction = event.deltaY >= 0 ? 1 : -1;
+        setCreationColor(COLORS[(current < 0 ? 0 : current + direction + COLORS.length) % COLORS.length]);
+        positionCreationPalette(event.clientX, event.clientY);
+        return;
+      }
+      const id = idAt(event); if (!id) return;
+      const now = performance.now(); if (now - lastPaletteWheel < 90) return;
+      lastPaletteWheel = now; event.preventDefault(); event.stopPropagation();
+      const drawing = drawRef.current.find((candidate) => candidate.id === id); if (!drawing) return;
+      const current = COLORS.findIndex((color) => color === drawing.color);
+      const direction = event.deltaY >= 0 ? 1 : -1;
+      const next = COLORS[(current < 0 ? 0 : current + direction + COLORS.length) % COLORS.length];
+      sel = id;
+      rememberRecentColor(next, drawing.color);
+      const canFill = getDrawingTool(drawing.kind)?.capabilities.includes("fill") ?? false;
+      drawRef.current = drawRef.current.map((candidate) => candidate.id === id
+        ? { ...candidate, color: next, ...(canFill ? { fillColor: next } : {}) }
+        : candidate);
+      onChangeRef.current?.([...drawRef.current]);
+    }, { passive: false });
 
     // creation / erase (bubble; svg is pointer-events:auto only when a tool is active)
     svg.addEventListener("pointerdown", (ev) => {
-      const tl = toolRef.current; if (!tl) return; const { x, y } = rectXY(ev); const a = snap(x, y);
-      if (tl === "erase") { const id = idAt(ev); if (id) onChangeRef.current?.(drawRef.current.filter((d) => d.id !== id)); return; }
-      if (tl === "hline") { onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "hline", points: [a], ...applyStyle("hline") }]); return; }
-      if (tl === "vline") { onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "vline", points: [a], ...applyStyle("vline") }]); return; }
-      if (tl === "text") { openTextEditor(a); return; }
-      if (TWO.has(tl)) { pending = { kind: tl, a }; try { svg.setPointerCapture(ev.pointerId); } catch {} }
+      const tl = toolRef.current; if (drawingCreationDisabledRef.current || replayIdxRef.current != null || !tl || !ev.isPrimary || ev.button !== 0) return;
+      const activation = toolActivationRef.current;
+      positionCreationPalette(ev.clientX, ev.clientY);
+      const { x, y } = rectXY(ev); const a = snap(x, y, ev);
+      const spec = getDrawingTool(tl); if (!spec) return;
+      // The palette follows the pointer by a small offset. During a paced
+      // diagonal drag its previous frame can otherwise move underneath the
+      // next pointer sample and steal the gesture before pointerup. Keep it
+      // visible, but make it click-through until this creation transaction
+      // ends; swatches become interactive again immediately on release.
+      creationPalette.style.pointerEvents = "none";
+      if (spec.creation.mode === "one-point") {
+        pending = {
+          kind: spec.id,
+          activation,
+          points: [],
+          mode: spec.capabilities.includes("textInput") ? "text" : "point",
+          pointerId: ev.pointerId,
+          candidate: a,
+          ...(spec.creation.anchorSpace === "pane" ? { meta: paneMetaAt(x, y) } : {}),
+        };
+        try { svg.setPointerCapture(ev.pointerId); } catch {}
+        renderDraw(); return;
+      }
+      if (spec.creation.mode === "two-point") {
+        if (pending?.kind === spec.id && pending.mode === "drag" && pending.awaitingSecond && pending.activation === activation) {
+          pending.pointerId = ev.pointerId;
+          pending.candidate = constrainedSnap(pending.points[0], x, y, ev);
+        } else {
+          pending = { kind: spec.id, activation, points: [a], mode: "drag", pointerId: ev.pointerId, awaitingSecond: false };
+        }
+        try { svg.setPointerCapture(ev.pointerId); } catch {}
+        return;
+      }
+      if (spec.creation.mode === "freehand") {
+        pending = { kind: spec.id, activation, points: [a], mode: "freehand", pointerId: ev.pointerId };
+        try { svg.setPointerCapture(ev.pointerId); } catch {}
+        return;
+      }
+      // Fixed and variable tools commit click-by-click. Variable paths finish on
+      // a repeated final anchor / native double-click; fixed tools auto-commit at
+      // their declarative 3–7 point count.
+      if (!pending || pending.kind !== spec.id || pending.mode !== "multi" || pending.activation !== activation) {
+        pending = { kind: spec.id, activation, points: [], mode: "multi" };
+      }
+      if (pending.pointerId != null) return;
+      pending.pointerId = ev.pointerId; pending.candidate = a;
+      try { svg.setPointerCapture(ev.pointerId); } catch {}
+      renderDraw();
     });
-    // double-click a text drawing to edit it in place
+    // Double-click finishes variable segmented tools and edits text in cursor mode.
     svg.addEventListener("dblclick", (ev) => {
-      if (!activeRef.current) return; const id = idAt(ev); const d = drawRef.current.find((x) => x.id === id);
-      if (d && d.kind === "text") { ev.stopPropagation(); ev.preventDefault(); openTextEditor(d.points[0], d); }
+      if (!activeRef.current) return;
+      const activeTool = toolRef.current, spec = getDrawingTool(activeTool);
+      if (activeTool && spec?.creation.mode === "variable-multi" && pending?.kind === activeTool && pending.mode === "multi") {
+        ev.stopPropagation(); ev.preventDefault();
+        const points = [...pending.points];
+        const activation = pending.activation;
+        // The second click in a dblclick repeats the endpoint. Persist one clean
+        // control anchor while still honoring the repeated-last finish gesture.
+        while (points.length > 1) {
+          const last = points[points.length - 1], before = points[points.length - 2];
+          const lx = xOf(last.t), ly = yOf(last.p), px = xOf(before.t), py = yOf(before.p);
+          if (lx == null || ly == null || px == null || py == null || Math.hypot(lx - px, ly - py) > 3) break;
+          points.pop();
+        }
+        if (points.length >= spec.creation.minPoints) { pending = null; commitDrawing(activeTool, points.slice(0, spec.creation.maxPoints), undefined, activation); renderDraw(); }
+        return;
+      }
+      const id = idAt(ev); const d = drawRef.current.find((x) => x.id === id);
+      if (d && replayIdxRef.current == null && !d.locked && getDrawingTool(d.kind)?.capabilities.includes("textInput")) { ev.stopPropagation(); ev.preventDefault(); openTextEditor(d.points[0], d); }
+      else if (d && replayIdxRef.current == null && !d.locked) {
+        ev.stopPropagation(); ev.preventDefault(); sel = d.id; renderDraw(); bar.classList.add("settings-open");
+      }
     });
     svg.addEventListener("pointermove", (ev) => {
-      if (!pending) return; const { x, y } = rectXY(ev); const p0 = pending; const b = snap(x, y);
-      // rAF-coalesced: rebuild the base draw layer once per frame, then (trailer) append the live preview
-      // shape ON TOP after the rebuild so it isn't wiped by renderDraw's clear.
-      scheduleDraw(() => { const svgEl = svgRef.current; if (svgEl && pending === p0) svgEl.appendChild(shape({ id: "_p", kind: p0.kind as any, points: [p0.a, b] }, true)); });
+      positionCreationPalette(ev.clientX, ev.clientY);
+      if (!pending) return;
+      if (pending.pointerId != null && pending.pointerId !== ev.pointerId) return;
+      const { x, y } = rectXY(ev); const p0 = pending;
+      const angleOrigin = pending.mode === "drag"
+        ? pending.points[0]
+        : pending.mode === "multi" ? pending.points[pending.points.length - 1] : undefined;
+      const b = constrainedSnap(angleOrigin, x, y, ev);
+      if (pending.mode === "multi" || pending.mode === "point" || pending.mode === "text") pending.candidate = b;
+      if (getDrawingTool(pending.kind)?.creation.anchorSpace === "pane") pending.meta = paneMetaAt(x, y, pending.meta);
+      if (pending.mode === "freehand") {
+        const last = pending.points[pending.points.length - 1], lx = xOf(last.t), ly = yOf(last.p);
+        if (lx == null || ly == null || Math.hypot(x - lx, y - ly) >= 3.5) pending.points.push(b);
+        if (pending.points.length > 64) pending.points.splice(1, 1);
+      }
+      const rawPreviewPoints = pending.mode === "freehand" ? [...pending.points]
+        : pending.mode === "multi" ? [...pending.points, pending.candidate ?? b]
+        : pending.mode === "point" || pending.mode === "text" ? [pending.candidate ?? b]
+        : [pending.points[0], b];
+      const previewPoints = materializePoints(pending.kind, rawPreviewPoints);
+      // One retained preview per animation frame, plus OpenMarket-style placement guides
+      // and an explicit halo whenever Weak/Strong magnet acquires an OHLC target.
+      scheduleDraw(() => {
+        const svgEl = svgRef.current; if (!svgEl || pending !== p0) return;
+        const guides = mk("g", { "pointer-events": "none", opacity: .72 });
+        guides.appendChild(mk("line", { x1: 0, y1: y, x2: el!.clientWidth, y2: y, stroke: "var(--muted)", "stroke-width": 1, "stroke-dasharray": "4 5", opacity: .48 }));
+        guides.appendChild(mk("line", { x1: x, y1: 0, x2: x, y2: el!.clientHeight, stroke: "var(--muted)", "stroke-width": 1, "stroke-dasharray": "4 5", opacity: .48 }));
+        if (snapTarget) {
+          guides.appendChild(mk("circle", { cx: snapTarget.x, cy: snapTarget.y, r: 8, fill: "none", stroke: "var(--brand-2)", "stroke-width": 1.5, opacity: .9 }));
+          guides.appendChild(mk("circle", { cx: snapTarget.x, cy: snapTarget.y, r: 2.5, fill: "var(--brand-2)" }));
+        }
+        svgEl.appendChild(guides);
+        svgEl.appendChild(shape({ id: "_p", kind: p0.kind, points: previewPoints, ...applyStyle(p0.kind), ...(p0.meta ? { meta: p0.meta } : {}) }, true));
+      });
     });
     svg.addEventListener("pointerup", (ev) => {
-      if (!pending) return; const { x, y } = rectXY(ev); const b = snap(x, y); const a = pending.a; const kind = pending.kind; pending = null;
-      if (Math.abs((xOf(a.t) ?? 0) - (xOf(b.t!) ?? 0)) < 3 && Math.abs((yOf(a.p) ?? 0) - (yOf(b.p) ?? 0)) < 3) { renderDraw(); return; }
-      onChangeRef.current?.([...drawRef.current, { id: uid(), kind: kind as any, points: [a, b], ...applyStyle(kind) }]);
+      if (!pending) return;
+      if (pending.pointerId != null && pending.pointerId !== ev.pointerId) return;
+      creationPalette.style.pointerEvents = "auto";
+      const { x, y } = rectXY(ev), current = pending;
+      const angleOrigin = current.mode === "drag"
+        ? current.points[0]
+        : current.mode === "multi" ? current.points[current.points.length - 1] : undefined;
+      const b = constrainedSnap(angleOrigin, x, y, ev);
+      try { if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId); } catch {}
+      if (current.mode === "multi") {
+        const previous = current.points[current.points.length - 1], px = previous ? xOf(previous.t) : null, py = previous ? yOf(previous.p) : null;
+        const repeatRadius = ev.pointerType === "touch" || matchMedia("(pointer:coarse)").matches ? 16 : 3;
+        const repeatedAnchor = Boolean(previous && px != null && py != null && Math.hypot(x - px, y - py) <= repeatRadius);
+        if (!repeatedAnchor) current.points.push(b);
+        current.pointerId = undefined; current.candidate = undefined;
+        const spec = getDrawingTool(current.kind);
+        const required = spec?.creation.mode === "fixed-multi" && typeof spec.creation.pointCount === "number" ? spec.creation.pointCount : Infinity;
+        const repeatedFinish = repeatedAnchor && spec?.creation.mode === "variable-multi" && current.points.length >= spec.creation.minPoints;
+        if (current.points.length >= required || repeatedFinish || (spec?.creation.mode === "variable-multi" && current.points.length >= spec.creation.maxPoints)) {
+          const points = [...current.points]; pending = null; commitDrawing(current.kind, points, undefined, current.activation);
+        } else renderDraw();
+        return;
+      }
+      const currentMeta = getDrawingTool(current.kind)?.creation.anchorSpace === "pane" ? paneMetaAt(x, y, current.meta) : current.meta;
+      if (current.mode === "text") { pending = null; openTextEditor(b, undefined, current.kind, [b], currentMeta, current.activation); renderDraw(); return; }
+      if (current.mode === "point") {
+        pending = null;
+        if (current.kind === "emoji" || current.kind === "icon") openMediaChoicePicker(current.kind, b, x, y, current.activation);
+        else commitDrawing(current.kind, [b], currentMeta, current.activation);
+        renderDraw(); return;
+      }
+      const maxPoints = getDrawingTool(current.kind)?.creation.maxPoints ?? 64;
+      const points = current.mode === "freehand" ? [...current.points, b].slice(0, maxPoints) : [current.points[0], b];
+      const a = points[0], last = points[points.length - 1];
+      const isTiny = !a || !last || (Math.abs((xOf(a.t) ?? 0) - (xOf(last.t) ?? 0)) < 3 && Math.abs((yOf(a.p) ?? 0) - (yOf(last.p) ?? 0)) < 3);
+      // A stationary first click arms the documented click-then-click placement
+      // mode. A normal drag continues to commit on the first pointerup.
+      if (current.mode === "drag" && isTiny && !current.awaitingSecond) {
+        current.pointerId = undefined;
+        current.candidate = b;
+        current.awaitingSecond = true;
+        renderDraw();
+        return;
+      }
+      if (isTiny) { current.pointerId = undefined; current.candidate = b; renderDraw(); return; }
+      pending = null;
+      if (current.kind === "image") { openImageUpload(points, x, y, current.activation); renderDraw(); return; }
+      if (getDrawingTool(current.kind)?.capabilities.includes("textInput")) {
+        openTextEditor(last, undefined, current.kind, points, currentMeta, current.activation);
+        renderDraw();
+        return;
+      }
+      commitDrawing(current.kind, points, currentMeta, current.activation); renderDraw();
     });
+    svg.addEventListener("pointercancel", (ev) => {
+      if (!pending || (pending.pointerId != null && pending.pointerId !== ev.pointerId)) return;
+      creationPalette.style.pointerEvents = "auto";
+      try { if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId); } catch {}
+      if (pending.mode === "multi" && pending.points.length) {
+        pending.pointerId = undefined; pending.candidate = undefined;
+      } else pending = null;
+      renderDraw();
+    });
+
+    // Precision shortcut: Shift+drag measures directly from the chart without first
+    // opening the drawing rail. Capture on the chart wrapper because the drawing SVG
+    // intentionally has pointer-events:none while no tool is armed.
+    const onShiftMeasure = (ev: PointerEvent) => {
+      if (drawingCreationDisabledRef.current || replayIdxRef.current != null || !ev.shiftKey || toolRef.current || !activeRef.current || ev.button !== 0) return;
+      const startXY = rectXY(ev), a = snap(startXY.x, startXY.y, ev);
+      const activation = toolActivationRef.current;
+      ev.preventDefault(); ev.stopPropagation();
+      const move = (e: PointerEvent) => {
+        const xy = rectXY(e), b = snap(xy.x, xy.y, e);
+        scheduleDraw(() => {
+          const svgEl = svgRef.current; if (!svgEl) return;
+          svgEl.appendChild(shape({ id: "_measure", kind: "measure", points: [a, b], ...applyStyle("measure") }, true));
+        });
+      };
+      const cleanupMeasure = () => {
+        window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", cancel);
+        if (dragCleanup === cleanupMeasure) dragCleanup = null;
+        drawingTransactionRef.current = false;
+      };
+      const end = (e: PointerEvent) => {
+        cleanupMeasure();
+        const xy = rectXY(e), b = snap(xy.x, xy.y, e);
+        if (Math.hypot((xOf(a.t) ?? 0) - (xOf(b.t) ?? 0), (yOf(a.p) ?? 0) - (yOf(b.p) ?? 0)) >= 3) commitDrawing("measure", [a, b], undefined, activation);
+        else renderDraw();
+      };
+      const cancel = () => { cleanupMeasure(); renderDraw(); };
+      drawingTransactionRef.current = true;
+      dragCleanup = cleanupMeasure;
+      window.addEventListener("pointermove", move); window.addEventListener("pointerup", end); window.addEventListener("pointercancel", cancel);
+    };
+    wrap.addEventListener("pointerdown", onShiftMeasure, true);
 
     // Alt+<key> → drawing-tool code. Mirrors DrawingSidebar's advertised kbd chips (do NOT edit that
     // file — this is the receiving half). Alt+R was RESET-view but the sidebar advertises it as
@@ -3277,25 +6029,106 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // ChartPanel can't set it directly — it dispatches the established `mm:set-tool` window event
     // (same idiom as mm:set-tf / mm:open-pane). NOTE: this requires a matching listener in TerminalShell
     // (`mm:set-tool` → setTool) to take effect — see the lane summary.
-    const ALT_TOOL: Record<string, string> = { KeyT: "trendline", KeyH: "hline", KeyV: "vline", KeyR: "rect", KeyX: "text", KeyM: "measure" };
     let lastEscTs = 0;
+    let drawingClipboard: Drawing | null = null;
     onKey = (e: KeyboardEvent) => {
       if (!activeRef.current) return;
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase(); if (tag === "input" || tag === "textarea") return;
+      // Portalled drawing menus own their first Escape. Window listeners share
+      // one event target, so stopPropagation in the sidebar alone cannot keep a
+      // later chart listener from also retiring the armed tool.
+      if (e.key === "Escape" && document.querySelector("[data-menu-id]")) return;
       if (e.key === "Escape") {
+        if (pending) { cancelPendingDrawingRef.current(); return; }
+        if (toolRef.current) {
+          lastEscTs = 0;
+          try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: null })); } catch {}
+          return;
+        }
         // Esc deselects; double-Esc (within 500ms) resets the chart view (the gesture that replaces the
         // former ⌥R — Alt+R is now the Rectangle tool as the sidebar advertises).
         const now = Date.now();
-        if (now - lastEscTs < 500) { lastEscTs = 0; if (toolRef.current) { try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: null })); } catch {} } try { chart.timeScale().fitContent(); } catch {} }
+        if (now - lastEscTs < 500) { lastEscTs = 0; if (toolRef.current) { try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: null })); } catch {} } normalizeChartView(); }
         else { lastEscTs = now; if (sel) { sel = null; renderDraw(); } }
       }
-      else if ((e.key === "Delete" || e.key === "Backspace") && sel) { e.preventDefault(); const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
+      else if ((e.key === "Delete" || e.key === "Backspace") && sel && replayIdxRef.current == null) { e.preventDefault(); const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
+      else if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyZ" && replayIdxRef.current == null) {
+        e.preventDefault();
+        try { window.dispatchEvent(new CustomEvent("mm:drawing-history", { detail: e.shiftKey ? "redo" : "undo" })); } catch {}
+      }
+      else if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyY" && replayIdxRef.current == null) {
+        e.preventDefault();
+        try { window.dispatchEvent(new CustomEvent("mm:drawing-history", { detail: "redo" })); } catch {}
+      }
+      else if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyC" && sel) {
+        const selected = drawRef.current.find((drawing) => drawing.id === sel);
+        if (!selected) return;
+        e.preventDefault();
+        drawingClipboard = cloneDrawing(selected, "_drawing_clipboard");
+      }
+      else if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyV" && drawingClipboard && replayIdxRef.current == null) {
+        e.preventDefault();
+        const source = drawingClipboard;
+        const times = semanticTimes();
+        const reference = source.points[0];
+        const referenceY = reference ? yOf(reference.p) : null;
+        const offsetPrice = referenceY == null
+          ? 0
+          : ((priceSeriesRef.current?.coordinateToPrice(referenceY + 10) as number | null) ?? reference.p) - reference.p;
+        const points = translateDrawingAnchors(source, times, 2, offsetPrice, precRef.current);
+        const copy = cloneDrawing(source, uid(), points);
+        const paneAnchor = paneAnchorOf(source.meta);
+        if (paneAnchor) {
+          const nextAnchor = { x: clampUnit(paneAnchor.x + .025), y: clampUnit(paneAnchor.y + .025) };
+          copy.meta = { ...(copy.meta ?? {}), paneAnchor: nextAnchor };
+          copy.points[0] = snap(nextAnchor.x * el!.clientWidth, nextAnchor.y * el!.clientHeight);
+        }
+        copy.z = Math.max(drawRef.current.length, ...drawRef.current.map((drawing) => drawing.z ?? 0)) + 1;
+        sel = copy.id;
+        drawRef.current = [...drawRef.current, copy];
+        onChangeRef.current?.([...drawRef.current]);
+      }
+      else if (sel && replayIdxRef.current == null && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        const selected = drawRef.current.find((drawing) => drawing.id === sel);
+        if (!selected || selected.locked) return;
+        e.preventDefault();
+        const amount = e.shiftKey ? 10 : 1;
+        const paneAnchor = paneAnchorOf(selected.meta);
+        if (paneAnchor) {
+          const dx = e.key === "ArrowLeft" ? -amount : e.key === "ArrowRight" ? amount : 0;
+          const dy = e.key === "ArrowUp" ? -amount : e.key === "ArrowDown" ? amount : 0;
+          const nextAnchor = {
+            x: clampUnit(paneAnchor.x + dx / Math.max(1, el!.clientWidth)),
+            y: clampUnit(paneAnchor.y + dy / Math.max(1, el!.clientHeight)),
+          };
+          const point = snap(nextAnchor.x * el!.clientWidth, nextAnchor.y * el!.clientHeight);
+          drawRef.current = drawRef.current.map((drawing) => drawing.id === sel ? {
+            ...drawing,
+            points: drawing.points.map((existing, index) => index === 0 ? point : existing),
+            meta: { ...(drawing.meta ?? {}), paneAnchor: nextAnchor },
+          } : drawing);
+        } else {
+          const requestedBars = e.key === "ArrowLeft" ? -amount : e.key === "ArrowRight" ? amount : 0;
+          const reference = selected.points[0];
+          const referenceY = reference ? yOf(reference.p) : null;
+          const targetY = referenceY == null ? null
+            : referenceY + (e.key === "ArrowUp" ? -amount : e.key === "ArrowDown" ? amount : 0);
+          const targetPrice = targetY == null ? reference?.p
+            : (priceSeriesRef.current?.coordinateToPrice(targetY) as number | null) ?? reference?.p;
+          const deltaPrice = requestedBars || reference == null || targetPrice == null ? 0 : targetPrice - reference.p;
+          const points = translateDrawingAnchors(selected, semanticTimes(), requestedBars, deltaPrice, precRef.current);
+          drawRef.current = drawRef.current.map((drawing) => drawing.id === sel ? { ...drawing, points } : drawing);
+        }
+        onChangeRef.current?.([...drawRef.current]);
+      }
       // ⌥A = add alert at last bar close
       else if (e.altKey && e.code === "KeyA") { e.preventDefault(); const b = barsRef.current; if (b.length) onAddAlertRef.current?.(b[b.length - 1].c); }
       // ⌥T/H/V/R/X/M = select the advertised drawing tool (via mm:set-tool → TerminalShell.setTool)
-      else if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && ALT_TOOL[e.code]) {
+      else {
+        const shortcut = drawingToolFromShortcut(e);
+        if (!shortcut) return;
         e.preventDefault();
-        try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: ALT_TOOL[e.code] })); } catch {}
+        try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: shortcut })); } catch {}
       }
     };
     window.addEventListener("keydown", onKey);
@@ -3330,12 +6163,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (pineHostRef.current) { try { pineHostRef.current.dispose(); } catch {} pineHostRef.current = null; }
       if (syncCleanupRef.current) { try { syncCleanupRef.current(); } catch {} syncCleanupRef.current = null; }
       if (dragCleanup) dragCleanup();
+      drawingTransactionRef.current = false;
       window.removeEventListener("mm:snapshot", snapshot);
+      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmChartSeriesTitles; delete (window as any).__mmChartAxisOpts; delete (window as any).__mmCrosshairDodge; } catch {} }
       if (onKey) window.removeEventListener("keydown", onKey);
       if (winDown) window.removeEventListener("pointerdown", winDown);
+      window.removeEventListener("pointerup", onProjectionPointerEnd);
+      window.removeEventListener("pointercancel", onProjectionPointerEnd);
       const wEl = wrapElRef.current;
       if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx);
-      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onTouchDown); wEl.removeEventListener("wheel", onAxisWheel, true); wEl.removeEventListener("dblclick", onAxisDbl); }
+      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onProjectionPointerDown, true); wEl.removeEventListener("pointerdown", onTouchDown); wEl.removeEventListener("pointerdown", onShiftMeasure, true); wEl.removeEventListener("wheel", onAxisWheel, true); wEl.removeEventListener("dblclick", onAxisDbl); wEl.removeEventListener("pointerenter", onScrubEnter); wEl.removeEventListener("pointermove", onScrubEnter); wEl.removeEventListener("pointerdown", onScrubEnter); wEl.removeEventListener("pointerleave", onScrubLeave); wEl.removeEventListener("pointercancel", onScrubLeave); }
       mqlMobile?.removeEventListener("change", onMqlChange);
       paneRO?.disconnect(); paneRORef.current = null; wrapElRef.current = null;
       ro?.disconnect();
@@ -3343,8 +6180,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; }
       if (emptyRef.current) { try { emptyRef.current.remove(); } catch {} emptyRef.current = null; }
       if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; }
+      if (creationPaletteRef.current) { try { creationPaletteRef.current.remove(); } catch {} creationPaletteRef.current = null; }
+      hideBarTip();
+      window.removeEventListener("resize", hideBarTip);
+      document.removeEventListener("scroll", hideBarTip, true);
+      try { barTip.remove(); } catch {}
+      if (indSvgRef.current) { try { indSvgRef.current.remove(); } catch {} indSvgRef.current = null; }
+      suiteTablesRef.current = [];
       if (sigRef.current) { try { sigRef.current.remove(); } catch {} sigRef.current = null; }
       if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; }
+      closeMediaSurface(false);
+      cancelPendingDrawingRef.current = () => {};
+      cancelMediaToolRef.current = () => {};
+      clearDrawingSelectionRef.current = () => {};
       if (tagTimerRef.current != null) { clearInterval(tagTimerRef.current); tagTimerRef.current = null; }
       if (priceTagRef.current) { try { priceTagRef.current.remove(); } catch {} priceTagRef.current = null; }
       renderTagRef.current = null;
@@ -3352,6 +6200,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (countdownTimerRef.current) { clearInterval(countdownTimerRef.current); countdownTimerRef.current = null; }
       if (countdownChipRef.current) { try { countdownChipRef.current.remove(); } catch {} countdownChipRef.current = null; }
       if (shadingPrimRef.current && priceSeriesRef.current) { try { detachSessionShading(priceSeriesRef.current, shadingPrimRef.current); } catch {} shadingPrimRef.current = null; }
+      clearExtendedPriceLine();
       indPriceLinesRef.current = new Map();
       indSeriesRef.current.clear(); cmpSeriesRef.current.clear(); paneMapRef.current.clear();
       pineSeriesRef.current.clear(); pineMarkersRef.current.clear(); pinePaneMapRef.current.clear(); pineErrRef.current.clear(); pineCacheRef.current.clear(); pineAstRef.current.clear();
@@ -3388,7 +6237,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         let bars: any[] = [];
         let feedErr: string | null = null;       // the route's j.error (route returns {bars:[],error} on an upstream/config failure)
         try {
-          const r = await fetch(`/api/intraday?sym=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(timeframe)}${extHours ? "&ext=1" : ""}`, { cache: "no-store" });
+          const r = await fetch(`/api/intraday?sym=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(timeframe)}&ext=${extHours ? "1" : "0"}`, { cache: "no-store" });
           const j = await r.json().catch(() => null);
           bars = Array.isArray(j?.bars) ? j.bars : [];
           if (!r.ok || j?.error) feedErr = String(j?.error || `HTTP ${r.status}`);
@@ -3399,6 +6248,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         earlyDotsRef.current = []; warnMarksRef.current = [];   // GC v2 side channels: daily-only too
         dailyBarsRef.current = [];               // splice is daily-only; disable it here
         if (!bars.length) {
+          clearChartData();   // never leave the previous symbol's series under this symbol's badge
           // Differentiate a feed/entitlement/config failure ("POLYGON_API_KEY not set", "polygon 403",
           // "unauthenticated", …) from a genuinely-empty symbol. Both dead-end the intraday chart, so
           // surface a "Back to Daily" affordance instead of a blank chart.
@@ -3407,6 +6257,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           showEmptyRef.current(unavailable
             ? `Intraday feed unavailable for ${symbol} on ${timeframe}. Switch back to the daily timeframe to keep charting.`
             : `No intraday data for ${symbol} on ${timeframe}. Switch back to the daily timeframe to keep charting.`);
+          announceTerminalVisualReady(symbol, "empty");
           return;
         }
         hideEmptyRef.current();                   // data arrived → clear any prior dead-end overlay
@@ -3440,19 +6291,25 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             if (rawBars.length && isIntradayRef.current) {
               try { if (indicatorsRef.current.has("slevels")) buildSlevels(onChart); } catch {}
               try { if (indicatorsRef.current.has("pivots")) buildPivots(onChart); } catch {}
+              // The builders create lines visible — re-assert the eye or a hidden
+              // slevels/pivots silently resurrects (the pooled-line eye is real now).
+              try { applyHidden(); } catch {}
             }
           }).catch(() => { /* silent — slevels/pivots will render with empty history */ });
         }
-        const familyOf = (ct: string) => (ct === "line" ? "line" : ct === "area" ? "area" : ct === "bars" ? "bars" : "candle");
-        const wantFamily = familyOf(chartType);
+        const wantFamily = priceSeriesFamily(chartType);
         let priceS = priceSeriesRef.current;
         if (!priceS || priceFamilyRef.current !== wantFamily) {
-          if (priceS) { try { chart.removeSeries(priceS); } catch {} }
+          if (priceS) { clearExtendedPriceLine(); try { chart.removeSeries(priceS); } catch {} }
           priceS = addPriceSeries(chart, tokensRef.current);
           priceFamilyRef.current = wantFamily;
           priceSeriesRef.current = priceS;
         } else { priceS.applyOptions({ priceFormat: priceFmt() }); }
+        if (chartType === "baseline" && onChart.length) priceS!.applyOptions({ baseValue: { type: "price", price: onChart[0].c } });
         priceS!.setData(priceData(onChart) as any);
+        cpMark(`chart-painted[${symbol}]`);
+        chartDataSymRef.current = symbol;
+        announceTerminalVisualReady(symbol);
         clearAllIndicators();
         buildAllIndicators(onChart, closes);
         buildIndDataMap(onChart, closes);
@@ -3491,7 +6348,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           o?.bars?.length ? (o.bars as any[][]).map((b) => ({ time: b[0] as string, o: b[1] as number, h: b[2] as number, l: b[3] as number, c: b[4] as number, v: b[5] as number })) : []
         );
         const summed = alignAndSum(legBars);
-        if (!summed.length) { if (statusRef.current) statusRef.current.textContent = "No shared data for composite."; return; }
+        if (!summed.length) {
+          clearChartData();
+          if (statusRef.current) statusRef.current.textContent = "No shared data for composite.";
+          showEmptyRef.current(`No overlapping data for ${symbol}. Its legs share no common dates.`, null);
+          announceTerminalVisualReady(symbol, "empty");
+          return;
+        }
         daily = summed;
         sliceRef.current = null;
       } else {
@@ -3499,7 +6362,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         cpMark(`ohlc-fetch-done[${symbol}]`);
         if (cancelled || epochRef.current !== epoch) return;
         sliceRef.current = slice;   // authoritative slice for replay sig-mark re-resolution (Effect 4)
-        if (!ohlc?.bars?.length) { if (statusRef.current) statusRef.current.textContent = "No data for this symbol."; return; }
+        if (!ohlc?.bars?.length) {
+          clearChartData();
+          if (statusRef.current) statusRef.current.textContent = "No data for this symbol.";
+          showEmptyRef.current(`No daily history for ${symbol} yet.`, null);
+          announceTerminalVisualReady(symbol, "empty");
+          return;
+        }
         daily = ohlc.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
       }
       dailyBarsRef.current = daily;         // raw daily source — the R11 splice operates on THIS
@@ -3552,19 +6421,21 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
 
       // ── price series: incremental setData if the type matches, else remove + re-add ──
-      const familyOf = (ct: string) => (ct === "line" ? "line" : ct === "area" ? "area" : ct === "bars" ? "bars" : "candle"); // heikin uses candle series
-      const wantFamily = familyOf(chartType);
+      const wantFamily = priceSeriesFamily(chartType);
       let priceS = priceSeriesRef.current;
       if (!priceS || priceFamilyRef.current !== wantFamily) {
-        if (priceS) { try { chart.removeSeries(priceS); } catch {} }
+        if (priceS) { clearExtendedPriceLine(); try { chart.removeSeries(priceS); } catch {} }
         priceS = addPriceSeries(chart, tokensRef.current);
         priceFamilyRef.current = wantFamily;
         priceSeriesRef.current = priceS;
       } else {
         priceS.applyOptions({ priceFormat: priceFmt() });
       }
+      if (chartType === "baseline" && onChart.length) priceS!.applyOptions({ baseValue: { type: "price", price: onChart[0].c } });
       priceS!.setData(priceData(onChart) as any);
       cpMark(`chart-painted[${symbol}]`);   // first candle on canvas
+      chartDataSymRef.current = symbol;
+      announceTerminalVisualReady(symbol);
 
       // ── PERF-FIX (a): indicators — on same-symbol TF/chartType switch, update series data in-place
       //    (setData only, no removeSeries/addSeries lifecycle). On symbol change, do a full rebuild. ──
@@ -3608,6 +6479,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // ── R11: re-apply the live splice AFTER setData (which erased any prior splice). No-op under
       //    replay / EOD basis / intraday (guarded inside). Runs last so status + sig marks agree. ──
       applyLiveSplice();
+      applyExtendedPriceLine();
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line
@@ -3619,7 +6491,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const chart = chartRef.current, priceS = priceSeriesRef.current, syncId = syncIdRef.current;
     if (syncId == null || !chart || !priceS) return;
     const closeByTime = new Map(barsRef.current.map((r) => [r.time, r.c]));
-    const cleanup = registerPane(syncId, { chart, series: priceS, valueAt: (tm: any) => closeByTime.get(tm as any) ?? null, tf: timeframeRef.current });
+    const cleanup = registerPane(syncId, {
+      chart, series: priceS, valueAt: (tm: any) => closeByTime.get(tm as any) ?? null, tf: timeframeRef.current,
+      // A mirrored crosshair draws the same axis label with no crosshairMove event behind it — feed the
+      // badge its coordinate directly so a synced pane dodges exactly like the pane being driven.
+      onCrosshair: (price) => {
+        const s = priceSeriesRef.current;
+        const y = price == null || !s ? null : (s.priceToCoordinate(price) as number | null);
+        crossLabelYRef.current = y != null && Number.isFinite(y) ? y : null;
+        renderTagRef.current?.();
+      },
+    });
     // v5 subscribe* return void; unsubscribe by passing the SAME handler reference back.
     const onCross = (p: any) => { broadcastCrosshair(syncId, (p.time ?? null) as any); };
     const onRange = (r: any) => { broadcastRange(syncId, r as any); };
@@ -3643,11 +6525,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // snapshot the visible range so a view-preserving toggle can restore it after series churn (§0.4)
     viewSavedRef.current = PRESERVE_VIEW_ON_INDICATOR_TOGGLE ? (() => { try { const r = chart.timeScale().getVisibleLogicalRange(); return r ? { from: r.from as number, to: r.to as number } : null; } catch { return null; } })() : null;
 
-    const OVERLAY_KEYS = ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "rvwap", "wvwap", "vprofile", "volbox", "svwap", "orb", "slevels", "pivots"] as const;
+    const OVERLAY_KEYS = ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "rvwap", "wvwap", "vprofile", "volbox", "svwap", "orb", "slevels", "pivots", "optlevels"] as const;
     const wantOverlays = new Set<string>(OVERLAY_KEYS.filter((k) => indicators.has(k)));
     const haveOverlays = new Set<string>(OVERLAY_KEYS.filter((k) => indSeriesRef.current.has(k) || indOverlayRef.current[k]));
     const wantSub = activeSubpanes();                                   // canonical-order sub-pane keys
-    const haveSub: string[] = SUBPANE_ORDER.filter((k) => indSeriesRef.current.has(k)); // current sub-panes in canonical order
+    const haveSub: string[] = [...SUBPANE_ORDER, ...paneSuiteKeys()].filter((k) => indSeriesRef.current.has(k)); // current sub-panes in canonical order
 
     // ── overlays: always incremental (all live in pane 0, no reindex risk) ──
     for (const k of haveOverlays) if (!wantOverlays.has(k)) {
@@ -3655,8 +6537,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       delete indOverlayRef.current[k];
       // Restore candle colors when ribbon is removed
       if (k === "ribbon") restoreNormalCandleColors(rows);
-      // Remove ONLY this indicator's price lines (keyed pool — the other of slevels/pivots keeps its lines).
-      if (k === "slevels" || k === "pivots") removeIndPriceLines(k);
+      // Remove ONLY this indicator's price lines (keyed pool — the others keep their lines).
+      if (k === "slevels" || k === "pivots" || k === "optlevels") removeIndPriceLines(k);
     }
     for (const k of wantOverlays) if (!haveOverlays.has(k)) {
       if (k === "ema") indSeriesRef.current.set("ema", buildEma(chart, rows, closes));
@@ -3675,6 +6557,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       else if (k === "orb") indSeriesRef.current.set("orb", buildOrb(rows));
       else if (k === "slevels") indSeriesRef.current.set("slevels", buildSlevels(rows));
       else if (k === "pivots") indSeriesRef.current.set("pivots", buildPivots(rows));
+      else if (k === "optlevels") indSeriesRef.current.set("optlevels", buildOptLevels());
     }
 
     // ── sub-pane topology decision (§pane-topology decision table) ──
@@ -3721,6 +6604,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         else if (a === "ttmsq") series = buildTtmsq(chart, rows, pane);
         else if (a === "adx") series = buildAdx(chart, rows, pane);
         else if (a === "cvd") series = buildCvd(chart, rows, pane);
+        else if (isSuiteKeyReg(a)) series = buildSuitePane(chart, rows, a, pane);
+        series = keepIndicatorPaneAxisLabelsOnly(series);
         indSeriesRef.current.set(a, series);
         // Claim the pane ONLY when the builder rendered ≥1 series: rvol/cvd return [] on daily, and a phantom
         // paneMapRef entry would both desync the next add's nextFreePane() index (splitting a later builder,
@@ -3799,6 +6684,29 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // eslint-disable-next-line
   }, [indParamsKey]);
 
+  // Entitlements resolve asynchronously after the chart can already be painted. Rebuild when the
+  // tier changes so persisted Essential/Pro modules and their shared panes appear immediately after
+  // `/api/me` upgrades the initial fail-closed Free tier (and disappear on a downgrade).
+  const tierMounted = useRef(false);
+  useEffect(() => {
+    if (!tierMounted.current) { tierMounted.current = true; return; }
+    const chart = chartRef.current; if (!chart || !barsRef.current.length) return;
+    const saved = PRESERVE_VIEW_ON_INDICATOR_TOGGLE ? (() => {
+      try {
+        const range = chart.timeScale().getVisibleLogicalRange();
+        return range ? { from: range.from as number, to: range.to as number } : null;
+      } catch { return null; }
+    })() : null;
+    rebuildIndicators();
+    normalizeStretch();
+    applyHidden();
+    renderSignalsRef.current();
+    renderRef.current();
+    measureRef.current();
+    if (saved) { try { chart.timeScale().setVisibleLogicalRange(saved); } catch {} }
+    // eslint-disable-next-line
+  }, [userTier]);
+
   // ── EFFECT 3-lab — reload lab markers when _lab indicator is toggled ON ──────
   // Effect 2 loads markers on symbol change. When the user enables _lab AFTER data is
   // already on the chart, this effect fires a one-shot fetch to populate labMarkersRef
@@ -3836,6 +6744,48 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // eslint-disable-next-line
   }, [hasLab, symbol]);
 
+  // ── EFFECT 3-optlevels — fetch gex+moves when the Options Levels overlay is ON ──────
+  // Mirrors Effect 3-lab: one-shot fetch on toggle-on / symbol change with an alive-flag
+  // cancel. flowGet dedupes + SWR-caches and returns null on a hard error (including the
+  // /api/flow entitlement 403) — that renders as the legend's gate/unavailable note, the
+  // chart never throws on a gated fetch. Ineligible (non-US) symbols skip the network.
+  const hasOptLevels = indicators.has("optlevels");
+  useEffect(() => {
+    if (!hasOptLevels) { optLevelsStateRef.current = null; return; }
+    const sym = symbolRef.current; if (!sym) return;
+    if (!optLevelsEligible(sym)) {
+      optLevelsStateRef.current = { sym, status: "ineligible", res: null };
+      rebuildPaneMeta();
+      return;
+    }
+    let alive = true;
+    const root = sym.toUpperCase();
+    optLevelsStateRef.current = { sym, status: "loading", res: null };
+    rebuildPaneMeta();
+    Promise.all([flowGet(`gex:${root}`), flowGet(`moves:${root}`)]).then(([g, m]) => {
+      if (!alive || symbolRef.current !== sym) return;
+      if (g == null && m == null) {
+        // Both lanes hard-failed (prod surfaces a missing/uncovered root's artifact as a
+        // 503 → flowGet null, NOT the fixture's 200 {}) — could be no coverage OR an
+        // outage; "unavailable" is the honest umbrella.
+        optLevelsStateRef.current = { sym, status: "unavailable", res: null };
+      } else {
+        // g == null with a live moves payload is the real-world partial publish (the two
+        // lanes are separate publishers) — derive from an empty gex shell so the Tier-A
+        // EM band still draws instead of being discarded.
+        const res = deriveOptLevels(g ?? {}, m, root);
+        optLevelsStateRef.current = { sym, status: res.status, res };
+      }
+      // First-load race (slevels precedent): Effect 2/3 may have already built against an
+      // empty state ref — the builder is idempotent (clears its own price-line pool, adds
+      // no LWC series), so re-run it directly now that data exists, then re-assert the eye.
+      try { if (indicatorsRef.current.has("optlevels")) { buildOptLevels(); applyHidden(); } } catch {}
+      rebuildPaneMeta();
+    }).catch(() => {});
+    return () => { alive = false; };
+    // eslint-disable-next-line
+  }, [hasOptLevels, symbol]);
+
   // ── EFFECT 3c — custom scripts [pineKey]. Add / remove / param-edit a script WITHOUT touching the
   //   built-in indicators (do NOT clearAllIndicators — that would flash + reset every built-in). Only
   //   pine series are dropped + rebuilt; runPineMemo caches per script so a single param change re-runs
@@ -3862,8 +6812,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // eslint-disable-next-line
   }, [pineKey]);
 
-  // ── eye toggle / tf-visibility [hidden] → flip series visibility in place (no chart rebuild) ──
-  useEffect(() => { hiddenRef.current = hidden; applyHidden(); renderSignalsRef.current(); measureRef.current(); }, [hidden]); // eslint-disable-line
+  // ── eye toggle / tf-visibility [hidden] → flip native series and immediately refresh suite SVG,
+  // candle-paint and dashboard output. Module eyes are expressed through suiteRenderParams(). ──
+  useEffect(() => {
+    hiddenRef.current = hidden;
+    applyHidden();
+    renderSignalsRef.current();
+    renderRef.current();
+    measureRef.current();
+  }, [hidden]); // eslint-disable-line
 
   // ────────────────────────────────────────────────────────────────────────────
   // EFFECT 4 — replay [replayIdx]. Slice from fullBarsRef; recompute indicators+sigMarks on the slice.
@@ -3902,6 +6859,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     reRegisterSync();
     // exiting replay returns to the live series → re-apply the splice (self-guards under replay/EOD/intraday)
     applyLiveSplice();
+    applyExtendedPriceLine();
     // eslint-disable-next-line
   }, [replayIdx]);
 
@@ -3910,11 +6868,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   //   Keyed on a stable signature so it fires on each new snapshot from the 6s poll. All guards
   //   (intraday / replay / EOD basis / no-quote) live inside applyLiveSplice.
   // ────────────────────────────────────────────────────────────────────────────
-  const liveSig = liveQuote ? `${liveQuote.last ?? ""}|${liveQuote.ts ?? ""}|${liveQuote.basis ?? ""}` : "";
+  const liveSig = liveQuote
+    ? `${liveQuote.last ?? ""}|${liveQuote.ts ?? ""}|${liveQuote.basis ?? ""}|${liveQuote.extPrice ?? ""}|${liveQuote.extTs ?? ""}|${liveQuote.extSession ?? ""}`
+    : "";
   useEffect(() => {
     if (!chartRef.current || !priceSeriesRef.current) return;
     if (!barsRef.current.length) return;   // no data yet — Effect 2's tail will apply it
     applyLiveSplice();
+    applyExtendedPriceLine();
     // eslint-disable-next-line
   }, [liveSig]);
 
@@ -3952,36 +6913,69 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // eslint-disable-next-line
   }, [symbol]);
 
+  // A symbol change no longer unmounts this renderer, so the teardown that used to end an
+  // in-flight drawing transaction never runs. End it here instead: a half-drawn trendline, an
+  // open media tool, or an inspector pointed at the previous ticker's drawing must not survive
+  // onto the next chart. Drawings themselves arrive as a prop and re-render on their own.
+  const symbolTransactionRef = useRef(symbol);
+  useEffect(() => {
+    if (symbolTransactionRef.current === symbol) return;
+    symbolTransactionRef.current = symbol;
+    cancelPendingDrawingRef.current?.();
+    cancelMediaToolRef.current?.(null);
+    clearDrawingSelectionRef.current?.();
+  }, [symbol]);
+
   // ────────────────────────────────────────────────────────────────────────────
   // EFFECT 5 — style [csNonce]. Re-read tokens; recolor chart + price + volume. NO createChart/removeSeries.
   // ────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const chart = chartRef.current, priceS = priceSeriesRef.current; if (!chart) return;
     const t = readTokens(); tokensRef.current = t;
+    const settings = chartSettingsRef.current;
     try {
       chart.applyOptions({
-        layout: { textColor: t.mut, panes: { separatorColor: css("--pane-sep"), separatorHoverColor: css("--pane-sep-h") } },
-        grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
+        layout: { textColor: settings.scaleTextColor || t.axis, panes: { separatorColor: settings.paneSeparatorColor || css("--pane-sep"), separatorHoverColor: settings.paneSeparatorColor || css("--pane-sep-h") } },
+        grid: { vertLines: { color: settings.gridVColor || t.grid }, horzLines: { color: settings.gridHColor || t.grid } },
         crosshair: { vertLine: { labelBackgroundColor: t.p3 }, horzLine: { labelBackgroundColor: t.p3 } },
-        rightPriceScale: { borderColor: t.line },
-        timeScale: { borderColor: t.line },
+        // C2 — this effect re-applies borderColor only (borderVisible from createEngine survives the
+        // merge), but the time-axis rule WOULD revert to --line without the shell gate here.
+        rightPriceScale: { borderColor: settings.scaleLineColor || t.line },
+        timeScale: { borderColor: settings.scaleLineColor || axisLineColor(t.line) },
       });
     } catch {}
     if (priceS) {
       try {
-        if (chartType === "bars") priceS.applyOptions({ upColor: t.up, downColor: t.down });
-        else if (chartType === "line" || chartType === "area") priceS.applyOptions(chartType === "area" ? { lineColor: t.brand2 } : { color: t.brand2 });
-        else priceS.applyOptions({ upColor: t.up, downColor: t.down, wickUpColor: t.up, wickDownColor: t.down });
+        if (chartType === "bars") priceS.applyOptions({ upColor: settings.candleUpColor || t.up, downColor: settings.candleDownColor || t.down });
+        else if (isValueChartType(chartType)) {
+          if (chartType === "area") priceS.applyOptions({ lineColor: t.brand2 });
+          else if (chartType === "baseline") priceS.applyOptions({
+            topLineColor: t.up, topFillColor1: withAlpha(t.up, 0.28), topFillColor2: withAlpha(t.up, 0.03),
+            bottomLineColor: t.down, bottomFillColor1: withAlpha(t.down, 0.03), bottomFillColor2: withAlpha(t.down, 0.28),
+          });
+          else priceS.applyOptions({ color: t.brand2 });
+        }
+        else priceS.applyOptions({
+          upColor: settings.candleBodyVisible === false || chartType === "hollow" ? "rgba(0,0,0,0)" : settings.candleUpColor || t.up,
+          downColor: settings.candleBodyVisible === false ? "rgba(0,0,0,0)" : settings.candleDownColor || t.down,
+          wickUpColor: settings.candleUpWick || settings.candleUpColor || t.up,
+          wickDownColor: settings.candleDownWick || settings.candleDownColor || t.down,
+          borderUpColor: settings.candleUpBorder || settings.candleUpColor || t.up,
+          borderDownColor: settings.candleDownBorder || settings.candleDownColor || t.down,
+        });
       } catch {}
     }
     // recolor the volume histogram by re-setData with token-derived up/down fills (no series churn)
     const vol = indSeriesRef.current.get("vol"); if (vol && vol[0]) { try { vol[0].setData(volData(barsRef.current)); } catch {} }
-    // DT indicators that resolve --up/--down (or derived colors) at BUILD time need a rebuild on flip:
-    // cvd baseline colors, ttmsq momentum shades, adx ±DI, pivots R/S price lines. Flips are rare —
-    // the full rebuild path is the sanctioned fix (skip on mount: csNonce 0 = initial run).
+    // Indicators that resolve --up/--down (or a directional param) at BUILD time need a rebuild on
+    // flip: cvd baseline colors, ttmsq momentum shades, adx ±DI, pivots R/S price lines, options
+    // levels — plus the classic set, whose crossover bars/dots, guide lines, cloud and ribbon fills
+    // are all directional. Flips are rare, so the full rebuild path is the sanctioned fix (skip on
+    // mount: csNonce 0 = initial run). Volume is recolored in place just above; `gaps` draws on the
+    // signal layer and picks its params up from the renderSignals call below.
     if (csNonce > 0 && barsRef.current.length) {
-      const dtDirectional = ["cvd", "ttmsq", "adx", "pivots"];
-      if (dtDirectional.some((k) => indicatorsRef.current.has(k))) { try { rebuildIndicators(); } catch {} }
+      const directional = ["cvd", "ttmsq", "adx", "pivots", "optlevels", "stochrsi", "macd", "ichimoku", "ribbon", "supertrend"];
+      if (directional.some((k) => indicatorsRef.current.has(k))) { try { rebuildIndicators(); } catch {} }
     }
     renderSignalsRef.current(); renderRef.current();
     // eslint-disable-next-line
@@ -4002,33 +6996,86 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const { mode, invertScale, scaleLeft, autoScale, priceLineVisible, lastValueVisible,
       gridHVisible, gridVVisible, candleUpColor, candleDownColor,
       candleUpBorder, candleDownBorder, candleUpWick, candleDownWick,
-      showWatermark, showOHLC, showBarChange } = chartSettings;
+      showWatermark } = chartSettings;
     try {
       if (scaleLeft != null) {
         chart.applyOptions({ leftPriceScale: { visible: !!scaleLeft }, rightPriceScale: { visible: !scaleLeft } });
         if (priceS) try { priceS.applyOptions({ priceScaleId: scaleLeft ? "left" : "right" } as any); } catch {}
       }
       const scaleId = (chartSettings.scaleLeft) ? "left" : "right";
-      if (mode != null || invertScale != null || autoScale != null) {
+      if (mode != null || invertScale != null || autoScale != null || chartSettings.scaleMarginsTop != null) {
         const opts: Record<string, any> = {};
         if (mode != null) opts.mode = mode;
         if (invertScale != null) opts.invertScale = invertScale;
         if (autoScale != null) opts.autoScale = autoScale;
+        if (chartSettings.scaleMarginsTop != null || chartSettings.scaleMarginsBottom != null) {
+          opts.scaleMargins = {
+            top: Math.max(0, Math.min(0.5, (chartSettings.scaleMarginsTop ?? 10) / 100)),
+            bottom: Math.max(0, Math.min(0.5, (chartSettings.scaleMarginsBottom ?? 8) / 100)),
+          };
+        }
         chart.priceScale(scaleId).applyOptions(opts);
       }
-      // Grid visibility
-      if (gridHVisible != null || gridVVisible != null) {
-        const t = tokensRef.current;
-        chart.applyOptions({
-          grid: {
-            horzLines: { color: t?.grid ?? "rgba(255,255,255,.04)", visible: gridHVisible !== false },
-            vertLines: { color: t?.grid ?? "rgba(255,255,255,.04)", visible: gridVVisible !== false },
+      const tokens = tokensRef.current;
+      const backgroundTop = chartSettings.backgroundTop || "transparent";
+      const backgroundBottom = chartSettings.backgroundBottom || backgroundTop;
+      const background = chartSettings.backgroundType === "gradient"
+        ? { type: ColorType.VerticalGradient, topColor: backgroundTop, bottomColor: backgroundBottom }
+        : { type: ColorType.Solid, color: backgroundTop };
+      chart.applyOptions({
+        layout: {
+          background: background as any,
+          textColor: chartSettings.scaleTextColor || tokens.axis,
+          // C7 — 12 is the SHIPPED DEFAULT, not a user choice, so it must not out-rank the shell's
+          // regular-width ramp; only a customised size wins. Web resolves to 12 either way.
+          fontSize: chartSettings.scaleFontSize && chartSettings.scaleFontSize !== DEFAULT_CHART_SETTINGS.scaleFontSize
+            ? chartSettings.scaleFontSize
+            : shellAxisFontSize(),
+          panes: {
+            separatorColor: chartSettings.paneSeparatorColor || css("--pane-sep"),
+            separatorHoverColor: chartSettings.paneSeparatorColor || css("--pane-sep-h"),
           },
-        });
-      }
+        },
+        grid: {
+          horzLines: { color: chartSettings.gridHColor || tokens.grid, visible: gridHVisible !== false },
+          vertLines: { color: chartSettings.gridVColor || tokens.grid, visible: gridVVisible !== false },
+        },
+        crosshair: {
+          mode: chartSettings.crosshairMode === 1 ? CrosshairMode.Magnet : CrosshairMode.Normal,
+          vertLine: { color: chartSettings.crosshairColor || "rgba(214,218,227,.32)", labelBackgroundColor: tokens.p3 },
+          horzLine: { color: chartSettings.crosshairColor || "rgba(214,218,227,.32)", labelBackgroundColor: tokens.p3 },
+        },
+        // C2 — borderVisible is never re-applied here, so createEngine's shell value survives the
+        // merge; only the time-axis colour needs the gate (see Effect 5).
+        leftPriceScale: { borderColor: chartSettings.scaleLineColor || tokens.line },
+        rightPriceScale: { borderColor: chartSettings.scaleLineColor || tokens.line },
+        timeScale: {
+          borderColor: chartSettings.scaleLineColor || axisLineColor(tokens.line),
+          rightOffset: chartSettings.rightOffsetBars ?? 10,
+          ...chartTimeAxisOptions(chartSettings.hourFormat ?? "24", visibleCalendarSpanDays),
+        } as any,
+      });
       // Watermark visibility — v5 uses the createTextWatermark plugin (chart-level watermark removed in v5).
       if (showWatermark != null) {
-        try { watermarkPluginRef.current?.applyOptions({ visible: showWatermark }); } catch {}
+        try {
+          // C5 — the plugin stays off in shell mode (it cannot be inset clear of the volume band);
+          // the .mm-brandbug DOM node carries the setting there instead.
+          const wmShell = shellAxis();
+          watermarkPluginRef.current?.applyOptions({
+            visible: showWatermark && !wmShell,
+            horzAlign: "center",
+            vertAlign: "center",
+            lines: [{
+              text: "Mastermind Terminal",
+              color: chartSettings.watermarkColor || "rgba(214,218,227,0.04)",
+              fontSize: 48,
+              fontStyle: "bold",
+              fontFamily: "var(--font-ui, system-ui, sans-serif)",
+            }],
+          });
+          watermarkVisibleRef.current = showWatermark && !wmShell;
+          if (brandBugRef.current) brandBugRef.current.style.display = showWatermark ? "" : "none";
+        } catch {}
       }
       if (priceS) {
         const sOpts: Record<string, any> = {};
@@ -4037,27 +7084,44 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // keep the series option in sync for library correctness but also re-render the custom tag
         // immediately so the toggle has instant visible effect.
         if (lastValueVisible != null) sOpts.lastValueVisible = lastValueVisible;
-        // Candle colors — only apply when the user has set an explicit hex (non-empty).
-        // Empty-string means "follow CSS --up/--down tokens" (set by Effect 5 on theme/flip change).
-        // This prevents the settings-load on mount from clobbering Effect 5's token-derived colors.
-        if (candleUpColor) sOpts.upColor = candleUpColor;
-        if (candleDownColor) sOpts.downColor = candleDownColor;
-        if (candleUpBorder) sOpts.borderUpColor = candleUpBorder;
-        if (candleDownBorder) sOpts.borderDownColor = candleDownBorder;
-        if (candleUpWick) sOpts.wickUpColor = candleUpWick;
-        if (candleDownWick) sOpts.wickDownColor = candleDownWick;
+        if (chartTypeRef.current === "bars") {
+          sOpts.upColor = candleUpColor || tokens.up;
+          sOpts.downColor = candleDownColor || tokens.down;
+        } else if (!isValueChartType(chartTypeRef.current)) {
+          sOpts.borderVisible = chartSettings.candleBordersVisible !== false;
+          sOpts.wickVisible = chartSettings.candleWicksVisible !== false;
+          sOpts.upColor = chartSettings.candleBodyVisible === false || chartTypeRef.current === "hollow" ? "rgba(0,0,0,0)" : candleUpColor || tokens.up;
+          sOpts.downColor = chartSettings.candleBodyVisible === false ? "rgba(0,0,0,0)" : candleDownColor || tokens.down;
+          sOpts.borderUpColor = candleUpBorder || candleUpColor || tokens.up;
+          sOpts.borderDownColor = candleDownBorder || candleDownColor || tokens.down;
+          sOpts.wickUpColor = candleUpWick || candleUpColor || tokens.up;
+          sOpts.wickDownColor = candleDownWick || candleDownColor || tokens.down;
+        }
+        if (chartSettings.precision && chartSettings.precision !== "auto") {
+          precRef.current = Number(chartSettings.precision);
+        } else if (barsRef.current.length) {
+          precRef.current = barsRef.current[barsRef.current.length - 1].c < 10 ? 4 : 2;
+        }
+        sOpts.priceFormat = priceFmt();
         if (Object.keys(sOpts).length) priceS.applyOptions(sOpts as any);
+        if (barsRef.current.length) {
+          priceS.setData(priceData(barsRef.current) as any);
+          applyLiveSplice();
+        }
       }
-      // Re-render the custom priceTag immediately when lastValueVisible changes so the toggle
-      // is visible without waiting for the 1s interval tick.
-      if (lastValueVisible != null) renderTagRef.current?.();
-      // Re-paint status line immediately when the status-line toggles change.
-      if (showOHLC != null || showBarChange != null) {
-        if (barsRef.current.length) paintStatus(barsRef.current, sliceRef.current);
-      }
+      renderTagRef.current?.();
+      if (barsRef.current.length) paintStatus(barsRef.current, sliceRef.current);
+      applyExtendedPriceLine();
     } catch {}
     // eslint-disable-next-line
   }, [JSON.stringify(chartSettings)]);
+
+  // Descriptive manifest data can land after OHLC. Refresh just the identity line
+  // when it arrives instead of waiting for a quote or rebuilding the chart.
+  useEffect(() => {
+    if (barsRef.current.length) paintStatus(barsRef.current, sliceRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instrumentName, instrumentMarket, instrumentColor, timeframe]);
 
   // ── EFFECT 8 ─ expose the chart API to the parent (for range navigation from the frame bar).
   const onChartApiRef = useRef(onChartApi); onChartApiRef.current = onChartApi;
@@ -4074,7 +7138,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const priceS = priceSeriesRef.current;
     const market = classify(symbol);
     const isIntraday = isIntradayTf(timeframe);
-    const canShade = dayMode && isIntraday && market !== "crypto";
+    // US-session shading assumes the bars' display axis runs on US Eastern wall clock. An
+    // international macro index (^N225, ^FTSE, ^HSI, …) plots on its HOME market's clock
+    // (macroDisplayTz), so ET RTH bands would tint arbitrary slices of the Tokyo or London
+    // session — suppress shading instead. classify() cannot see this: every macro shape
+    // falls through its "us" default.
+    const canShade = dayMode && isIntraday && market !== "crypto"
+      && !(isMacroSymbol(symbol) && !macroOnEtAxis(symbol));
 
     // Detach any existing shading primitive first
     if (shadingPrimRef.current && priceS) {
@@ -4112,7 +7182,28 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   useEffect(() => { renderRef.current?.(); }, [lockedVLine]);
 
   // ── unchanged: re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild) ──
-  useEffect(() => { renderRef.current?.(); const svg = svgRef.current; if (svg) { svg.style.pointerEvents = tool ? "auto" : "none"; svg.style.cursor = tool === "erase" ? "pointer" : tool ? "crosshair" : "default"; } }, [tool, drawings]);
+  useLayoutEffect(() => {
+    cancelPendingDrawingRef.current();
+    cancelMediaToolRef.current(tool);
+    const svg = svgRef.current;
+    if (svg) {
+      svg.style.pointerEvents = tool ? "auto" : "none";
+      svg.style.cursor = tool ? "crosshair" : "default";
+      svg.dataset.toolActivation = String(toolActivation);
+    }
+    if (!tool && creationPaletteRef.current) creationPaletteRef.current.style.display = "none";
+  }, [tool, toolActivation]);
+  useLayoutEffect(() => {
+    if (!drawingCreationDisabled && replayIdx == null) return;
+    cancelPendingDrawingRef.current();
+    cancelMediaToolRef.current(null);
+    if (creationPaletteRef.current) creationPaletteRef.current.style.display = "none";
+    // Replay is a read-only historical lens: its first committed frame must
+    // retire any live selection so no inspector, handle, keyboard edit, or
+    // direct-dispatched pointer event can mutate the document behind it.
+    if (replayIdx != null) clearDrawingSelectionRef.current();
+  }, [drawingCreationDisabled, replayIdx]);
+  useEffect(() => { renderRef.current?.(); }, [drawings]);
 
   // ── unchanged: detection commands → append auto-drawings (or clear) ──
   useEffect(() => {
@@ -4163,14 +7254,18 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         {/* GC v2: toggle the early-dots + arm/confirm warning overlay (side channels) */}
         {oracleVisible && <span className="mm" role="button" tabIndex={0} onClick={() => setShowDetail((v) => !v)}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setShowDetail((v) => !v); } }}
-          title="Toggle early dots & structure-break warnings"
+          title={tPlain("cpOracleToggle", "Toggle early dots & structure-break warnings")}
           style={{ cursor: "pointer", opacity: showDetail ? 1 : 0.5 }}>
           <i style={{ background: "var(--muted)" }} />{showDetail ? "⚠ detail" : "⚠ off"}
         </span>}
       </div>
       <div ref={ref} style={{ position: "absolute", inset: 0 }} />
+      <ChartTables tables={suiteTables} />
       <ChartOverlays
         panes={paneLayout} hoveredKey={hoveredKey} legendOpen={legendOpen} onToggleLegend={() => setLegendOpen((o) => !o)}
+        showTitles={chartSettings?.showIndicatorTitles !== false}
+        backgroundOpacity={chartSettings?.indicatorBackgroundOpacity ?? 70}
+        paneButtons={chartSettings?.paneButtons ?? "hover"}
         onEye={(k) => onToggleHidden?.(k)} onSettings={(k) => onOpenSettings?.(k)} onSource={(k) => onOpenSource?.(k)} onRemove={(k) => onRemoveInd?.(k)}
         onMoveUp={(pi) => doMove(pi, -1)} onMoveDown={(pi) => doMove(pi, 1)} onCollapse={doCollapse} onMaximize={doMaximize}
         canMoveUp={canMoveUp} canMoveDown={canMoveDown}

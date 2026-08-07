@@ -25,6 +25,7 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import type { Bar, Insider } from "../../lib/fund";
 import { getInsider } from "../../lib/fund";
+import { marketOf } from "../../lib/markets";
 import { fmtCur, fmtNum, fmtDate, pick } from "../../lib/finFormat";
 import { ComboChart, type Series } from "./FinCharts";
 import { ArcGauge } from "../ui/ArcGauge";
@@ -191,11 +192,26 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
   }
 
   if (state === "empty" || !data) {
+    // Honest empty: Form 4 is a US SEC dataset, so a non-US listing is NOT
+    // "missing data" — it is out of coverage. Say which one it is.
+    const nonUS = marketOf(sym) !== "us";
     return (
       <div className="fin-body">
         <div className="fin-empty fin-empty-lg" role="status">
           <span className="fin-empty-title">{pick(zh, "No insider data", "暂无内部交易数据")}</span>
-          <span>{pick(zh, "No recent open-market Form-4 activity for this name.", "该标的近期无公开市场 Form-4 交易。")}</span>
+          <span className="fin-empty-why">
+            {nonUS
+              ? pick(
+                  zh,
+                  `Form 4 insider filings are a US SEC dataset. ${sym} is listed outside the US, so no Form 4 record exists for it.`,
+                  `Form 4 内部人申报属于美国 SEC 数据集。${sym} 在美国以外上市，因此没有 Form 4 记录。`,
+                )
+              : pick(
+                  zh,
+                  `No open-market Form 4 buys or sells have been filed for ${sym} in the covered period.`,
+                  `覆盖期内 ${sym} 没有公开市场 Form 4 买入或卖出申报。`,
+                )}
+          </span>
         </div>
       </div>
     );
@@ -203,6 +219,10 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
 
   const d = data;
   const verdict = resolveVerdict(d, zh);
+  // Section rail: the verdict section IS directional, so its rail carries the
+  // same tone the ArcGauge already resolved (grey when there is no signal).
+  const verdictRail =
+    verdict.tone === "up" ? "var(--up)" : verdict.tone === "down" ? "var(--down)" : "var(--muted)";
 
   // ── asof quarter label — SEC publishes bulk Form-4 data one quarter at a time,
   // roughly 45 days after quarter-end. Show "Q1 2026" rather than just the ISO date
@@ -258,7 +278,13 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
     <div className="fin-body">
       {/* ── Verdict header: state chip + sentence + ArcGauge + evidence strip ── */}
       <div className="fin-sec">
-        <div className="fin-sec-h">{pick(zh, "Insider Power", "内部人操作力度")}</div>
+        <div className="fin-eyebrow">{pick(zh, "Form 4 · open market", "Form 4 · 公开市场")}</div>
+        <div
+          className="fin-sec-h fin-rail fin-rule"
+          style={{ "--rail": verdictRail } as React.CSSProperties}
+        >
+          {pick(zh, "Insider Power", "内部人操作力度")}
+        </div>
         <div className="fin-insider-verdict">
           <div className="fin-insider-verdict-main">
             <div className="fin-insider-verdict-row">
@@ -303,6 +329,11 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
               state={verdict.gauge}
               size={148}
               showValue={!verdict.staleScore}
+              centerLabel={
+                verdict.staleScore
+                  ? pick(zh, "No material signal", "无实质信号")
+                  : undefined
+              }
               label={pick(zh, "Insider Power", "操作力度")}
               sublabel={pick(zh, "50 = neutral", "50 = 中性")}
             />
@@ -312,7 +343,13 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
 
       {/* ── Buy/Sell volume overlaid on price ── */}
       <div className="fin-sec">
-        <div className="fin-sec-h">{pick(zh, "Insider buy / sell volume vs price", "内部买卖量 vs 价格")}</div>
+        <div className="fin-eyebrow">{pick(zh, "Activity", "交易活动")}</div>
+        <div
+          className="fin-sec-h fin-rail fin-rule"
+          style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+        >
+          {pick(zh, "Insider buy / sell volume vs price", "内部买卖量 vs 价格")}
+        </div>
         {hasAnyVol ? (
           <div className="fin-insider-volchart">
             <ComboChart
@@ -334,7 +371,11 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
 
       {/* ── Recent open-market trades (18-month window) ── */}
       <div className="fin-sec">
-        <div className="fin-sec-h" style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <div className="fin-eyebrow">{pick(zh, "Filings", "申报记录")}</div>
+        <div
+          className="fin-sec-h fin-rail fin-rule fin-insider-tradehdr"
+          style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+        >
           {pick(zh, "Insider trades — last 18 months", "内部交易 — 近18个月")}
           {mostRecentDate && (
             <span className="fin-insider-lasttrade">
@@ -391,7 +432,7 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
             </table>
           </div>
         )}
-        <div className="fin-insider-asof">
+        <div className="fin-asof">
           {pick(zh, `${asofQLabel} SEC filing data (as of ${d.asof}) · filing dates (public). Open-market P/S only.`, `${asofQLabel} SEC 申报数据（截至 ${d.asof}）· 申报公开日期。仅公开市场买卖 (P/S)。`)}
         </div>
       </div>

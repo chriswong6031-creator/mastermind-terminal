@@ -20,6 +20,7 @@
 
 const WebSocket = require("ws");
 const log = require("./log");
+const { classifySession, etDate } = require("./usSession");
 
 const URL_LIVE = "wss://socket.polygon.io/stocks";
 const URL_DELAYED = "wss://delayed.polygon.io/stocks";
@@ -30,21 +31,11 @@ const SWEEP_INTERVAL_MS = 60 * 1000;
 const MAX_BACKOFF_MS = 30 * 1000;
 const MAX_PARAMS_PER_FRAME = 50; // batch subscribe/unsubscribe frames
 
-// ET trading-date formatter (mirror of intradaySources.ts:etDisplay date components).
-const ET_DATE_FMT = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/New_York",
-  year: "numeric", month: "2-digit", day: "2-digit",
-});
-function etDate(ms) {
-  const p = {};
-  for (const part of ET_DATE_FMT.formatToParts(ms)) p[part.type] = part.value;
-  return `${p.year}-${p.month}-${p.day}`;
-}
-
 class Polygon {
-  constructor(store, apiKey) {
+  constructor(store, apiKey, extFeed) {
     this.store = store;
     this.apiKey = apiKey || "";
+    this.extFeed = extFeed || null;
     // Effective cluster; starts from env, demoted (permanently for this process) on RT-denied.
     this.cluster = WANT_LIVE ? "live" : "delayed";
     this.ws = null;
@@ -176,8 +167,25 @@ class Polygon {
     const c = Number(m.c);
     if (!Number.isFinite(c)) return;
     const o = Number(m.o), h = Number(m.h), l = Number(m.l), v = Number(m.v);
+    const startMs = Number(m.s) || Number(m.e) || Date.now();
     const endMs = Number(m.e) || Date.now();
-    const date = etDate(endMs);
+    const session = classifySession(startMs);
+    const live = this.cluster === "live";
+
+    // Polygon AM includes pre/post aggregates. Route them into the explicit
+    // extended lane so they never mutate regular LAST/OHLC/volume.
+    if (session !== "rth") {
+      this.extFeed?.ingest(sym, {
+        price: c,
+        ts: Math.floor(endMs / 1000),
+        session,
+        source: live ? "polygon-live" : "polygon-delayed",
+        basis: live ? "LIVE" : "DELAYED_15M",
+      });
+      return;
+    }
+
+    const date = etDate(startMs);
 
     let acc = this.dayAcc.get(sym);
     if (!acc || acc.date !== date) {
@@ -198,7 +206,6 @@ class Polygon {
     }
     this.dayAcc.set(sym, acc);
 
-    const live = this.cluster === "live";
     this.store.setQuote(sym, {
       last: acc.last,
       open: acc.open,
@@ -210,6 +217,8 @@ class Polygon {
       source: live ? "polygon-live" : "polygon-delayed",
       market: "us",
       basis: live ? "LIVE" : "DELAYED_15M",
+      regularSessionDate: date,
+      regularSession: "rth",
     });
   }
 
@@ -261,6 +270,7 @@ class Polygon {
       source: "polygon-delayed",
       market: "us",
       basis: "DELAYED_15M",
+      regularSession: "closed",
     });
   }
 

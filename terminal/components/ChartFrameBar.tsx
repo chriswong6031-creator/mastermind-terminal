@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { type IChartApi, PriceScaleMode } from "lightweight-charts";
+import { DEFAULT_CHART_RIGHT_OFFSET } from "@/lib/chart-engine/viewReset";
 import { isIntradayTf } from "@/lib/intradaySources";
 import { useT } from "@/lib/i18n";
 
@@ -16,21 +17,53 @@ export type ChartSettings = {
   gridHVisible: boolean;       // horizontal grid lines
   gridVVisible: boolean;       // vertical grid lines
   crosshairMode: number;       // 0=Normal, 1=Magnet (reserved for crosshair API)
+  scaleMarginsTop: number;
+  scaleMarginsBottom: number;
+  rightOffsetBars: number;
+  scaleTextColor: string;
+  scaleFontSize: number;
+  scaleLineColor: string;
+  countdownVisible: boolean;
+  hourFormat: "12" | "24";
   // Symbol (candle body/wick/border colors)
+  candleBodyVisible: boolean;
+  candleBordersVisible: boolean;
+  candleWicksVisible: boolean;
+  colorBarsPrevClose: boolean;
   candleUpColor: string;
   candleDownColor: string;
   candleUpBorder: string;
   candleDownBorder: string;
   candleUpWick: string;
   candleDownWick: string;
+  precision: "auto" | "2" | "3" | "4";
   // Status line
+  showLogo: boolean;
   showOHLC: boolean;           // status line bar change display
   showBarChange: boolean;      // show % change on status line
   showSymbolName: boolean;     // show symbol name on status line
+  titleMode: "ticker" | "name" | "both";
+  showVolume: boolean;
+  showLastDayChange: boolean;
+  showIndicatorTitles: boolean;
+  indicatorBackgroundOpacity: number;
   // Canvas
   showWatermark: boolean;
+  backgroundType: "solid" | "gradient";
+  backgroundTop: string;
+  backgroundBottom: string;
+  gridHColor: string;
+  gridVColor: string;
+  paneSeparatorColor: string;
+  crosshairColor: string;
+  watermarkColor: string;
+  paneButtons: "always" | "hover" | "never";
   // Extended hours (intraday only)
   extHours: boolean;
+  extendedLineVisible: boolean;
+  preMarketColor: string;
+  postMarketColor: string;
+  overnightColor: string;
 };
 export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   mode: PriceScaleMode.Normal,
@@ -42,20 +75,52 @@ export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   gridHVisible: true,
   gridVVisible: true,
   crosshairMode: 0,
+  scaleMarginsTop: 10,
+  scaleMarginsBottom: 8,
+  rightOffsetBars: DEFAULT_CHART_RIGHT_OFFSET,
+  scaleTextColor: "",
+  scaleFontSize: 12,
+  scaleLineColor: "",
+  countdownVisible: true,
+  hourFormat: "24",
   // Empty strings = "use CSS theme tokens (--up/--down)". Non-empty = user-overridden hex.
   // Effect 7 only applies candle colors when truthy, so the up/down flip in Effect 5 is never
   // clobbered by a settings-load on mount.
+  candleBodyVisible: true,
+  candleBordersVisible: true,
+  candleWicksVisible: true,
+  colorBarsPrevClose: false,
   candleUpColor: "",
   candleDownColor: "",
   candleUpBorder: "",
   candleDownBorder: "",
   candleUpWick: "",
   candleDownWick: "",
+  precision: "auto",
+  showLogo: true,
   showOHLC: true,
   showBarChange: true,
   showSymbolName: true,
+  titleMode: "name",
+  showVolume: false,
+  showLastDayChange: false,
+  showIndicatorTitles: true,
+  indicatorBackgroundOpacity: 70,
   showWatermark: true,
+  backgroundType: "solid",
+  backgroundTop: "",
+  backgroundBottom: "",
+  gridHColor: "",
+  gridVColor: "",
+  paneSeparatorColor: "",
+  crosshairColor: "",
+  watermarkColor: "",
+  paneButtons: "hover",
   extHours: false,
+  extendedLineVisible: true,
+  preMarketColor: "#ff9800",
+  postMarketColor: "#2962ff",
+  overnightColor: "#9c27b0",
 };
 
 // Range presets — the button click scrolls the chart time axis to show this window.
@@ -127,12 +192,14 @@ export default function ChartFrameBar({
   settings,
   onSettings,
   onOpenSettingsModal,
+  extendedEligible = false,
 }: {
   timeframe: string;
   chartApi: IChartApi | null;
   settings: ChartSettings;
   onSettings: (patch: Partial<ChartSettings>) => void;
   onOpenSettingsModal?: (tab?: string) => void;
+  extendedEligible?: boolean;
 }) {
   const t = useT();
   // Client-only clock: render nothing until mounted to avoid SSR/hydration mismatch.
@@ -146,6 +213,10 @@ export default function ChartFrameBar({
   const [gotoDate, setGotoDate] = useState("");
   const gearRef = useRef<HTMLDivElement>(null);
   const gotoRef = useRef<HTMLInputElement>(null);
+  // C8/CHART-08b — the native shell swaps the settings glyph for TV's hexagon nut. Read after mount
+  // (the marker is stamped pre-paint on <html>, but this component is SSR'd) so the server output —
+  // and therefore the whole browser web render — stays byte-identical under L2.
+  const [shellMode, setShellMode] = useState(false);
 
   const isIntraday = isIntradayTf(timeframe);
 
@@ -155,6 +226,7 @@ export default function ChartFrameBar({
     setClock(fmtHHMMSS(new Date()));
     setTzLabel(utcOffsetLabel());
     setMounted(true);
+    setShellMode(document.documentElement.getAttribute("data-shell") === "app");
     const id = setInterval(() => {
       setClock(fmtHHMMSS(new Date()));
       setTzLabel(utcOffsetLabel());
@@ -344,11 +416,11 @@ export default function ChartFrameBar({
         )}
         {/* ETH chip — active when on; muted+non-interactive on daily TFs (no tooltip per spec) */}
         <button
-          className={`cfb-chip${s.extHours ? " on" : ""}${!isIntraday ? " dis" : ""}`}
-          disabled={!isIntraday}
-          onClick={() => isIntraday && onSettings({ extHours: !s.extHours })}
-          title={isIntraday ? (s.extHours ? t("ethOff") : t("ethOn")) : undefined}
-          aria-label="Extended trading hours"
+          className={`cfb-chip${s.extHours && extendedEligible ? " on" : ""}${!isIntraday || !extendedEligible ? " dis" : ""}`}
+          disabled={!isIntraday || !extendedEligible}
+          onClick={() => isIntraday && extendedEligible && onSettings({ extHours: !s.extHours })}
+          title={isIntraday && extendedEligible ? (s.extHours ? t("ethOff") : t("ethOn")) : undefined}
+          aria-label={t("cfbExtendedHours")}
         >ETH</button>
         {/* ADJ chip — always passive (display-only; we only serve adjusted data) */}
         <span className="cfb-chip cfb-chip-adj" title={t("adjTip")}>ADJ</span>
@@ -359,10 +431,20 @@ export default function ChartFrameBar({
             title={t("quickSettings")}
             onClick={(e) => { e.stopPropagation(); setGearOpen((o) => !o); if (gearOpen) setSubMenu(null); }}
           >
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
-              <circle cx="8" cy="8" r="2.2" />
-              <path d="M8 1.5v1.3M8 13.2v1.3M1.5 8h1.3M13.2 8h1.3M3.2 3.2l.9.9M11.9 11.9l.9.9M3.2 12.8l.9-.9M11.9 4.1l.9-.9" strokeLinecap="round" />
-            </svg>
+            {/* C8b — at the shell's 26×26 / 15px svg the eight straight radial strokes read as a
+                brightness/sun icon, not settings. TV draws a hexagon nut. House-neutral, but gated
+                on shellMode anyway so the web render stays byte-identical (L2). */}
+            {shellMode ? (
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+                <path d="M8 1.7 13.4 4.85v6.3L8 14.3 2.6 11.15v-6.3z" strokeLinejoin="round" />
+                <circle cx="8" cy="8" r="2.1" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+                <circle cx="8" cy="8" r="2.2" />
+                <path d="M8 1.5v1.3M8 13.2v1.3M1.5 8h1.3M13.2 8h1.3M3.2 3.2l.9.9M11.9 11.9l.9.9M3.2 12.8l.9-.9M11.9 4.1l.9-.9" strokeLinecap="round" />
+              </svg>
+            )}
           </button>
 
           {gearOpen && (
@@ -378,6 +460,11 @@ export default function ChartFrameBar({
               }}>
                 <span className="qsg-check">{s.autoScale ? "✓" : ""}</span>
                 <span className="qsg-lbl">{t("qsgAuto")}</span>
+              </div>
+
+              <div className="qsg-item qsg-disabled">
+                <span className="qsg-check" />
+                <span className="qsg-lbl">{t("qsgScaleChartOnly")}</span>
               </div>
 
               {/* Invert scale ⌥I */}
@@ -440,6 +527,8 @@ export default function ChartFrameBar({
                   </div>
                 )}
               </div>
+
+              <div className="qsg-sep" />
 
               {/* More settings — opens the full settings modal on the Scales and lines tab */}
               <div className="qsg-item" onClick={() => { setGearOpen(false); onOpenSettingsModal?.("scales"); }}>

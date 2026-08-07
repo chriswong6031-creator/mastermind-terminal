@@ -1,26 +1,34 @@
 "use client";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { useT } from "@/lib/i18n";
+import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useLang, useT } from "@/lib/i18n";
 import { CMP_PALETTE, CmpMode, CmpCfg } from "@/lib/compare";
 import { parseComposite, compositeExpr, validateLegs } from "@/lib/composite";
-import { getHistory } from "@/lib/searchHistory";
+import { getRecentlyViewed, RECENTLY_VIEWED_LIMIT } from "@/lib/recentlyViewed";
 import { trackSearch } from "@/lib/searchTrack";
 import { verdictIsStale } from "@/lib/signalVerdict";
-import AuthSheet from "@/components/AuthSheet";
+import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
+import {
+  isSymbolVisible, scoreSymbol, marketOf, displayName, followedMarketSet, ALL_MARKETS,
+  DEFAULT_PREFS, MARKET_TKEY, type MarketId, type MarketPrefs,
+} from "@/lib/markets";
+import { categoryBrowse, tabOf } from "@/lib/searchCategory";
+import { FLAG_COLORS, FLAG_DEFAULT } from "@/lib/flagPalette";
+import { useIsPhone } from "@/lib/useMediaQuery";
+import MobileSheet from "@/components/ui/MobileSheet";
+
+export { FLAG_COLORS, FLAG_DEFAULT } from "@/lib/flagPalette";
 
 type Row = { name: string; col: string; verdict: string | null; vts?: string | null; mkt?: string; zh?: string; sec?: string };
 type ListInfo = { name: string; count: number; symbols: { symbol: string; section: string }[] };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY" || v === "RECLAIM";
 
-// Asset-class → search-tab mapping. `sec` in the manifest is the asset class
-// (Equities / Funds / Crypto / …); anything unmapped (incl. stocks) falls under "Stocks".
-const CAT_OF: Record<string, string> = { Funds: "Funds", Crypto: "Crypto", Indices: "Indices", Bonds: "Bonds", Futures: "Futures", Forex: "Forex", Economy: "Economy", Options: "Options" };
-// The manifest tags ETFs as "Equities" today, so a pure `sec` map would file SPY/QQQ under
-// Stocks. This explicit ticker set routes the common broad-market/sector ETFs into "Funds" so
-// that category has real coverage (and lights up instead of rendering disabled). Heuristics
-// beyond this fixed set are intentionally out of scope — extend the set, don't guess.
-const FUND_TICKERS = new Set(["SPY", "QQQ", "IWM", "DIA", "SOXL", "GLD", "TLT"]);
-const tabOf = (sym: string, sec?: string): string => (FUND_TICKERS.has(sym) ? "Funds" : (sec && CAT_OF[sec]) || "Stocks");
+/** The phone ticker picker presents at the Drawings sheet's detents — one drawer idiom. */
+const SEARCH_DETENTS = [62, 96] as const;
+
+// Roughly what the add-to-list popover measures (header + a few list rows + "New list"). Only used
+// to decide whether it opens below the row or above it, so an approximation is enough.
+const PICKER_H = 190;
 
 // Category tab order + their i18n keys (bilingual labels — no hardcoded English in JSX).
 const CATS: { id: string; key: string }[] = [
@@ -30,28 +38,18 @@ const CATS: { id: string; key: string }[] = [
   { id: "Options", key: "catOptions" },
 ];
 
-// TV flag palette — 6 fixed hex colors matching the spec.
-export const FLAG_COLORS = [
-  "#f23645", // red
-  "#2962ff", // blue (TV default)
-  "#089981", // green
-  "#f8b500", // yellow
-  "#9c27b0", // purple
-  "#00bcd4", // cyan
-];
-export const FLAG_DEFAULT = "#2962ff";
-
 // One dialog, two modes.
 // "go"      = Symbol search / watchlist home. Two macro-states: HOME (empty + unfocused) shows the
 //             active watchlist; SEARCH (focused or typing) shows category-filtered results. The chip
 //             row morphs in place between the two vocabularies (watchlist chips ⇄ category tabs) —
-//             its geometry never moves. Supports composites + history.
+//             its geometry never moves. Supports composites + recently viewed symbols.
 // "compare" = Compare overlay picker.
 // "add"     = Add Symbol dialog (per S5): has remove-from-watchlist + go-to-symbol instead of +.
 export default function SearchModal({
   open, seed, manifest, inWatchlist, mode = "go", compare = [], active = "",
   flags = {}, lastFlagColor = FLAG_DEFAULT,
   email, lists = [], activeList = "", onSwitchList, onCreateList, onAddToList,
+  marketPrefs = DEFAULT_PREFS, prefsReady = false, onShowAllMarkets,
   onClose, onPick, onAdd, onRemove, onToggleCompare, compareCfg,
 }: {
   open: boolean; seed: string; manifest: Record<string, Row>; inWatchlist: Set<string>;
@@ -64,6 +62,11 @@ export default function SearchModal({
   onSwitchList?: (name: string) => void;
   onCreateList?: (name: string) => string | null;   // returns created name, or null on empty/dup
   onAddToList?: (sym: string, listName: string) => void;
+  // Owned by TerminalShell (one instance) and passed down, so the settings toggles and the
+  // search results can never disagree about which markets are on.
+  marketPrefs?: MarketPrefs;
+  prefsReady?: boolean;
+  onShowAllMarkets?: () => void;         // one-click undo from the filter notice
   onClose: () => void; onPick: (s: string) => void;
   onAdd: (s: string) => void;
   onRemove?: (s: string) => void;
@@ -71,20 +74,26 @@ export default function SearchModal({
   compareCfg?: Record<string, CmpCfg>;
 }) {
   const t = useT();
+  const { lang } = useLang();
+  const onboarding = useOnboarding();
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
   const [choosing, setChoosing] = useState<string | null>(null);
-  const [history, setHistory] = useState<string[]>([]);
+  const [recentlyViewed, setRecentlyViewed] = useState<string[]>([]);
   const [cat, setCat] = useState("All");   // selected asset-class tab
-  const [focused, setFocused] = useState(false);       // input focus drives HOME ⇄ SEARCH
+  const [view, setView] = useState<"home" | "search">("home");
   const [railCreating, setRailCreating] = useState(false);   // inline "+ New list" input open
   const [railName, setRailName] = useState("");
   const [picker, setPicker] = useState<string | null>(null);  // symbol whose add-to-list picker is open
-  const [pickerUp, setPickerUp] = useState(false);            // flip picker above the row when no room below
+  // Viewport-anchored geometry for that picker. It used to be an absolute child of the row, which
+  // put it inside `.sres` (overflow:auto) — so on a SHORT result list the scroller is barely taller
+  // than the row and clipped the popover to a sliver: the add button looked dead because the list
+  // menu it opened was invisible (reported 2026-08-05 on a one-hit 明阳电气 search, 8px of a 123px
+  // popover showing). Fixed positioning takes it out of every ancestor's clip.
+  const [pickerPos, setPickerPos] = useState<{ right: number; top?: number; bottom?: number; up: boolean } | null>(null);
   const [pickerNew, setPickerNew] = useState(false);          // inline "new list" inside the picker
   const [pickerNewName, setPickerNewName] = useState("");
   const [justAdded, setJustAdded] = useState<{ sym: string; list: string } | null>(null);  // inline confirm
-  const [authMode, setAuthMode] = useState<"signin" | "signup" | null>(null);   // AuthSheet
   const inputRef = useRef<HTMLInputElement>(null);
   const railInputRef = useRef<HTMLInputElement>(null);
   const pickerNewRef = useRef<HTMLInputElement>(null);
@@ -96,28 +105,63 @@ export default function SearchModal({
       setSel(0);
       setChoosing(null);
       setCat("All");
-      setHistory(getHistory());
-      setFocused(false);
+      setRecentlyViewed(getRecentlyViewed());
+      setView(seed ? "search" : "home");
       setRailCreating(false); setRailName("");
-      setPicker(null); setPickerUp(false); setPickerNew(false); setPickerNewName("");
-      setJustAdded(null); setAuthMode(null);
-      setTimeout(() => inputRef.current?.focus(), 10);
+      setPicker(null); setPickerPos(null); setPickerNew(false); setPickerNewName("");
+      setJustAdded(null);
+      // Opening the mobile ticker picker is a navigation action, so it must land on the active
+      // watchlist without also summoning the keyboard. Desktop symbol search, seeded type-ahead,
+      // Compare, and Add Symbol retain their established autofocus behavior.
+      const mobileWatchlistEntry = mode === "go"
+        && !seed
+        && window.matchMedia("(max-width: 860px)").matches;
+      const focusTimer = mobileWatchlistEntry
+        ? null
+        : setTimeout(() => inputRef.current?.focus(), 10);
+      return () => { if (focusTimer) clearTimeout(focusTimer); };
     }
-  }, [open, seed]);
+  }, [open, seed, mode]);
 
   useEffect(() => { if (railCreating) setTimeout(() => railInputRef.current?.focus(), 10); }, [railCreating]);
   useEffect(() => { if (pickerNew) setTimeout(() => pickerNewRef.current?.focus(), 10); }, [pickerNew]);
+  // The picker is anchored to a row's viewport rect, so anything that moves the row underneath it
+  // (scrolling the result list, resizing) leaves it floating over nothing — close it instead of
+  // re-projecting on every frame. Capture phase: `.sres` scrolls do not bubble to window.
+  useEffect(() => {
+    if (!picker) return;
+    const close = () => { setPicker(null); setPickerPos(null); };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => { window.removeEventListener("scroll", close, true); window.removeEventListener("resize", close); };
+  }, [picker]);
   useEffect(() => () => { if (addedTimer.current) clearTimeout(addedTimer.current); }, []);
 
   const deferredQ = useDeferredValue(q);
   const cmp = mode === "compare";
   const isAdd = mode === "add";
   const signedIn = !!email;
+  const phoneDrawer = useIsPhone() && mode === "go";
 
-  // "go" mode home vs search: SEARCH when the input has focus OR the query is non-empty; HOME otherwise.
-  // Only "go" mode has a home — compare/add are always in their search body.
-  const searchState = mode !== "go" || focused || q.trim() !== "" ? "search" : "home";
+  // Only "go" mode has a watchlist home. Focusing the field or using the mobile Recent action
+  // moves to search explicitly; it stays there until navigation completes or Watchlist is chosen.
+  const searchState = mode !== "go" || view === "search" || q.trim() !== "" ? "search" : "home";
   const isHome = searchState === "home";
+
+  const showRecent = () => {
+    setQ("");
+    setCat("All");
+    setSel(0);
+    setView("search");
+  };
+
+  const showWatchlist = () => {
+    setQ("");
+    setCat("All");
+    setSel(0);
+    setView("home");
+    inputRef.current?.blur();
+  };
 
   // Parse query as composite expression.
   const compositeLegs = useMemo(() => {
@@ -127,28 +171,87 @@ export default function SearchModal({
     return { legs, valid: validation.valid, unknown: (validation as any).unknown as string[] | undefined };
   }, [deferredQ, manifest]);
 
+  // Markets the user has switched off are not in the universe as far as search is concerned —
+  // a disabled market's symbols are unreachable by ticker, by name, and out of Recent. `ready`
+  // gates the filter so the very first paint (before the account answers) never hides a symbol
+  // that is in fact enabled.
+  const marketVisible = useCallback(
+    (s: string, r: Row | undefined) => !prefsReady || !r || isSymbolVisible(s, r, marketPrefs),
+    [prefsReady, marketPrefs],
+  );
+
+  // Markets the user follows, as MarketIds ("global" → intl). Hoisted out of the scoring loop —
+  // it is one Set for the whole sort, not one per manifest row.
+  const boostedMarkets = useMemo(() => followedMarketSet(marketPrefs.followed), [marketPrefs.followed]);
+
+  // Ranked, not merely filtered. This was `.filter(...).slice(0, 30)` over Object.entries, so the
+  // order was manifest insertion order — typing "AA" could bury Alcoa under anything whose NAME
+  // contained "aa", and the 30-cap then cut the exact match off entirely. scoreSymbol ranks
+  // exact ticker > ticker prefix > name prefix > substring, with a followed-market boost that is
+  // deliberately smaller than one tier so personalization only ever breaks ties.
   const results = useMemo(() => {
     const ql = deferredQ.trim().toLowerCase();
     if (!ql) return [];
-    return Object.entries(manifest)
-      .filter(([s, r]) => (!cmp || s !== active) && (cat === "All" || tabOf(s, r.sec) === cat) && (s.toLowerCase().includes(ql) || r.name.toLowerCase().includes(ql) || (!!r.zh && r.zh.toLowerCase().includes(ql))))
-      .slice(0, 30);
-  }, [deferredQ, manifest, cmp, active, cat]);
+    const scored: [string, Row, number][] = [];
+    for (const [s, r] of Object.entries(manifest)) {
+      if (cmp && s === active) continue;
+      if (cat !== "All" && tabOf(s, r.sec) !== cat) continue;
+      if (!marketVisible(s, r)) continue;
+      const score = scoreSymbol(s, r, ql, boostedMarkets);
+      if (score >= 0) scored.push([s, r, score]);
+    }
+    // Ties broken by ticker length then alphabetically, so ordering is stable across renders
+    // (Object.entries order is not a guarantee we want leaking into the UI).
+    scored.sort((a, b) => b[2] - a[2] || a[0].length - b[0].length || (a[0] < b[0] ? -1 : 1));
+    return scored.slice(0, 30).map(([s, r]) => [s, r] as [string, Row]);
+  }, [deferredQ, manifest, cmp, active, cat, marketVisible, boostedMarkets]);
 
-  // History rows when no query (most recent first, filtered against manifest).
-  const historyResults = useMemo((): [string, Row][] => {
+  // Recently viewed rows when no query (most recent first, filtered against manifest).
+  const recentResults = useMemo((): [string, Row][] => {
     if (deferredQ.trim()) return [];
-    return history
-      .filter((s) => manifest[s] && (cat === "All" || tabOf(s, manifest[s].sec) === cat))
+    return recentlyViewed
+      .filter((s) => manifest[s] && (cat === "All" || tabOf(s, manifest[s].sec) === cat) && marketVisible(s, manifest[s]))
       .map((s) => [s, manifest[s]] as [string, Row])
-      .slice(0, 30);
-  }, [deferredQ, history, manifest, cat]);
+      .slice(0, RECENTLY_VIEWED_LIMIT);
+  }, [deferredQ, recentlyViewed, manifest, cat, marketVisible]);
+
+  // Category BROWSE rows: what a selected category tab lists when the query is still empty.
+  // Without this an empty query rendered Recent and nothing else, so tapping "Crypto" on a
+  // fresh session showed only whichever coins were in RECENT — which is exactly how 24 crypto
+  // rows in the manifest read to a user as "only BTC and ETH are in Crypto" (2026-07-27).
+  // Ordering + capping live in lib/searchCategory.ts, where they are testable.
+  const browseResults = useMemo((): [string, Row][] => {
+    if (deferredQ.trim() || cat === "All") return [];
+    return categoryBrowse(manifest, cat, {
+      exclude: [...recentResults.map(([s]) => s), ...(cmp && active ? [active] : [])],
+      marketPrefs, prefsReady,
+    }).map((s) => [s, manifest[s]] as [string, Row]);
+  }, [deferredQ, cat, manifest, recentResults, cmp, active, marketPrefs, prefsReady]);
+
+  // How many matches the market filter is holding back, and from where. Shown as a one-line
+  // footer so a hidden market reads as a setting the user owns, not as missing data — the
+  // difference between "personalized" and "broken". Only computed when something is off.
+  const hiddenByMarket = useMemo(() => {
+    const ql = deferredQ.trim().toLowerCase();
+    if (!ql || !prefsReady || marketPrefs.enabled.length === ALL_MARKETS.length) return null;
+    let n = 0;
+    const from = new Set<MarketId>();
+    for (const [s, r] of Object.entries(manifest)) {
+      if (isSymbolVisible(s, r, marketPrefs)) continue;
+      if (scoreSymbol(s, r, ql, null) < 0) continue;
+      n++; from.add(marketOf(s, r));
+    }
+    return n ? { n, from: Array.from(from) } : null;
+  }, [deferredQ, manifest, prefsReady, marketPrefs]);
 
   // Which asset-class tabs actually have symbols in the universe (others render disabled).
   const availCats = useMemo(() => { const s = new Set<string>(); for (const [sym, r] of Object.entries(manifest)) s.add(tabOf(sym, r.sec)); return s; }, [manifest]);
 
-  const showHistory = !deferredQ.trim();
-  const displayRows: [string, Row][] = showHistory ? historyResults : results;
+  const showRecentRows = !deferredQ.trim();
+  // RECENT first, then the rest of the category — one flat list so arrow-key nav and the `sel`
+  // index stay a single sequence across the section header that separates them.
+  const displayRows: [string, Row][] = showRecentRows ? [...recentResults, ...browseResults] : results;
+  const catLabelKey = CATS.find((c) => c.id === cat)?.key;
 
   // Active list's symbols joined against the manifest (HOME body). Symbols missing from the
   // manifest still render (neutral placeholder) — never silently dropped.
@@ -156,22 +259,16 @@ export default function SearchModal({
 
   // Default highlight: if active symbol not in watchlist → pre-select it; else 0.
   const defaultSel = useMemo(() => {
-    if (showHistory && !inWatchlist.has(active)) {
-      const idx = historyResults.findIndex(([s]) => s === active);
+    if (showRecentRows && !inWatchlist.has(active)) {
+      const idx = recentResults.findIndex(([s]) => s === active);
       return idx >= 0 ? idx : 0;
     }
     return 0;
-  }, [showHistory, active, inWatchlist, historyResults]);
+  }, [showRecentRows, active, inWatchlist, recentResults]);
 
   useEffect(() => {
     if (open) setSel(defaultSel);
-  }, [open, defaultSel, showHistory]);
-
-  // M1: self-dismiss the AuthSheet once sign-in lands. On success AuthSheet fires router.refresh(),
-  // which re-runs the server component and delivers a real `email` — but a returning (already
-  // provisioned) user gets no navigation, so nothing else closes the sheet: it would sit stuck on
-  // its busy state over the now-signed-in hub. Close it the moment `signedIn` flips true.
-  useEffect(() => { if (signedIn) setAuthMode(null); }, [signedIn]);
+  }, [open, defaultSel, showRecentRows]);
 
   if (!open) return null;
 
@@ -197,14 +294,19 @@ export default function SearchModal({
       onAdd(sym);
       flashAdded(sym, lists[0]?.name || activeList || "Watchlist");
     } else {
-      // Flip the picker upward when the row is in the lower part of the scroll area, so the popover
-      // (which lives inside the overflow:auto .sres) isn't clipped at the bottom.
-      const scroller = rowEl?.closest(".sres") as HTMLElement | null;
-      if (rowEl && scroller) {
-        const rr = rowEl.getBoundingClientRect(), sr = scroller.getBoundingClientRect();
-        const roomBelow = sr.bottom - rr.bottom;
-        setPickerUp(roomBelow < 180 && (rr.top - sr.top) > roomBelow);   // ~picker height; flip if tighter below
-      } else setPickerUp(false);
+      // Anchor to the row in VIEWPORT space: the popover is position:fixed, so the only room that
+      // matters is the window's, not the scroller's (see pickerPos). Flip it above the row when
+      // the space below can't hold it and the space above can.
+      if (rowEl) {
+        const rr = rowEl.getBoundingClientRect();
+        const roomBelow = window.innerHeight - rr.bottom;
+        const up = roomBelow < PICKER_H && rr.top > roomBelow;
+        setPickerPos({
+          right: Math.max(8, window.innerWidth - rr.right + 8),   // matches the old right:8px inset
+          ...(up ? { bottom: window.innerHeight - rr.top + 2 } : { top: rr.bottom - 2 }),
+          up,
+        });
+      } else setPickerPos(null);
       setPicker(sym); setPickerNew(false); setPickerNewName("");
     }
   }
@@ -273,7 +375,7 @@ export default function SearchModal({
   const titleKey = isAdd ? "addSymbolTitle" : "searchTitle";
   const placeholderKey = "searchInputPlaceholder";
 
-  // Render one symbol row with the shared `.r` anatomy (used by SEARCH results, history, and the
+  // Render one symbol row with the shared `.r` anatomy (used by SEARCH results, Recent, and the
   // HOME active-list body). `withAdd` shows the + / confirm button (SEARCH only).
   function symRow(s: string, r: Row | undefined, rowSel: number, withAdd: boolean) {
     const buy = r ? isBuy(r.verdict) : false;
@@ -300,7 +402,11 @@ export default function SearchModal({
         )}
         <div className="meta">
           <div className="tk">{s}</div>
-          <div className="nm">{r ? `${r.name}${r.zh && r.zh !== r.name ? ` · ${r.zh}` : ""}` : s}</div>
+          {/* ONE language, never both. This used to render `name · zh`, so an English user read
+              "Dogecoin · 狗狗币" and "Palladium · 钯金" — the last surface still doing it after
+              displayName() landed (reported 2026-07-27). Chinese stays SEARCHABLE either way:
+              scoreSymbol matches the zh field regardless of the display language. */}
+          <div className="nm">{r ? displayName(r, lang) || s : s}</div>
         </div>
         <div className="vr">
           {r?.mkt && <span className="mkt">{r.mkt}</span>}
@@ -327,9 +433,17 @@ export default function SearchModal({
                 </button>
           )}
         </div>
-        {/* Add-to-list picker popover (F, multi-list) — anchored under the row. */}
-        {picker === s && (
-          <div className={`s-pick${pickerUp ? " s-pick-up" : ""}`} onClick={(e) => e.stopPropagation()}>
+        {/* Add-to-list picker popover (F, multi-list) — anchored to the row in VIEWPORT space and
+            PORTALLED to the body: it sits between two clips otherwise (`.sres` scrolls, `.smodal`
+            hides overflow for its rounded corners), and both cropped it (see pickerPos). React
+            events still bubble through the component tree, so the row's stopPropagation and the
+            scrim's target check behave exactly as they did in place. */}
+        {picker === s && portal(
+          <div className={`s-pick${pickerPos?.up ? " s-pick-up" : ""}`}
+            style={pickerPos
+              ? { position: "fixed", right: pickerPos.right, top: pickerPos.top, bottom: pickerPos.bottom, left: "auto" }
+              : undefined}
+            onClick={(e) => e.stopPropagation()}>
             <div className="s-pick-hd">{t("chooseListHd")}</div>
             {lists.map((l) => {
               const has = l.symbols.some((x) => x.symbol === s);
@@ -361,15 +475,13 @@ export default function SearchModal({
     );
   }
 
-  return (
-    <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`smodal${cmp ? " smodal-cmp" : ""}${isAdd ? " smodal-add" : ""}${mode === "go" ? " smodal-hub" : ""}`} onClick={(e) => e.stopPropagation()}>
-        {/* Header with title */}
-        <div className="smodal-title-bar">
-          <span className="smodal-title">{t(titleKey)}</span>
-          <span className="esc" onClick={onClose}>ESC</span>
-        </div>
+  /** Portal a popover to the body, or render it in place while there is no document (SSR). */
+  function portal(node: React.ReactNode) {
+    return typeof document === "undefined" ? node : createPortal(node, document.body);
+  }
 
+  const body = (
+      <>
         {cmp && (
           <div className="scmp-h">
             <span className="scmp-t">
@@ -387,17 +499,27 @@ export default function SearchModal({
             value={q}
             placeholder={cmp ? t("comparePlaceholder") : t(placeholderKey)}
             onChange={(e) => { setQ(e.target.value); setSel(0); }}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
+            onFocus={() => setView("search")}
             onKeyDown={key}
           />
-          {/* keyboard icon (decorative, per S4) */}
+          {/* Desktop keyboard hint. The mobile hub replaces it with the explicit view switch. */}
           <span className="sh-kbd" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <rect x="2" y="6" width="20" height="13" rx="2" />
               <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M9 14h6M18 14h.01" />
             </svg>
           </span>
+          {mode === "go" && (
+            <button
+              type="button"
+              className="sh-view-toggle"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={isHome ? showRecent : showWatchlist}
+              aria-label={isHome ? t("searchShowRecent") : t("searchShowWatchlist")}
+            >
+              {isHome ? t("searchShowRecent") : t("searchShowWatchlist")}
+            </button>
+          )}
         </div>
 
         {/* Compare mode chips */}
@@ -471,8 +593,8 @@ export default function SearchModal({
                   <div className="s-cta-title">{t("ctaTitle")}</div>
                   <div className="s-cta-body">{t("ctaBody")}</div>
                 </div>
-                <button className="s-cta-primary" onMouseDown={(e) => e.preventDefault()} onClick={() => setAuthMode("signup")}>{t("ctaSignup")}</button>
-                <button className="s-cta-link" onMouseDown={(e) => e.preventDefault()} onClick={() => setAuthMode("signin")}>{t("ctaSignin")}</button>
+                <button className="s-cta-primary" onMouseDown={(e) => e.preventDefault()} onClick={() => { onClose(); onboarding.open("signup"); }}>{t("ctaSignup")}</button>
+                <button className="s-cta-link" onMouseDown={(e) => e.preventDefault()} onClick={() => { onClose(); onboarding.open("signin"); }}>{t("ctaSignin")}</button>
               </div>
             )}
             {/* Eyebrow: active list name + count (quiet TV register). */}
@@ -530,35 +652,62 @@ export default function SearchModal({
               </div>
             )}
 
-            {/* History header */}
-            {showHistory && historyResults.length > 0 && (
+            {/* Recently viewed header */}
+            {showRecentRows && recentResults.length > 0 && (
               <div className="sres-section-hd">{t("searchRecentHeader")}</div>
             )}
 
-            {/* Type-to-search hint (F): only when there is no history to show and no query yet. */}
-            {!cmp && !isAdd && showHistory && historyResults.length === 0 && (
-              <div className="s-type-hint">{t("typeToSearch")}</div>
+            {/* Recent is navigation history, so an empty list says that plainly. Category browse
+                content replaces this state whenever a category tab has rows. */}
+            {!cmp && !isAdd && showRecentRows && displayRows.length === 0 && (
+              <div className="s-type-hint">{t("searchRecentEmpty")}</div>
             )}
 
             {/* Empty state */}
-            {!showCompositeRow && displayRows.length === 0 && !showHistory && (
+            {!showCompositeRow && displayRows.length === 0 && !showRecentRows && (
               <div className="empty">{t("noSymbolMatch")} "{q}".</div>
             )}
-            {(cmp || isAdd) && showHistory && historyResults.length === 0 && (
-              <div className="empty">{t("searchHistoryEmpty")}</div>
+
+            {/* Market-filter disclosure. A user who cannot find 0700.HK must be told it is their
+                own setting doing it — and be able to undo it right here, without hunting through
+                settings. Renders only when a switched-off market actually has matches. */}
+            {hiddenByMarket && (
+              <div className="s-mkt-hidden">
+                <span>
+                  {t("mktHiddenLead")} {hiddenByMarket.n} {t("mktHiddenMore")}{" "}
+                  {hiddenByMarket.from.map((m) => t(MARKET_TKEY[m])).join(" · ")}
+                </span>
+                {onShowAllMarkets && (
+                  <button type="button" className="s-mkt-show" onClick={onShowAllMarkets}>{t("mktShowAll")}</button>
+                )}
+              </div>
+            )}
+            {(cmp || isAdd) && showRecentRows && displayRows.length === 0 && (
+              <div className="empty">{t("searchRecentEmpty")}</div>
             )}
 
             {displayRows.map(([s, r], i) => {
               const rowSel = showCompositeRow ? i + 1 : i;
+              // The category-browse block gets its own header, at the seam after the RECENT rows
+              // (index 0 when there are no recent views). Rendered inside the map so one flat row list
+              // keeps driving `sel`/arrow-key nav across the seam.
+              const seamHd = showRecentRows && browseResults.length > 0 && i === recentResults.length && catLabelKey
+                ? <div className="sres-section-hd">{t(catLabelKey)}</div>
+                : null;
               // compare/add modes keep their bespoke row actions; go mode uses the shared symRow w/ add.
-              if (!cmp && !isAdd) return symRow(s, r, rowSel, true);
+              if (!cmp && !isAdd) {
+                return seamHd
+                  ? <Fragment key={`seam-${s}`}>{seamHd}{symRow(s, r, rowSel, true)}</Fragment>
+                  : symRow(s, r, rowSel, true);
+              }
               const buy = isBuy(r.verdict);
               const inCmp = cmp && compare.includes(s);
               const inWl = inWatchlist.has(s);
               const flagColor = flags[s];
               return (
+                <Fragment key={s}>
+                {seamHd}
                 <div
-                  key={s}
                   className={`r${rowSel === sel ? " sel" : ""}${inCmp ? " r-on" : ""}`}
                   onMouseEnter={() => setSel(rowSel)}
                   onClick={(e) => choose(s, e.shiftKey)}
@@ -572,7 +721,7 @@ export default function SearchModal({
                   <span className="ic" style={{ background: r.col }}>{s[0]}</span>
                   <div className="meta">
                     <div className="tk">{s}</div>
-                    <div className="nm">{r.name}{r.zh && r.zh !== r.name ? ` · ${r.zh}` : ""}</div>
+                    <div className="nm">{displayName(r, lang) || s}</div>
                   </div>
                   <div className="vr">
                     {r.mkt && <span className="mkt">{r.mkt}</span>}
@@ -607,6 +756,7 @@ export default function SearchModal({
                     }
                   </div>
                 </div>
+                </Fragment>
               );
             })}
           </div>
@@ -618,10 +768,37 @@ export default function SearchModal({
         {isAdd && (
           <div className="smodal-hint">{t("shiftClickHint")}</div>
         )}
+      </>
+  );
 
-        {/* AuthSheet layered over the body (Part E). Keyed on mode so switching CTA buttons
-            remounts with the right initial mode (no initialMode→state sync effect needed). */}
-        {authMode && <AuthSheet key={authMode} initialMode={authMode} onClose={() => setAuthMode(null)} />}
+  // R2c — on the phone the ticker picker is a DRAWER, the idiom the Drawings sheet established:
+  // it presents over a live chart at 62%, drags to full and back, and a short flick down
+  // dismisses it. Compare and Add Symbol keep the centred modal — they are sub-tasks of a
+  // surface that is already open, not the phone's primary navigation.
+  if (phoneDrawer) {
+    return (
+      <MobileSheet
+        open
+        onClose={onClose}
+        title={t(titleKey)}
+        detents={SEARCH_DETENTS}
+        className="msheet-search"
+        initialFocus="sheet"
+      >
+        {body}
+      </MobileSheet>
+    );
+  }
+
+  return (
+    <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className={`smodal${cmp ? " smodal-cmp" : ""}${isAdd ? " smodal-add" : ""}${mode === "go" ? " smodal-hub" : ""}`} onClick={(e) => e.stopPropagation()}>
+        {/* Header with title */}
+        <div className="smodal-title-bar">
+          <span className="smodal-title">{t(titleKey)}</span>
+          <span className="esc" onClick={onClose}>ESC</span>
+        </div>
+        {body}
       </div>
     </div>
   );

@@ -1,0 +1,460 @@
+# Options Superintelligence Masterplan — 2026-07-31
+
+**Status:** ACTIVE program. Successor to `docs/OPTIONS_SUITE_PARITY_MASTERPLAN.md` (2026-07-24), the quanted teardown
+(`Macro Dashboard: research/quanted_options/`), and the OEU program (`research/options_estate/OEU_MASTERPLAN.md`).
+Those documents remain the reference teardowns; **this document is now the roadmap of record for the options estate.**
+
+**Commissioning intent (operator, 2026-07-31):** stop cherry-picking. Reach *full* QuantData.us capability parity on the
+intraday options suite, exceed it, restructure the IA so the suite reads as one coherent product, and upgrade Prophet
+into a superintelligent signal system that consumes the entire options estate (intraday flow + EOD structure), the
+Golden Oracle / GC-v2 stack, the Research Desk, technicals, and the macro labs — one brain across both repos.
+
+---
+
+## ⚡ EXECUTION LEDGER — live wave status (update this section IN THE SAME PR as your work)
+
+> **⚠️ 2026-08-02 OPERATOR DIRECTIVES — read `docs/QUANTDATA_PARITY_HANDOFF_2026-08-02.md`
+> FIRST.** It carries: (1) the rescission of the house-idiom + paraphrase-only laws —
+> QuantData's layout/structure/IA are now explicit build targets, full parity structured to
+> be better in every regard; (2) the intraday-transition mandate; (3) live data arriving
+> ~08-04/05 with the marketing launch (re-gate data-gated items; ask which feed was bought);
+> (4) the renewed priority order (IA restructure W1, promoted) and the MSC collision map
+> (the intraday store is a shared keystone: build once here, MSC consumes).
+
+**Coordination protocol (multi-session law):** chat memory does not travel between sessions or accounts — this
+section is the shared truth. Before starting ANY options-estate work: (1) read this section + the sibling docs
+below + the `options-suite-parity-program` memory ledger; (2) CLAIM your lane by editing this section (mark
+`IN FLIGHT` + branch name) in your first PR; (3) flip it to `DONE` with PR numbers when merged. Unclaimed lanes
+are fair game; claimed lanes are not.
+
+**Sibling programs (do not duplicate their scope):**
+- `docs/MARKET_STRUCTURE_CORE_MASTERPLAN_2026-08-01.md` — dealer-positioning / gamma-structure / vol-mechanics
+  intelligence (MenthorQ/SpotGamma/VolSignals/IVolatility class). Division of labour: THIS doc = "see every
+  print, replay every minute" (tape, filters, playback, IA); MSC = "interpret what the inventory does to price."
+  MSC also wires into Prophet — **R6 spine design must be co-authored with MSC's signal layer, not built twice.**
+- `docs/VOLLAND_PARITY_PLAN_2026-08-01.md` — Volland-class parity lane.
+
+| Wave / item | Status (as of 2026-08-01) |
+|---|---|
+| R0.1 chain-heat relight | ✅ DONE 07-31 — relit on M1, artifact verified current on public R2 |
+| R0 repair wave (seal, cadence, schema v2, two-tier, U-CHAIN, dead-man) | ✅ DONE 07-31 — macro #4152 (+ #4222 weekend hub runs). Cadence root-cause: jar was fine; wildcard+time-window returned silently empty. **VERIFY GATE Mon 08-03:** live `meta.json` shows `delta_mode: time_window` + `two_tier: true` |
+| R0.7 Prophet dormant wires | ✅ DONE — terminal fixture #282 (index: `last_price` + nested state); verify overlay component + fields in the next nightly `prophet/index.json` |
+| R0.10 dated GEX-ladder replay (slice 3) | ✅ DONE + LIVE 07-31 — terminal #283 deployed; macro #4153 (`dates.json` + self-heal); accrual holes healed |
+| R3 Volatility tab | ✅ DONE + LIVE 07-31 — #287; extended by #314 (VRP regime level+trend+velocity, skew read, term slopes) |
+| R3 Structure tab (OI suite) | ✅ DONE — #291 (OI ladder / OI-time / max pain / OI change) |
+| R3 Positioning / exposure profile / dealer heat | ✅ DONE under MSC — #298 (program of record + Positioning tab), #312 (production sweep + 40 audit fixes), macro #4219 |
+| R1 tape-truth classifier (sweep/block/golden, 5-tier side, per-trade greeks) | 🔓 OPEN — **gated on first full session of captured conditions (schema v2 live since #4152; earliest build day Mon 08-03).** Calibrate vs QuantData UI before dropping `~` prefixes |
+| R2 intraday store extension (tier-1 roots) + universal playback wrapper | 🔓 OPEN — U-CHAIN accruing since 07-31; wrapper spec in §4-R2; fix the surface stamp-index head-follow gap with it |
+| R2 slice-3 deep backfill (2017→ ladder reconstruction + ladder-level validation) | 🔓 OPEN — macro side; `audit_overlap` extension is the honesty gate |
+| R3 remaining: Interval Map · multi-metric heatmap+MVC · Statistics suite · Vol Drift · Exposure-matrix VEX/UNUSUAL-equivalent lenses | 🔓 OPEN — Interval Map/Vol Drift want U-CHAIN accrual (~1wk); Statistics buildable now (exchange codes retained); VEX/UNUSUAL: verify vanna grids + 30d baseline, then light the equivalent lenses on the **Exposure matrix** (PRISM retired into Exposure, §5.3 done — PR #344) |
+| R4 Filter Groups + alert generalization + page/global filter bus | 🔓 OPEN — design pinned §4-R4; enriched schema (R1) is its vocabulary, but the engine + Supabase persistence can start against existing fields |
+| R5 IA restructure (7 categories) + blind-spot surfaces (0DTE dash, largest-trades, chain browser, P/C history, exp-vs-realized, export) | 🔓 OPEN — first slice IN FLIGHT 08-03: §5.3 PRISM→Exposure merge (branch `claude/prism-exposure-merge-20260803`; retire PRISM tab, shared sign-correct matrix renderer, port Confluence + HeatSeeker, `?tab=prism` alias). **PR #164 RESOLVED 08-03: closed as superseded** — master already ships its flat-sidebar intent (AppNav 7-item, next.config redirects) and resolves the one design conflict (Leaders/Radar → Discover) in R5's direction; nothing to re-implement; salvage check pending: multi-watchlist pill switcher on PortfolioView |
+| 2026-08-03 continuation session (this session's claims) | IN FLIGHT — P0 Tickers-drill crash hotfix; Volatility/Structure card-height equalization (branch `claude/vol-structure-layout-20260802`); Surface granularity upgrade (gradient + msc-consuming signal overlays, spec from census lane); Exposure/PRISM adjudication executed per §5.3 (see R5 row) |
+| R6 Prophet superintelligence (spine, multi-lane origination, live re-score, distribution) | 🔓 OPEN — co-design with MSC's signal layer (see sibling note above); R0.7 prerequisites landed |
+| R7 dark pool / equities feed | ⛔ GATED — owner spend decision (Polygon TRF vs Databento) still open |
+| R8 composability (My-Pages) | ⛔ GATED — after R5 |
+
+---
+
+## 0. Why the last program stalled — audit verdict (2026-07-31)
+
+Fresh evidence: live logged-in walkthrough of v3.quantdata.us (all 7 built-in pages, the full Add-Tool catalog, Filter
+Groups, Public Alerts, page/global filter system), 16 curated feature screenshots, and six parallel code audits across
+charting-app, Macro Dashboard, and the M1 data plane. Conclusions:
+
+1. **The frontend outran the data plane by design, then the data plane never caught up.** Every in-repo lane shipped
+   within ~72h of the 07-24 teardown (P0, SSE spine, Phase-2 slices 1–2, OEU T-A..T-E). Everything else — poller
+   cadence, condition capture, universe expansion, 1-min snapshots, per-date ladders, dark pool — was tagged
+   "infra-gated", and when the infra unblock arrived (M1 Max ruled the data-plane host) the 07-25/26 window was spent
+   on the migration itself, then attention rotated to onboarding/v7/native apps. **No parity commit after 07-26.**
+2. **"Clean stopping point" was true only for the slice, not the program.** Phase 2 slices 1–2 (scalar session
+   scrubber) shipped honestly; slices 3+ (per-date full ladders), Phases 3–5 (Interval Map, multi-metric heatmap,
+   normalization modes, Filter Groups, alerts inheritance, statistics, dark pool, composability) are open.
+   **And the slice-3 blocker itself was a false premise**: the 2026-07-26 session probed guessed R2 keys
+   (`options_hub/gex/{DATE}/{ROOT}.json`), got 404s, and concluded per-date ladders exist nowhere. The real key
+   family is **`options_hub/gex_history/{ROOT}/{DATE}.json`** (WP-GEX-SNAPSHOTS, macro PR #2615, accruing since
+   2026-07-16) — full `by_strike` (gamma/delta/vanna/charm net per strike, ±20% of spot, uncut count disclosed),
+   `by_expiry`, walls/flip/scalars, per session, **every hub root including single names** — verified live on
+   public R2 this audit (SPY 2026-07-17→07-30). The date-picker ladder replay was buildable all along; what's
+   actually missing is a `dates.json` index, self-heal for two accrual holes (07-18, 07-20), pre-07-16 backfill,
+   ladder-level validation, and the Terminal consumer (`gex_at:` f-param + date picker).
+3. **The honesty doctrine correctly vetoed ~7 features** (VEX/UNUSUAL lenses, LIVE badges on EOD data, IV percentile,
+   GEX date-picker against 404 ladders, event markers on replay…). Those vetoes were *right* — the fix is to build the
+   data that makes the features honest, which is what this plan sequences first.
+4. **The migration left two live regressions** (found by this audit, must be repaired first):
+   - **Chain-heat lane is dead**: `com.macro.chainheat` was parked in `dataplane-migration/m2-dead/`, never
+     reinstalled on M1; prod `live_flow/chain_heat_current.json` is 8 days stale while the Flow Desk polls it every
+     45 s. Script survives in `~/flow-ops-wt/scripts/build_chain_heat.py` — relight is a plist re-point.
+   - **levelsseal degraded**: exit 4, "nothing to seal" for 2 consecutive sessions (store freshness at 04:30 PT
+     suspect).
+5. **Three fully-built capabilities are sitting dark** (build once, never lit):
+   - **U-CHAIN 15-min chain snapshots** (`chain_snapshot_poller.py` + `com.mastermind.chainsnapshots` plist) — the
+     intraday greeks plane — authored, tested, **installed on neither machine** (plist targets a nonexistent
+     `~/chainsnap-ops-wt`).
+   - **Two-tier poller cadence** (FC-R6) — coded, `LIVE_FLOW_TWO_TIER` unset ⇒ OFF.
+   - **Incremental time-window pulls** — watermark machinery complete in the poller; inert because the deployed
+     `ThetaTerminalv3.jar` (Jul-4 build) rejects time filters ⇒ `delta_mode: full_day`, measured cadence **~48 min**
+     against a 120 s target. The cadence fix is a **vendor/terminal-build item, not poller code**.
+6. **Prophet is a packaging layer, not a signal engine** — full trace in §6. Several of its inputs are already built
+   and simply not wired (`macro_stance`/`futures_chg` params never passed; `components`, `last_price`, `geometry`
+   computed nightly then stripped by the index whitelist, leaving three Terminal UI features dead).
+
+---
+
+## 1. QuantData v3 — the complete census (live walkthrough, 2026-07-31)
+
+### 1.1 The 7 built-in pages
+| Page | Tools |
+|---|---|
+| Dashboard | Consolidated + Unconsolidated Order Flow, Net Flow, Net Drift, News, Equity Prints, Dark Pool Levels, Gainers/Losers |
+| Exposure | Exposure by Strike + by Expiration (GEX/DEX/VEX/CHEX), **Interval Map**, **Heat Map** |
+| Flow Analysis | Net Flow, Net Drift (+ net-volume subchart), Net Premium Heat Map, Net Volume Heat Map |
+| Dark Pool / Equities | Stock Price/Time (candles, 1-min), Dark Pool Levels (top-50 price levels by notional/count/volume), Dark Flow (cumulative dark notional vs price, 4:00–20:00), Equity Prints |
+| Statistics | Contract Statistics (C/P premium-volume-count split), Contract **Trade-Side** Statistics (Above Ask/Ask/Mid/Bid/Below Bid), Market Share pie + table (per exchange, call/put/equity/index volume) |
+| Open Interest | OI by Strike, OI by Expiration, OI Change table (prev→current per contract), Max Pain, Max Pain/Time, OI/Time (~18-month series) |
+| Volatility Analysis | Volatility Drift (intraday ARV vs IV vs price), IV Rank (365-d lookback / 30-d maturity), Volatility Skew (by strike), Term Structure (IV vs DTE 0–800) |
+
+### 1.2 The tool catalog (Add Tool: ~31 tools = 24 Options + 6 Equities + 1 News)
+Options: Consolidated Order Flow · Unconsolidated Order Flow · Contract Price/Time · Contract Statistics · Contract
+Side Statistics · Exposure by Strike · Exposure by Expiration · Interval Map · Heat Map · Gainers/Losers · IV Rank ·
+Market Share · Market Share Table · Max Pain · Max Pain/Time · Net Drift · Net Flow · OI/Time · OI by Expiration ·
+OI by Strike · OI Change · Term Structure · Volatility Drift · Volatility Skew.
+Equities: Dark Flow · Dark Pool Levels · Equity Prints · **Exchange Notifications (REG SHO / LULD / halts)** ·
+Market Map (sector treemap) · Stock Price/Time. News: tagged News Feed.
+
+### 1.3 The control plane (what makes it feel a generation ahead)
+- **Every exposure/time-series widget scrubs any 1-minute snapshot** — date-picker + intraday time slider (9:30→4:15)
+  with play/pause + a crop/zoom brush. Historical sessions (365+ days) load in the same UI as live.
+- **Exposure modes**: Per 1% move / Per $1 / Per 1 contract; net toggle; strike + expiration + ticker filters.
+- **Interval Map**: bubble map of exposure snapshots per interval (aggregation 1min→4hr) × strike, net-exposure
+  coloring, value-vs-change mode, price overlay.
+- **Heat Map: 30+ metrics** (GEX/DEX/VEX/CHEX, net premium, net volume, OI…) × strike × expiration, full axis
+  control, **MVC marker + MVC Proximity / MVC Shift alerts**.
+- **Filter Groups**: named, saved, **shareable (My / Public library, one-click Duplicate)**; Field/Operator/Value
+  rows with multi-chip values; vocabulary spans Trade (side, consolidation SPLIT/BLOCK/SWEEP, money type, premium,
+  qty, sentiment, Golden Sweeps, opening positions, tied/cancelled/floor/auction trades), all **15 greeks per trade**
+  (Delta Vega Theta Rho Omega Charm Gamma Vanna Veta Vomma Color Speed Ultima Zomma), Contract (DTE, expiration, IV,
+  OI, strike, volume, Volume>OI, type), Underlying (ticker, sector, industry, index/ETF membership, penny program,
+  stock price). Human-readable summary sentence renders above the rows.
+- **Alerts**: per-widget, inherit the widget's active Filter Group, **throttle config** ("at most once every N s"),
+  My/Public alert libraries, widget-specific types (Net Drift Cross, MVC Proximity/Shift, New Consolidated Flow…).
+- **Page Tool Filters + Global Tool Filters**: one panel syncs ticker/expiration/session-date across a page or the
+  whole app. **Tool Configuration**: global display toggles (axis titles, crosshairs, legends, status indicators,
+  time sliders, tooltips, zoom sliders). **My Pages**: user-composed custom pages from the tool catalog.
+- **Tape columns** (visible live): Time, Contract, Spot, Qty, Price, exec-side badge (A/B/AA/BB), Bid×Ask at exec,
+  Premium, Sentiment, Exchange, **Type (OPRA condition: AUTO, EXT_HOURS, CANCEL, CANCEL_LAST, FLR, MULTI_FLR_PP,
+  MULTI_AUTO_COB, ISO…)**, Consolidation (SPLIT/BLOCK), Moneyness, Volume, OI, IV, DTE, Sector, Industry + all 15
+  per-trade greeks. Golden highlighted rows for repeat/notable prints.
+- Session header gauges: Sentiment verdict, P/C ratio, P/C volume, P/C premium. Date-picker on everything.
+
+### 1.4 What we will NOT copy (standing law, unchanged unless the operator overrules)
+- **News feed** — `docs/DAYTRADE_SUITE_SPEC.md` §0: "No order execution, no P&L, no news feed."
+- **Their visual design** — we keep the v5/v7 Terminal idiom; parity is capability parity.
+- **Fabricated data** — every surface stays honesty-gated; we build the data before the control.
+- Licensing red lines hold: no participant-tagged positioning without a license, no vendor-key exposure in the
+  browser, dark-pool prints only from a licensed feed (§R7).
+
+---
+
+## 2. Ground truth on our side (verified 2026-07-31)
+
+**Data plane (all on M1 Max now; M2 clean; rollback scripts armed):**
+- ThetaData **PROFESSIONAL** (8 concurrent). Endpoints used: eod, open_interest, greeks/eod (51 GB full 1st/2nd/3rd
+  order surface, 380+ roots, 2017→), trade_quote (bulk + per-contract), snapshot greeks 1st/2nd + snapshot OI (full
+  chain ~1 s). **Unused entitlement**: trade conditions (fetched, dropped at parse), NBBO sizes (dropped), snapshot
+  cadence headroom, ~380-root live universe (polling 122).
+- Live flow poller: target 120 s, **measured ~48 min** (`delta_mode: full_day` — deployed ThetaTerminal jar rejects
+  time-window filters; incremental watermark machinery ready and inert). Two-tier cadence coded, default OFF.
+- Exec-vs-NBBO: quote-rule ±1 sign only; QuantData's 5-tier ladder (Below Bid/Bid/Mid/Ask/Above Ask) is computable
+  from columns we already keep — not computed today.
+- Stores: 60 GB EOD store (M1, `theta-ops-wt` symlink → `flow-ops-wt`); Flow-Surface per-strike net-premium +
+  greek grids for SPY/QQQ/IWM at poller cadence, 10-session retention; hourly tape archives (24 h feed retention);
+  nightly GEX scalars history (`history[]` — net_gex_bn/flip/walls/regime only); **dated per-strike ladders on R2
+  since 2026-07-16** (`options_hub/gex_history/{ROOT}/{DATE}.json` — no index, two holes, no consumer yet); six
+  weeks of full single-name chains in `data/polygon_gex/chains/{DATE}.parquet` (~370 underlyings, since 06-15);
+  U-CHAIN 15-min chain snapshots authored, never run. Warts: `data/index_gex_history` parquets frozen at
+  2026-07-02 despite the Sunday M1 lane; **no freshness dead-man's switch on any options R2 plane** (which is
+  exactly why the gex_history holes and the chain-heat death went unnoticed).
+- Dark pool: FINRA CNMS daily short volume + weekly ATS only (honest "not prints, not live" chip). No TRF feed.
+
+**Terminal `/options` (11-tab hub)**: prophet · desk (Flow Desk) · tape · tide · tickers · screener · gex (Exposure)
+· surface · leaders · radar (`prism` retired to a `?tab=prism` → Exposure alias, §5.3). SSE spine live on feed/gex/tide/hub-tape. Exposure desk: GEX/DEX/VEX/CHEX
+switcher, by-expiration, dist-to-flip, EOD context belt, scalar session scrubber (#210/#211). Surface tab: the only
+true replay (multi-day, ReplayBar, replayBus). PRISM: 6 lenses, VEX/UNUSUAL disabled-with-reasons. 15 IA defects
+catalogued (tab aliasing `vol→screener`, tape/desk duplication, 3 unrelated "strike ladder" idioms, 3 expiry-term
+renders, 4,599-line OptionsHubView monolith, dead GEX code, leaders/radar orphaned into Discover, chain-heat only on
+one tab, cold-landing data deps, per-module formatter drift…) — full list in the 2026-07-31 audit (§IA-12 of the
+terminal options audit report; the redesign in §5 resolves them structurally).
+
+**Prophet**: nightly top-6 of `us_standouts` buy lane → R-multiple geometry (1.5R/3R, ATR/swing stop) → 0.60Δ monthly
+call overlay priced EOD → 7-phase management confidence (ceiling 92, EMA-smoothed) → R2 `prophet/index.json` +
+5-min live marks. BULL-only. No options/flow/GEX/technicals/macro input to selection, geometry, or confidence.
+Renders only in the /options Prophet tab (+ delayed-winners landing teaser). Ledger accrues but is unsurfaced;
+option outcomes never graded.
+
+**Signal stack available to feed a unified brain** (already computed nightly, most with no Terminal surface):
+GC-v2 scored stream + keeper/recipe tiers (aplus/quality/base) · macro T1–T4 confluence cascade (+HTF S1/S2) ·
+`us_standouts` conviction/entry/act_level (+v2 shadow board) · entry_signal 12-state posture machine · subsector
+ENTRY-NOW double gate · cohort rubber-band score · oracle rotation episodes (`oracle_state.v1`) · Tech-Lab 43–71
+signal profiles + fire events · confluence_screener combo stats · seasonal_regime outlooks · bottom_sensors ·
+stage_analysis · market_risk · NW market_plane · options_entry_state · vol regime · expected moves · darkpool EOD ·
+GEX state/matrix/history. R2 is the proven bus; `model_slice()`/versioned-contract discipline is the delivery norm.
+
+---
+
+## 3. The gap matrix (QuantData capability → our status → root cause)
+
+| # | Capability | Ours today | Root cause class |
+|---|---|---|---|
+| G1 | Sub-minute live tape, ~380 roots | ~48-min, 122 roots | Vendor terminal build (time-window), two-tier OFF |
+| G2 | OPRA conditions + consolidation classes (SPLIT/BLOCK/SWEEP/golden sweep/opening) | dropped at parse | one parser change + classifier build |
+| G3 | 5-tier exec-side sentiment + header gauges | binary ±sign | compute from retained columns |
+| G4 | Per-trade greeks (15) in tape + filters | none | join tape ↔ snapshot/EOD greek surface |
+| G5 | 1-min exposure snapshots, any date, every widget | 3-root flow-surface grids, 10 sessions | U-CHAIN never lit; store scope |
+| G6 | Scrub/date-pick/crop on every chart | Surface tab only + scalar scrubber | shared playback wrapper never built |
+| G7 | Interval Map | none (data lane #2638 built for it) | UI never built |
+| G8 | Heat Map 30+ metrics + MVC alerts | 4-metric surface + 6-lens PRISM | metric engine + alert types |
+| G9 | Exposure modes (1%/$1/unit) | raw only | arithmetic + UI toggle |
+| G10 | OI suite (OI/Time, Max Pain, Max Pain/Time, OI Change) | oi_movers/hot rails only | builders + surfaces |
+| G11 | Vol suite (Vol Drift ARV/IV, IV Rank, Skew, Term Structure w/ history) | vol payload in Tickers drill | dedicated surfaces + history depth |
+| G12 | Statistics (contract/trade-side/market-share) | none (exchange captured, never aggregated) | aggregation builders |
+| G13 | Filter Groups (saved/shared/public) | fixed preset chips | engine + Supabase persistence |
+| G14 | Per-widget alerts inheriting filters + throttle + public library | 5 fixed opt_* conditions | alert engine generalization |
+| G15 | Page/Global filter sync (ticker/exp/date) | per-tab state | workspace state bus |
+| G16 | Custom pages / composability | fixed 11 tabs | deliberate (revisit post-IA) |
+| G17 | Dark pool prints/levels/dark-flow live | FINRA EOD honest belt | licensing decision (Polygon TRF vs Databento) |
+| G18 | Equity prints + exchange notifications (halts/LULD) | none | feed decision (same as G17) |
+| G19 | Historical session library (365+ d, every widget) | 10-session surface + 30-session scalars | retention + dated publish |
+| G20 | Blind spots neither product structured: 0DTE dashboard, largest-trades board, chain browser table, P/C ratio history, expected-vs-realized move report, flow export | partials scattered | never planned — now in R5 |
+
+---
+
+## 4. Renewed roadmap
+
+Numbered R0–R8. Each wave states its host (M1 plane / macro repo / terminal repo), its honesty gate, and its exit
+marker. In-repo waves follow the standing delivery chain (commit→PR→CI→merge→deploy→verify). Data-plane waves follow
+the M1 ops discipline (never double-run against prod, rollback scripts, market-closed cutovers).
+
+### R0 — Repair & relight (immediate; M1 plane + small repo diffs)
+1. **Relight chain-heat**: point the parked plist at `~/flow-ops-wt` on M1, bootstrap `com.macro.chainheat`,
+   verify `live_flow/chain_heat_current.json` asof goes current. (Terminal is already polling it.)
+2. **Diagnose levelsseal** exit-4 ("no reconstructable board" ×2 sessions): check greeks/OI t-1 freshness at
+   04:30 PT on M1; fix ordering or gate; verify a sealed board next session.
+3. **Bootstrap U-CHAIN**: create the worktree the plist expects (or re-point it), load
+   `com.mastermind.chainsnapshots` on M1 → 15-min full-chain 1st+2nd-order greek snapshots, ~150 roots. This is the
+   intraday exposure store seed — everything in R2/R3 rides it.
+4. **Parser keeps what we pay for**: retain `condition`, `ext_condition1–4`, `bid_size`, `ask_size` (+exchange codes
+   already kept) in `bulk_trade_quote._parse_rows`. Version the feed schema; downstream tolerant-reader.
+5. **Two-tier ON**: set `LIVE_FLOW_TWO_TIER=1` (tier-1 33 roots every cycle, tier-2 round-robin) — halves effective
+   staleness for the names that matter before the vendor fix lands.
+6. **Vendor ticket / jar upgrade probe**: newer ThetaTerminal build vs time-window filtering on PRO; if supported,
+   flip `delta_mode` to `time_window` → the 120 s target becomes real. (This single item is the "feels alive"
+   unlock; treat as R0-critical-path.)
+7. **Prophet quick wires** (macro repo, 3 small diffs): pass `macro_stance` + `futures_chg` into
+   `compute_management_state`; whitelist `components`, `last_price`, `geometry`, `change_reason` into the index;
+   Terminal features (ConfidencePanel bars, GAINERS sort, T1-progress/P&L) light up with zero frontend work.
+8. **thetadata-r2sync retry/backoff** for the nightly multipart flake; diagnose the frozen
+   `data/index_gex_history` weekly lane (parquets stuck at 2026-07-02 despite E3c hardening).
+9. **Freshness dead-man's switch**: add `options_hub/`, `live_flow/`, `levels/`, `gex_history` accrual to the
+   `audit_r2` anchor set so a dead lane pages instead of silently serving stale data.
+10. **Ship the GEX date picker now** (charting-app): `gex_at:{ROOT}:{DATE}` f-param over the *existing*
+    `options_hub/gex_history/{ROOT}/{DATE}.json` + date picker on the Exposure desk — data verified live; macro
+    side adds `dates.json` + self-heal for the two holes. This closes Phase-2 slice 3 for the accrued window
+    (2026-07-16→) immediately; the 2017→ backfill is R2's job.
+
+### R1 — Tape truth: the enriched print schema (M1 plane + macro engine + terminal)
+Goal: every print carries what QuantData shows. New `flow.print/v2` schema:
+`{ts, root, exp, strike, right, qty, price, prem, spot, bid, ask, bid_size, ask_size, exchange, conditions[],
+side_5tier, consolidation (SPLIT|BLOCK|SWEEP|MULTI), golden, opening (vol>OI heuristic), moneyness, dte, iv,
+greeks{delta…zomma} (from nearest U-CHAIN/EOD surface), sector, industry}`.
+- **Classifier build** (macro `engine/`): sweep stitching (same root/exp/strike/side across exchanges in Δt),
+  block/split from conditions + size, golden-sweep thresholds, opening-position heuristic, tied/cancelled tagging.
+  Calibrate against QuantData's visible classifications for shared sessions (we have their UI as oracle).
+- **5-tier side ladder** + header gauges (session sentiment verdict, P/C ratio / volume / premium) published in
+  `meta.json`.
+- Terminal tape/desk render the new columns (column-picker, not 30 visible columns); Filter-Group vocabulary (R4)
+  keys off this schema. Honesty: classifier confidence tagged; heuristics labelled (`~sweep` until calibrated).
+
+### R2 — The intraday store + universal playback (the keystone)
+Goal: QuantData's defining capability — every widget can replay any minute of any session.
+- **Store**: extend the Flow-Surface grid store from 3 roots to tier-1 (~35 roots) at poller cadence and all
+  U-CHAIN roots at 15-min; nightly compaction to per-session parquet on the M1 store; dated R2 publish
+  `intraday/{ROOT}/{DATE}/{metric}.json` with an index manifest. Retention: 90 sessions hot on R2, full history on
+  the M1 store. Cadence honesty: the scrubber step granularity = actual snapshot cadence (1-min only when the
+  cadence fix lands; 15-min meanwhile — the UI must say which).
+- **Slice-3 deep backfill** (forward accrual + Terminal consumer already handled in R0.10): extend
+  `build_index_gex_history.py` to persist the reconstructed full per-date ladder in the `options_hub.gex/v1`
+  shape under the same `gex_history/{ROOT}/{DATE}.json` family (`reconstructed:true`), 2017→ for index ETFs
+  (~300–400 MB R2); extend `audit_overlap` (existing validation primitive, net-GEX corr 0.94–0.998) to ladder
+  level over the 2026-07-17→ live overlap **before** the picker exposes reconstructed dates (honesty gate);
+  single-name recent history re-derivable from `data/polygon_gex/chains/{DATE}.parquet` (since 2026-06-15).
+- **Universal playback wrapper** (terminal): one shared component (date-picker + time slider + play/pause + crop
+  brush + LIVE-follow) adopted by Exposure ladder, PRISM, heatmaps, tide, net-flow — replacing the Surface-tab-only
+  replay. replayBus stays the cross-pane time authority. Fix the stamp-index head-follow gap (poller missing).
+
+### R3 — The missing analytics surfaces (terminal + small builders)
+Interval Map (bubbles, value/Δ modes — U-CHAIN data) · multi-metric Heat Map (strike×expiry engine: GEX/DEX/VEX/
+CHEX/net-prem/net-vol/OI/IV/…, MVC marker) · exposure normalization modes (1%/$1/unit) · OI suite (OI/Time from the
+1.9 GB OI history, Max Pain + Max Pain/Time, OI Change table) · Vol suite (Volatility Drift ARV-vs-IV intraday,
+IV Rank with configurable lookback, Skew, Term Structure — from the vol payload + U-CHAIN IV) · Statistics
+(contract stats, trade-side stats, market share by exchange from retained exchange codes) · Net Flow/Net Drift
+upgrade (click-reveals-largest-trades-per-interval, Net Drift Cross events) · **VEX/UNUSUAL-equivalent lenses turn ON, on the Exposure matrix** (PRISM retired, §5.3)
+(vanna grids from U-CHAIN make VEX honest; the 30-d unusual baseline has accrued since 07-24 — verify, then light).
+
+### R4 — Filter Groups, alerts, and the workspace bus (terminal + Supabase)
+- **Filter engine**: Field/Operator/Value AST over `flow.print/v2` + contract + underlying vocabulary; applied
+  server-side in the SSE spine (per-connection filter param) and client-side for instant refinement; human-readable
+  summary sentence (their best UX idea).
+- **Persistence/sharing**: Supabase tables (`filter_groups`, `alert_rules`) with owner RLS + public flag +
+  duplicate; seed a curated public library (SPX big orders, golden sweeps, 0DTE whales…).
+- **Alert generalization**: alert = filter group + event type + throttle; new types from R2/R3 surfaces (MVC
+  proximity/shift, Net-Drift cross, wall-touch upgraded to intraday) joining the 5 existing opt_* kinds; delivery =
+  existing alerts plane (5-min VPS cron) + SSE in-session toasts; throttle field honored.
+- **Page/global filter sync**: ticker/expiration/session-date context bus across the options workspace (the
+  QuantData Page/Global Tool Filters pattern) — replaces today's per-tab root state.
+
+### R5 — IA restructure + the blind-spot surfaces (terminal)
+Reorganize `/options` from 11 flat tabs into QuantData-shaped categories **in our idiom** (see §5): Command ·
+Flow · Exposure · Structure (OI) · Volatility · Statistics · Prophet. Kill the aliases, extract the monolith,
+unify the 3 ladder idioms + 3 expiry renders, cross-link tape↔desk, move leaders/radar fully into Discover.
+Add the blind-spot surfaces neither product has as first-class: **0DTE dashboard** (dedicated tab of the Flow
+category), **largest-trades board**, **chain browser table** (plain sortable chain — table stakes), **P/C ratio
+history chart**, **expected-vs-realized move report** (moves data already exists), CSV export on tape/screener.
+
+### R6 — Prophet superintelligence (macro engine + terminal; the flagship)
+Full design in §6. Summary: multi-source origination (GC-v2 + cascade + standouts + options-flow triggers),
+options-structure-aware geometry (walls/flip/expected-move), live intraday management (flow deltas re-score
+signals mid-session), option-contract optimization + graded option outcomes, ledger surfaced (PERF tab real),
+Prophet on charts/ticker pages/screener, bear-side lane behind its own pre-registration.
+
+### R7 — Dark pool & equities lane (owner spending decision required)
+Decision gate: **Polygon TRF** (cheap, prints+levels) vs **Databento** (licensed depth, per
+`docs/DATABENTO_INTEGRATION_DESIGN.md`, incl. pro/non-pro classification duty). Until decided, the honest FINRA
+EOD belt stays. When decided: Dark Pool Levels (top price levels), Dark Flow (cumulative), Equity Prints, Exchange
+Notifications (halts/LULD from the same feed family), Market Map. **No fabricated interim.**
+
+### R8 — Composability (deliberately last)
+My-Pages-style custom layouts over the R5 category surfaces (widget = extracted tab panes; layout persistence in
+Supabase). Only after R5 proves the extracted-pane architecture; a fixed excellent IA beats a widget board until
+every widget is excellent.
+
+**Sequencing law**: R0 unblocks everything and is pure repair — do first, immediately. R1→R2 are the data spine and
+strictly precede their UI consumers. R3/R4 parallelize after R2. R5 lands as its surfaces stabilize. R6 runs as its
+own lane once R0.7 + R2 exist (its intraday inputs). R7/R8 are gated (spend / IA-maturity).
+
+---
+
+## 5. IA redesign — `/options` as one coherent product
+
+Categories (workspace tab row), each hosting sub-views via the existing WorkspaceTabs pattern:
+
+1. **Command** — the desk formerly known as `desk`: watchlist rail, session gauges (new R1 header verdicts),
+   chain-heat rail (relit), tide compact, EOD context belt, Prophet receipt. The "open the market" home.
+2. **Flow** — tape (enriched R1 columns) + Net Flow/Drift + 0DTE dashboard + largest trades. One filter system
+   (R4), one preset library; card view (old Flow Desk) and table view (old Tape) become **view modes of one
+   surface**, ending the duplication.
+3. **Exposure** — the gexdesk suite + Interval Map + multi-metric Heat Map + universal playback; PRISM merged here ✅ §5.3 (PR #344): Matrix view + Confluence + HeatSeeker, one shared renderer with Positioning
+   as the matrix view (one ladder idiom, one levels provenance, one expiry render).
+4. **Structure** — OI suite: chain browser, OI by strike/expiry, OI change, Max Pain (+/Time), OI/Time.
+5. **Volatility** — Vol Drift, IV Rank, Skew, Term Structure, expected-vs-realized moves.
+6. **Statistics** — contract/trade-side/market-share (+ export).
+7. **Prophet** — the R6 desk.
+Screener + Tickers fold into **Flow** (screener) and a global ticker drill (Tickers' vol content moves to
+Volatility). Leaders/Radar leave for Discover (they are equity boards). Every dead alias (`?tab=vol`) 301s.
+
+Design doctrine unchanged: v5/v7 tokens, LEX i18n, `--up/--down` law, svgChart law, Tip primitive, honesty chips
+(asof/cadence/provenance on every widget), responsive contract (1440/820/390 e2e).
+
+---
+
+## 6. Prophet superintelligence — architecture
+
+**Principle**: Prophet stops being a repackager of one upstream list and becomes the estate's **fusion desk**:
+every signal source in §2 flows into one scored, provenance-tagged, live-managed plan surface. Score-not-gate,
+display-tier, ledger-graded, "validated" stays CI-forbidden.
+
+### 6.1 The spine artifact
+New versioned doc `prophet.spine/v1` per candidate symbol (macro nightly + intraday patcher):
+```
+{sym, asof, sources:{
+  oracle:   {verdict, quality_tier, keeper, reclaim, known_ts},        # GC-v2 scored lane
+  cascade:  {tier, weight, fresh_ticks, htf_s1},                        # macro T1–T4
+  standout: {conviction, band, act_level, entry_status, gate_go},       # us_standouts
+  entry:    {status, buy_zone, chase_above, invalidation},              # entry_signal
+  cohort:   {rubber_band_z, peer_washout_pct, subsector_gate},          # cohort/subsector
+  rotation: {episode, complex_in_out},                                  # oracle_state
+  options:  {net_gex, flip, walls, dist_to_flip, vex?, charm?,          # gex_state/matrix
+             pcr, iv_rank, term_slope, expected_move,                   # vol/moves
+             flow: {tide_z, unusual_z, sweep_bias_5t, oi_confirm}},     # R1/R2 intraday
+  technicals: {ma_stack, rsi_regime, vol_squeeze, washout, extended},   # entry_primitives
+  seasonal: {bucket_tilt}, market: {risk_verdict, regime},              # seasonal/market_risk
+}, staleness per source, grammar tag per source}
+```
+Composed **from existing artifacts** over the R2 bus — no new math in v1, so it ships fast and honestly. Each
+source carries its own `known_ts` + bar-grammar tag (the three-confluence-grammars problem is disclosed, not
+hidden).
+
+### 6.2 Origination (multi-lane, provenance-tagged)
+Lanes, each pre-registered with its own pick rule (macro `research/` prereg discipline):
+- **L1 Standout** (today's lane, unchanged — continuity of the ledger).
+- **L2 Confluence-of-confluences**: GC-v2 A+/quality BUY ∧ cascade T1/T2-fresh ∧ subsector tailwind.
+- **L3 Flow-trigger** (the operator's "sudden bullish shift" ask): intraday — repeat golden-sweep bias + tide
+  inflection + OI-confirm on a name whose spine shows non-bearish structure (dist-to-flip, walls) → intraday
+  candidate, published to the Prophet desk as `provisional` (marked; converts or expires at close). This is the
+  continuation-catcher Golden Oracle misses by design.
+- **L4 Washout-reclaim**: rubber-band extreme + reclaim lane + flow confirmation.
+Each plan records `origin_lane` + the spine snapshot at origination (auditable forever). Selection stays BULL-only
+until a bear-lane prereg passes review (bear branches exist in the geometry code already).
+
+### 6.3 Geometry (options-structure-aware)
+Stops/targets stop being blind R-multiples: invalidation snaps below the nearest of (swing low, 2×ATR, put wall /
+flip when between); T1/T2 respect call walls + expected move for the horizon (targets inside the reachable cone get
+flagged `structure_fit:true`; outside, the current honest "geometry, not forecast" warning). Levels provenance =
+gex_state (one source; the sealed-levels lane grades them daily already).
+
+### 6.4 Management (live, both directions)
+- Nightly engine unchanged as the anchor; add the **intraday re-scorer** (M1, 5-min with prophet-marks loop):
+  recompute confidence deltas from live spine inputs — flow bias flip against the plan, wall break, tide reversal,
+  vol-regime jump ⇒ `live_adjustment` field (bounded ±10, decays to 0 at close, never crosses phase boundaries —
+  the nightly engine remains the authority). UI: live delta chip + reason string on SignalCard.
+- Intraday touch detection from the intraday store closes the "close-only scan misses T1/stop touches" gap.
+- `macro_stance`/`futures_chg` wired (R0.7). Earnings-blackout veto joins management (no "Hold" through a report
+  silently — chip + confidence haircut).
+- **Option overlay graded**: `option_result_pct` computed from marks history; contract choice upgraded (spread-cost
+  vs delta vs IV-rank aware; still display-tier).
+- **PERF tab goes real**: the ledger (already accruing, PIT-safe) renders as the desk's track record with the same
+  delayed-winners law as the landing.
+
+### 6.5 Distribution (Prophet everywhere it's relevant)
+Chart: plan levels (entry/stop/T1/T2) + phase chip as an opt-in overlay (ChartPanel already draws level rails).
+Ticker page: Prophet receipt block in StockAnalysis (plan state or "no active plan — nearest lane distance").
+Screener: `prophet_phase`, `management_confidence`, `origin_lane` manifest columns. Watchlist rail: phase dot.
+All read the same index — no second pipeline.
+
+### 6.6 Golden Oracle upgrades (the entry-gate stays sovereign)
+Oracle remains the entry authority (its no-cut/GC-v2 discipline is validated); upgrades are inputs, not overrides:
+Tech-Lab combo stats + confluence_screener combos surface as graded context rows in OracleDash; the spine's
+options block joins the OracleDash context (walls/flip/flow bias beside the verdict); the tri-desk relationship
+becomes explicit in the UI: **Oracle = "may I enter?" · Research Desk = "is it worth owning?" · Prophet = "manage
+the trade"** — one shared SignalButton popover surfaces all three with their disagreements disclosed (the existing
+lane-disagreement pattern, extended). No merged composite score — DNR's fusion-score ban stays respected;
+disagreement is displayed, not averaged away.
+
+---
+
+## 7. Execution operating model
+
+- **Hosts**: M1 = all pollers/builders (launchd, `plane` env); macro repo = engine/classifiers/spine/Prophet;
+  terminal repo = all surfaces; VPS = serving + alerts cron. R2 = the only bus. The `terminal-data` two-copies law
+  and the 200-min macro nightly budget both apply (heavy new steps go to M1 launchd, not the GH nightly).
+- **Cadence honesty**: every widget states its true cadence (1-min / 15-min / nightly) — the QuantData look with
+  our honesty chips. Nothing ships against unvalidated reconstructed data (slice-3 gate).
+- **Verification**: responsive e2e at 1440/820/390 per UI wave; fixture families per new f-param
+  (`flow-fixture-family-authoring` rules); classifier calibration vs QuantData sessions before `~` prefixes drop.
+- **Delivery**: standing chain per wave (commit→PR→CI→merge→deploy→marker-verify). Data-plane changes: staggered,
+  rollback-armed, never double-running against prod R2.
+- **Owner decision gates**: (a) ThetaTerminal jar upgrade / vendor ticket approval (R0.6); (b) dark-pool feed spend
+  (R7); (c) news-feed law reconfirm (we keep excluding it); (d) bear-lane activation after prereg (R6.2).
+
+*Reference audits for this plan (2026-07-31 session): terminal options suite, parity history, Prophet trace,
+signal stack, data-plane reality, QuantData live walkthrough + screenshot catalogs.*

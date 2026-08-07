@@ -4,8 +4,8 @@
  * ArcGauge — v6 primitive. Replaces every speedometer / rainbow / hard-edged
  * conic "retro odometer". A single open 240° SVG arc with a round terminal cap,
  * a faint track, ONE state color, a soft drop-shadow glow, and a mono numeral at
- * the center. The arc SWEEPS in on mount / value change (CSS transition on
- * stroke-dashoffset). prefers-reduced-motion kills the sweep.
+ * the center. The progress arc renders at its final reading immediately so a
+ * throttled mobile animation frame can never leave the gauge visually empty.
  *
  * Law: the STATE picks the color — never a red→green gradient across the arc.
  *   bull → var(--up)   bear → var(--down)   warn → var(--signal)
@@ -17,8 +17,6 @@
  *   <ArcGauge value={72} state="bull" label="Buy pressure" />
  *   <ArcGauge value={48} state="neutral" label="Insider" sublabel="routine only" />
  */
-
-import { useEffect, useRef, useState } from "react";
 
 export type ArcState = "bull" | "bear" | "warn" | "neutral";
 
@@ -32,6 +30,8 @@ export interface ArcGaugeProps {
   sublabel?: string;
   /** Show the center numeral (default true). */
   showValue?: boolean;
+  /** Textual state shown in the center when a numeric score is intentionally hidden. */
+  centerLabel?: string;
 }
 
 /** The visible arc spans 240° (a 120° gap at the bottom, symmetric). */
@@ -54,6 +54,19 @@ export function clampArcValue(value: number): number {
   return Math.max(0, Math.min(100, value));
 }
 
+/** Keep the accessible name honest when the visual deliberately withholds a score. */
+export function arcAccessibleLabel(
+  label: string | undefined,
+  value: number,
+  showValue = true,
+  centerLabel?: string,
+): string {
+  const prefix = label ? `${label}: ` : "";
+  return showValue
+    ? `${prefix}${Math.round(clampArcValue(value))} of 100`
+    : `${prefix}${centerLabel || "No numeric score"}`;
+}
+
 /**
  * Geometry for the arc stroke. Given the SVG radius, returns the dasharray
  * (length of the full 240° track) and the dashoffset for a 0–100 value
@@ -67,6 +80,46 @@ export function arcGeometry(radius: number, value: number) {
   return { full, arcLen, offset };
 }
 
+/**
+ * A multi-word verdict ("Strong sell", "No signal") wraps to two lines inside
+ * the arc. At the default inner width (80% of the box) the second line's
+ * corners reach past the arc's inner edge and the words visually collide with
+ * the stroke. `arcInnerPadPct` returns the horizontal inset (as a fraction of
+ * `size`) that keeps a two-line verdict clear of the stroke: the wide default
+ * for a single word, a deep inset for anything that can wrap.
+ *
+ * .21 is derived, not guessed: with the numeral at .26·size, a 2×10px/1.15
+ * verdict beneath it and the centre stack sitting .09·size above the arc
+ * centre, an inset of .21·size keeps the block's lower corners ≥6px inside the
+ * arc's inner edge at every size the app uses (118 is the tightest — the
+ * Technicals gauges — where it clears by ~7.5px).
+ */
+export function arcInnerPadPct(sublabel?: string): number {
+  const s = (sublabel ?? "").trim();
+  const wraps = s.length > 0 && /\s/.test(s);
+  return wraps ? 0.21 : 0.1;
+}
+
+/**
+ * Optical layout for the numeral + verdict stack.
+ *
+ * The content wrapper is intentionally shorter than the full SVG because the
+ * gauge has an open bottom gap. Centering a two-line verdict in that shorter
+ * wrapper pushes the larger numeral too close to the arc's inner top edge.
+ * Multi-word verdicts therefore use a slightly smaller numeral and move the
+ * complete stack down into the open gap. Single-line gauges retain the original
+ * metrics exactly.
+ */
+export function arcStackMetrics(size: number, sublabel?: string) {
+  const tight = arcInnerPadPct(sublabel) > 0.1;
+  return {
+    tight,
+    valueFontSize: Math.round(size * (tight ? 0.235 : 0.26)),
+    translateY: tight ? Math.max(4, Math.round(size * 0.042)) : 0,
+    gap: tight ? Math.max(3, Math.round(size * 0.025)) : 2,
+  };
+}
+
 export function ArcGauge({
   value,
   state,
@@ -74,6 +127,7 @@ export function ArcGauge({
   label,
   sublabel,
   showValue = true,
+  centerLabel,
 }: ArcGaugeProps) {
   const v = clampArcValue(value);
   const color = arcStateColor(state);
@@ -86,36 +140,25 @@ export function ArcGauge({
   const cy = size / 2;
   const { arcLen, offset } = arcGeometry(radius, v);
 
+  // Verdict crowding: a wrapping verdict gets a deeper inner inset plus tighter
+  // tracking/leading, a smaller numeral, and a downward optical shift so both
+  // the score and verdict clear the arc. Single-word verdicts keep the original
+  // metrics.
+  const stack = arcStackMetrics(size, sublabel);
+  const innerPad = Math.round(size * arcInnerPadPct(sublabel));
+
   // The 240° arc is centered at the bottom gap: start at 150°, sweep to 30°
   // (i.e. rotate the SVG so the gap is bottom-center). We draw a full-circle
   // <circle> and reveal 240° of it via dasharray; a -90° base rotation plus a
   // 60° start offset lands the gap symmetrically at the bottom.
   const rotation = 90 + (360 - ARC_SWEEP_DEG) / 2; // = 90 + 60 = 150°
 
-  // Sweep-in: start collapsed (offset = full arc = empty) then transition to the
-  // real offset on mount. prefers-reduced-motion → jump straight to final.
-  const [drawn, setDrawn] = useState(false);
-  const reduce = useRef(false);
-  useEffect(() => {
-    reduce.current =
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    if (reduce.current) { setDrawn(true); return; }
-    const id = requestAnimationFrame(() => setDrawn(true));
-    return () => cancelAnimationFrame(id);
-  }, []);
-  // Re-arm the sweep when the value changes materially (keeps the "arc grows to
-  // the new reading" feel rather than snapping).
-  useEffect(() => { if (reduce.current) setDrawn(true); }, [v]);
-
-  const shownOffset = drawn || reduce.current ? offset : arcLen;
-
   return (
     <span
       className="arcg"
       style={{ width: size, display: "inline-flex", flexDirection: "column", alignItems: "center", gap: label ? 6 : 0 }}
       role="img"
-      aria-label={`${label ? label + ": " : ""}${Math.round(v)} of 100`}
+      aria-label={arcAccessibleLabel(label, v, showValue, centerLabel)}
     >
       <span style={{ position: "relative", width: size, height: size * 0.82, display: "block" }}>
         <svg
@@ -146,11 +189,8 @@ export function ArcGauge({
               strokeWidth={stroke}
               strokeLinecap="round"
               strokeDasharray={`${arcLen} 9999`}
-              strokeDashoffset={shownOffset}
+              strokeDashoffset={offset}
               style={{
-                transition: reduce.current
-                  ? "none"
-                  : "stroke-dashoffset 600ms var(--ease-out)",
                 filter: `drop-shadow(0 0 5px color-mix(in srgb, ${color} 30%, transparent))`,
               }}
             />
@@ -165,7 +205,11 @@ export function ArcGauge({
               flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              gap: 2,
+              gap: stack.gap,
+              // inner padding — the lane the centred stack may occupy. Deeper
+              // when the verdict wraps, so line 2 never touches the arc.
+              padding: `0 ${innerPad}px`,
+              transform: stack.translateY ? `translateY(${stack.translateY}px)` : undefined,
               pointerEvents: "none",
             }}
           >
@@ -174,7 +218,7 @@ export function ArcGauge({
               style={{
                 fontFamily: "var(--font-num)",
                 fontWeight: 650,
-                fontSize: Math.round(size * 0.26),
+                fontSize: stack.valueFontSize,
                 letterSpacing: "-.01em",
                 color: "var(--text)",
                 lineHeight: 1,
@@ -185,17 +229,42 @@ export function ArcGauge({
             {sublabel && (
               <span
                 style={{
-                  font: "600 var(--fs-micro)/1.2 var(--font-ui)",
-                  letterSpacing: ".06em",
+                  // 10px is the bottom of the v6 ramp AND the house font floor,
+                  // so the "one step down" for a wrapping verdict is spent on
+                  // tracking + leading rather than on an illegible font size.
+                  font: `600 var(--fs-micro)/${stack.tight ? 1.15 : 1.2} var(--font-ui)`,
+                  letterSpacing: stack.tight ? ".02em" : ".06em",
                   textTransform: "uppercase",
                   color: "var(--muted)",
-                  maxWidth: size * 0.8,
+                  maxWidth: "100%",
                   textAlign: "center",
+                  overflowWrap: "break-word",
                 }}
               >
                 {sublabel}
               </span>
             )}
+          </span>
+        )}
+        {!showValue && centerLabel && (
+          <span
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: `0 ${Math.round(size * 0.19)}px`,
+              color: "var(--text-2)",
+              font: "650 var(--fs-micro)/1.25 var(--font-ui)",
+              letterSpacing: ".04em",
+              textTransform: "uppercase",
+              textAlign: "center",
+              overflowWrap: "break-word",
+              pointerEvents: "none",
+            }}
+          >
+            {centerLabel}
           </span>
         )}
       </span>

@@ -1,29 +1,55 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useIsMobile } from "@/lib/useMediaQuery";
+import { useIsMobile, useIsPhone } from "@/lib/useMediaQuery";
 import MobileSheet from "@/components/ui/MobileSheet";
-import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext, PointerSensor, KeyboardSensor, useDroppable, useSensor, useSensors, closestCenter, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import dynamic from "next/dynamic";
+import { flushSync } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandLockup, BrandMark } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import { initShellBridge, postToShell } from "@/lib/platform/shellBridge";
 import MobileNav from "@/components/MobileNav";
 import { type DetectCmd } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
 import ChartConductor from "@/components/ChartConductor";
 import { intradayCapable } from "@/components/ChartPanel";
 import { classify } from "@/lib/intradaySources";
-import { type FinPage } from "@/components/fin/MegaPane";
+import { isMacroSymbol } from "@/lib/macroSymbols";
+import { flowGet } from "@/lib/flowClientCache";
+// R3.2 glance layer: the rail block's per-root gexstate read. Entitlement-gated at
+// /api/flow — a 403 nulls out and the rail renders exactly as before (free UX unchanged).
+// NOTE (R3.3 deferred): the watchlist regime dot was built and then pulled — its index
+// payload commits a new span into every row at once, and that one commit landing inside
+// a phone double-tap window eats the pane-maximize gesture (mobile-chart-chrome e2e,
+// cold-reproducible). A dot needs a per-row, jank-free paint path before it ships.
+import { parseGlanceState } from "@/lib/mscGlance";
+import { DEFAULT_START_TF, TF_CANONICAL_ORDER, readStartTf, resolveStartTf } from "@/lib/startTf";
+import { useMarketPrefs } from "@/lib/useMarketPrefs";
+import { FIN_PAGES, type FinPage } from "@/components/fin/MegaPane";
 import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
-import SearchModal, { FLAG_DEFAULT, FLAG_COLORS } from "@/components/SearchModal";
-import IndicatorsModal from "@/components/IndicatorsModal";
-import IndicatorSettings from "@/components/IndicatorSettings";
-import IndicatorSource from "@/components/IndicatorSource";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey } from "@/lib/indicators";
+import { isSuiteKey, suiteDefaults } from "@/lib/suites/registry";
+import {
+  enabledModulesForSuite,
+  enabledSuiteModules,
+  getSuiteModuleCatalogEntry,
+  parseSuiteModuleId,
+  setSuiteModuleEnabledParams,
+  setSuiteSurfaceEnabledParams,
+  suiteModuleCatalogFor,
+} from "@/lib/suites/catalog";
+import {
+  applySuitePresetParams,
+  resolveSuitePreset,
+  type SuitePresetId,
+} from "@/lib/suites/presets";
+import { useEntitlement } from "@/lib/useEntitlement";
+import { normalizeDevTierOverride } from "@/lib/subscriptionTier";
 import { useChartBus } from "@/lib/useChartBus";
 import { isV2Envelope, type IndicatorSpec } from "@/lib/chartBus";
 import SeasonalityCard from "@/components/SeasonalityCard";
@@ -32,35 +58,78 @@ import SeasonalityCard from "@/components/SeasonalityCard";
 // path (each mounts only when opened: paneOpen / signalsOpen / copilot toggle).
 const MegaPane = dynamic(() => import("@/components/fin/MegaPane"), { ssr: false });
 const OracleDash = dynamic(() => import("@/components/fin/OracleDash"), { ssr: false });
+const SearchModal = dynamic(() => import("@/components/SearchModal"), { ssr: false });
+const IndicatorsModal = dynamic(() => import("@/components/IndicatorsModal"), { ssr: false });
+const IndicatorSettings = dynamic(() => import("@/components/IndicatorSettings"), { ssr: false });
+const GuidePanel = dynamic(() => import("@/components/GuidePanel"), { ssr: false });
+const IndicatorSource = dynamic(() => import("@/components/IndicatorSource"), { ssr: false });
+const CompareSettings = dynamic(() => import("@/components/CompareSettings"), { ssr: false });
+const ChartObjectTree = dynamic(() => import("@/components/ChartObjectTree"), { ssr: false });
+// Phone-only chart chrome (R2): the bottom roller strip and the two sheets it raises. Never
+// server-rendered — the phone breakpoint is a client media query, and shell mode brings its own.
+const RollerStrip = dynamic(() => import("@/components/mobile/RollerStrip"), { ssr: false });
+const DrawingsSheet = dynamic(() => import("@/components/mobile/DrawingsSheet"), { ssr: false });
+const AnalysisHubSheet = dynamic(() => import("@/components/mobile/AnalysisHubSheet"), { ssr: false });
 // BrainWidget mounts the production Mastermind Brain widget (mm_brain.js) — it renders null
 // and only injects a cross-origin <script>, so ssr:false / dynamic isn't needed.
 import BrainWidget from "@/components/BrainWidget";
 import StockAnalysis from "@/components/StockAnalysis";
 import SignalButton from "@/components/SignalButton";
 import TrendRow from "@/components/TrendRow";
+import WashoutTurnRow from "@/components/WashoutTurnRow";
 import { oracleVerdict, deskVerdict } from "@/lib/signalVerdict";
 import { computeTrendState } from "@/lib/trend";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
-import { type Drawing, uid } from "@/lib/drawings";
-import SettingsMenu from "@/components/SettingsMenu";
+import {
+  MAX_DRAWINGS_PER_SYMBOL,
+  type Dash,
+  type Drawing,
+  type DrawKind,
+  normalizeDrawingUpdate,
+  normalizeDrawings,
+  uid,
+} from "@/lib/drawings";
+import { readDrawingOutbox, writeDrawingOutbox, type DrawingOutbox } from "@/lib/drawingOutbox";
+import { FREEHAND_DRAWING_KINDS, getDrawingTool, isDrawingToolId } from "@/lib/drawingTools";
+import { SHELL_DRAW_TOOLS } from "@/lib/drawingTaxonomy";
+import { type ShellPanelId } from "@/lib/platform/contract";
+import SettingsButton from "@/components/settings/SettingsButton";
+import { SettingsProvider } from "@/components/settings/SettingsProvider";
+import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
 import DrawingSidebar from "@/components/DrawingSidebar";
 import DayRange from "@/components/DayRange";
 import { useT, useLang } from "@/lib/i18n";
+import { displayName } from "@/lib/markets";
 import { useFromMacro, backToMacro } from "@/lib/originNav";
 import { getJSON, prefetch, loadCoverage } from "@/lib/dataCache";
 import { type CmpCfg, type CmpMode, defaultCmpCfg, cmpKey, isCmpKey, cmpSymOf } from "@/lib/compare";
 import { isComposite, parseComposite, compositeQuote as calcCompositeQuote } from "@/lib/composite";
-import { pushHistory } from "@/lib/searchHistory";
-import CompareSettings from "@/components/CompareSettings";
+import { pushRecentlyViewed } from "@/lib/recentlyViewed";
 import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
 import { type PineScript } from "@/components/ChartPanel";
+
+type ShellDrawingStyle = { color: string; width: number; dash: Dash };
 import ChartTableView from "@/components/ChartTableView";
-import ChartObjectTree, { type OTEntry } from "@/components/ChartObjectTree";
+import { type OTEntry } from "@/components/ChartObjectTree";
 import { listTemplates, saveTemplate } from "@/lib/chartTemplates";
+import { FLAG_DEFAULT, FLAG_COLORS } from "@/lib/flagPalette";
+import { TERMINAL_VISUAL_READY_EVENT } from "@/lib/terminalBoot";
+import AssetLogo from "@/components/AssetLogo";
+import {
+  DEFAULT_WATCHLIST_SETTINGS,
+  WATCHLIST_SETTINGS_KEY,
+  WATCHLIST_SETTINGS_VERSION_KEY,
+  resolveWatchlistSettings,
+  type WatchlistSettings,
+} from "@/lib/watchlistSettings";
+import { resolveRegularSessionDisplay } from "@/lib/quoteDisplay";
 
 type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
+// /api/ext-quote entry. extSession mirrors the Quote Hub's own window classification.
+type ExtSession = "pre" | "post" | "overnight";
+type ExtQuote = { extPrice: number; extChg: number; extTs: number; extSession?: ExtSession };
 
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const vol = (v: number | null | undefined) => (v == null || !isFinite(v) ? "—" : v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : String(v));
@@ -89,26 +158,56 @@ function mergeLive(r: Row | undefined, q: any): Row | undefined {
     const v = q[k];
     if (v != null && isFinite(v)) base[k] = v;
   }
-  // After-hours: when the hub emits an official EOD `close`, the row's LAST/CHG%
-  // should reflect the completed session (the after-hours delta belongs in the
-  // EXT column), NOT the raw AH-influenced `last`/`chg`. Mirrors the detail-pane
-  // rule (officialClose ?? last; chg = (close - prevClose)/prevClose) so the
-  // sidebar, header, and detail pane all agree.
-  const officialClose = q.close;
-  if (officialClose != null && isFinite(officialClose)) {
-    base.last = officialClose;
-    const prevClose = q.prevClose;
-    if (prevClose != null && isFinite(prevClose) && prevClose !== 0) {
-      base.chg = ((officialClose - prevClose) / prevClose) * 100;
-    }
-  }
-  // Overnight (post-midnight-ET, pre-open): no new session prints exist, so chg
-  // computes to a misleading 0.00%. The hub emits prevSessionChg ONLY in that
-  // window — show the last completed session's move instead (TV semantics).
-  if (q.prevSessionChg != null && isFinite(q.prevSessionChg)) {
-    base.chg = q.prevSessionChg;
-  }
+  const regular = resolveRegularSessionDisplay(q);
+  if (regular.regularPrice != null) base.last = regular.regularPrice;
+  if (regular.regularChg != null) base.chg = regular.regularChg;
   return base;
+}
+
+// Section headers double as drop targets. Their droppable ids are namespaced so a section can
+// never collide with a ticker of the same name (a list with a "GOLD" section and a GOLD symbol
+// would otherwise share an id and drop into itself).
+const SEC_DROP_PREFIX = "__sec__:";
+
+// A watchlist section divider: collapse toggle, name, count, and — matching the operator's
+// TradingView reference — rename + trash affordances that appear on hover. Deleting removes the
+// DIVIDER only; the symbols survive in the section above (see deleteSection).
+function WlSectionHeader({ name, count, collapsed, minWidth, onToggle, onRename, onDelete, labels }: {
+  name: string;
+  count: number;
+  collapsed: boolean;
+  minWidth: number;
+  onToggle: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+  labels: { rename: string; remove: string; collapse: string };
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: SEC_DROP_PREFIX + name });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`wl-sec${collapsed ? " collapsed" : ""}${isOver ? " over" : ""}`}
+      style={{ minWidth }}
+      onClick={onToggle}
+      role="button"
+      tabIndex={0}
+      aria-expanded={!collapsed}
+      title={labels.collapse}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+    >
+      <svg className="wl-sec-car" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+      <span className="wl-sec-nm">{name}</span>
+      <span className="wl-sec-ct">{count}</span>
+      <span className="wl-sec-acts">
+        <span className="wl-sec-ic" title={labels.rename} onClick={(e) => { e.stopPropagation(); onRename(); }}>
+          <svg viewBox="0 0 24 24"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3M13.5 6.5l3 3" /></svg>
+        </span>
+        <span className="wl-sec-ic del" title={labels.remove} onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></svg>
+        </span>
+      </span>
+    </div>
+  );
 }
 
 // Drag-sortable wrapper for a watchlist row. Whole-row draggable with a distance
@@ -149,14 +248,30 @@ function SortableWlRow({ sym, className, style, onClick, onMouseEnter, children 
     </div>
   );
 }
-const CHART_TYPES = [["candles", "Candles"], ["heikin", "Heikin Ashi"], ["bars", "Bars"], ["line", "Line"], ["area", "Area"]];
+const CHART_TYPE_GROUPS: [string, string[]][] = [
+  ["ctGroupCandles", ["candles", "hollow", "heikin"]],
+  ["ctGroupBars", ["bars"]],
+  ["ctGroupLines", ["line", "line-markers", "step"]],
+  ["ctGroupAreas", ["area", "baseline"]],
+];
+function ChartTypeIcon({ kind }: { kind: string }) {
+  if (kind === "candles" || kind === "hollow" || kind === "heikin") return (
+    <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true">
+      <path d="M5 2v12M3 5h4v5H3zM14 1v14M12 3h4v7h-4zM23 3v11M21 7h4v4h-4z" fill={kind === "hollow" ? "none" : "currentColor"} />
+    </svg>
+  );
+  if (kind === "bars") return <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true"><path d="M5 2v12M2 5h3M5 11h3M14 1v14M11 4h3M14 10h3M23 3v11M20 6h3M23 12h3" /></svg>;
+  if (kind === "step") return <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 12h7V8h8V4h9" /></svg>;
+  if (kind === "area" || kind === "baseline") return <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 12l6-5 5 3 6-7 7 3v8H2z" className="ct-fill" /><path d="M2 12l6-5 5 3 6-7 7 3" />{kind === "baseline" && <path d="M2 9h24" className="ct-base" />}</svg>;
+  return <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 12l6-5 5 3 6-7 7 3" />{kind === "line-markers" && <><circle cx="8" cy="7" r="1.4" /><circle cx="19" cy="3" r="1.4" /><circle cx="26" cy="6" r="1.4" /></>}</svg>;
+}
 const TF_GROUPS: [string, string[]][] = [["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "2D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
 // Daily-derived TFs are always functional. Intraday TFs (R12) go live for intraday-capable markets
 // (us/crypto/cn/hk); .TO (ca) stays daily-only — its picker entries render disabled.
 const DAILY_FUNCTIONAL = new Set(["D", "2D", "3D", "W", "2W", "1M", "3M"]);
 const INTRADAY_FUNCTIONAL = ["1m", "5m", "15m", "30m", "1h", "2h", "4h"];
-// Canonical chronological order for all TFs — used to sort the top-bar favourites list.
-const TF_CANONICAL_ORDER = ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "D", "2D", "3D", "W", "2W", "1M", "3M"];
+// Sorts the top-bar favourites tray into chronological order. TF_CANONICAL_ORDER lives in
+// lib/startTf, which also feeds the Settings → Terminal startup-timeframe picker.
 const tfSortKey = (tf: string) => { const i = TF_CANONICAL_ORDER.indexOf(tf); return i < 0 ? 999 : i; };
 function functionalSet(sym: string): Set<string> {
   const s = new Set(DAILY_FUNCTIONAL);
@@ -165,7 +280,7 @@ function functionalSet(sym: string): Set<string> {
 }
 // valid ?pane= deep-link targets (the MegaPane pages; "analyst" is an alias for forecast).
 // "mastermind" was retired — its research read now lives in the OracleDash Research-Desk surface.
-const VALID_PANES = new Set(["overview", "statements", "statistics", "dividends", "earnings", "revenue", "forecast", "analyst", "technicals", "seasonals", "insider", "lab"]);
+const VALID_PANES = new Set<string>([...FIN_PAGES, "analyst"]);
 const normalizePane = (pane: string): FinPage => (pane === "analyst" ? "forecast" : pane) as FinPage;
 const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
 
@@ -173,26 +288,30 @@ const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); r
 // everyone and chart drawings were destroyed on symbol switch / reload. Persist them
 // per-symbol in localStorage for guests instead.
 const GUEST_DRAW_KEY = "mm.draw";
-const readGuestDraw = (sym: string): Drawing[] => { try { const m = JSON.parse(localStorage.getItem(GUEST_DRAW_KEY) || "{}"); return Array.isArray(m[sym]) ? m[sym] : []; } catch { return []; } };
+const readGuestDraw = (sym: string): Drawing[] => { try { const m = JSON.parse(localStorage.getItem(GUEST_DRAW_KEY) || "{}"); return normalizeDrawings(m[sym]); } catch { return []; } };
 const writeGuestDraw = (sym: string, d: Drawing[]) => { try { const m = JSON.parse(localStorage.getItem(GUEST_DRAW_KEY) || "{}"); if (d && d.length) m[sym] = d; else delete m[sym]; localStorage.setItem(GUEST_DRAW_KEY, JSON.stringify(m)); } catch {} };
+const drawingCollectionsEqual = (a: Drawing[], b: Drawing[]) =>
+  a.length === b.length && a.every((drawing, index) => drawing === b[index]);
+const isUserDrawing = (drawing: Drawing) => drawing.source
+  ? drawing.source === "user"
+  : drawing.auto !== true;
 
 // drawing tools that accept a pre-draw color/width/dash style — still referenced by ChartPane/ChartPanel
 // for the styleable-tool check; DrawingSidebar owns its own definition of this set now.
 // kept for parity reference; not rendered in this component.
-const DETECTORS: [string, string][] = [
+const DETECTORS: [NonNullable<DetectCmd>["kind"], string][] = [
   ["trendlines", "Auto trendlines"], ["fib", "Auto Fibonacci"], ["sr", "S/R strength heatmap"], ["mtfa", "Multi-timeframe S/R"], ["clear", "Clear detected"],
 ];
 // translation key maps for the (otherwise hard-coded) toolbar/tool labels
-const CT_TKEY: Record<string, string> = { candles: "ctCandles", heikin: "ctHeikin", bars: "ctBars", line: "ctLine", area: "ctArea" };
+const CT_TKEY: Record<string, string> = { candles: "ctCandles", hollow: "ctHollow", heikin: "ctHeikin", bars: "ctBars", line: "ctLine", "line-markers": "ctLineMarkers", step: "ctStepLine", area: "ctArea", baseline: "ctBaseline" };
 const TFG_TKEY: Record<string, string> = { Minutes: "tfMinutes", Hours: "tfHours", Days: "tfDays", Weeks: "tfWeeks", Months: "tfMonths" };
 const DET_TKEY: Record<string, string> = { trendlines: "autoTrendlines", fib: "autoFib", sr: "srHeatmap", mtfa: "mtfSR", clear: "clearDetected" };
 
 // watchlist column widths (px). The symbol column + every visible data column is user-resizable.
-const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, changePct: 76, volume: 80, ext: 72 };
-// item-26: ext = Extended Hours chg% vs close; dash when no ext print.
-type WLSet = { tableView: boolean; cols: { last: boolean; changePct: boolean; change: boolean; volume: boolean; ext: boolean }; disp: string; logo: boolean; colW: Record<string, number> };
-const DEFAULT_SET: WLSet = { tableView: true, cols: { last: true, changePct: true, change: false, volume: false, ext: true }, disp: "symbol", logo: true, colW: {} };
-
+// `ext` matches `last` (82, not the old 72): the column now carries a PRICE of the same
+// magnitude as Last rather than a two-digit percentage, so the narrower default clipped it.
+// A user who has already dragged the column keeps their own width (set.colW wins).
+const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, changePct: 76, volume: 80, ext: 82 };
 // ── Boot-trace helper (?boottrace=1) ────────────────────────────────────────
 // Wraps performance.mark so profiling is zero-cost unless the flag is set.
 // Each mark is also console.log'd with a wall-clock delta from the first mark
@@ -208,14 +327,21 @@ function btMark(name: string) {
   console.log(`[boottrace] ${name} +${(now - _btStart).toFixed(1)}ms`);
 }
 
-export default function TerminalShell({ symbols, email, initialSymbol }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string }) {
+export default function TerminalShell({ symbols, email, initialSymbol, shellMode = false, shellTray = false, shellDossier = false }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string; shellMode?: boolean; shellTray?: boolean; shellDossier?: boolean }) {
   const [man, setMan] = useState<Manifest | null>(null);
   // named watchlists — client-side + localStorage-backed so switching / creating lists works for guests
   // (no auth needed). The server-provided `symbols` seed becomes the "Default" list.
   const [lists, setLists] = useState<Record<string, { symbol: string; section: string }[]>>({ Default: symbols });
+  // Per-list section metadata (order + collapsed). Kept OUT of `lists` so old mm.wls saves,
+  // which store `lists` as plain row arrays, keep loading unchanged.
+  const [listMeta, setListMeta] = useState<Record<string, { sections: string[]; collapsed: string[] }>>({});
+  const [secCreating, setSecCreating] = useState(false);   // inline "add section" input open
+  const [secName, setSecName] = useState("");
   const [activeList, setActiveList] = useState("Default");
   const [wlMenuOpen, setWlMenuOpen] = useState(false);
-  const wl = lists[activeList] || [];
+  // Memoized so its identity is stable: `lists[activeList] || []` allocated a fresh [] on every
+  // render whenever the list was missing, which re-ran every useMemo downstream of `wl`.
+  const wl = useMemo(() => lists[activeList] || [], [lists, activeList]);
   const setWl = (updater: any) => setLists((l) => ({ ...l, [activeList]: typeof updater === "function" ? updater(l[activeList] || []) : updater }));
   // Drag-to-reorder sensors: 6px activation distance so clicks still select rows.
   const dndSensors = useSensors(
@@ -229,17 +355,69 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (!over || active.id === over.id) return;
     setWl((prev: { symbol: string; section: string }[]) => {
       const from = prev.findIndex((x) => x.symbol === active.id);
-      const to = prev.findIndex((x) => x.symbol === over.id);
-      if (from < 0 || to < 0 || prev[from].section !== prev[to].section) return prev;
-      return arrayMove(prev, from, to);
+      if (from < 0) return prev;
+      // Dropping ON a section header re-files the row into that section and parks it at the end
+      // of that group. Sections are user-made now, so a row must be able to LEAVE the section it
+      // was born in — previously any cross-section drop was rejected outright.
+      const overId = String(over.id);
+      if (overId.startsWith(SEC_DROP_PREFIX)) {
+        const sec = overId.slice(SEC_DROP_PREFIX.length);
+        if (prev[from].section === sec) return prev;
+        const row = { ...prev[from], section: sec };
+        const rest = prev.filter((_, i) => i !== from);
+        const lastOfSec = rest.map((r) => r.section).lastIndexOf(sec);
+        rest.splice(lastOfSec + 1, 0, row);
+        return rest;
+      }
+      const to = prev.findIndex((x) => x.symbol === overId);
+      if (to < 0) return prev;
+      // Same section → plain reorder. Different section → adopt the target's section, so
+      // dragging a row into another group does what it looks like it does.
+      if (prev[from].section === prev[to].section) return arrayMove(prev, from, to);
+      const moved = arrayMove(prev, from, to);
+      const at = moved.findIndex((x) => x.symbol === active.id);
+      moved[at] = { ...moved[at], section: prev[to].section };
+      return moved;
     });
   }, [activeList]);
+  // Market preference — ONE instance for the whole shell, so the Markets settings pane and the
+  // search results are always reading the same object. Backed by Supabase user_metadata, which
+  // is the same store the macro site's onboarding writes, on the same Supabase project.
+  // Read-only here: the editing controls live in the settings panel's Terminal section, which subscribes to the same
+  // module store, so both always see identical state.
+  const { prefs: marketPrefs, ready: prefsReady, enableAll: showAllMarkets } = useMarketPrefs(email);
+  // premium-suite UI gate — client hint only, fail-closed to "free" (server authority stays macro-api)
+  const ent = useEntitlement(email);
+  // dev-only tier override (localStorage mm.devTier = "essential" | "pro") — read post-mount to
+  // avoid a hydration mismatch; the whole branch constant-folds away in production builds.
+  // `insider` is the pre-rename name and is still ACCEPTED on read: a dev machine's localStorage
+  // was written before the flip and no migration can reach it. Normalized on read, never written
+  // back — devTier only ever holds a canonical value.
+  const [devTier, setDevTier] = useState<"essential" | "pro" | null>(null);
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    setDevTier(normalizeDevTierOverride(localStorage.getItem("mm.devTier")));
+  }, []);
+  // ent.tier is already normalized by useEntitlement (legacy `insider` → `essential`).
+  const userTier: "free" | "essential" | "pro" = devTier ?? (ent.tier === "essential" || ent.tier === "pro" ? ent.tier : "free");
+
   const seed0 = initialSymbol || symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA";
   const [panes, setPanes] = useState<string[]>([seed0]);
   const [activePane, setActivePane] = useState(0);
   const [sync, setSync] = useState(true);
   const [split, setSplit] = useState(1);   // the split the user requested (panes.length may be smaller after dedup)
   const active = panes[activePane] ?? panes[0] ?? seed0;
+  // A deep link already identifies the real landing symbol. A normal launch may restore a saved
+  // workspace later in the mount pass, so wait for that restore before counting the chart view;
+  // otherwise the brief fallback seed would pollute Recent ahead of the actual restored ticker.
+  const [workspaceRestored, setWorkspaceRestored] = useState(!!initialSymbol);
+  // The active chart is the source of truth for Recently viewed. Recording here (instead of only
+  // inside the search picker) includes direct Macro Dashboard links, the warm iframe bridge,
+  // watchlists, movers, and search results. Composite expressions are not standalone ticker rows.
+  useEffect(() => {
+    if (!active || !workspaceRestored) return;
+    if (!isComposite(active)) pushRecentlyViewed(active);
+  }, [active, workspaceRestored]);
   // Analytics: emit a ticker_view whenever the active chart symbol changes. The symbol is client
   // state (not a route), so the route tracker never sees it — fire a decoupled window event that
   // components/Tracker.tsx picks up. Fire-and-forget; never blocks the UI.
@@ -247,7 +425,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (!active) return;
     try { window.dispatchEvent(new CustomEvent("mm:track", { detail: { type: "ticker_view", ticker: active } })); } catch {}
   }, [active]);
-  const [paneTfs, setPaneTfs] = useState<string[]>(["3D"]);   // one timeframe per pane — Terminal opens on 3D by default
+  // one timeframe per pane. The SSR/first render uses the 3D default; the mount effect below swaps in
+  // the user's saved startup timeframe (localStorage is not readable during render without a hydration
+  // mismatch, which is why this can't be a useState initializer).
+  const [paneTfs, setPaneTfs] = useState<string[]>([DEFAULT_START_TF]);
   const tf = paneTfs[activePane] ?? paneTfs[0] ?? "D";        // the active pane's timeframe drives the toolbar
   const setTf = (t: string) => setPaneTfs((a) => { const n = [...a]; n[activePane] = t; return n; });
   // per-market functional TF set: daily-derived always; intraday TFs only for intraday-capable markets (R12)
@@ -259,8 +440,15 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [inds, setInds] = useState<Set<string>>(new Set(["ema", "vol", "macd", "stochrsi"]));
   const [hidden, setHidden] = useState<Set<string>>(new Set());                       // indicators the eye has hidden
   const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());      // per-indicator params (Settings dialog)
-  const [settingsKey, setSettingsKey] = useState<string | null>(null);                 // indicator whose Settings dialog is open
+  const [settingsKey, setSettingsKey] = useState<string | null>(null);
+  const [guide, setGuide] = useState<
+    { suite: string; mod: string; label: string } | null
+  >(null);
   const [sourceKey, setSourceKey] = useState<string | null>(null);                     // indicator whose Source view is open
+  const activeSuiteModuleIds = useMemo(
+    () => new Set(enabledSuiteModules(inds, indParams).map((entry) => entry.id)),
+    [inds, indParams],
+  );
   // ── custom scripts (Pine): the user's saved scripts + which are ENABLED on the chart + param overrides ──
   const [scripts, setScripts] = useState<UserScript[]>([]);
   const [enabledIds, setEnabledIds] = useState<string[]>([]);                           // enabled script ids (persisted 'mm.pineOn')
@@ -269,7 +457,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // id → script, in a ref so the legend callbacks (declared above the derivations) can look it up
   const scriptByIdRef = useRef<Record<string, UserScript>>({});
   const [favTF, setFavTF] = useState<string[]>(["D", "3D", "W", "1M"]);
-  const [set, setSet] = useState<WLSet>(DEFAULT_SET);
+  // Starred timeframes in canonical order — the phone interval wheel and the native wheel
+  // (bridge payload favTimeframes) rotate exactly what the TF grid's stars saved.
+  const favTfOrder = useMemo(
+    () => [...favTF].filter((entry) => TF_CANONICAL_ORDER.includes(entry)).sort((a, b) => tfSortKey(a) - tfSortKey(b)),
+    [favTF],
+  );
+  const [set, setSet] = useState<WatchlistSettings>(DEFAULT_WATCHLIST_SETTINGS);
   // ── F1 flags: symbol → color; persisted inside mm.wls additively (read below) ──
   const [flags, setFlags] = useState<Record<string, string>>({});
   const [lastFlagColor, setLastFlagColor] = useState<string>(FLAG_DEFAULT);
@@ -281,18 +475,33 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [replayOn, setReplayOn] = useState(false); const [replayIdx, setReplayIdx] = useState<number | null>(null); const [total, setTotal] = useState(0); const [playing, setPlaying] = useState(false); const [speed, setSpeed] = useState(1);
   const playRef = useRef<any>(null);
   // §7 state
-  const [tool, setTool] = useState<string | null>(null);
+  // Tool identity and activation travel together. The epoch makes one-shot
+  // commit resets replay-safe even when the user immediately re-arms the same
+  // tool under React concurrent rendering.
+  const [toolState, setToolState] = useState<{ kind: DrawKind | null; activation: number }>({ kind: null, activation: 0 });
+  const tool = toolState.kind;
+  const [drawingPinnedTool, setDrawingPinnedTool] = useState<DrawKind | null>(null);
+  const selectDrawingTool = useCallback((kind: DrawKind | null) => {
+    setDrawingPinnedTool((current) => kind !== null && current === kind ? current : null);
+    setToolState((current) => kind === null
+      ? (current.kind === null ? current : { ...current, kind: null })
+      : { kind, activation: current.activation + 1 });
+  }, []);
   const [detectCmd, setDetectCmd] = useState<DetectCmd>(null);
   const [detectOpen, setDetectOpen] = useState(false);
   const [intel, setIntel] = useState<any>(null);
+  // R3.2: the ticker page's dealer-positioning block (raw gexstate:{ROOT}; StockAnalysis parses)
+  const [railGex, setRailGex] = useState<unknown>(null);
   const [layouts, setLayouts] = useState<any[]>([]); const [layoutOpen, setLayoutOpen] = useState(false); const [layoutName, setLayoutName] = useState("");
   const [livePx, setLivePx] = useState<number | null>(null);
   // symbol-keyed live top-of-book — ONE source for the header AND every watchlist row (via a single
   // batched /api/quote?syms= poll), so the detail pane and the watchlist can't disagree on a price.
   const [quotes, setQuotes] = useState<Record<string, any>>({});
   // item-26/27: symbol-keyed extended/overnight ext prints — polled from /api/ext-quote (separate
-  // from the main quote poll so the Quote Hub lane surface stays clean). Each entry: { extPrice, extChg, extTs } | null.
-  const [extQuotes, setExtQuotes] = useState<Record<string, { extPrice: number; extChg: number; extTs: number } | null>>({});
+  // from the main quote poll so the Quote Hub lane surface stays clean).
+  // Each entry: { extPrice, extChg, extTs, extSession? } | null. `extSession` ('pre'|'post'|
+  // 'overnight') is the hub's classification of the window; absent when the hub does not say.
+  const [extQuotes, setExtQuotes] = useState<Record<string, ExtQuote | null>>({});
   const [slice, setSlice] = useState<any>(null);
   const [fund, setFund] = useState<Fund | null>(null);
   const [fundLoading, setFundLoading] = useState(true);   // true from symbol reset until getFund settles — MegaPane/ForecastPage skeleton gate
@@ -301,7 +510,28 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // MegaPane (in-shell fundamentals overlay) + OracleDash (Golden Oracle history) overlays
   const [paneOpen, setPaneOpen] = useState<FinPage | null>(null);
   const [signalsOpen, setSignalsOpen] = useState(false);
-  const [magnet, setMagnet] = useState(false);
+  const [magnet, setMagnet] = useState<"off" | "weak" | "strong">("off");
+  const [drawingSticky, setDrawingSticky] = useState(false);
+  const drawingCreationDisabledReason = replayOn
+    ? "replay" as const
+    : panes.length > 1
+      ? "multi-chart" as const
+      : null;
+  const activeDrawingTool = drawingCreationDisabledReason ? null : tool;
+  const drawingKeepsActive = drawingSticky
+    || (activeDrawingTool !== null && drawingPinnedTool === activeDrawingTool)
+    || (activeDrawingTool !== null && FREEHAND_DRAWING_KINDS.has(activeDrawingTool));
+  const drawingStickyRef = useRef(false);
+  drawingStickyRef.current = drawingCreationDisabledReason ? false : drawingKeepsActive;
+  const [drawingsVisible, setDrawingsVisible] = useState(true);
+  const [drawingHistoryVersion, setDrawingHistoryVersion] = useState(0);
+  const [activePaneDetectedDrawingCount, setActivePaneDetectedDrawingCount] = useState(0);
+  const [drawingPrefsHydrated, setDrawingPrefsHydrated] = useState(false);
+  useEffect(() => {
+    if (!drawingCreationDisabledReason) return;
+    const frame = window.requestAnimationFrame(() => selectDrawingTool(null));
+    return () => window.cancelAnimationFrame(frame);
+  }, [drawingCreationDisabledReason, selectDrawingTool]);
   // ── D1-D4: context-menu feature state ──────────────────────────────────────
   // D3: table view mode (replaces chart body)
   const [tableViewOpen, setTableViewOpen] = useState(false);
@@ -320,7 +550,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // D2: locked vertical line (bar time string | null); persists with the workspace save
   const [lockedVLine, setLockedVLine] = useState<string | null>(null);
   // D1: "remove all indicators" undo toast
-  const [undoInds, setUndoInds] = useState<{ snapshot: Set<string>; timer: any } | null>(null);
+  const [undoInds, setUndoInds] = useState<{
+    snapshot: Set<string>;
+    enabledScripts: string[];
+    hidden: Set<string>;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
   // ── Day Trade Mode (D lane §5) ────────────────────────────────────────────────
   const [dtm, setDtm] = useState(false);
   // Snapshot of pre-mode workspace fields restored on OFF
@@ -336,8 +571,56 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // Brief mode-change toast
   const [dtmToast, setDtmToast] = useState<string | null>(null);
   const dtmToastTimer = useRef<any>(null);
-  // pre-draw style chosen BEFORE drawing (color/width/dash) — applied to each new line/arrow/box/HV drawing
-  const [drawStyle, setDrawStyle] = useState<{ color: string; width: number; dash: "solid" | "dashed" | "dotted" }>({ color: "#4d82ff", width: 1.5, dash: "solid" });
+
+  // ── Free-tier gate ──────────────────────────────────────────────────────────
+  // Anonymous visitors get MAX_ANON_IND active indicators and no watchlist; a
+  // free account unlocks unlimited indicators + the watchlist. One toast nudge
+  // with a Sign-up CTA (same /login idiom as onAuthRequired below).
+  const MAX_ANON_IND = 3;
+  const [gateNudge, setGateNudge] = useState<string | null>(null);
+  const gateNudgeTimer = useRef<any>(null);
+  const showGateNudge = useCallback((msg: string) => {
+    setGateNudge(msg);
+    clearTimeout(gateNudgeTimer.current);
+    gateNudgeTimer.current = setTimeout(() => setGateNudge(null), 5000);
+  }, []);
+  // Enforce the indicator cap in ONE place: every mutation path (default set,
+  // localStorage restore, templates, DTM presets, layouts, commands, undo) flows
+  // through `inds`, so clamp here instead of guarding ~10 setInds call sites.
+  // Silent — the manual add path (toggleInd) shows the nudge; bulk/load just cap.
+  useEffect(() => {
+    if (loggedIn || inds.size <= MAX_ANON_IND) return;
+    setInds((s) => new Set([...s].slice(0, MAX_ANON_IND)));
+  }, [inds, loggedIn]);
+  // Preserve OpenMarket-style defaults per tool. A global blue/1.5/solid state
+  // flattened meaningful defaults (for example Highlighter 8px and dashed Fib)
+  // as soon as a tool was selected. Overrides now belong to the tool that the
+  // user customized and are merged over its registry defaults.
+  const [drawStyleOverrides, setDrawStyleOverrides] = useState<
+    Partial<Record<DrawKind, Partial<ShellDrawingStyle>>>
+  >({});
+  const drawStyle = useMemo<ShellDrawingStyle>(() => {
+    const defaults = tool ? getDrawingTool(tool)?.defaults : undefined;
+    const override = tool ? drawStyleOverrides[tool] : undefined;
+    return {
+      color: override?.color ?? defaults?.color ?? "#4d82ff",
+      width: override?.width ?? defaults?.width ?? 1.5,
+      dash: override?.dash ?? defaults?.dash ?? "solid",
+    };
+  }, [drawStyleOverrides, tool]);
+  const patchDrawStyle = useCallback((patch: Partial<ShellDrawingStyle>, explicitKind?: DrawKind) => {
+    const targetKind = explicitKind ?? tool;
+    if (!targetKind) return;
+    const safePatch: Partial<ShellDrawingStyle> = {
+      ...(typeof patch.color === "string" ? { color: patch.color } : {}),
+      ...(typeof patch.width === "number" && Number.isFinite(patch.width) ? { width: patch.width } : {}),
+      ...(patch.dash === "solid" || patch.dash === "dashed" || patch.dash === "dotted" ? { dash: patch.dash } : {}),
+    };
+    setDrawStyleOverrides((current) => ({
+      ...current,
+      [targetKind]: { ...current[targetKind], ...safePatch },
+    }));
+  }, [tool]);
   const [compare, setCompare] = useState<string[]>([]);
   const [compareCfg, setCompareCfg] = useState<Record<string, CmpCfg>>({});
   const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
@@ -346,6 +629,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const t = useT();
   const { lang } = useLang();
   const isMobile = useIsMobile();
+  // Narrower than isMobile on purpose — the tablet contract viewport keeps the desktop-era chrome.
+  const isPhone = useIsPhone();
   const navPath = usePathname();
   // ── urlSearch: window.location.search alternative to useSearchParams() ──────
   // TerminalShell is always dynamically-rendered (server-side, on demand) so the
@@ -371,6 +656,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }, []);
   // mobile + fullscreen + expanded-analysis state
   const [fullChart, setFullChart] = useState(false);
+  // ── phone chart chrome (R2): the roller strip's two sheets ──
+  const [drawSheetOpen, setDrawSheetOpen] = useState(false);
+  const [hubOpen, setHubOpen] = useState(false);
+  // Optimistic "seen" so the ••• badge cannot flash before localStorage is read on mount.
+  const [hubSeen, setHubSeen] = useState(true);
+  useEffect(() => { try { setHubSeen(localStorage.getItem("mm.hubSeen") === "1"); } catch {} }, []);
   // SSR-consistent default; the persisted width is read after mount (below) so the server- and
   // client-rendered `--rail-w` style always agree on the first paint (no hydration mismatch).
   const [railW, setRailW] = useState<number>(360);
@@ -381,12 +672,133 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // shared per-symbol drawing store (lifted out of ChartPane so multiple panes on the same
   // symbol share one set instead of clobbering each other through the replace-all PUT)
   const [drawStore, setDrawStore] = useState<Record<string, Drawing[]>>({});
+  const drawStoreRef = useRef<Record<string, Drawing[]>>({});
+  drawStoreRef.current = drawStore;
   const drawLoaded = useRef<Set<string>>(new Set());
   const drawPending = useRef<Record<string, Drawing[]>>({});
   const drawTimers = useRef<Record<string, any>>({});
+  const drawSaving = useRef<Partial<Record<string, Promise<void>>>>({});
+  const flushDrawingsRef = useRef<(sym: string) => void>(() => {});
+  const drawLoadRetryTimers = useRef<Record<string, any>>({});
+  const drawLoadRetryAttempts = useRef<Record<string, number>>({});
+  // Invalidates every async load/save callback when drawing ownership changes
+  // (guest -> account, sign-out, or account swap). A stale request must never
+  // populate or enqueue work into the next owner's cache.
+  const drawOwnerEpoch = useRef(0);
+  const drawOwner = useRef(email ? `account:${email}` : "guest");
+  const [drawingOwnerKey, setDrawingOwnerKey] = useState(email ? `account:${email}` : "guest");
+  const drawHistory = useRef<Record<string, { undo: Drawing[][]; redo: Drawing[][] }>>({});
   const prevPaneSyms = useRef<Set<string>>(new Set());
-  const flushDrawings = useCallback((sym: string) => { clearTimeout(drawTimers.current[sym]); const d = drawPending.current[sym]; if (d) { delete drawPending.current[sym]; if (loggedIn) { fetch("/api/drawings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: sym, drawings: d }) }).catch(() => {}); } else { writeGuestDraw(sym, d); } } }, [loggedIn]);
-  const setSymbolDrawings = useCallback((sym: string, d: Drawing[]) => { setDrawStore((s) => ({ ...s, [sym]: d })); drawPending.current[sym] = d; clearTimeout(drawTimers.current[sym]); drawTimers.current[sym] = setTimeout(() => flushDrawings(sym), 600); }, [flushDrawings]);
+  const [drawingLoadRetryVersion, setDrawingLoadRetryVersion] = useState(0);
+  const [drawingLoadFailures, setDrawingLoadFailures] = useState<Set<string>>(new Set());
+  const drawRecovery = useRef<Record<string, DrawingOutbox>>({});
+  const [drawingLimitWarning, setDrawingLimitWarning] = useState(false);
+  const drawingLimitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showDrawingLimitWarning = useCallback(() => {
+    setDrawingLimitWarning(true);
+    if (drawingLimitTimer.current !== null) clearTimeout(drawingLimitTimer.current);
+    drawingLimitTimer.current = setTimeout(() => setDrawingLimitWarning(false), 5_000);
+  }, []);
+  const flushDrawings = useCallback((sym: string) => {
+    clearTimeout(drawTimers.current[sym]);
+    if (drawSaving.current[sym]) return;
+    const drawings = drawPending.current[sym];
+    if (!drawings) return;
+    delete drawPending.current[sym];
+    if (!loggedIn) { writeGuestDraw(sym, drawings); return; }
+    const ownerEpoch = drawOwnerEpoch.current;
+    const ownerKey = drawOwner.current;
+    let failed = false;
+    const save = fetch("/api/drawings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: sym, drawings }),
+      })
+      .then((response) => {
+        if (!response.ok) throw new Error(`drawing save failed (${response.status})`);
+        if (drawOwnerEpoch.current !== ownerEpoch) return;
+        const recovery = drawRecovery.current[ownerKey];
+        if (recovery?.[sym] === drawings) {
+          delete recovery[sym];
+          writeDrawingOutbox(localStorage, ownerKey, recovery);
+        }
+      })
+      .catch(() => {
+        if (drawOwnerEpoch.current !== ownerEpoch) return;
+        failed = true;
+        // Preserve a failed snapshot, but never replace a newer edit queued
+        // while this request was in flight.
+        if (drawPending.current[sym] === undefined) drawPending.current[sym] = drawings;
+      })
+      .finally(() => {
+        if (drawOwnerEpoch.current !== ownerEpoch) return;
+        delete drawSaving.current[sym];
+        const pending = drawPending.current[sym];
+        // Coalesce to the newest snapshot and serialize PUTs per symbol. Do not
+        // spin forever on a lone failed request; a future edit/navigation flush
+        // retries the retained snapshot.
+        if (pending && (!failed || pending !== drawings)) {
+          drawTimers.current[sym] = setTimeout(() => flushDrawings(sym), 0);
+        } else if (!pending && !prevPaneSyms.current.has(sym)) {
+          // A symbol that left the workspace stays cached while its serialized
+          // save is in flight. Evict only after the final snapshot is durable;
+          // revisiting before then keeps the authoritative in-memory version.
+          drawLoaded.current.delete(sym);
+          delete drawHistory.current[sym];
+          setDrawStore((store) => {
+            if (store[sym] === undefined) return store;
+            const next = { ...store }; delete next[sym]; return next;
+          });
+        }
+      });
+    drawSaving.current[sym] = save;
+  }, [loggedIn]);
+  useEffect(() => { flushDrawingsRef.current = flushDrawings; }, [flushDrawings]);
+  const setSymbolDrawings = useCallback((sym: string, d: Drawing[], recordHistory = true) => {
+    if (drawOwner.current !== (email ? `account:${email}` : "guest")) return;
+    // `undefined` is deliberate: signed-in symbols remain fail-closed until an
+    // authoritative GET succeeds (a valid empty collection is stored as `[]`).
+    // This prevents a transient load failure plus one new mark from replacing
+    // an unseen server collection.
+    if (loggedIn && drawStoreRef.current[sym] === undefined) return;
+    if (d.length > MAX_DRAWINGS_PER_SYMBOL) {
+      showDrawingLimitWarning();
+      return;
+    }
+    const previous = drawPending.current[sym] ?? drawStoreRef.current[sym] ?? [];
+    const normalized = normalizeDrawingUpdate(d, previous, MAX_DRAWINGS_PER_SYMBOL);
+    if (recordHistory && !drawingCollectionsEqual(previous, normalized)) {
+      const history = drawHistory.current[sym] ?? (drawHistory.current[sym] = { undo: [], redo: [] });
+      history.undo.push(previous);
+      if (history.undo.length > 100) history.undo.shift();
+      history.redo = [];
+    }
+    setDrawStore((s) => ({ ...s, [sym]: normalized }));
+    drawPending.current[sym] = normalized;
+    if (loggedIn) {
+      const ownerKey = drawOwner.current;
+      const recovery = drawRecovery.current[ownerKey] ?? (drawRecovery.current[ownerKey] = {});
+      recovery[sym] = normalized;
+    }
+    clearTimeout(drawTimers.current[sym]);
+    drawTimers.current[sym] = setTimeout(() => flushDrawings(sym), 600);
+    setDrawingHistoryVersion((v) => v + 1);
+  }, [email, flushDrawings, loggedIn, showDrawingLimitWarning]);
+  const travelDrawingHistory = useCallback((sym: string, dir: "undo" | "redo") => {
+    const history = drawHistory.current[sym]; if (!history) return;
+    const from = dir === "undo" ? history.undo : history.redo, to = dir === "undo" ? history.redo : history.undo;
+    const target = from.pop(); if (!target) return;
+    const current = drawPending.current[sym] ?? drawStoreRef.current[sym] ?? [];
+    to.push(current);
+    setSymbolDrawings(sym, target, false);
+  }, [setSymbolDrawings]);
+  const drawingHistoryState = useMemo(() => {
+    // drawingHistoryVersion deliberately makes ref-backed stacks reactive without
+    // copying up to 100 drawing snapshots into React state on every pointer move.
+    void drawingHistoryVersion;
+    const history = drawHistory.current[active];
+    return { canUndo: !!history?.undo.length, canRedo: !!history?.redo.length };
+  }, [active, drawingHistoryVersion]);
   // copilot → chart: convert AI-suggested price levels into drawings appended to the symbol's store
   const annotateChart = useCallback((sym: string, anns: any[]) => {
     if (!Array.isArray(anns) || !anns.length) return;
@@ -402,22 +814,59 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (add.length) setSymbolDrawings(sym, [...(drawPending.current[sym] ?? drawStore[sym] ?? []), ...add]);
   }, [drawStore, setSymbolDrawings]);
 
-  // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
-  // After the manifest loads, also warm the coverage index so uncovered symbols
-  // never fire a network request for intel/fund/opts files.
-  useEffect(() => { let alive = true; btMark("manifest-fetch-start"); getJSON("/data/manifest.json").then((m) => { if (alive && m) { btMark("manifest-fetch-done"); setMan(m); loadCoverage(Object.keys(m.symbols || {})); } }).catch(() => {}); return () => { alive = false; }; }, []);
+  // The 600KB manifest is important for watchlist metadata, but it is not
+  // chart-blocking. Let OHLC + the first canvas frame win the cold-start
+  // bandwidth race, then hydrate the surrounding workspace immediately after
+  // that real visual-ready signal. The fallback preserves recovery if chart
+  // setup fails before it can emit the event.
   useEffect(() => {
-    { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); { const sv = load("mm.set", {}); setSet({ ...DEFAULT_SET, ...sv, cols: { ...DEFAULT_SET.cols, ...(sv.cols || {}) }, colW: { ...(sv.colW || {}) } }); } setCompareCfg(load("mm.cmpCfg", {}));
+    let alive = true;
+    let started = false;
+    const loadManifest = () => {
+      if (started) return;
+      started = true;
+      btMark("manifest-fetch-start");
+      getJSON("/data/manifest.json").then((m) => {
+        if (alive && m) {
+          btMark("manifest-fetch-done");
+          setMan(m);
+          loadCoverage(Object.keys(m.symbols || {}));
+        }
+      }).catch(() => {});
+    };
+    window.addEventListener(TERMINAL_VISUAL_READY_EVENT, loadManifest, { once: true });
+    const fallback = window.setTimeout(loadManifest, 3500);
+    return () => {
+      alive = false;
+      window.clearTimeout(fallback);
+      window.removeEventListener(TERMINAL_VISUAL_READY_EVENT, loadManifest);
+    };
+  }, []);
+  useEffect(() => {
+    // Settings → Terminal → Default timeframe (3D unless changed). Resolved against the landing
+    // symbol's functional set, since the workspace restore below can land on a symbol other than seed0.
+    const savedStartTf = readStartTf();
+    const startTf = resolveStartTf(savedStartTf, functionalSet(seed0));
+    { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); for (const k of Object.keys(savedP)) if (isSuiteKey(k)) base[k] = { ...suiteDefaults(k), ...savedP[k] }; setIndParams(base); } setPaneTfs([startTf]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); {
+      const savedSet = load(WATCHLIST_SETTINGS_KEY, {});
+      const savedVersion = Number(localStorage.getItem(WATCHLIST_SETTINGS_VERSION_KEY) || 0);
+      const resolvedSet = resolveWatchlistSettings(savedSet, savedVersion);
+      if (resolvedSet.migrated) {
+        localStorage.setItem(WATCHLIST_SETTINGS_KEY, JSON.stringify(resolvedSet.settings));
+        localStorage.setItem(WATCHLIST_SETTINGS_VERSION_KEY, String(resolvedSet.version));
+      }
+      setSet(resolvedSet.settings);
+    } setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
       try {
         const ws = load("mm.ws", null);
         if (ws && Array.isArray(ws.panes)) {
-          const pairs = ws.panes.map((s: string, i: number) => [s, ws.paneTfs?.[i] ?? "3D"]).filter(([s]: any) => symbols.some((x) => x.symbol === s));
+          const pairs = ws.panes.map((s: string, i: number) => [s, ws.paneTfs?.[i] ?? startTf]).filter(([s]: any) => symbols.some((x) => x.symbol === s));
           if (pairs.length) {
-            // a single chart always opens on the 3D default; genuine multi-pane layouts (e.g. MTF) keep their saved per-pane timeframes
-            setPanes(pairs.map((p: any) => p[0])); setPaneTfs(pairs.length === 1 ? ["3D"] : pairs.map((p: any) => p[1]));
+            // a single chart always opens on the startup default; genuine multi-pane layouts (e.g. MTF) keep their saved per-pane timeframes
+            setPanes(pairs.map((p: any) => p[0])); setPaneTfs(pairs.length === 1 ? [resolveStartTf(savedStartTf, functionalSet(pairs[0][0]))] : pairs.map((p: any) => p[1]));
             setSplit([1, 2, 4].includes(ws.split) ? ws.split : (pairs.length >= 4 ? 4 : pairs.length >= 2 ? 2 : 1));
             setActivePane(Math.min(ws.activePane || 0, pairs.length - 1));
             if (typeof ws.sync === "boolean") setSync(ws.sync);
@@ -440,20 +889,54 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       if (initialSymbol) setTimeout(() => setTf("5m"), 0);
       setTimeout(() => setDtm(true), 0);
     }
+    setWorkspaceRestored(true);
   }, []);
+  // Legacy workspaces stored one hidden bit per suite. Expand that bit to the suite's currently
+  // enabled qualified module ids so new module-level eyes preserve the old all-hidden appearance.
+  useEffect(() => {
+    setHidden((current) => {
+      const legacySuites = [...current].filter(isSuiteKey);
+      if (!legacySuites.length) return current;
+      const next = new Set(current);
+      for (const suiteKey of legacySuites) {
+        next.delete(suiteKey);
+        for (const entry of enabledSuiteModules(inds, indParams, suiteKey)) next.add(entry.id);
+      }
+      return next;
+    });
+  }, [inds, indParams]);
   // persist the workspace — but skip the mount-time write (no user intent) and never write during a
   // deep-link (?sym=) session, so following a Screener/Portfolio row can't clobber the saved layout.
   useEffect(() => {
     if (!wsMounted.current) { wsMounted.current = true; return; }
     if (!initialSymbol) localStorage.setItem("mm.ws", JSON.stringify({ panes, paneTfs, split, sync, activePane, lockedVLine }));
   }, [panes, paneTfs, split, sync, activePane, lockedVLine]);
-  useEffect(() => { localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
   // skip the mount-pass write (state is still the pre-load default) — otherwise a reload/discard
-  // landing inside the mount→load window can permanently clobber the saved value with the default
+  // landing inside the mount→load window can permanently clobber the saved value with the default.
+  // mm.inds was the one key WITHOUT this guard: on the mount pass the anon clamp (MAX_ANON_IND)
+  // fires against the 4-item default before hydration lands, the unguarded write recorded the
+  // clamped default, and dev StrictMode's second hydration pass then read the clobbered value —
+  // permanently resetting a guest's saved set to ["ema","vol","macd"] on every reload.
+  const indsMounted = useRef(false);
+  useEffect(() => { if (!indsMounted.current) { indsMounted.current = true; return; } localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
   const hidMounted = useRef(false); const ipMounted = useRef(false); const cmpCfgMounted = useRef(false);
   const favTFMounted = useRef(false); const setMounted = useRef(false); const dtmMounted = useRef(false);
   useEffect(() => { if (!hidMounted.current) { hidMounted.current = true; return; } localStorage.setItem("mm.indHidden", JSON.stringify([...hidden])); }, [hidden]);
   useEffect(() => { if (!ipMounted.current) { ipMounted.current = true; return; } localStorage.setItem("mm.indParams", JSON.stringify(indParams)); }, [indParams]);
+  // Up/Down colors flip: re-run every built-in through withDefaults so its DIRECTIONAL style params
+  // move to the new convention. ChartPanel already normalizes at draw time, so this is what keeps the
+  // Settings dialog swatches (and the persisted blob) telling the same story as the chart. A color the
+  // user picked themselves matches neither convention's default and is left alone. Suite keys aren't
+  // in the built-in registry and are skipped, exactly like the load path above.
+  useEffect(() => {
+    const onFlip = () => setIndParams((p) => {
+      const next = { ...p };
+      for (const k of IND_ORDER) next[k] = withDefaults(k, p[k]);
+      return next;
+    });
+    window.addEventListener("mm:updown", onFlip);
+    return () => window.removeEventListener("mm:updown", onFlip);
+  }, []);
   useEffect(() => { if (!cmpCfgMounted.current) { cmpCfgMounted.current = true; return; } localStorage.setItem("mm.cmpCfg", JSON.stringify(compareCfg)); }, [compareCfg]);
   useEffect(() => { localStorage.setItem("mm.ct", JSON.stringify(chartType)); }, [chartType]);
   useEffect(() => { localStorage.setItem("mm.tf", JSON.stringify(tf)); }, [tf]);
@@ -461,7 +944,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // useEffect at line ~213 runs setFavTF(load(...)). Without the guard, the first render fires
   // this effect with the default and clobbers the saved value before the load effect runs.
   useEffect(() => { if (!favTFMounted.current) { favTFMounted.current = true; return; } localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
-  useEffect(() => { if (!setMounted.current) { setMounted.current = true; return; } localStorage.setItem("mm.set", JSON.stringify(set)); }, [set]);
+  useEffect(() => { if (!setMounted.current) { setMounted.current = true; return; } localStorage.setItem(WATCHLIST_SETTINGS_KEY, JSON.stringify(set)); }, [set]);
   useEffect(() => { if (!dtmMounted.current) { dtmMounted.current = true; return; } localStorage.setItem("mm.dtm", JSON.stringify(dtm)); }, [dtm]);
   // restore saved named watchlists (falls back to the server-seeded Default list)
   useEffect(() => {
@@ -503,6 +986,19 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       }
       setLists(restored);
       setActiveList(saved.active && restored[saved.active] ? saved.active : (loggedIn ? "Default" : Object.keys(restored)[0]));
+      // Section metadata is additive: saves written before sections existed simply have no
+      // `meta` key and fall back to derived first-appearance order.
+      if (saved.meta && typeof saved.meta === "object") {
+        const clean: Record<string, { sections: string[]; collapsed: string[] }> = {};
+        for (const [k, v] of Object.entries(saved.meta as Record<string, unknown>)) {
+          const m = v as { sections?: unknown; collapsed?: unknown };
+          clean[k] = {
+            sections: Array.isArray(m?.sections) ? m.sections.filter((x): x is string => typeof x === "string") : [],
+            collapsed: Array.isArray(m?.collapsed) ? m.collapsed.filter((x): x is string => typeof x === "string") : [],
+          };
+        }
+        setListMeta(clean);
+      }
     }
     // F1 flags: stored alongside wls (additive — old saves without flags load fine)
     const savedFlags = load("mm.flags", {});
@@ -514,7 +1010,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // transition is handled by the prevEmailRef effect below).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => { if (Object.keys(lists).length) localStorage.setItem("mm.wls", JSON.stringify({ lists, active: activeList })); }, [lists, activeList]);
+  useEffect(() => { if (Object.keys(lists).length) localStorage.setItem("mm.wls", JSON.stringify({ lists, active: activeList, meta: listMeta })); }, [lists, activeList, listMeta]);
   // ── TRAP 1: guest → signed-in reconciliation (AuthSheet router.refresh delivers a real `email`
   //    + the server's Default symbols, but client `lists` was seeded from the guest state in the
   //    useState initializer and never re-seeds on its own; stale mm.wls also shadows the server list).
@@ -536,16 +1032,126 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // paneSync mirrors same-timeframe peers only — disable it entirely when the panes carry mixed timeframes
   // (the Sync button is rendered disabled in that case), so a stale sync=true can't silently half-work.
   useEffect(() => { setPaneSync(sync && panes.length > 1 && new Set(paneTfs.slice(0, panes.length)).size <= 1); }, [sync, panes.length, paneTfs]);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      try {
+        const value = JSON.parse(localStorage.getItem("mm.drawing.preferences") || "{}");
+        if (value.magnet === "off" || value.magnet === "weak" || value.magnet === "strong") setMagnet(value.magnet);
+        if (typeof value.sticky === "boolean") setDrawingSticky(value.sticky);
+        if (typeof value.visible === "boolean") setDrawingsVisible(value.visible);
+        if (value.styles && typeof value.styles === "object" && !Array.isArray(value.styles)) {
+          const styles: Partial<Record<DrawKind, Partial<ShellDrawingStyle>>> = {};
+          for (const [id, candidate] of Object.entries(value.styles as Record<string, unknown>)) {
+            if (!isDrawingToolId(id) || !candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+            const raw = candidate as Record<string, unknown>;
+            const style: Partial<ShellDrawingStyle> = {
+              ...(typeof raw.color === "string" ? { color: raw.color } : {}),
+              ...(typeof raw.width === "number" && Number.isFinite(raw.width) ? { width: raw.width } : {}),
+              ...(raw.dash === "solid" || raw.dash === "dashed" || raw.dash === "dotted" ? { dash: raw.dash } : {}),
+            };
+            styles[id] = style;
+          }
+          setDrawStyleOverrides(styles);
+        }
+      } catch {}
+      setDrawingPrefsHydrated(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+  useEffect(() => {
+    if (!drawingPrefsHydrated) return;
+    try { localStorage.setItem("mm.drawing.preferences", JSON.stringify({ magnet, sticky: drawingSticky, visible: drawingsVisible, styles: drawStyleOverrides })); } catch {}
+  }, [drawStyleOverrides, drawingPrefsHydrated, drawingSticky, drawingsVisible, magnet]);
+  // Drawing ownership is a hard cache boundary. Guest drawings remain in the
+  // guest collection; an account always reloads its authoritative server copy.
+  // This also handles sign-out and direct account-to-account session changes.
+  useEffect(() => {
+    const nextOwner = email ? `account:${email}` : "guest";
+    const previousOwner = drawOwner.current;
+    if (previousOwner === nextOwner) return;
+
+    const pending = { ...drawPending.current };
+    for (const timer of Object.values(drawTimers.current)) clearTimeout(timer);
+    for (const timer of Object.values(drawLoadRetryTimers.current)) clearTimeout(timer);
+
+    if (previousOwner === "guest") {
+      // Guest persistence is synchronous, so finish every pending snapshot
+      // before clearing its cache.
+      for (const [sym, drawings] of Object.entries(pending)) writeGuestDraw(sym, drawings);
+    } else {
+      // Authentication has already changed by the time this effect runs, so an
+      // unsent old-account fetch would carry the wrong cookie. Preserve the
+      // captured full snapshots under the previous owner and replay only when
+      // that exact identity is active again.
+      const recovery = drawRecovery.current[previousOwner] ?? (drawRecovery.current[previousOwner] = {});
+      Object.assign(recovery, pending);
+      writeDrawingOutbox(localStorage, previousOwner, recovery);
+    }
+
+    // From here onward, callbacks carrying the previous epoch are inert.
+    drawOwnerEpoch.current += 1;
+    drawOwner.current = nextOwner;
+    setDrawingOwnerKey(nextOwner);
+    const recovered = nextOwner === "guest"
+      ? {}
+      : {
+          ...readDrawingOutbox(localStorage, nextOwner),
+          ...(drawRecovery.current[nextOwner] ?? {}),
+        };
+    if (nextOwner !== "guest") drawRecovery.current[nextOwner] = recovered;
+    drawPending.current = recovered;
+    drawSaving.current = {};
+    drawTimers.current = {};
+    drawLoadRetryTimers.current = {};
+    drawLoadRetryAttempts.current = {};
+    drawLoaded.current.clear();
+    drawHistory.current = {};
+    prevPaneSyms.current.clear();
+    setDrawStore(recovered);
+    setDrawingLoadFailures(new Set());
+    setDrawingHistoryVersion((version) => version + 1);
+    for (const sym of Object.keys(recovered)) {
+      drawTimers.current[sym] = setTimeout(() => flushDrawings(sym), 0);
+    }
+  }, [email, flushDrawings]);
   // load drawings once per symbol that appears in a pane; don't clobber an in-flight local edit
   useEffect(() => {
     const now = new Set(panes);
     for (const sym of now) {
+      // A revisited symbol with an in-flight save keeps its authoritative local
+      // cache. Waiting avoids loading the older server snapshot underneath it.
+      if (drawSaving.current[sym]) continue;
       if (drawLoaded.current.has(sym)) continue;
       drawLoaded.current.add(sym);
       if (loggedIn) {
-        fetch(`/api/drawings?symbol=${sym}`).then((r) => r.json()).then((d) => {
-          if (drawPending.current[sym] === undefined) setDrawStore((s) => (s[sym] !== undefined ? s : { ...s, [sym]: d.drawings || [] }));
-        }).catch(() => { drawLoaded.current.delete(sym); });
+        const ownerEpoch = drawOwnerEpoch.current;
+        fetch(`/api/drawings?symbol=${encodeURIComponent(sym)}`).then((r) => {
+          if (!r.ok) throw new Error(`drawing load failed (${r.status})`);
+          return r.json();
+        }).then((d) => {
+          if (drawOwnerEpoch.current !== ownerEpoch) return;
+          if (!prevPaneSyms.current.has(sym)) return;
+          if (drawPending.current[sym] === undefined) setDrawStore((s) => (s[sym] !== undefined ? s : { ...s, [sym]: normalizeDrawings(d.drawings) }));
+          clearTimeout(drawLoadRetryTimers.current[sym]);
+          delete drawLoadRetryTimers.current[sym];
+          delete drawLoadRetryAttempts.current[sym];
+          setDrawingLoadFailures((failed) => {
+            if (!failed.has(sym)) return failed;
+            const next = new Set(failed); next.delete(sym); return next;
+          });
+        }).catch(() => {
+          if (drawOwnerEpoch.current !== ownerEpoch || !prevPaneSyms.current.has(sym)) return;
+          drawLoaded.current.delete(sym);
+          setDrawingLoadFailures((failed) => failed.has(sym) ? failed : new Set(failed).add(sym));
+          const attempt = (drawLoadRetryAttempts.current[sym] ?? 0) + 1;
+          drawLoadRetryAttempts.current[sym] = attempt;
+          clearTimeout(drawLoadRetryTimers.current[sym]);
+          drawLoadRetryTimers.current[sym] = setTimeout(() => {
+            if (drawOwnerEpoch.current !== ownerEpoch || !prevPaneSyms.current.has(sym)) return;
+            delete drawLoadRetryTimers.current[sym];
+            setDrawingLoadRetryVersion((version) => version + 1);
+          }, Math.min(30_000, 1_000 * (2 ** Math.min(attempt - 1, 5))));
+        });
       } else {
         const gd = readGuestDraw(sym);
         if (drawPending.current[sym] === undefined) setDrawStore((s) => (s[sym] !== undefined ? s : { ...s, [sym]: gd }));
@@ -556,12 +1162,25 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     for (const sym of prevPaneSyms.current) {
       if (now.has(sym)) continue;
       flushDrawings(sym);
+      clearTimeout(drawLoadRetryTimers.current[sym]);
+      delete drawLoadRetryTimers.current[sym];
+      if (drawSaving.current[sym] || drawPending.current[sym] !== undefined) continue;
       drawLoaded.current.delete(sym);
+      delete drawLoadRetryAttempts.current[sym];
+      delete drawHistory.current[sym];
+      setDrawingLoadFailures((failed) => {
+        if (!failed.has(sym)) return failed;
+        const next = new Set(failed); next.delete(sym); return next;
+      });
       setDrawStore((s) => { if (s[sym] === undefined) return s; const n = { ...s }; delete n[sym]; return n; });
     }
     prevPaneSyms.current = now;
-  }, [panes, flushDrawings, loggedIn]);
-  useEffect(() => () => { for (const sym of Object.keys(drawPending.current)) flushDrawings(sym); }, [flushDrawings]);
+  }, [panes, flushDrawings, loggedIn, drawingLoadRetryVersion, email]);
+  useEffect(() => () => {
+    for (const timer of Object.values(drawLoadRetryTimers.current)) clearTimeout(timer);
+    for (const sym of Object.keys(drawPending.current)) flushDrawingsRef.current(sym);
+    if (drawingLimitTimer.current !== null) clearTimeout(drawingLimitTimer.current);
+  }, []);
 
   // per-symbol data for the rail.  Priority split:
   //   IMMEDIATE  — ohlc + slice share the chart's inflight fetch (dataCache dedup); getBars re-uses
@@ -574,6 +1193,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => {
     let alive = true;
     setIntel(null); setLivePx(null); setSlice(null); setFund(null); setOpts(null); setBars([]); setFundLoading(true);
+    setRailGex(null);
     // immediate: chart-shared OHLC and 6KB slice (signal verdict for the rail badge)
     getJSON(`/data/${active}.slice.json`).then((d) => { if (alive) setSlice(d); });
     getBars(active).then((b) => { if (alive) setBars(b); }).catch(() => {});
@@ -587,6 +1207,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         getJSON(`/data/${active}.intel.json`).then((d) => { if (alive) setIntel(d); });
         getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {}).finally(() => { if (alive) setFundLoading(false); });
         getOpts(active).then((d) => { if (alive) setOpts(d); }).catch(() => {});
+        // R3.2: positioning block data — US options names only; 403/absence nulls out silently
+        if (classify(active) === "us" && !isMacroSymbol(active)) {
+          flowGet(`gexstate:${active.toUpperCase()}`).then((d) => { if (alive) setRailGex(d); }).catch(() => {});
+        }
       }, { timeout: 2000 });
       cancelDeferred = () => cancelIdleCallback(id);
     } else {
@@ -595,6 +1219,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         getJSON(`/data/${active}.intel.json`).then((d) => { if (alive) setIntel(d); });
         getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {}).finally(() => { if (alive) setFundLoading(false); });
         getOpts(active).then((d) => { if (alive) setOpts(d); }).catch(() => {});
+        if (classify(active) === "us" && !isMacroSymbol(active)) {
+          flowGet(`gexstate:${active.toUpperCase()}`).then((d) => { if (alive) setRailGex(d); }).catch(() => {});
+        }
       }, 0);
       cancelDeferred = () => clearTimeout(id);
     }
@@ -767,11 +1394,69 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // ChartPanel's keyboard layer owns Alt+T/H/V/R/X/M + double-Esc but cannot set the shell-owned
   // tool state directly — it dispatches mm:set-tool {detail: toolId|null}; ids match DrawingSidebar.
   useEffect(() => {
-    const TOOL_IDS = new Set(["trendline", "hline", "vline", "rect", "text", "measure", "arrow", "ray", "fib"]);
-    const h = (e: Event) => { const id = (e as CustomEvent).detail as string | null; if (id === null || TOOL_IDS.has(id)) setTool(id); };
+    const h = (e: Event) => {
+      const id = (e as CustomEvent).detail as unknown;
+      if (id === null || isDrawingToolId(id)) {
+        if (id !== null && drawingCreationDisabledReason) return;
+        selectDrawingTool(id);
+        if (id !== null) setDrawingsVisible(true);
+      }
+    };
     window.addEventListener("mm:set-tool", h);
     return () => window.removeEventListener("mm:set-tool", h);
+  }, [drawingCreationDisabledReason, selectDrawingTool]);
+  useEffect(() => {
+    const hideAllDrawings = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.isContentEditable || target?.closest("input,textarea,select,[contenteditable='true']")) return;
+      if (!(event.metaKey || event.ctrlKey) || !event.altKey || event.code !== "KeyH") return;
+      event.preventDefault();
+      setDrawingsVisible(false);
+    };
+    window.addEventListener("keydown", hideAllDrawings);
+    return () => window.removeEventListener("keydown", hideAllDrawings);
   }, []);
+  // Creation-palette events omit `kind` and therefore target the armed tool.
+  // Existing-object quick bars include an explicit kind so their edits become
+  // that tool family's next-drawing default even while cursor mode is active.
+  useEffect(() => {
+    const h = (event: Event) => {
+      const detail = (event as CustomEvent).detail as (Partial<ShellDrawingStyle> & { kind?: unknown }) | null;
+      if (!detail || typeof detail !== "object") return;
+      if ("kind" in detail && !isDrawingToolId(detail.kind)) return;
+      patchDrawStyle(detail, isDrawingToolId(detail.kind) ? detail.kind : undefined);
+    };
+    window.addEventListener("mm:drawing-style", h);
+    return () => window.removeEventListener("mm:drawing-style", h);
+  }, [patchDrawStyle]);
+  useEffect(() => {
+    const committed = (event: Event) => {
+      if (drawingStickyRef.current) return;
+      const detail = (event as CustomEvent<{ kind?: unknown; activation?: unknown }>).detail;
+      const committedKind = detail?.kind;
+      const committedActivation = detail?.activation;
+      if (!isDrawingToolId(committedKind) || !Number.isSafeInteger(committedActivation)) return;
+      // This listener runs from ChartPanel's native pointerup handler. Commit
+      // cursor mode before a following discrete toolbar action can overtake the
+      // update in React's priority queue. The functional identity + epoch guard
+      // makes a replayed old commit a no-op after any newer activation.
+      flushSync(() => setToolState((current) => (
+        current.kind === committedKind && current.activation === committedActivation
+          ? { ...current, kind: null }
+          : current
+      )));
+    };
+    const history = (event: Event) => {
+      const direction = (event as CustomEvent).detail as "undo" | "redo" | undefined;
+      if (direction === "undo" || direction === "redo") travelDrawingHistory(active, direction);
+    };
+    window.addEventListener("mm:drawing-committed", committed);
+    window.addEventListener("mm:drawing-history", history);
+    return () => {
+      window.removeEventListener("mm:drawing-committed", committed);
+      window.removeEventListener("mm:drawing-history", history);
+    };
+  }, [active, travelDrawingHistory]);
   // Broadcast the overlay's open/close so AppNav's left-rail "Analyst" highlight tracks the REAL pane
   // state (page name on open, null on close). The URL ?pane= is stripped via replaceState on close and
   // is invisible to Next's useSearchParams, so a URL-derived highlight would stay lit after closing.
@@ -783,15 +1468,28 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   // Remove-all-indicators event (from D1 context menu)
   useEffect(() => {
-    const h = (e: Event) => {
-      const cnt = (e as CustomEvent).detail?.count as number;
-      // snapshot current inds for undo
-      setUndoInds((prev) => { if (prev?.timer) clearTimeout(prev.timer); const snap = new Set(inds); const timer = setTimeout(() => setUndoInds(null), 5000); return { snapshot: snap, timer }; });
+    const h = () => {
+      if (!inds.size && !enabledIds.length) return;
+      setUndoInds((previous) => {
+        if (previous?.timer) clearTimeout(previous.timer);
+        const timer = setTimeout(() => setUndoInds(null), 5_000);
+        return { snapshot: new Set(inds), enabledScripts: [...enabledIds], hidden: new Set(hidden), timer };
+      });
       setInds(new Set());
+      setEnabledIds([]);
+      setHidden((current) => {
+        const removed = new Set<string>([...inds, ...enabledIds, ...enabledIds.map((id) => `pine:${id}`)]);
+        for (const key of inds) {
+          if (isSuiteKey(key)) for (const entry of suiteModuleCatalogFor(key)) removed.add(entry.id);
+        }
+        const next = new Set(current);
+        for (const key of removed) next.delete(key);
+        return next;
+      });
     };
     window.addEventListener("mm:remove-all-inds", h);
     return () => window.removeEventListener("mm:remove-all-inds", h);
-  }, [inds]);
+  }, [enabledIds, hidden, inds]);
 
   // Apply template event (from D2 context menu)
   useEffect(() => {
@@ -802,6 +1500,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       setInds(new Set(tmpl.indicators));
       const base = allDefaults();
       for (const k of IND_ORDER) { if (tmpl.indParams[k]) base[k] = withDefaults(k, tmpl.indParams[k]); }
+      for (const k of Object.keys(tmpl.indParams || {})) { if (isSuiteKey(k)) base[k] = { ...suiteDefaults(k), ...tmpl.indParams[k] }; }
       setIndParams(base);
     };
     window.addEventListener("mm:apply-template", h);
@@ -815,7 +1514,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     return () => window.removeEventListener("mm:save-template", h);
   }, []);
 
-  const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
+  const detect = (kind: NonNullable<DetectCmd>["kind"]) => {
+    setDetectCmd({ kind, nonce: ++nonce.current, targetPane: activePane });
+    setDetectOpen(false);
+  };
   function setGrid(n: number) {
     setSplit(n);
     let next: string[];
@@ -885,7 +1587,34 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setWlMenuOpen(false); setSnapOpen(false); };
   useEffect(() => { const h = () => closeAll(); window.addEventListener("click", h); return () => window.removeEventListener("click", h); }, []);
 
-  const sections = useMemo(() => { const o: Record<string, string[]> = {}; wl.forEach((s) => { (o[s.section] ||= []).push(s.symbol); }); return o; }, [wl]);
+  // ── Sections ────────────────────────────────────────────────────────────────────────────
+  // A section used to be purely DERIVED from the rows' `section` field, which meant a section
+  // could not exist without a symbol in it — you could not create one, name one, or keep an
+  // empty one. `listMeta` gives each list an explicit section ORDER (so an empty section holds
+  // its slot) and a collapsed set. Rows remain the source of truth for membership; meta only
+  // adds the things membership cannot express. Lists saved before this existed have no meta,
+  // and fall back to first-appearance order exactly as before.
+  const activeMeta = listMeta[activeList];
+
+  // Section order: declared order first, then any section that only exists on rows (a list
+  // created before meta, or a symbol added with a fresh `sec` from the manifest).
+  const sectionOrder = useMemo(() => {
+    const out: string[] = [];
+    for (const s of activeMeta?.sections ?? []) if (!out.includes(s)) out.push(s);
+    for (const r of wl) if (!out.includes(r.section)) out.push(r.section);
+    return out;
+  }, [wl, activeMeta]);
+
+  const collapsed = useMemo(() => new Set(activeMeta?.collapsed ?? []), [activeMeta]);
+
+  // sec → symbols, in declared section order, INCLUDING empty sections (an empty section still
+  // renders its header so the user can drop symbols into the thing they just created).
+  const sections = useMemo(() => {
+    const o: Record<string, string[]> = {};
+    for (const s of sectionOrder) o[s] = [];
+    for (const r of wl) (o[r.section] ||= []).push(r.symbol);
+    return o;
+  }, [wl, sectionOrder]);
   const inWl = useMemo(() => new Set(wl.map((s) => s.symbol)), [wl]);
   const activeIsComposite = isComposite(active);
   const activeLegs = activeIsComposite ? (parseComposite(active) ?? []) : [];
@@ -976,27 +1705,20 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     };
   }, [intel, m?.verdict]);
   // live quote (China/HK) wins over the WS tick and the manifest EOD row for both price and % change
-  // AH semantics: when the hub emits `close` (official EOD) use it as the primary display price.
-  // The `last` field may be a delayed AH print; expose it as a secondary line when it differs.
-  const officialClose = liveQuote?.close as number | undefined;
-  const ahPrint = liveQuote?.afterHours as number | undefined;
-  // AH % change vs the official close (shown alongside ahPrint in the secondary line).
-  const ahChg: number | null =
-    ahPrint != null && officialClose != null && officialClose !== 0
-      ? ((ahPrint - officialClose) / officialClose) * 100
-      : null;
+  // Regular and extended prices are independent lanes. `last`/`close` stay
+  // regular-session values; the hub's ext* namespace drives the secondary line.
+  const regularQuote = resolveRegularSessionDisplay(liveQuote);
+  const hubExtPrice = liveQuote?.extPrice as number | undefined;
+  const hubExtChg = liveQuote?.extChg as number | undefined;
+  const hubExtTs = liveQuote?.extTs as number | undefined;
+  const hubExtSession = liveQuote?.extSession as ExtSession | undefined;
   // F2: for composites, use summed composite quote; for singles, use existing logic.
   const lastPx: number | undefined = activeIsComposite
     ? (compositeQ?.last ?? undefined)
-    : (officialClose ?? liveQuote?.last ?? livePx ?? m?.last);
-  const prevCloseForChg = liveQuote?.prevClose as number | undefined;
+    : (regularQuote.regularPrice ?? livePx ?? m?.last);
   const chgNow: number | null | undefined = activeIsComposite
     ? (compositeQ?.chg ?? null)
-    : officialClose != null && prevCloseForChg != null && prevCloseForChg !== 0
-      ? ((officialClose - prevCloseForChg) / prevCloseForChg) * 100
-      : // Overnight: hub emits prevSessionChg only when no new session prints
-        // exist — prefer it over the misleading 0.00% (TV semantics).
-        ((liveQuote?.prevSessionChg as number | undefined) ?? liveQuote?.chg ?? m?.chg);
+    : (regularQuote.regularChg ?? m?.chg);
 
   // ── market-closed chip ──────────────────────────────────────────────────────
   // Recomputes every minute via setInterval (no holiday calendar — see risks).
@@ -1044,6 +1766,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // ────────────────────────────────────────────────────────────────────────────
 
   async function addSymbol(sym: string) {
+    // OnboardingProvider is a DESCENDANT of this component, so useOnboarding() here is the
+    // no-op context — the `mm:onboard` window event is the only way up to the real sheet.
+    if (!loggedIn) { showGateNudge(t("gateWatchlist")); window.dispatchEvent(new CustomEvent("mm:onboard", { detail: { mode: "signup" } })); return; }
     const sec = man?.symbols?.[sym]?.sec || "Watchlist";
     if (!inWl.has(sym)) {
       setWl((w: any[]) => [...w, { symbol: sym, section: sec }]);
@@ -1070,6 +1795,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // Add a symbol to a NAMED list (search-hub multi-list picker). Mirrors addSymbol's dedupe +
   // Default-only server sync, but targets an explicit list instead of the active one.
   function addToList(sym: string, listName: string) {
+    // Same descendant-provider constraint as addSymbol — reach the sheet via the window event.
+    if (!loggedIn) { showGateNudge(t("gateWatchlist")); window.dispatchEvent(new CustomEvent("mm:onboard", { detail: { mode: "signup" } })); return; }
     const sec = man?.symbols?.[sym]?.sec || "Watchlist";
     setLists((l) => {
       const cur = l[listName] || [];
@@ -1094,9 +1821,239 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (Object.keys(lists).length <= 1) return;
     if (typeof window !== "undefined" && !window.confirm(t("deleteWatchlistConfirm"))) return;
     setLists((l) => { const n = { ...l }; delete n[name]; return n; });
+    setListMeta((m) => { const n = { ...m }; delete n[name]; return n; });
     if (activeList === name) setActiveList(Object.keys(lists).filter((k) => k !== name)[0] || "Default");
   }
-  const toggleInd = (k: string) => setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+
+  // ── list menu: copy / clear / sort ─────────────────────────────────────────────────────
+  // Duplicate a list under a new name, sections and all. TradingView's "Make a copy".
+  function copyList(name: string) {
+    const raw = typeof window !== "undefined" ? window.prompt(t("copyWatchlistPrompt"), `${name} (2)`) : "";
+    const next = raw?.trim();
+    setWlMenuOpen(false);
+    if (!next || lists[next]) return;
+    setLists((l) => ({ ...l, [next]: (l[name] || []).map((r) => ({ ...r })) }));
+    setListMeta((m) => (m[name] ? { ...m, [next]: { sections: [...m[name].sections], collapsed: [...m[name].collapsed] } } : m));
+    setActiveList(next);
+  }
+
+  // Empty a list without deleting it. Section structure is kept — you cleared the symbols, not
+  // the organisation you built.
+  function clearList(name: string) {
+    if (typeof window !== "undefined" && !window.confirm(t("clearWatchlistConfirm"))) return;
+    setWlMenuOpen(false);
+    setLists((l) => ({ ...l, [name]: [] }));
+    if (name === "Default") {
+      for (const r of lists[name] || []) {
+        fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: r.symbol }) }).catch(() => {});
+      }
+    }
+  }
+
+  // Sort symbols A→Z WITHIN each section, so sorting never silently reorganises the list.
+  function sortActiveList() {
+    setWlMenuOpen(false);
+    setWl((prev: { symbol: string; section: string }[]) => {
+      const order = new Map(sectionOrder.map((s, i) => [s, i]));
+      return [...prev].sort((a, b) =>
+        (order.get(a.section) ?? 0) - (order.get(b.section) ?? 0) || (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0));
+    });
+  }
+
+  // ── import / export ────────────────────────────────────────────────────────────────────
+  // CSV carries the SECTION alongside the symbol, so a list survives a round-trip with its
+  // organisation intact rather than arriving as one flat block.
+  function exportList(name: string) {
+    setWlMenuOpen(false);
+    const rows = lists[name] || [];
+    const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+    const csv = ["symbol,section", ...rows.map((r) => `${esc(r.symbol)},${esc(r.section || "")}`)].join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${name.replace(/[^\w.-]+/g, "_")}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // Import appends into the ACTIVE list, skipping duplicates. Accepts a bare symbol list too
+  // (one per line, no header) because that is what most exports elsewhere actually produce.
+  function importList() {
+    setWlMenuOpen(false);
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".csv,.txt,text/csv,text/plain";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      file.text().then((text) => {
+        const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        if (!lines.length) return;
+        if (/^symbol\s*(,|$)/i.test(lines[0])) lines.shift();     // drop a header row if present
+        const parsed: { symbol: string; section: string }[] = [];
+        for (const line of lines) {
+          const [rawSym, rawSec] = line.split(",");
+          const symbol = (rawSym || "").trim().replace(/^"|"$/g, "").toUpperCase();
+          if (!symbol) continue;
+          parsed.push({ symbol, section: (rawSec || "").trim().replace(/^"|"$/g, "") || "Watchlist" });
+        }
+        if (!parsed.length) return;
+        setWl((prev: { symbol: string; section: string }[]) => {
+          const have = new Set(prev.map((r) => r.symbol));
+          const add = parsed.filter((r) => !have.has(r.symbol));
+          if (!add.length) return prev;
+          if (activeList === "Default") {
+            for (const r of add) {
+              fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: r.symbol, section: r.section }) }).catch(() => {});
+            }
+          }
+          return [...prev, ...add];
+        });
+      }).catch(() => {});
+    };
+    input.click();
+  }
+
+  // ── sections ───────────────────────────────────────────────────────────────────────────
+  // Write meta for the active list, seeding `sections` from what is on screen right now so the
+  // existing visual order survives the very first edit (before meta existed, order was implicit).
+  function editMeta(fn: (m: { sections: string[]; collapsed: string[] }) => { sections: string[]; collapsed: string[] }) {
+    setListMeta((all) => {
+      const cur = all[activeList] ?? { sections: [...sectionOrder], collapsed: [] };
+      return { ...all, [activeList]: fn(cur) };
+    });
+  }
+
+  // Inline input rather than window.prompt: a browser prompt is modal, unstyleable, and looks
+  // nothing like the rest of the app. Returns true when the section was created so the caller
+  // can close its input.
+  function addSection(raw: string): boolean {
+    const name = raw.trim();
+    if (!name || sectionOrder.includes(name)) return false;
+    editMeta((m) => ({ ...m, sections: [...m.sections.filter((s) => s !== name), name] }));
+    return true;
+  }
+
+  function renameSection(from: string) {
+    const to = (typeof window !== "undefined" ? window.prompt(t("renameSectionPrompt"), from) : "")?.trim();
+    if (!to || to === from || sectionOrder.includes(to)) return;
+    setWl((prev: { symbol: string; section: string }[]) => prev.map((r) => (r.section === from ? { ...r, section: to } : r)));
+    editMeta((m) => ({
+      sections: m.sections.map((s) => (s === from ? to : s)),
+      collapsed: m.collapsed.map((s) => (s === from ? to : s)),
+    }));
+  }
+
+  // Delete the DIVIDER, not the symbols. TradingView behaves the same way, and silently deleting
+  // a section's holdings because the user removed a label would be a data-loss trap. The rows
+  // fall back to the section above (or the first remaining one).
+  function deleteSection(name: string) {
+    const idx = sectionOrder.indexOf(name);
+    const fallback = sectionOrder[idx - 1] ?? sectionOrder.find((s) => s !== name) ?? "Watchlist";
+    setWl((prev: { symbol: string; section: string }[]) => prev.map((r) => (r.section === name ? { ...r, section: fallback } : r)));
+    editMeta((m) => ({
+      sections: m.sections.filter((s) => s !== name),
+      collapsed: m.collapsed.filter((s) => s !== name),
+    }));
+  }
+
+  function toggleSection(name: string) {
+    editMeta((m) => ({
+      ...m,
+      collapsed: m.collapsed.includes(name) ? m.collapsed.filter((s) => s !== name) : [...m.collapsed, name],
+    }));
+  }
+  const toggleInd = (k: string) => {
+    // Anon cap: toggling OFF is always fine; block ADDING past the cap + nudge.
+    // Checked OUTSIDE the setInds updater (no setState side-effect in a reducer).
+    if (!loggedIn && !inds.has(k) && inds.size >= MAX_ANON_IND) { showGateNudge(t("gateIndCap")); return; }
+    setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+    // A newly added suite starts with its quiet Focus profile. Saved workspaces are never migrated
+    // implicitly; this runs only after an explicit add/toggle action.
+    if (isSuiteKey(k) && !inds.has(k)) {
+      const preset = resolveSuitePreset(k);
+      setIndParams((p) => ({
+        ...p,
+        [k]: applySuitePresetParams(k, preset?.id, p[k]),
+      }));
+      setHidden((h) => {
+        const next = new Set(h);
+        next.delete(k);
+        const selected = new Set(preset?.modules ?? []);
+        for (const entry of suiteModuleCatalogFor(k)) {
+          if (selected.has(entry.moduleKey)) next.delete(entry.id);
+        }
+        return next;
+      });
+    }
+  };
+  const applySuitePreset = (k: string, presetId: SuitePresetId) => {
+    if (!isSuiteKey(k)) return;
+    const profile = resolveSuitePreset(k, presetId);
+    if (!profile) return;
+    const tierRank = (tier: "free" | "essential" | "pro") => tier === "pro" ? 2 : tier === "essential" ? 1 : 0;
+    if (tierRank(profile.minTier) > tierRank(userTier)) return;
+    const parentActive = inds.has(k);
+    const preset = applySuitePresetParams(k, profile.id, indParams[k]);
+    const nextModuleCount = suiteModuleCatalogFor(k).filter(
+      (entry) => preset[`${entry.moduleKey}.on`] ?? entry.defaultOn,
+    ).length;
+    const activeOutsideSuite = [...inds].filter((key) => !isSuiteKey(key)).length
+      + activeSuiteModuleIds.size
+      - (parentActive ? enabledModulesForSuite(k, inds, indParams).length : 0);
+    if (!loggedIn && activeOutsideSuite + nextModuleCount > MAX_ANON_IND) {
+      showGateNudge(t("gateIndCap"));
+      return;
+    }
+    setInds((current) => new Set(current).add(k));
+    setIndParams((current) => ({
+      ...current,
+      [k]: applySuitePresetParams(k, profile.id, current[k]),
+    }));
+    setHidden((current) => {
+      const next = new Set(current);
+      next.delete(k);
+      const selected = new Set(profile.modules);
+      for (const entry of suiteModuleCatalogFor(k)) {
+        if (selected.has(entry.moduleKey)) next.delete(entry.id);
+      }
+      return next;
+    });
+  };
+  const toggleSuiteModule = useCallback((id: string) => {
+    const entry = getSuiteModuleCatalogEntry(id);
+    if (!entry) return;
+    const tierRank = (tier: "free" | "essential" | "pro") => tier === "pro" ? 2 : tier === "essential" ? 1 : 0;
+    if (tierRank(entry.tier) > tierRank(userTier)) return;
+
+    const parentActive = inds.has(entry.suiteKey);
+    const enabled = parentActive && activeSuiteModuleIds.has(entry.id);
+    const nextEnabled = !enabled;
+    const activeStudyCount = [...inds].filter((key) => !isSuiteKey(key)).length + activeSuiteModuleIds.size;
+    if (nextEnabled && !loggedIn && activeStudyCount >= MAX_ANON_IND) {
+      showGateNudge(t("gateIndCap"));
+      return;
+    }
+
+    const nextParams = setSuiteModuleEnabledParams(entry.id, indParams[entry.suiteKey], nextEnabled, parentActive);
+    const hasAnyEnabled = suiteModuleCatalogFor(entry.suiteKey).some(
+      (candidate) => nextParams[`${candidate.moduleKey}.on`] ?? candidate.defaultOn,
+    );
+    setIndParams((current) => ({ ...current, [entry.suiteKey]: nextParams }));
+    setInds((current) => {
+      const next = new Set(current);
+      if (nextEnabled || hasAnyEnabled) next.add(entry.suiteKey);
+      else next.delete(entry.suiteKey);
+      return next;
+    });
+    setHidden((current) => {
+      if (!current.has(entry.id) && !current.has(entry.suiteKey)) return current;
+      const next = new Set(current);
+      next.delete(entry.id);
+      next.delete(entry.suiteKey);
+      return next;
+    });
+  }, [activeSuiteModuleIds, indParams, inds, loggedIn, showGateNudge, t, userTier]);
   const toggleCompare = useCallback((s: string, mode: CmpMode = "percent") => {
     if (s === active) return;
     if (compare.includes(s)) {
@@ -1117,11 +2074,90 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // Object-tree pine entries are keyed as "pine:<id>" — strip the prefix before the ref lookup
     const pineId = k.startsWith("pine:") ? k.slice(5) : k;
     if (scriptByIdRef.current[pineId]) { setEnabledIds((ids) => ids.filter((x) => x !== pineId)); setHidden((s) => { const n = new Set(s); n.delete(k); n.delete(pineId); return n.size === s.size ? s : n; }); return; }
+    const paneSuiteKey = k.startsWith("suite-pane:") ? k.slice("suite-pane:".length) : "";
+    if (paneSuiteKey && isSuiteKey(paneSuiteKey)) {
+      const nextParams = setSuiteSurfaceEnabledParams(paneSuiteKey, "pane", indParams[paneSuiteKey], false);
+      const hasAnyEnabled = suiteModuleCatalogFor(paneSuiteKey).some(
+        (entry) => nextParams[`${entry.moduleKey}.on`] ?? entry.defaultOn,
+      );
+      setIndParams((current) => ({ ...current, [paneSuiteKey]: nextParams }));
+      setInds((current) => {
+        if (hasAnyEnabled || !current.has(paneSuiteKey)) return current;
+        const next = new Set(current);
+        next.delete(paneSuiteKey);
+        return next;
+      });
+      setHidden((current) => {
+        const paneIds = suiteModuleCatalogFor(paneSuiteKey)
+          .filter((entry) => entry.surface === "pane")
+          .map((entry) => entry.id);
+        if (!paneIds.some((id) => current.has(id))) return current;
+        const next = new Set(current);
+        for (const id of paneIds) next.delete(id);
+        return next;
+      });
+      return;
+    }
+    const moduleTarget = parseSuiteModuleId(k);
+    if (moduleTarget) {
+      const nextParams = setSuiteModuleEnabledParams(k, indParams[moduleTarget.suiteKey], false, inds.has(moduleTarget.suiteKey));
+      const hasAnyEnabled = suiteModuleCatalogFor(moduleTarget.suiteKey).some(
+        (entry) => nextParams[`${entry.moduleKey}.on`] ?? entry.defaultOn,
+      );
+      setIndParams((current) => ({ ...current, [moduleTarget.suiteKey]: nextParams }));
+      setInds((current) => {
+        if (hasAnyEnabled || !current.has(moduleTarget.suiteKey)) return current;
+        const next = new Set(current);
+        next.delete(moduleTarget.suiteKey);
+        return next;
+      });
+      setHidden((current) => {
+        if (!current.has(k)) return current;
+        const next = new Set(current);
+        next.delete(k);
+        return next;
+      });
+      return;
+    }
     setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
-    setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
-  }, [toggleCompare]);
-  const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...withDefaults(k, p[k]), ...patch } })), []);
-  const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: indDefaults(k) })), []);
+    setHidden((s) => {
+      const childIds = isSuiteKey(k) ? suiteModuleCatalogFor(k).map((entry) => entry.id) : [];
+      if (!s.has(k) && !childIds.some((id) => s.has(id))) return s;
+      const n = new Set(s);
+      n.delete(k);
+      for (const id of childIds) n.delete(id);
+      return n;
+    });
+  }, [indParams, inds, toggleCompare]);
+  const setIndParam = useCallback((k: string, patch: Record<string, any>) => {
+    const moduleTarget = parseSuiteModuleId(k);
+    const targetKey = moduleTarget?.suiteKey ?? k;
+    setIndParams((p) => ({
+      ...p,
+      [targetKey]: {
+        ...(isSuiteKey(targetKey) ? { ...suiteDefaults(targetKey), ...p[targetKey] } : withDefaults(targetKey, p[targetKey])),
+        ...patch,
+      },
+    }));
+  }, []);
+  const resetIndParam = useCallback((k: string) => {
+    const moduleTarget = parseSuiteModuleId(k);
+    if (!moduleTarget) {
+      setIndParams((p) => ({ ...p, [k]: isSuiteKey(k) ? suiteDefaults(k) : indDefaults(k) }));
+      return;
+    }
+    const entry = getSuiteModuleCatalogEntry(k);
+    if (!entry) return;
+    setIndParams((p) => {
+      const current = { ...suiteDefaults(moduleTarget.suiteKey), ...p[moduleTarget.suiteKey] };
+      const prefix = `${moduleTarget.moduleKey}.`;
+      const on = current[`${moduleTarget.moduleKey}.on`];
+      for (const key of Object.keys(current)) if (key.startsWith(prefix)) delete current[key];
+      current[`${moduleTarget.moduleKey}.on`] = on ?? true;
+      for (const [fieldKey, value] of Object.entries(entry.module.defaults)) current[`${moduleTarget.moduleKey}.${fieldKey}`] = value;
+      return { ...p, [moduleTarget.suiteKey]: current };
+    });
+  }, []);
   const openSettings = useCallback((k: string) => setSettingsKey(k), []);
 
   // ── Day Trade Mode toggle (D lane §5) ─────────────────────────────────────────
@@ -1313,18 +2349,64 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   };
   const removeFlag = (sym: string) => { setFlags((f) => { const n = { ...f }; delete n[sym]; return n; }); };
 
-  const pick = (sym: string) => {
+  const pick = useCallback((sym: string) => {
     // prefer the pane the user is viewing (matters in an MTF layout where one symbol fills several panes):
     // re-clicking the active symbol is a no-op rather than jumping focus to the first matching pane.
     const existing = panes[activePane] === sym ? activePane : panes.findIndex((s) => s === sym);
     if (existing >= 0 && existing !== activePane) setActivePane(existing);          // shown in a different pane → focus it (don't duplicate)
     else if (panes[activePane] !== sym) setPanes((p) => p.map((s, i) => (i === activePane ? sym : s)));
     setReplayOn(false); setReplayIdx(null); setPlaying(false); setCompare([]);
-    // F3: record navigation in history ring buffer (skip composites — SearchModal filters
-    // history via manifest keys, so composite exprs would silently vanish from the Recent list).
-    if (!isComposite(sym)) pushHistory(sym);
-  };
+  }, [activePane, panes]);
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { toggleCompare(sym); } else pick(sym); };
+
+  // The dashboard keeps one warm iframe alive between launches. A later ticker click
+  // therefore switches the existing Terminal instance through the bridge instead of
+  // reloading the whole Next app and chart runtime.
+  useEffect(() => {
+    const onEmbeddedSymbol = (event: Event) => {
+      const symbol = (event as CustomEvent<{ symbol?: string }>).detail?.symbol;
+      if (symbol) pick(symbol);
+    };
+    window.addEventListener("mm:embedded-symbol", onEmbeddedSymbol);
+    return () => window.removeEventListener("mm:embedded-symbol", onEmbeddedSymbol);
+  }, [pick]);
+
+  // Native shell bridge (?shell=app): the installable apps drive this page through
+  // window.__mmShell; commands reuse the mm:embedded-symbol / mm:set-tf seams above,
+  // so the bridge adds no second symbol/TF pathway (lib/platform/shellBridge.ts).
+  const shellStateRef = useRef({ sym: "", tf: "" });
+  shellStateRef.current = { sym: active, tf };
+  // The R2.5 commands read their handlers through this ref: the bridge installs ONCE per shell
+  // session (re-installing would re-announce `ready`), while the handlers below close over state
+  // that changes every render. Populated after the drawing helpers are declared.
+  const shellCmdRef = useRef<{
+    favTimeframes: string[];
+    setDrawTool: (id: string) => boolean;
+    drawUndo: () => boolean;
+    drawRedo: () => boolean;
+    openPanel: (id: ShellPanelId) => boolean;
+  }>({
+    favTimeframes: [],
+    setDrawTool: () => false,
+    drawUndo: () => false,
+    drawRedo: () => false,
+    openPanel: () => false,
+  });
+  useEffect(() => {
+    if (!shellMode) return;
+    return initShellBridge({
+      getState: () => shellStateRef.current,
+      getPayload: () => ({ favTimeframes: shellCmdRef.current.favTimeframes, drawTools: SHELL_DRAW_TOOLS }),
+      setDrawTool: (id) => shellCmdRef.current.setDrawTool(id),
+      drawUndo: () => shellCmdRef.current.drawUndo(),
+      drawRedo: () => shellCmdRef.current.drawRedo(),
+      openPanel: (id) => shellCmdRef.current.openPanel(id),
+    });
+  }, [shellMode]);
+  useEffect(() => { if (shellMode) postToShell({ type: "symbolChanged", sym: active }); }, [shellMode, active]);
+  useEffect(() => {
+    if (shellMode) postToShell({ type: "stateChanged", tf, favTimeframes: favTfOrder, drawTools: [...SHELL_DRAW_TOOLS] });
+  }, [shellMode, tf, favTfOrder]);
 
   // ── Chart Bus v2 (CMX W1) ──────────────────────────────────────────────────────────────────
   // The v2 typed drawing/command vocabulary. v1 envelopes stay on handleBrainCommand below; a v:2
@@ -1340,9 +2422,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     capabilities: { tfs: TF_CANONICAL_ORDER, indicators: [...IND_ORDER] },
     sessionIndicators,
     currentTf: tf,
-    // AI objects live in the bus's own store, never in drawStore — so drawStore[active] is purely the
-    // user's own drawings (by:"user"). Enumerable, so we report them.
-    userDrawings: drawStore[active] ?? [],
+    // AI objects live in the bus's own store. Detector drawings do share the
+    // durable drawing collection, so keep them out of the bus's user-authored
+    // context rather than reporting generated levels as operator marks.
+    userDrawings: (drawStore[active] ?? []).filter(isUserDrawing),
     setSymbol: (s) => pick(s),
     setTf: (t2) => setTf(t2),
     setIndicators: (specs) => {
@@ -1388,6 +2471,37 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   function delLayout(id: string) { fetch(`/api/layouts?id=${id}`, { method: "DELETE" }).then(() => setLayouts((ls) => ls.filter((x) => x.id !== id))); }
 
   const colList = (): [string, string][] => { const a: [string, string][] = [["last", t("colLast")]]; if (set.cols.change) a.push(["change", t("colChgShort")]); if (set.cols.changePct) a.push(["changePct", t("colChgPctShort")]); if (set.cols.volume) a.push(["volume", t("colVolShort")]); if (set.cols.ext) a.push(["ext", t("colExtShort")]); return a; };
+  // Plain-word label for an ext window. The hub's classification when it has one; "Overnight"
+  // is both the third value and the honest fallback when the hub does not say which window.
+  const extSessionLabel = (s?: ExtSession) =>
+    s === "pre" ? t("extSessionPre") : s === "post" ? t("extSessionPost") : t("overnight");
+  // One extended-hours display object feeds both the responsive mobile symbol bar and the
+  // desktop/detail card. The hub namespace wins; the dedicated poll is a compatibility fallback.
+  const activeExtData = (() => {
+    const hubExt = hubExtPrice != null && Number.isFinite(hubExtPrice) ? {
+      price: hubExtPrice,
+      chg: hubExtChg ?? null,
+      ts: hubExtTs ?? null,
+      session: hubExtSession,
+    } : null;
+    const pollExt = !isComposite(active) && classify(active) === "us"
+      ? extQuotes[active]
+      : null;
+    return hubExt ?? (pollExt ? {
+      price: pollExt.extPrice,
+      chg: pollExt.extChg,
+      ts: pollExt.extTs,
+      session: pollExt.extSession,
+    } : null);
+  })();
+  // Ext column tooltip: which session, and the move — the % the cell no longer prints itself.
+  const extTitle = (sym: string): string | undefined => {
+    const eq = extQuotes[sym];
+    if (!eq || eq.extPrice == null || !isFinite(eq.extPrice)) return undefined;
+    const label = extSessionLabel(eq.extSession);
+    if (eq.extChg == null || !isFinite(eq.extChg)) return label;
+    return `${label} · ${eq.extChg >= 0 ? "+" : ""}${fmt(eq.extChg)}%`;
+  };
   // item-26: ext column reads from extQuotes (separate poll); dash when closed or no ext print.
   const colVal = (sym: string, r: Row | undefined, key: string) => {
     if (!r) return "—";
@@ -1399,11 +2513,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (key === "change") { const prev = r.chg > -100 ? r.last / (1 + r.chg / 100) : r.last; const d = r.last - prev; return (d >= 0 ? "+" : "") + fmt(d, 2); }
     if (key === "changePct") return (u ? "+" : "") + fmt(r.chg) + "%";
     if (key === "volume") return vol(r.vol);
+    // Ext shows the overnight/extended PRICE, formatted exactly like Last — the number a trader
+    // reads off the tape — with the % move moved into the cell's tooltip alongside the session
+    // name. Dash when there is no ext print; never a fabricated value.
     if (key === "ext") {
       const eq = extQuotes[sym];
-      if (!eq || eq.extChg == null) return "—";
-      const eu = eq.extChg >= 0;
-      return (eu ? "+" : "") + fmt(eq.extChg) + "%";
+      if (!eq || eq.extPrice == null || !isFinite(eq.extPrice)) return "—";
+      return fmt(eq.extPrice, eq.extPrice < 10 ? 4 : 2);
     }
     return "";
   };
@@ -1412,7 +2528,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const dataCols = colList();
   const wlGrid = `${colw("sym")}px ${dataCols.map(([k]) => colw(k) + "px").join(" ")} 18px`;
   const wlMinW = colw("sym") + dataCols.reduce((s, [k]) => s + colw(k), 0) + 18 + (dataCols.length + 1) * 8;
-  const nameOf = (r?: Row) => (r?.zh || r?.name || "");   // Chinese stocks carry a `zh` proper name
+  // Language-aware: EN shows the English name, ZH shows the Chinese one, each falling back to the
+  // other when a row carries only one. (This used to be `zh || name`, which showed every Chinese
+  // name to English users.)
+  const nameOf = (r?: Row) => displayName(r, lang);
   const startResize = (key: string, e: React.MouseEvent) => {
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startW = colw(key);
@@ -1438,9 +2557,103 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     window.addEventListener("mouseup", up);
     document.body.classList.add("rail-resizing");
   };
+  const currentDrawingOwnerKey = email ? `account:${email}` : "guest";
+  const drawingOwnerMatches = drawingOwnerKey === currentDrawingOwnerKey;
+  const drawingsReadyFor = (sym: string) => drawingOwnerMatches && (!loggedIn || drawStore[sym] !== undefined);
+  // ONE activation path for every surface that arms a tool — the desktop dock, the phone Drawings
+  // sheet, and the native bridge's setDrawTool. Returns whether the tool actually armed.
+  const activateDrawingTool = (id: DrawKind | null) => {
+    if (!drawingsReadyFor(active) || (id !== null && drawingCreationDisabledReason)) return false;
+    selectDrawingTool(id);
+    if (id) setDrawingsVisible(true);
+    return true;
+  };
+  const activeStoredDrawings = drawingOwnerMatches ? (drawStore[active] ?? []) : [];
+  const activeUserDrawings = activeStoredDrawings.filter(isUserDrawing);
+  const storedDetectedDrawingCount = activeStoredDrawings.length - activeUserDrawings.length;
+  const detectedDrawingCount = storedDetectedDrawingCount + activePaneDetectedDrawingCount;
+  const userDrawingCount = activeUserDrawings.length;
+  const allUserDrawingsLocked = userDrawingCount > 0 && activeUserDrawings.every((drawing) => drawing.locked);
+  const activeIndicatorCount = inds.size + pineScripts.length;
+  const removeAllIndicators = () => {
+    if (!inds.size && !enabledIds.length) return;
+    setUndoInds((previous) => {
+      if (previous?.timer) clearTimeout(previous.timer);
+      const snapshot = new Set(inds);
+      const enabledScripts = [...enabledIds];
+      const hiddenSnapshot = new Set(hidden);
+      const timer = setTimeout(() => setUndoInds(null), 5_000);
+      return { snapshot, enabledScripts, hidden: hiddenSnapshot, timer };
+    });
+    setInds(new Set());
+    setEnabledIds([]);
+    setHidden((current) => {
+      const removed = new Set<string>([...inds, ...enabledIds, ...enabledIds.map((id) => `pine:${id}`)]);
+      for (const key of inds) {
+        if (isSuiteKey(key)) for (const entry of suiteModuleCatalogFor(key)) removed.add(entry.id);
+      }
+      if (![...removed].some((key) => current.has(key))) return current;
+      const next = new Set(current);
+      for (const key of removed) next.delete(key);
+      return next;
+    });
+  };
+
+  // ?shell=app&dossier=1 — the native symbol sheet stacks THIS page under its own chart, so the
+  // detail rail is the whole surface: no chart workspace, no watchlist board, natural page scroll.
+  // Only meaningful inside shell mode (the page prop already ANDs the two; belt-and-braces here).
+  const dossierMode = shellMode && shellDossier;
+
+  // ── phone roller strip + native bridge command surface ──────────────────────────────────────
+  // The symbol wheel rotates the ACTIVE watchlist (the charted symbol appended when it is not a
+  // member); the interval wheel rotates the starred timeframes, falling back to the canonical list
+  // when the user has starred none. Both wheels always contain their current value.
+  const stripSymbols = useMemo(() => {
+    const list = wl.map((row) => row.symbol).filter(Boolean);
+    return list.includes(active) ? list : [...list, active];
+  }, [wl, active]);
+  const stripTimeframes = useMemo(() => {
+    const base = favTfOrder.length ? favTfOrder : [...TF_CANONICAL_ORDER];
+    return base.includes(tf) ? base : [...base, tf].sort((a, b) => tfSortKey(a) - tfSortKey(b));
+  }, [favTfOrder, tf]);
+  const openDrawingsSheet = () => {
+    setHubOpen(false);
+    setDrawSheetOpen(true);
+  };
+  const openAnalysisHub = () => {
+    setDrawSheetOpen(false);
+    setHubOpen(true);
+    if (!hubSeen) { setHubSeen(true); try { localStorage.setItem("mm.hubSeen", "1"); } catch {} }
+  };
+  shellCmdRef.current = {
+    favTimeframes: favTfOrder,
+    setDrawTool: (id) => (isDrawingToolId(id) ? activateDrawingTool(id) : false),
+    drawUndo: () => {
+      if (!drawingHistoryState.canUndo) return false;
+      travelDrawingHistory(active, "undo");
+      return true;
+    },
+    drawRedo: () => {
+      if (!drawingHistoryState.canRedo) return false;
+      travelDrawingHistory(active, "redo");
+      return true;
+    },
+    openPanel: (id) => {
+      if (id === "indicators") { setIndOpen(true); return true; }
+      if (id === "compare") { setSearchMode("compare"); setSeed(""); setSearchOpen(true); return true; }
+      return false;
+    },
+  };
 
   return (
-    <div className={`app${fullChart ? " fs" : ""}`} style={{ ["--rail-w" as any]: `${railW}px` }}>
+    <OnboardingProvider email={email}>
+    {/* Inside OnboardingProvider so the settings panel (and the avatar button)
+        can call useOnboarding() directly. Note this provider is a DESCENDANT of
+        TerminalShell, so useSettings() *here* would be the no-op — the buttons
+        below are children of it, which is what matters. */}
+    <SettingsProvider email={email} defaultSection="terminal">
+    <div className={`app${fullChart ? " fs" : ""}${shellMode ? " shell-app" : ""}`} data-shell={shellMode ? "app" : undefined} data-tray={shellMode && shellTray ? "1" : undefined} data-dossier={dossierMode ? "1" : undefined} style={{ ["--rail-w" as any]: `${railW}px` }}>
+      {!shellMode && (
       <header className="topbar">
         {fromMacro
           ? <button className="brand-back" onClick={onBack} title={t("backToDashboard")} aria-label={t("backToDashboard")}>
@@ -1471,10 +2684,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         })()}
         <div className="spacer" />
         <button className="ai" onClick={() => (window as any).MMBrain?.toggle()}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
-        <SettingsMenu email={email} />
+        <SettingsButton email={email} />
       </header>
+      )}
 
       {/* ── mobile top bar + drawer (shared component) ── */}
+      {!shellMode && (<>
       <MobileNav
         email={email}
         fromMacro={fromMacro}
@@ -1487,19 +2702,33 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         })()}
       />
       {/* ── mobile symbol bar (tap → search) ── */}
-      <div className="m-symbar" onClick={() => { setSeed(""); setSearchOpen(true); }}>
+      <div className={`m-symbar${activeExtData ? " has-ext" : ""}`} onClick={() => { setSeed(""); setSearchOpen(true); }}>
         <span className="m-sym"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span><b>{active}</b><svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></span>
-        <span className="m-px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></span>
+        <span className="m-quote-stack">
+          <span className="m-px" data-quote-lane="regular"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></span>
+          {activeExtData && (
+            <span className="m-ext" data-quote-lane="extended">
+              <span className="m-ext-label">{extSessionLabel(activeExtData.session)}</span>
+              <span className="num">{fmt(activeExtData.price, activeExtData.price < 10 ? 4 : 2)}</span>
+              {activeExtData.chg != null && <span className={`num ${activeExtData.chg >= 0 ? "up" : "down"}`}>{chgStr(activeExtData.chg)}</span>}
+            </span>
+          )}
+        </span>
       </div>
 
       <AppNav />
+      </>)}
 
+      {/* Dossier mode renders NO chart workspace — the native sheet owns the chart above us. */}
+      {!dossierMode && (
       <section className="workspace">
+        {!shellMode && (
         <button className={`chart-fs-float${fullChart ? " on" : ""}`} title={fullChart ? t("exitFullscreen") : t("fullscreenChart")} onClick={() => setFullChart((f) => !f)}>
           {fullChart
             ? <svg viewBox="0 0 24 24"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" /></svg>
             : <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5" /></svg>}
         </button>
+        )}
         <div className="chart-tabs">
           <div className="ct on">{t("priceChart")}</div>
           <div className="tools">
@@ -1542,24 +2771,33 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               )}
             </div>
             <div className="pophost">
-              <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !ctOpen; closeAll(); setCtOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h3M14 4v16M14 9h3" /></svg>{t(CT_TKEY[chartType])}<span style={{ color: "var(--muted)" }}>▾</span></button>
+              <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !ctOpen; closeAll(); setCtOpen(willOpen); }}><ChartTypeIcon kind={chartType} />{t(CT_TKEY[chartType])}<span style={{ color: "var(--muted)" }}>▾</span></button>
               {/* desktop popover (hidden on mobile via CSS) */}
-              <div className={`pop${ctOpen ? " show" : ""}`} style={{ top: 32, left: 0 }} onClick={(e) => e.stopPropagation()}>
-                {CHART_TYPES.map(([k]) => <div key={k} className="set-row" style={chartType === k ? { color: "var(--brand-2)" } : {}} onClick={() => { setChartType(k); setCtOpen(false); }}>{t(CT_TKEY[k])}</div>)}
+              <div className={`pop chart-type-pop${ctOpen ? " show" : ""}`} style={{ top: 32, left: 0 }} onClick={(e) => e.stopPropagation()}>
+                {CHART_TYPE_GROUPS.map(([groupKey, types]) => <div key={groupKey} className="chart-type-group"><div className="set-grp">{t(groupKey)}</div>{types.map((kind) => <button type="button" key={kind} className={`set-row chart-type-row${chartType === kind ? " on" : ""}`} onClick={() => { setChartType(kind); setCtOpen(false); }}><ChartTypeIcon kind={kind} /><span>{t(CT_TKEY[kind])}</span>{chartType === kind && <span className="ct-check">✓</span>}</button>)}</div>)}
               </div>
               {/* mobile bottom sheet */}
               {isMobile && (
                 <MobileSheet open={ctOpen} onClose={() => setCtOpen(false)} title={t("ctSheetTitle")}>
-                  {CHART_TYPES.map(([k]) => (
-                    <div key={k} className={`msheet-row${chartType === k ? " on" : ""}`} onClick={() => { setChartType(k); setCtOpen(false); }}>
-                      {t(CT_TKEY[k])}
-                      {chartType === k && <span style={{ marginLeft: "auto" }}>✓</span>}
-                    </div>
-                  ))}
+                  {CHART_TYPE_GROUPS.map(([groupKey, types]) => <div key={groupKey}><div className="msheet-ghd">{t(groupKey)}</div>{types.map((kind) => (
+                    <button type="button" key={kind} className={`msheet-row chart-type-row${chartType === kind ? " on" : ""}`} onClick={() => { setChartType(kind); setCtOpen(false); }}>
+                      <ChartTypeIcon kind={kind} /><span>{t(CT_TKEY[kind])}</span>
+                      {chartType === kind && <span className="ct-check">✓</span>}
+                    </button>
+                  ))}</div>)}
                 </MobileSheet>
               )}
             </div>
-            <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
+            <button
+              className="tbtn indicator-library-trigger"
+              aria-haspopup="dialog"
+              aria-expanded={indOpen}
+              aria-controls={indOpen ? "indicator-library-dialog" : undefined}
+              onClick={() => setIndOpen(true)}
+            >
+              <svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>
+              {t("indicators")}
+            </button>
             <div className="seg tool-adv" title={t("splitLayout")}>{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
             <button className={`tbtn tool-adv${isMtf ? " on" : ""}`} title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
             <button className={`tbtn dtm${dtm ? " on" : ""}`} title={t("dtmTip")} onClick={toggleDtm}><svg viewBox="0 0 24 24" style={{ width: 13, height: 13 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>{t("dtmBtn")}</button>
@@ -1657,7 +2895,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             symbol={active}
             timeframe={tf}
             bars={bars}
-            indCols={[...inds].filter((k) => !hidden.has(k)).map((k) => {
+            indCols={[...inds].filter((k) => !isSuiteKey(k) && !hidden.has(k)).map((k) => {
               const def = (IND_DEFS as any)[k];
               return { key: k, label: def?.label ?? k, tag: def?.tag ?? k };
             })}
@@ -1667,17 +2905,56 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         ) : (
           <div className="chart-body" style={{ "--subpanes": subPanes } as React.CSSProperties}>
             <DrawingSidebar
-              tool={tool}
+              tool={drawingsReadyFor(active) ? activeDrawingTool : null}
+              creationDisabledReason={drawingCreationDisabledReason}
               magnet={magnet}
+              sticky={drawingCreationDisabledReason ? false : drawingKeepsActive}
+              stayActive={drawingSticky}
+              pinned={activeDrawingTool !== null && drawingPinnedTool === activeDrawingTool}
+              drawingsVisible={drawingsVisible}
+              drawingsLocked={allUserDrawingsLocked}
+              drawingCount={activeStoredDrawings.length + activePaneDetectedDrawingCount + chartBus.legend.count}
+              userDrawingCount={userDrawingCount}
+              detectedDrawingCount={detectedDrawingCount}
+              indicatorCount={activeIndicatorCount}
+              canUndo={drawingHistoryState.canUndo}
+              canRedo={drawingHistoryState.canRedo}
               drawStyle={drawStyle}
-              onTool={(id) => setTool(id)}
-              onMagnet={() => setMagnet((mg) => !mg)}
-              onClear={() => detect("clearAll")}
-              onDrawStyle={(patch) => setDrawStyle((s) => ({ ...s, ...patch }))}
+              onTool={(id) => { activateDrawingTool(id); }}
+              onMagnet={setMagnet}
+              onSticky={setDrawingSticky}
+              onPinned={setDrawingPinnedTool}
+              onToggleVisibility={() => setDrawingsVisible((visible) => !visible)}
+              onToggleLock={() => {
+                const current = drawPending.current[active] ?? activeStoredDrawings;
+                const currentUsers = current.filter(isUserDrawing);
+                if (!currentUsers.length) return;
+                const lock = !currentUsers.every((drawing) => drawing.locked);
+                setSymbolDrawings(active, current.map((drawing) => (
+                  isUserDrawing(drawing) ? { ...drawing, locked: lock } : drawing
+                )));
+              }}
+              onUndo={() => travelDrawingHistory(active, "undo")}
+              onRedo={() => travelDrawingHistory(active, "redo")}
+              onClear={(scope) => {
+                const current = drawPending.current[active] ?? activeStoredDrawings;
+                if (scope === "user") setSymbolDrawings(active, current.filter((drawing) => !isUserDrawing(drawing)));
+                else if (scope === "detected") {
+                  setSymbolDrawings(active, current.filter(isUserDrawing));
+                  detect("clear");
+                }
+                else if (scope === "all" || scope === "everything") {
+                  setSymbolDrawings(active, []);
+                  detect("clearAll");
+                  chartBus.legend.clear();
+                }
+                if (scope === "indicators" || scope === "everything") removeAllIndicators();
+              }}
+              onDrawStyle={patchDrawStyle}
             />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawStore[sym] ?? []), ...chartBus.aiDrawingsFor(sym)]} onDrawingsChange={(d) => setSymbolDrawings(sym, d.filter((x) => !x.id.startsWith("ai_")))} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm}
+                <ChartPane key={i} idx={i} symbol={sym} drawingOwnerKey={currentDrawingOwnerKey} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={drawingsReadyFor(sym) ? activeDrawingTool : null} toolActivation={toolState.activation} drawingSticky={drawingCreationDisabledReason ? false : drawingKeepsActive} drawingCreationDisabled={drawingCreationDisabledReason !== null} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawingOwnerMatches ? (drawStore[sym] ?? []) : []), ...chartBus.aiDrawingsFor(sym)]} drawingsVisible={drawingsVisible} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} onDetectedDrawingCount={i === activePane ? setActivePaneDetectedDrawingCount : undefined} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
                   onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
                   onTableView={() => setTableViewOpen(true)}
                   onObjectTree={() => setObjectTreeOpen((o) => !o)}
@@ -1734,6 +3011,15 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                     const def = (IND_DEFS as any)[k];
                     return { key: k, label: def?.label ?? k, tag: def?.tag ?? k, kind: "pane", hidden: hidden.has(k) };
                   }),
+                  // Premium modules are first-class object-tree rows while their five runtime
+                  // containers and three oscillator panes remain shared internally.
+                  ...enabledSuiteModules(inds, indParams).map((entry): OTEntry => ({
+                    key: entry.id,
+                    label: `${entry.suiteTag} · ${entry.label}`,
+                    tag: entry.tag,
+                    kind: entry.surface === "pane" ? "pane" : "overlay",
+                    hidden: hidden.has(entry.id),
+                  })),
                 ]}
                 onEye={toggleHidden}
                 onRemove={removeInd}
@@ -1742,9 +3028,68 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             )}
           </div>
         )}
+        {/* The strip is the foot of the chart column, directly under the canvas and in place of
+            the range row (hidden on phone) — TV's anatomy. As the workspace's last flex child it
+            rides the expanded-chart mode too, where the flex:1 chart body yields it its height. */}
+        {!shellMode && isPhone && (
+          <RollerStrip
+            symbols={stripSymbols}
+            symbol={active}
+            onSymbol={pick}
+            onTapSymbol={() => { setSeed(""); setSearchMode("go"); setSearchOpen(true); }}
+            timeframes={stripTimeframes}
+            timeframe={tf}
+            onTimeframe={(next) => { if (FUNCTIONAL.has(next)) setTf(next); }}
+            onDraw={openDrawingsSheet}
+            drawActive={activeDrawingTool !== null}
+            onMore={openAnalysisHub}
+            moreBadge={!hubSeen}
+            onUndo={() => travelDrawingHistory(active, "undo")}
+            onRedo={() => travelDrawingHistory(active, "redo")}
+            canUndo={drawingHistoryState.canUndo}
+            canRedo={drawingHistoryState.canRedo}
+          />
+        )}
       </section>
+      )}
 
-      <div className="rail-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" onMouseDown={startRailResize}><span /></div>
+      {/* ── phone chart chrome (R2.1–R2.3) ──────────────────────────────────────────────────────
+          The sheets the strip raises replace the phone's floating drawing dock and top toolbar
+          row. They portal to the body, so they sit here rather than in the workspace; the strip
+          itself lives at the foot of the workspace, directly under the chart. Never rendered in
+          shell mode — the installable app draws its own native strip. */}
+      {!shellMode && isPhone && (<>
+        <DrawingsSheet
+          open={drawSheetOpen}
+          onClose={() => setDrawSheetOpen(false)}
+          activeTool={activeDrawingTool}
+          onPick={(id) => { activateDrawingTool(id); }}
+        />
+        <AnalysisHubSheet
+          open={hubOpen}
+          onClose={() => setHubOpen(false)}
+          onAction={(action) => {
+            setHubOpen(false);
+            if (action === "indicators") setIndOpen(true);
+            else if (action === "compare") { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }
+            else if (action === "alerts") window.location.assign(`/alerts?sym=${encodeURIComponent(active)}`);
+            else if (action === "symbolDetails") {
+              setFullChart(false);
+              // The dossier is the page's own scroll position on a phone, not a modal.
+              window.requestAnimationFrame(() =>
+                document.querySelector(".detail-board")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+            }
+          }}
+        />
+      </>)}
+
+      {/* The rail and the chart workspace are INDEPENDENT surfaces (the rail's intel/fund/opts
+          fetches never touch ChartPanel), so shell mode drops the rail while dossier mode keeps
+          it and drops the chart. The resizer is desktop-only chrome — never in a native shell. */}
+      {!shellMode && (
+      <div className="rail-resizer" role="separator" aria-orientation="vertical" aria-label={t("shResizeSidebar")} onMouseDown={startRailResize}><span /></div>
+      )}
+      {(!shellMode || dossierMode) && (<>
       <aside className="rail">
         <div className="rail-body">
           <div className="board wl-board">
@@ -1762,6 +3107,31 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                   </div>
                 ))}
                 <div className="menu-row wl-new" onClick={() => newList()}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>{t("newWatchlist")}</div>
+                {/* Actions on the ACTIVE list — the operator's reference puts sections and the
+                    list-level commands behind the watchlist-name dropdown, not the gear. */}
+                <div className="set-grp">{t("thisList")}</div>
+                {secCreating ? (
+                  <div className="wl-sec-new">
+                    <input
+                      autoFocus
+                      value={secName}
+                      placeholder={t("addSectionPrompt")}
+                      onChange={(e) => setSecName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { if (addSection(secName)) { setSecName(""); setSecCreating(false); } }
+                        else if (e.key === "Escape") { setSecName(""); setSecCreating(false); }
+                      }}
+                    />
+                    <button onClick={() => { if (addSection(secName)) { setSecName(""); setSecCreating(false); } }}>{t("addSection")}</button>
+                  </div>
+                ) : (
+                  <div className="menu-row" onClick={() => { setSecName(""); setSecCreating(true); }}><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h10M4 17h16" /></svg>{t("addSection")}</div>
+                )}
+                <div className="menu-row" onClick={() => copyList(activeList)}><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>{t("copyWatchlist")}</div>
+                <div className="menu-row" onClick={() => sortActiveList()}><svg viewBox="0 0 24 24"><path d="M4 6h10M4 12h7M4 18h4M17 4v16M17 20l3-3M17 20l-3-3" /></svg>{t("sortAZ")}</div>
+                <div className="menu-row" onClick={() => exportList(activeList)}><svg viewBox="0 0 24 24"><path d="M12 3v12M8 11l4 4 4-4M4 19h16" /></svg>{t("exportCsv")}</div>
+                <div className="menu-row" onClick={() => importList()}><svg viewBox="0 0 24 24"><path d="M12 15V3M8 7l4-4 4 4M4 19h16" /></svg>{t("importCsv")}</div>
+                <div className="menu-row danger" onClick={() => clearList(activeList)}><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></svg>{t("clearWatchlist")}</div>
               </div>
               <div className="wl-acts">
                 <button title={t("addSymbol")} onClick={(e) => { e.stopPropagation(); setSeed(""); setAddSymOpen(true); }}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
@@ -1789,9 +3159,22 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               </div>
               <div className="wl-list">
                 <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={onWlDragEnd} modifiers={[restrictToVerticalAxis, restrictToParentElement]}>
-                {Object.entries(sections).map(([sec, rows]) => (
+                {sectionOrder.map((sec) => {
+                  const rows = sections[sec] ?? [];
+                  const isCollapsed = collapsed.has(sec);
+                  return (
                   <div key={sec}>
-                    <div className="wl-sec" style={{ minWidth: wlMinW }}>{sec}</div>
+                    <WlSectionHeader
+                      name={sec}
+                      count={rows.length}
+                      collapsed={isCollapsed}
+                      minWidth={wlMinW}
+                      onToggle={() => toggleSection(sec)}
+                      onRename={() => renameSection(sec)}
+                      onDelete={() => deleteSection(sec)}
+                      labels={{ rename: t("renameSection"), remove: t("deleteSection"), collapse: t("collapseSection") }}
+                    />
+                    {!isCollapsed && (
                     <SortableContext items={rows} strategy={verticalListSortingStrategy}>
                     {rows.map((sym) => {
                       const isCompSym = isComposite(sym);
@@ -1828,7 +3211,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                         <SortableWlRow key={sym} sym={sym} className={`wl-row${sym === active ? " on" : ""}${set.tableView ? " tv" : ""}`} style={{ gridTemplateColumns: wlGrid, minWidth: wlMinW, height: set.tableView ? 32 : 46 }} onClick={() => pick(sym)} onMouseEnter={() => { if (!isCompSym) { prefetch(`/data/${sym}.json`); prefetch(`/data/${sym}.slice.json`); prefetch(`/data/${sym}.intel.json`); } }}>
                           {/* F1 flag slot — click to apply lastFlagColor; hover when already set shows palette */}
                           <WlFlagSlot sym={sym} color={flagColor} onSet={(c) => setFlag(sym, c)} onRemove={() => removeFlag(sym)} lastColor={lastFlagColor} />
-                          <div className="s">{set.logo && !isCompSym && <span className="ic" style={{ background: r?.col || "#888", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24 }}>{sym[0]}</span>}
+                          <div className="s">{set.logo && !isCompSym && <AssetLogo className="ic" symbol={sym} name={nm} market={r?.mkt || r?.sec} color={r?.col} size={set.tableView ? 18 : 24} />}
                             {set.logo && isCompSym && <span className="ic" style={{ background: "#2962ff", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24, fontSize: 7, fontWeight: 700, color: "#fff" }}>M</span>}
                             <span className="nm"><span className="tk">{isCompSym ? sym.split("+").slice(0, 2).join("+") + (sym.split("+").length > 2 ? "+…" : "") : primary}</span>{secondary && !isCompSym && <span className={set.tableView ? "tk-sub" : "sub"}>{secondary}</span>}</span></div>
                           {dataCols.map(([k]) => {
@@ -1837,14 +3220,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                             const eq = isExt ? extQuotes[sym] : null;
                             const extUp = eq && eq.extChg != null ? eq.extChg >= 0 : null;
                             const cls = isChg ? (u ? "up" : "down") : isExt && extUp != null ? (extUp ? "up" : "down") : "";
-                            return <span key={k} className={`c num ${cls}`}>{colVal(sym, r, k)}</span>;
+                            return <span key={k} className={`c num ${cls}`} title={isExt ? extTitle(sym) : undefined}>{colVal(sym, r, k)}</span>;
                           })}
                           <span className="rm" title={t("remove")} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); removeSymbol(sym); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span>
                         </SortableWlRow>
                       ); })}
                     </SortableContext>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
                 </DndContext>
               </div>
             </div>
@@ -1853,7 +3238,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className="board detail-board">
             {/* detail-hd: flex-wrap 2-row — top: icon+name, bottom: big price + status chip */}
             <div className="detail-hd">
-              <span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
+              <AssetLogo className="ic" symbol={active} name={nameOf(m)} market={m?.mkt || m?.sec} color={m?.col || "#76b900"} size={26} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="nm">{nameOf(m) || active}</div>
                 <div className="ex">{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</div>
@@ -1867,33 +3252,17 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>
                 {mktClosed && <span className="mkt-closed">{t("marketClosed")}</span>}
               </div>
-              {/* item-25: Overnight / extended-hours secondary price block (TV parity).
-                  Shown ONLY when market is closed and we have an ext print.
+              {/* Overnight / extended-hours secondary price block.
+                  Shown only while the backend exposes an out-of-session ext print.
                   Sources in priority order:
-                    1. Hub-emitted afterHours field on the live quote (existing leg).
-                    2. ext-quote poll result from /api/ext-quote (Yahoo grey fallback).
-                  Disappears at market open (mktClosed gate) — TV's "Overnight via BOATS" mechanic.
-                  We label by our actual source, never a borrowed brand. */}
+                    1. Hub-emitted ext* namespace.
+                    2. ext-quote poll result as a compatibility fallback.
+                  Disappears at market open.
+                  We label by our actual source, never a borrowed brand.
+                  The label follows extSession ('pre'/'post'/'overnight'). */}
               {(() => {
-                if (!mktClosed) return null;
-                // Prefer hub afterHours print; fall back to ext-quote poll
-                const hubExt = ahPrint != null && ahPrint !== officialClose ? {
-                  price: ahPrint,
-                  chg: ahChg,
-                  ts: null as number | null,
-                  source: "hub",
-                } : null;
-                const pollExt = !isComposite(active) && classify(active) === "us"
-                  ? extQuotes[active]
-                  : null;
-                const extData = hubExt ?? (pollExt ? {
-                  price: pollExt.extPrice,
-                  chg: pollExt.extChg,
-                  ts: pollExt.extTs,
-                  source: "ext-quote",
-                } : null);
-                if (!extData) return null;
-                const { price, chg, ts } = extData;
+                if (!activeExtData) return null;
+                const { price, chg, ts, session } = activeExtData;
                 const eu = (chg ?? 0) >= 0;
                 const tsStr = ts
                   ? new Date(ts * 1000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
@@ -1909,7 +3278,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                       )}
                     </div>
                     <div className="ah-meta">
-                      <span>{t("overnight")}</span>
+                      <span>{extSessionLabel(session)}</span>
                       {tsStr && <span> · {t("extLastUpdate").replace("{time}", tsStr)}</span>}
                     </div>
                   </div>
@@ -1920,10 +3289,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               <div style={{ padding: "12px 12px 0" }}>
                 <SignalButton oracle={ov} desk={dv} oracleLabel={t("goldenOracleLbl")} deskLabel={t("researchDeskLbl")} viewLabel={t("signalView")} onView={() => setSignalsOpen(true)} />
                 <TrendRow bars={bars} />
+                <WashoutTurnRow wt={intel?.tape?.washout_turn} zh={lang === "zh"} />
               </div>
               {/* Seasonality is injected via beforeIv so it renders BETWEEN the Analyst gauge and Implied
                   Volatility (order: analysis → Seasonality → IV) rather than after the whole card. */}
-              <StockAnalysis intel={intel} row={m} fund={fund} opts={opts} bars={bars} onOpenPane={(p) => setPaneOpen(p)} onOpenSignals={() => setSignalsOpen(true)}
+              <StockAnalysis intel={intel} row={m} fund={fund} opts={opts} bars={bars} glance={parseGlanceState(railGex, active)} onOpenPane={(p) => setPaneOpen(p)} onOpenSignals={() => setSignalsOpen(true)}
                 beforeIv={<div style={{ padding: 12 }}><SeasonalityCard symbol={active} onOpenPane={() => setPaneOpen("seasonals")} /></div>} />
               {/* ── bottom button group (after Seasonality): full analysis + Ask AI ── */}
               <div className="sa-btn-group">
@@ -1933,8 +3303,30 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
           </div>
         </div>
+        <a className="logo-attribution" href="https://logo.dev" target="_blank" rel="noopener">{t("shLogoCredit")}</a>
       </aside>
+      </>)}
 
+      {/* The rail's "Open full analysis" / seasonality drill-ins call setPaneOpen, and the ONLY
+          MegaPane mount lives inside the chart workspace — which dossier mode does not render.
+          Mount the same pane here in overlay mode so those buttons are not dead in the sheet. */}
+      {dossierMode && paneOpen && (
+        <MegaPane
+          sym={active}
+          fund={fund}
+          fundLoading={fundLoading}
+          quote={liveQuote ? { last: lastPx ?? null } : null}
+          bars={bars}
+          page={paneOpen}
+          onPage={(p) => setPaneOpen(p)}
+          onClose={() => setPaneOpen(null)}
+          name={nameOf(m) || active}
+          mode="overlay"
+          intel={intel}
+        />
+      )}
+
+      {!shellMode && (
       <div className="ticker">
         <span className="lbl">{t("movers")}</span>
         <div className="tk-marquee">
@@ -1950,24 +3342,39 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           </div>
         </div>
       </div>
+      )}
 
-      <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} compareCfg={compareCfg} active={active}
-        flags={flags} lastFlagColor={lastFlagColor}
-        email={email}
-        lists={Object.entries(lists).map(([name, syms]) => ({ name, count: syms.length, symbols: syms }))}
-        activeList={activeList}
-        onSwitchList={switchList}
-        onCreateList={createListNamed}
-        onAddToList={addToList}
-        onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} onRemove={removeSymbol}
-        onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
+      {searchOpen && (
+        <SearchModal open seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} compareCfg={compareCfg} active={active}
+          flags={flags} lastFlagColor={lastFlagColor}
+          email={email}
+          lists={Object.entries(lists).map(([name, syms]) => ({ name, count: syms.length, symbols: syms }))}
+          activeList={activeList}
+          onSwitchList={switchList}
+          onCreateList={createListNamed}
+          onAddToList={addToList}
+          marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
+          onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} onRemove={removeSymbol}
+          onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
+      )}
       {/* F3 Add Symbol dialog — mode="add" with trash+crosshair for members */}
-      <SearchModal open={addSymOpen} seed="" manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode="add" active={active}
-        flags={flags} lastFlagColor={lastFlagColor}
-        onClose={() => setAddSymOpen(false)} onPick={pick} onAdd={addSymbol} onRemove={removeSymbol}
-        onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
-      <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}
-        scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
+      {addSymOpen && (
+        <SearchModal open seed="" manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode="add" active={active}
+          flags={flags} lastFlagColor={lastFlagColor}
+          marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
+          onClose={() => setAddSymOpen(false)} onPick={pick} onAdd={addSymbol} onRemove={removeSymbol}
+          onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
+      )}
+      {indOpen && (
+        <IndicatorsModal open suspended={!!guide} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}
+          onApplyPreset={applySuitePreset} suiteParams={indParams} userTier={userTier}
+          activeModules={activeSuiteModuleIds} onToggleModule={toggleSuiteModule} onOpenModuleSettings={openSettings}
+          onOpenGuide={(id) => {
+            const entry = getSuiteModuleCatalogEntry(id);
+            if (entry) setGuide({ suite: entry.suiteKey, mod: entry.moduleKey, label: entry.label });
+          }}
+          scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
+      )}
       {settingsKey && (isCmpKey(settingsKey)
         ? <CompareSettings sym={cmpSymOf(settingsKey)} cfg={compareCfg[cmpSymOf(settingsKey)] || defaultCmpCfg(0)} onChange={(patch) => setCompareCfg((c) => ({ ...c, [cmpSymOf(settingsKey)]: { ...(c[cmpSymOf(settingsKey)] || defaultCmpCfg(0)), ...patch } }))} onClose={() => setSettingsKey(null)} />
         : isPineKey(settingsKey)
@@ -1975,8 +3382,27 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               pine={{ name: scriptById[settingsKey].name, params: mergedParams(scriptById[settingsKey], pineParams) }}
               onPineChange={(patch) => setPineParam(settingsKey, patch)}
               onClose={() => setSettingsKey(null)} />
-          : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />)}
+          : <IndicatorSettings key={settingsKey} indKey={settingsKey} params={indParams[parseSuiteModuleId(settingsKey)?.suiteKey ?? settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} userTier={userTier} onOpenGuide={(sk, mk, ml) => {
+              setSettingsKey(null);
+              setGuide({ suite: sk, mod: mk, label: ml });
+            }} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
+      {guide && (
+        <GuidePanel
+          suiteKey={guide.suite}
+          moduleKey={guide.mod}
+          moduleLabel={guide.label}
+          activeModules={activeSuiteModuleIds}
+          userTier={userTier}
+          onToggleModule={toggleSuiteModule}
+          onConfigureModule={(id) => {
+            setGuide(null);
+            setIndOpen(false);
+            openSettings(id);
+          }}
+          onClose={() => setGuide(null)}
+        />
+      )}
       <BrainWidget
         active={active}
         onCommand={handleBrainCommand}
@@ -2034,7 +3460,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <div className="undo-toast" style={{ position: "fixed", bottom: 22, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--line-3)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 50, display: "flex", alignItems: "center", gap: 10 }}>
           {t("allIndicatorsRemoved")}
           <button className="btn" style={{ height: 26, fontSize: 11.5 }} onClick={() => {
-            if (undoInds) { clearTimeout(undoInds.timer); setInds(undoInds.snapshot); setUndoInds(null); }
+            if (undoInds) {
+              clearTimeout(undoInds.timer);
+              setInds(undoInds.snapshot);
+              setEnabledIds(undoInds.enabledScripts);
+              setHidden(undoInds.hidden);
+              setUndoInds(null);
+            }
           }}>{t("undo")}</button>
         </div>
       )}
@@ -2046,7 +3478,29 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         </div>
       )}
 
+      {/* Free-tier register nudge — indicator cap / watchlist (anon only) */}
+      {gateNudge && (
+        <div className="undo-toast" role="status" style={{ position: "fixed", bottom: 96, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--line-3)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 51, display: "flex", alignItems: "center", gap: 12 }}>
+          <span>{gateNudge}</span>
+          <a href="/login" style={{ color: "#4d82ff", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>{t("gateSignupCta")}</a>
+        </div>
+      )}
+
+      {drawingOwnerMatches && drawingLoadFailures.has(active) && (
+        <div className="undo-toast" role="alert" style={{ position: "fixed", bottom: 136, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--danger)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 52, display: "flex", alignItems: "center", gap: 10, maxWidth: "min(92vw, 560px)" }}>
+          {t("drawingLoadFailed")}
+        </div>
+      )}
+
+      {drawingLimitWarning && (
+        <div className="undo-toast" role="alert" style={{ position: "fixed", bottom: 176, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--warn)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 52, display: "flex", alignItems: "center", gap: 10, maxWidth: "min(92vw, 560px)" }}>
+          {t("drawingLimitReached")}
+        </div>
+      )}
+
     </div>
+    </SettingsProvider>
+    </OnboardingProvider>
   );
 }
 

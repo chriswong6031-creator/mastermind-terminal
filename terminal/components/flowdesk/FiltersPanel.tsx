@@ -10,6 +10,8 @@
  * uses neutral language ("~buy lean", "~sell lean") matching our field values.
  */
 
+import { pick } from "@/lib/finFormat";
+import { FD } from "@/lib/flowdeskStrings";
 import type { DteBucket, MnyBucket, Side } from "./FeedPane";
 
 // ── Filter shape ─────────────────────────────────────────────────────────────
@@ -106,82 +108,86 @@ const PREMIUM_OPTIONS: { v: number; label: string; zh: string }[] = [
   { v: 1_000_000, label: "$1M+", zh: "$100万+" },
 ];
 
-const BADGE_OPTIONS: { key: BadgeFlag; label: string; zh: string; tip: string }[] = [
+/** Bilingual tip pair — EN text unchanged from v1; zh added so the accessible
+ *  label never leaks English into the 中文 view. */
+type TipPair = { en: string; zh: string };
+
+const BADGE_OPTIONS: { key: BadgeFlag; label: string; zh: string; tip: TipPair }[] = [
   {
     key: "whale",
     label: "Whale",
     zh: "巨单",
-    tip: "Premium ≥$1M (magnitude gate — reliable)",
+    tip: FD.filterTipWhale,
   },
   {
     key: "cluster",
     label: "Cluster",
     zh: "集群",
-    tip: "Chain-heat campaign: ≥$3M accumulated same contract-day",
+    tip: FD.filterTipCluster,
   },
   {
     key: "sweep",
     label: "Sweep",
     zh: "扫单",
-    tip: "Multi-print heuristic — aggressor direction is unverified (no NBBO)",
+    tip: FD.filterTipSweep,
   },
   {
     key: "unusual",
     label: "Unusual",
     zh: "异常",
-    tip: "Premium z-score vs 252-day baseline ≥2σ",
+    tip: FD.filterTipUnusual,
   },
   {
     key: "block",
     label: "Block",
     zh: "大宗",
-    tip: "Single-print size ≥ block threshold (exchange-reported; not direction-signed)",
+    tip: FD.filterTipBlock,
   },
 ];
 
 /** v2 detection badge filter options (from enrich artifact) */
-const DETECTION_OPTIONS: { key: DetectionFlag; label: string; zh: string; tip: string }[] = [
+const DETECTION_OPTIONS: { key: DetectionFlag; label: string; zh: string; tip: TipPair }[] = [
   {
     key: "WHALE",
     label: "Whale",
     zh: "巨单",
-    tip: "Single-event premium ≥$1M. Magnitude gate — reliable.",
+    tip: FD.detTipWhale,
   },
   {
     key: "MULTI_LEG",
     label: "Multi-leg",
     zh: "多腿策略",
-    tip: "Spread detected: 2+ strikes, same root, ≤60s. Direction is DISCOUNTED — reads as spread, not naked.",
+    tip: FD.detTipMultiLeg,
   },
   {
     key: "LADDER",
     label: "Ladder",
     zh: "梯形布局",
-    tip: "Same root+right, ≥3 distinct strikes, same lean within 30 min — staged accumulation.",
+    tip: FD.detTipLadder,
   },
   {
     key: "REPEAT_HITTER",
     label: "Repeat",
     zh: "反复加仓",
-    tip: "Same OCC contract in ≥3 separate events this session — conviction re-load.",
+    tip: FD.detTipRepeat,
   },
   {
     key: "SIZE_VS_OI",
     label: "Size>OI",
     zh: "量超持仓",
-    tip: "Event size ≥ 2× prior-day OI — new positioning that can't hide in existing interest.",
+    tip: FD.detTipSizeVsOi,
   },
   {
     key: "FRESH",
     label: "Fresh",
     zh: "新建仓",
-    tip: "Vol > OI: new positioning, not recycled open interest.",
+    tip: FD.detTipFresh,
   },
   {
     key: "Z_OUTLIER",
-    label: "Z-outlier",
-    zh: "Z值异常",
-    tip: "Root-level premium z-score ≥2σ vs 252-day baseline — ticker running hot.",
+    label: "Activity spike",
+    zh: "活跃度飙升",
+    tip: FD.detTipZOutlier,
   },
 ];
 
@@ -310,7 +316,8 @@ export function FiltersPanel({ filters, onFiltersChange, lang }: FiltersPanelPro
               <button
                 key={key}
                 onClick={() => toggleDte(key)}
-                style={chipStyle(on)}
+                className={`obs-chip${on ? " on" : ""}`}
+                aria-pressed={on}
               >
                 {label}
               </button>
@@ -331,7 +338,8 @@ export function FiltersPanel({ filters, onFiltersChange, lang }: FiltersPanelPro
               <button
                 key={key}
                 onClick={() => toggleMny(key)}
-                style={chipStyle(on)}
+                className={`obs-chip${on ? " on" : ""}`}
+                aria-pressed={on}
               >
                 {zh ? zl : label}
               </button>
@@ -345,13 +353,15 @@ export function FiltersPanel({ filters, onFiltersChange, lang }: FiltersPanelPro
         <div style={CHIP_ROW_STYLE}>
           {BADGE_OPTIONS.map(({ key, label, zh: zl, tip }) => {
             const on = filters.badges.has(key);
+            const tipStr = pick(zh, tip.en, tip.zh);
             return (
               <button
                 key={key}
                 onClick={() => toggleBadge(key)}
-                style={chipStyle(on)}
-                aria-label={tip}
-                data-tip={tip}
+                className={`obs-chip${on ? " on" : ""}`}
+                aria-pressed={on}
+                aria-label={tipStr}
+                data-tip={tipStr}
               >
                 {zh ? zl : label}
               </button>
@@ -370,13 +380,15 @@ export function FiltersPanel({ filters, onFiltersChange, lang }: FiltersPanelPro
         <div style={CHIP_ROW_STYLE}>
           {DETECTION_OPTIONS.map(({ key, label, zh: zl, tip }) => {
             const on = filters.detections.has(key);
+            const tipStr = pick(zh, tip.en, tip.zh);
             return (
               <button
                 key={key}
                 onClick={() => toggleDetection(key)}
-                style={chipStyle(on)}
-                aria-label={tip}
-                data-tip={tip}
+                className={`obs-chip${on ? " on" : ""}`}
+                aria-pressed={on}
+                aria-label={tipStr}
+                data-tip={tipStr}
               >
                 {zh ? zl : label}
               </button>
@@ -392,11 +404,11 @@ export function FiltersPanel({ filters, onFiltersChange, lang }: FiltersPanelPro
 
       {/* ── Reset ── */}
       {isDirty && (
-        <div style={{ marginTop: 6 }}>
+        <div style={{ marginTop: "var(--sp-2)" }}>
           <button
             className="fin-pill"
             onClick={() => onFiltersChange({ ...DEFAULT_FILTERS, badges: new Set(), detections: new Set() })}
-            style={{ fontSize: 11 }}
+            style={{ fontSize: "var(--fs-label)" }}
           >
             {zh ? "重置筛选" : "Reset filters"}
           </button>
@@ -411,19 +423,19 @@ export function FiltersPanel({ filters, onFiltersChange, lang }: FiltersPanelPro
 function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={ROW_STYLE}>
-      <div style={LABEL_STYLE}>{label}</div>
+      <div className="obs-lbl">{label}</div>
       <div style={{ minWidth: 0 }}>{children}</div>
     </div>
   );
 }
 
-// ── Styles (inline — no new CSS classes required) ────────────────────────────
+// ── Styles (inline — chips/labels ride the .obs-* primitives) ────────────────
 
 const PANEL_STYLE: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 10,
-  padding: "10px 12px",
+  gap: "var(--sp-3)",
+  padding: "var(--sp-3)",
   background: "var(--panel)",
   borderBottom: "1px solid var(--line)",
 };
@@ -431,40 +443,17 @@ const PANEL_STYLE: React.CSSProperties = {
 const ROW_STYLE: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 5,
-};
-
-const LABEL_STYLE: React.CSSProperties = {
-  font: "600 10.5px/1 var(--font-ui)",
-  color: "var(--muted)",
-  textTransform: "uppercase",
-  letterSpacing: ".04em",
+  gap: "var(--sp-2)",
 };
 
 const CAVEAT_STYLE: React.CSSProperties = {
-  font: "500 10px/1.35 var(--font-ui)",
+  font: "500 var(--fs-micro)/1.35 var(--font-ui)",
   color: "var(--text-dim)",
-  marginTop: 3,
+  marginTop: "var(--sp-1)",
 };
 
 const CHIP_ROW_STYLE: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
-  gap: 4,
+  gap: "var(--sp-1)",
 };
-
-function chipStyle(on: boolean): React.CSSProperties {
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    font: "600 10.5px/1 var(--font-ui)",
-    color: on ? "var(--bg)" : "var(--text-2)",
-    background: on ? "var(--text)" : "var(--panel-2)",
-    border: `1px solid ${on ? "transparent" : "var(--line)"}`,
-    borderRadius: "var(--r-pill)",
-    padding: "5px 9px",
-    cursor: "pointer",
-    whiteSpace: "nowrap" as const,
-    transition: "color var(--t), background var(--t), border-color var(--t)",
-  };
-}

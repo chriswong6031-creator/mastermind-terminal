@@ -4,9 +4,11 @@
  */
 "use client";
 import { useMemo } from "react";
+import type React from "react";
 import { pick } from "../../lib/finFormat";
 import type { Lang } from "../../lib/i18n";
 import { FD } from "../../lib/flowdeskStrings";
+import { Tip } from "../ui/Tip";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -55,7 +57,36 @@ function zBarWidth(z: number | null): number {
   return Math.min(100, Math.round((z / 5) * 100));
 }
 
+/** Turn the statistical score into a glanceable activity band. */
+function activityBand(z: number | null, zh: boolean): string {
+  if (z == null) return zh ? "积累中" : "Warming";
+  const az = Math.abs(z);
+  if (az >= 3) return zh ? "极异常" : "Extreme";
+  if (az >= 2) return zh ? "很异常" : "Very high";
+  if (az >= 1) return zh ? "偏高" : "Elevated";
+  return zh ? "正常" : "Typical";
+}
+
+/** Payloads still carry an engine name; the UI explains it as a familiar time span. */
+function readableBaseline(note: string): string {
+  return note
+    .replace(/EOD[-\s]?252/gi, "1-year")
+    .replace(/252[-\s]?(session|day|trading day)s?/gi, "1-year")
+    .replace(/\beod252\b/gi, "1-year");
+}
+
 const MAX_ROWS = 8;
+
+/** Hairline magnitude track under each ticker — neutral line token, never a
+ *  direction color (the fill's accent is a magnitude hue from zAccent). */
+const BAR_TRACK: React.CSSProperties = {
+  height: 2,
+  background: "var(--line)",
+  borderRadius: "var(--r-pill)",
+  marginTop: "var(--sp-1)",
+  overflow: "hidden",
+  width: "100%",
+};
 
 // ─── Component ────────────────────────────────────────────────────────────
 
@@ -72,30 +103,42 @@ export function RadarStrip({ feed, lang }: RadarStripProps) {
       .slice(0, MAX_ROWS);
   }, [feed.unusual_names]);
 
-  const note = feed.baseline_note
+  const rawNote = feed.baseline_note
     ? pick(zh, feed.baseline_note.en, feed.baseline_note.zh)
     : pick(zh, FD.radarBaseline.en, FD.radarBaseline.zh);
+  const note = zh ? rawNote : readableBaseline(rawNote);
 
   return (
-    <section className="obs-card obs-fd-radar obs-scroll" data-tut="flow-radar" style={{ borderRadius: 0, border: "none", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+    <section
+      className="obs-card obs-fd-radar obs-scroll"
+      data-tut="flow-radar"
+      style={{ borderRadius: 0, border: "none", borderBottom: "1px solid var(--line)" }}
+    >
       {/* Header */}
       <div className="obs-card-hd">
         <span className="obs-lbl">{pick(zh, FD.smartMoneyRadar.en, FD.smartMoneyRadar.zh)}</span>
-        <span style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>{note}</span>
+        <span className="obs-fd-radar-note">{note}</span>
       </div>
 
       {/* Column headers */}
-      <div className="obs-fd-radar-col-head">
-        <span style={{ flex: "0 0 44px" }}>{pick(zh, "Ticker", "标的")}</span>
-        <span style={{ flex: "0 0 38px", textAlign: "right" }}>z</span>
-        <span style={{ flex: 1, textAlign: "right" }}>{pick(zh, "Gross Prem", "总权利金")}</span>
-        <span style={{ flex: "0 0 36px", textAlign: "right" }}>{pick(zh, "C%", "认购%")}</span>
+      <div className="obs-fd-radar-col-head obs-lbl">
+        <span>{pick(zh, "Ticker", "标的")}</span>
+        <Tip label={pick(zh, "How unusual today's premium is compared with roughly one trading year", "今日权利金相对约一年交易历史的异常程度")} side="top" size="card">
+          <span style={{ textAlign: "right", cursor: "help" }}>{pick(zh, "Activity", "活跃度")}</span>
+        </Tip>
+        <Tip label={pick(zh, "Gross options premium traded today (calls + puts)", "今日期权总权利金（认购+认沽）")} side="top" size="card">
+          <span style={{ textAlign: "right", cursor: "help" }}>{pick(zh, "Premium", "权利金")}</span>
+        </Tip>
+        <Tip label={pick(zh, "Call premium as a share of total (call + put) premium", "认购权利金占总权利金（认购+认沽）的比例")} side="top" size="card">
+          <span style={{ textAlign: "right", cursor: "help" }}>{pick(zh, "Calls", "认购")}</span>
+        </Tip>
       </div>
 
-      {/* Rows */}
+      {/* Rows — the empty state names the reason instead of a bare "no data" */}
       {rows.length === 0 && (
-        <div style={{ padding: "12px", fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
-          {pick(zh, "No unusual activity", "暂无异常活动")}
+        <div className="fin-empty" style={{ margin: "var(--sp-3)", flexDirection: "column", gap: "var(--sp-1)" }}>
+          <span className="fin-empty-title">{pick(zh, FD.radarEmpty.en, FD.radarEmpty.zh)}</span>
+          <span className="fin-empty-why">{pick(zh, FD.radarEmptyWhy.en, FD.radarEmptyWhy.zh)}</span>
         </div>
       )}
 
@@ -117,27 +160,35 @@ function RadarRow({ row, zh }: { row: UnusualName; zh: boolean }) {
   return (
     <div className="obs-fd-radar-row">
       {/* Ticker + group */}
-      <div style={{ flex: "0 0 44px", minWidth: 0 }}>
+      <div className="obs-fd-radar-name">
         <div className="obs-fd-radar-ticker">{row.root}</div>
-        <div style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        <div className="obs-fd-radar-group">
           {group}
         </div>
         {/* Magnitude bar */}
-        <div style={{ height: 2, background: "rgba(255,255,255,0.07)", borderRadius: 1, marginTop: 3, overflow: "hidden", width: "100%" }}>
-          <div style={{ height: "100%", borderRadius: 1, background: accent, width: `${barW}%` }} />
+        <div style={BAR_TRACK}>
+          <div style={{ height: "100%", borderRadius: "var(--r-pill)", background: accent, width: `${barW}%` }} />
         </div>
       </div>
 
-      {/* z-score */}
+      {/* Human-readable unusualness band; exact z remains in the accessible label. */}
       <div className="obs-fd-radar-z" style={{ color: accent }}>
-        {row.prem_z != null ? row.prem_z.toFixed(1) : "—"}
+        <Tip
+          label={row.prem_z != null
+            ? pick(zh, `${row.prem_z.toFixed(1)} standard deviations from its one-year norm`, `相对一年常态偏离 ${row.prem_z.toFixed(1)} 个标准差`)
+            : pick(zh, "A full baseline is still building", "完整基线仍在积累")}
+          side="top"
+          size="card"
+        >
+          <span style={{ cursor: "help" }}>{activityBand(row.prem_z, zh)}</span>
+        </Tip>
       </div>
 
       {/* Gross premium */}
       <div className="obs-fd-radar-prem">{fmtPrem(row.gross_premium_today)}</div>
 
       {/* Call share */}
-      <div style={{ flex: "0 0 36px", textAlign: "right", fontSize: 11, color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>
+      <div className="obs-fd-radar-call">
         {callPct}%
       </div>
     </div>

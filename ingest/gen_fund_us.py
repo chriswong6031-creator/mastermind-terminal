@@ -18,7 +18,8 @@ the judge-fixed §1.1 contract EXACTLY:
 
 Joins, all null-safe:
   * site/stockdata/<SYM>.json  — free-float/employees fallback, earnings-surprise depth, profile HQ/founded.
-  * data/us_fund/_tx_index.json — {SYM: [fiscal ids]} → sets earnings.q[].tx (skipped if the file is absent).
+  * data/us_fund/_tx_index.json — {SYM: [fiscal ids]} → sets earnings.q[].tx.  A
+    missing/collapsed index may never erase previously published discovery links.
 
 Run with the macro venv:
     "<Macro Dashboard>/.venv/bin/python" ingest/gen_fund_us.py [--only AAPL,ZS] [--limit N]
@@ -740,13 +741,83 @@ def atomic_write(dest: Path, text: str) -> None:
 
 
 # ───────────────────────────── driver ─────────────────────────────
-def load_tx_index() -> dict:
-    if TX_INDEX.exists():
+def _published_tx_pairs() -> set[tuple[str, str]]:
+    """Return exact ``(ticker, id)`` pairs discoverable in fund payloads."""
+    pairs: set[tuple[str, str]] = set()
+    for path in OUT.glob("*.fund.json"):
         try:
-            return json.loads(TX_INDEX.read_text())
+            payload = json.loads(path.read_text())
+            sym = str(payload.get("ticker") or path.name.removesuffix(".fund.json")).upper()
+            linked = {
+                row.get("tx")
+                for row in ((payload.get("earnings") or {}).get("q") or [])
+                if row.get("tx")
+            }
         except Exception:
-            return {}
-    return {}
+            continue
+        pairs.update((sym, tx_id) for tx_id in linked if isinstance(tx_id, str))
+    return pairs
+
+
+def _normalize_tx_map(raw: object) -> dict[str, list[str]]:
+    """Strict local normalization keeps this standalone emitter import-safe."""
+    if not isinstance(raw, dict):
+        raise ValueError("transcript index must be an object")
+    clean: dict[str, list[str]] = {}
+    for raw_sym, raw_values in raw.items():
+        if not isinstance(raw_sym, str) or not raw_sym.strip() or not isinstance(raw_values, list):
+            raise ValueError("transcript entries must map symbol strings to ID arrays")
+        sym = raw_sym.strip().upper()
+        ids: set[str] = set()
+        for value in raw_values:
+            if not (
+                isinstance(value, str)
+                and len(value) == 6
+                and value[:4].isdigit()
+                and value[4] == "Q"
+                and value[5] in "1234"
+            ):
+                raise ValueError(f"invalid transcript ID for {sym}: {value!r}")
+            ids.add(value)
+        if ids:
+            clean[sym] = sorted(ids)
+    return clean
+
+
+def load_tx_index() -> dict:
+    """Load and guard the transcript discovery map.
+
+    The old fail-open ``{}`` behavior allowed a missing Macro-root index to
+    overwrite thousands of valid fund payloads with ``tx:null``.  Preserve the
+    last-good surface instead: malformed/missing input is fatal when any links
+    are already published, and every published ticker/ID pair is immutable.
+    """
+    published_pairs = _published_tx_pairs()
+    if not TX_INDEX.exists():
+        if published_pairs:
+            raise RuntimeError(
+                f"transcript index absent at {TX_INDEX}; refusing to erase "
+                f"{len(published_pairs)} published links"
+            )
+        return {}
+    try:
+        raw = json.loads(TX_INDEX.read_text())
+    except Exception as exc:
+        raise RuntimeError(f"transcript index unreadable: {exc}") from exc
+    try:
+        clean = _normalize_tx_map(raw)
+        candidate_pairs = {(sym, tx_id) for sym, ids in clean.items() for tx_id in ids}
+        missing = sorted(published_pairs - candidate_pairs)
+    except ValueError as exc:
+        raise RuntimeError(f"transcript index invalid: {exc}") from exc
+    if missing:
+        preview = ", ".join(f"{sym}/{tx_id}" for sym, tx_id in missing[:8])
+        suffix = f" (+{len(missing) - 8} more)" if len(missing) > 8 else ""
+        raise RuntimeError(
+            "transcript index would remove published links: "
+            f"{preview}{suffix}; preserving last good"
+        )
+    return clean
 
 
 def main(argv: list[str]) -> None:

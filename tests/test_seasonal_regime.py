@@ -105,6 +105,15 @@ def test_build_outlook_structure_and_schema():
     assert out["forward_buckets"] and all("baseline" in b and "regime" in b for b in out["forward_buckets"])
     assert "intervals_baseline" in out and "intervals_regime" in out
     assert out["validation"]["verdict"] in ("edge", "no_edge", "anti", "untested")
+    assert out["engine_version"] == "0.2.0"
+    assert out["validation"]["n_blocks"] >= 3
+    assert out["validation"]["skill_ci_lo"] is not None
+    assert out["validation"]["skill_ci_hi"] is not None
+    for interval in out["intervals_baseline"] + out["intervals_regime"]:
+        assert 0 <= interval["evidence_score"] <= 100
+        assert interval["confidence"] in ("low", "medium", "high")
+        assert interval["n_eff"] <= interval["n"] + 1e-9
+        assert "typical_move" in interval and "stability" in interval
 
 
 def test_seasonal_signal_is_detected():
@@ -158,3 +167,16 @@ def test_direction_stable_under_threshold_perturbation(monkeypatch):
     pert = sr.build_outlook("S", close, as_of=pd.Timestamp("2026-07-08"))
     for b0, b1 in zip(base["forward_buckets"], pert["forward_buckets"]):
         assert {b0["baseline"]["dir"], b1["baseline"]["dir"]} != {"bull", "bear"}
+
+
+def test_validation_treats_years_as_units_not_buckets():
+    close = synth(1994, 2025, seed=19)
+    out = sr.build_outlook("YEARS", close, as_of=pd.Timestamp("2026-07-08"))
+    val = out["validation"]
+    compared = val["regime_better_years"] + val["baseline_better_years"] + val["tied_years"]
+    assert compared == val["loyo_years"]
+    assert val["n_predictions"] > compared
+    assert val["n_blocks"] < compared
+    # A point estimate cannot earn EDGE unless the conservative block interval clears zero.
+    if val["verdict"] == "edge":
+        assert val["skill_ci_lo"] > 0

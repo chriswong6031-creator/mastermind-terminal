@@ -11,11 +11,14 @@
  * Narrow-width: CENTER and RIGHT stack vertically below LEFT.
  *
  * HONESTY DOCTRINE:
+ *   - Masthead names the factor engine so the Options hub does not imply options origination.
  *   - Cadence chip: "nightly EOD — updates after close"
  *   - Authority chip: "display-only — forward ledger accruing"
  *   - Thesis rendered with "machine-generated from engine fields" caption
  *   - what_to_do_now rendered with "phase-keyed action guide — display only"
- *   - profit_plan rendered with "exit levels from engine geometry — display only"
+ *   - profit_plan rendered with "exit levels from engine geometry — display only";
+ *     wide projected geometry keeps its warning and target de-emphasis.
+ *   - GAINERS is hidden until the producer publishes last_price.
  *   - No "validated", no predictive copy
  *   - Empty state: "No active prophecies — ledger accruing."
  *   - PERF sub-tab: placeholder only ("outcome ledger accruing")
@@ -26,7 +29,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { flowGet } from "@/lib/flowClientCache";
 import { useLang } from "@/lib/i18n";
 import { makeProphetT } from "./prophetStrings";
-import { SignalCard, planAsof, planConfidence, planPhase, planRecommendedAction } from "./SignalCard";
+import { SignalCard, phaseTone, planAsof, planConfidence, planPhase, planRecommendedAction } from "./SignalCard";
 import type { PlanSummary } from "./SignalCard";
 import { ConfidencePanel } from "./ConfidencePanel";
 import type { ConfidenceComponents } from "./ConfidencePanel";
@@ -90,8 +93,41 @@ function resolveliveMark(
   return { mark: m, forced };
 }
 
+function marksAreFresh(marks: ProphetMarksPayload | null): boolean {
+  const table = marks?.marks;
+  if (!table || Object.keys(table).length === 0) return false;
+  if (marks?._fixture === true) return true;
+  const now = Date.now();
+  return Object.values(table).some((mark) => {
+    const ts = new Date(mark.ts_utc).getTime();
+    return Number.isFinite(ts) && now - ts >= 0 && now - ts <= LIVE_MARK_WINDOW_MS;
+  });
+}
+
 type SortMode = "new" | "best" | "gainers";
 type SubTab   = "signals" | "perf";
+
+function SortButton({
+  mode,
+  label,
+  active,
+  onSelect,
+}: {
+  mode: SortMode;
+  label: string;
+  active: boolean;
+  onSelect: (mode: SortMode) => void;
+}) {
+  return (
+    <button
+      className={`obs-chip${active ? " on" : ""}`}
+      style={SORT_CHIP_STYLE}
+      onClick={() => onSelect(mode)}
+    >
+      {label}
+    </button>
+  );
+}
 
 // ── Sort helpers ──────────────────────────────────────────────────────────────
 
@@ -121,6 +157,21 @@ function sortPlans(plans: PlanSummary[], mode: SortMode): PlanSummary[] {
         };
         return pnl(b) - pnl(a);
       });
+  }
+}
+
+function fmtDate(iso: string | null | undefined, lang: "en" | "zh"): string | null {
+  if (!iso) return null;
+  try {
+    const date = new Date(iso);
+    if (!Number.isFinite(date.getTime())) return iso.slice(0, 10) || null;
+    return date.toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "America/New_York",
+    });
+  } catch {
+    return iso.slice(0, 10) || null;
   }
 }
 
@@ -173,6 +224,8 @@ export function ProphetView() {
   }, []);
 
   useEffect(() => {
+    // Initializing the external feed subscription is the purpose of this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
     fetchMarks();
     const poll = setInterval(fetchMarks, 30_000);
@@ -181,23 +234,16 @@ export function ProphetView() {
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
-  const plans       = payload?.plans ?? [];
-  const sortedPlans = sortPlans(plans, sortMode);
+  const plans = payload?.plans ?? [];
+  // The producer currently omits last_price, so a GAINERS sort would compare an
+  // identical empty value for every plan. Keep the control hidden until it can work.
+  const hasLastPrice = plans.some((plan) => plan.last_price != null);
+  const effectiveSort = sortMode === "gainers" && !hasLastPrice ? "new" : sortMode;
+  const sortedPlans = sortPlans(plans, effectiveSort);
   const selected    = sortedPlans.find((p) => p.id === selectedId) ?? sortedPlans[0] ?? null;
-
-  // ── Render helpers ─────────────────────────────────────────────────────────
-
-  function SortButton({ mode, label }: { mode: SortMode; label: string }) {
-    return (
-      <button
-        className={`obs-chip${sortMode === mode ? " on" : ""}`}
-        style={SORT_CHIP_STYLE}
-        onClick={() => setSortMode(mode)}
-      >
-        {label}
-      </button>
-    );
-  }
+  const activePlans = sortedPlans.filter((p) => planPhase(p) !== "invalidated").length;
+  const marksFresh  = marksAreFresh(marks);
+  const asofLabel   = fmtDate(payload?.asof, lang) ?? (lang === "zh" ? "等待更新" : "Awaiting close");
 
   // ── Full-pane states ───────────────────────────────────────────────────────
 
@@ -217,9 +263,46 @@ export function ProphetView() {
   // ── Layout ─────────────────────────────────────────────────────────────────
 
   return (
-    <div style={OUTER}>
+    <div className="obs obs-ambient obs-prophet">
+      <header className="obs-prophet-masthead">
+        <div className="obs-prophet-orb" aria-hidden>
+          <span>✦</span>
+        </div>
+        <div className="obs-prophet-brand">
+          <span className="obs-prophet-eyebrow">{t("mastheadEyebrow")}</span>
+          <div className="obs-prophet-title-row">
+            <h2>{t("tabProphet")}</h2>
+            <span>{t("provSource")}</span>
+          </div>
+        </div>
+        <div className="obs-prophet-status">
+          <div className="obs-prophet-stat">
+            <span>{t("mastheadActive")}</span>
+            <b>{activePlans}</b>
+          </div>
+          <div className="obs-prophet-stat">
+            <span>{t("mastheadFocus")}</span>
+            <b>{selected?.asset ?? "—"}</b>
+          </div>
+          <div className="obs-prophet-stat">
+            <span>{t("mastheadUpdated")}</span>
+            <b>{asofLabel}</b>
+          </div>
+          {marksFresh && (
+            <div className="obs-prophet-stat">
+              <span>{t("mastheadMarks")}</span>
+              <b style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <span className="obs-live-dot" aria-hidden />
+                {t("mastheadMarksLive")}
+              </b>
+            </div>
+          )}
+        </div>
+      </header>
+
+      <div className="obs-prophet-grid">
       {/* ── LEFT — alert stream ── */}
-      <div className="obs-card" style={LEFT_PANE}>
+      <div className="obs-card obs-prophet-pane obs-prophet-left" style={LEFT_PANE}>
         {/* Sub-tabs */}
         <div style={SUBTAB_ROW}>
           <nav className="obs-pillnav" style={{ padding: "3px", gap: 2 }}>
@@ -241,13 +324,35 @@ export function ProphetView() {
         {subTab === "signals" && (
           <>
             <div style={SORT_ROW}>
-              <SortButton mode="new"     label={t("sortNew")} />
-              <SortButton mode="best"    label={t("sortBest")} />
-              <SortButton mode="gainers" label={t("sortGainers")} />
+              <SortButton
+                mode="new"
+                label={t("sortNew")}
+                active={sortMode === "new"}
+                onSelect={setSortMode}
+              />
+              <SortButton
+                mode="best"
+                label={t("sortBest")}
+                active={sortMode === "best"}
+                onSelect={setSortMode}
+              />
+              {hasLastPrice && (
+                <SortButton
+                  mode="gainers"
+                  label={t("sortGainers")}
+                  active={sortMode === "gainers"}
+                  onSelect={setSortMode}
+                />
+              )}
             </div>
-            <div style={CARD_LIST}>
+            <div
+              style={CARD_LIST}
+              className="obs-scroll"
+              role="listbox"
+              aria-label={t("signalStreamTitle")}
+            >
               {sortedPlans.length === 0 ? (
-                <div style={EMPTY_STATE}>{t("noPlans")}</div>
+                <EmptyColumn t={t} />
               ) : (
                 sortedPlans.map((plan) => (
                   <SignalCard
@@ -272,24 +377,85 @@ export function ProphetView() {
       </div>
 
       {/* ── CENTER — analysis ── */}
-      <div className="obs-card" style={CENTER_PANE}>
+      <div className="obs-card obs-prophet-pane obs-prophet-center" style={CENTER_PANE}>
         {!selected ? (
-          <div style={FULL_CENTER}>{t("noPlans")}</div>
+          <EmptyColumn t={t} center />
         ) : (
           <AnalysisPanel plan={selected} lang={lang} t={t} />
         )}
       </div>
 
       {/* ── RIGHT — confidence index ── */}
-      <div className="obs-card" style={RIGHT_PANE}>
+      <div className="obs-card obs-prophet-pane obs-prophet-right" style={RIGHT_PANE}>
         {!selected ? (
-          <div style={FULL_CENTER}>{t("noPlans")}</div>
+          <EmptyColumn t={t} center />
         ) : (
           <ConfidenceColumn plan={selected} lang={lang} t={t} marks={marks} />
         )}
       </div>
+      </div>
     </div>
   );
+}
+
+// ── EmptyColumn ───────────────────────────────────────────────────────────────
+//
+// An empty desk column has to say WHICH empty it is. All three columns are empty for
+// the same reason — the nightly run published no plans — so they say the same thing
+// instead of leaving the analysis panes looking merely unselected.
+
+function EmptyColumn({
+  t,
+  center,
+}: {
+  t: ReturnType<typeof makeProphetT>;
+  center?: boolean;
+}) {
+  return (
+    <div style={center ? EMPTY_STATE_CENTER : EMPTY_STATE}>
+      <div style={EMPTY_TITLE}>{t("noPlans")}</div>
+      <div style={EMPTY_WHY}>{t("noPlansWhy")}</div>
+    </div>
+  );
+}
+
+const POSITIONING_HINTS = [
+  "dealer", "open interest", "call wall", "put wall", "gamma", "positioning",
+  "做市商", "未平仓", "持仓", "伽马", "看涨墙", "看跌墙",
+];
+
+function splitSentences(text: string): string[] {
+  const out: string[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const cjkEnd = ch === "。" || ch === "！" || ch === "？";
+    const asciiEnd = ch === "." || ch === "!" || ch === "?";
+    if (!cjkEnd && !asciiEnd) continue;
+    if (asciiEnd) {
+      const next = text[i + 1];
+      if (next !== undefined && !/\s/.test(next)) continue;
+    }
+    let end = i + 1;
+    while (end < text.length && /\s/.test(text[end])) end++;
+    out.push(text.slice(start, end));
+    start = end;
+  }
+  if (start < text.length) out.push(text.slice(start));
+  return out.filter((sentence) => sentence.trim().length > 0);
+}
+
+function splitPositioning(text: string): { body: string; note: string | null } {
+  const parts = splitSentences(text);
+  if (parts.length < 2) return { body: text, note: null };
+  const index = parts.findIndex((sentence) => {
+    const lower = sentence.toLowerCase();
+    return POSITIONING_HINTS.some((hint) => lower.includes(hint));
+  });
+  if (index < 0) return { body: text, note: null };
+  const note = parts[index].trim();
+  const body = parts.filter((_, partIndex) => partIndex !== index).join("").trim();
+  return body && note ? { body, note } : { body: text, note: null };
 }
 
 // ── AnalysisPanel (CENTER column) ─────────────────────────────────────────────
@@ -305,9 +471,6 @@ function AnalysisPanel({
 }) {
   const isBear   = plan.direction === "BEAR";
   const dirColor = isBear ? "var(--down)" : "var(--up)";
-  const dirBg    = isBear
-    ? "color-mix(in srgb, var(--down) 15%, transparent)"
-    : "color-mix(in srgb, var(--up) 15%, transparent)";
 
   const phase      = planPhase(plan);
   const state      = plan.state;
@@ -326,13 +489,8 @@ function AnalysisPanel({
     invalidated:       t("phaseInvalidated"),
   };
   const phaseLabel = phase ? (phaseMap[phase] ?? phase) : null;
-  const phaseColor = phase === "invalidated"
-    ? "var(--down)"
-    : phase?.includes("t1") || phase?.includes("t2")
-    ? "var(--up)"
-    : phase === "triggered_pre_t1"
-    ? "var(--warn)"
-    : "var(--text-2)";
+  // Shared with SignalCard + ConfidencePanel — one phase, one colour, everywhere.
+  const phaseColor = phaseTone(phase);
 
   // What-to-do-now from payload — prefer ZH variant when lang is zh.
   const whatToDo = (lang === "zh" && plan.what_to_do_now_zh?.length)
@@ -345,18 +503,25 @@ function AnalysisPanel({
   // Thesis from payload — prefer ZH variant when lang is zh.
   const _planAny = plan as unknown as { thesis?: string | null; thesis_zh?: string | null };
   const thesis = (lang === "zh" && _planAny.thesis_zh) ? _planAny.thesis_zh : _planAny.thesis;
+  const thesisParts = thesis ? splitPositioning(thesis) : null;
 
   return (
-    <div style={ANALYSIS_SCROLL}>
+    <div style={ANALYSIS_SCROLL} className="obs-scroll obs-prophet-analysis">
       {/* ── Ticker header ── */}
       <div style={ANALYSIS_HEADER}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={ANALYSIS_TICKER}>{plan.asset}</span>
-          <span style={{ ...DIR_BADGE, background: dirBg, color: dirColor }}>
+          <span
+            className="obs-tag"
+            style={{ ...DIR_BADGE, "--c": dirColor } as React.CSSProperties}
+          >
             {isBear ? `▼ ${t("bear")}` : `▲ ${t("bull")}`}
           </span>
           {phaseLabel && (
-            <span style={{ ...PHASE_BADGE, color: phaseColor, borderColor: `${phaseColor}44` }}>
+            <span
+              className="obs-tag"
+              style={{ ...PHASE_BADGE, "--c": phaseColor } as React.CSSProperties}
+            >
               {phaseLabel}
             </span>
           )}
@@ -380,9 +545,9 @@ function AnalysisPanel({
 
       {/* ── WHAT TO DO NOW ── */}
       {whatToDo && whatToDo.length > 0 && (
-        <div style={SECTION_BOX}>
+        <div style={SECTION_BOX} className="obs-card obs-prophet-section obs-prophet-section-primary">
           <div style={SECTION_HDR_ROW}>
-            <span style={SECTION_LABEL}>{t("briefLabel")}</span>
+            <span className="obs-lbl" style={SECTION_LABEL}>{t("briefLabel")}</span>
             <span style={SECTION_CAPTION}>{t("briefCaption")}</span>
           </div>
           <ol style={BULLET_LIST}>
@@ -398,9 +563,9 @@ function AnalysisPanel({
 
       {/* ── PROFIT TAKING PLAN ── */}
       {profitPlan && profitPlan.length > 0 && (
-        <div style={SECTION_BOX}>
+        <div style={SECTION_BOX} className="obs-card obs-prophet-section">
           <div style={SECTION_HDR_ROW}>
-            <span style={SECTION_LABEL}>{t("profitPlanLabel")}</span>
+            <span className="obs-lbl" style={SECTION_LABEL}>{t("profitPlanLabel")}</span>
             <span style={SECTION_CAPTION}>{t("profitPlanCaption")}</span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -412,13 +577,21 @@ function AnalysisPanel({
       )}
 
       {/* ── SIGNAL THESIS ── */}
-      {thesis && (
-        <div style={SECTION_BOX}>
+      {thesisParts && (
+        <div style={SECTION_BOX} className="obs-card obs-prophet-section">
           <div style={SECTION_HDR_ROW}>
-            <span style={SECTION_LABEL}>{t("thesisLabel")}</span>
+            <span className="obs-lbl" style={SECTION_LABEL}>{t("thesisLabel")}</span>
             <span style={SECTION_CAPTION}>{t("thesisCaption")}</span>
           </div>
-          <p style={THESIS_TEXT}>{thesis}</p>
+          <p style={THESIS_TEXT}>{thesisParts.body}</p>
+          {thesisParts.note && (
+            <p style={POSITIONING_NOTE}>
+              <span style={{ color: "var(--warn)", fontWeight: 700 }}>
+                {t("positioningLabel")}:{" "}
+              </span>
+              {thesisParts.note}
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -481,8 +654,6 @@ function ConfidenceColumn({
   const state      = plan.state;
   const confidence = planConfidence(plan);
   const components = (state as { components?: ConfidenceComponents } | null | undefined)?.components ?? null;
-  const geometry   = state?.geometry ?? null;
-
   const t1 = plan.targets?.[0] ?? null;
 
   const rrRatio: number | null =
@@ -491,10 +662,10 @@ function ConfidenceColumn({
       : null;
 
   return (
-    <div style={CONFIDENCE_SCROLL}>
+    <div style={CONFIDENCE_SCROLL} className="obs-scroll obs-prophet-confidence-column">
       {/* Section label */}
       <div style={CONF_HDR}>
-        <span style={CONF_HDR_LABEL}>{t("confidenceTitle")}</span>
+        <span className="obs-lbl" style={CONF_HDR_LABEL}>{t("confidenceTitle")}</span>
       </div>
 
       {/* Confidence panel (arc + bars) */}
@@ -554,16 +725,6 @@ function ConfidenceColumn({
 }
 
 // ── Style constants ───────────────────────────────────────────────────────────
-
-const OUTER: React.CSSProperties = {
-  display: "grid",
-  // 3 columns: LEFT fixed 280px, CENTER flex, RIGHT fixed 260px
-  gridTemplateColumns: "280px 1fr 260px",
-  gap: 10,
-  height: "100%",
-  minHeight: 0,
-  overflow: "hidden",
-};
 
 const LEFT_PANE: React.CSSProperties = {
   display: "flex",
@@ -631,6 +792,30 @@ const EMPTY_STATE: React.CSSProperties = {
   textAlign: "center",
 };
 
+/* center-column variant: fills the pane and stacks title over the why-line */
+const EMPTY_STATE_CENTER: React.CSSProperties = {
+  ...EMPTY_STATE,
+  flex: 1,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 6,
+  padding: "48px 24px",
+};
+
+const EMPTY_TITLE: React.CSSProperties = {
+  font: "600 14px/1.25 var(--font-ui)",
+  color: "var(--text-2)",
+};
+
+const EMPTY_WHY: React.CSSProperties = {
+  font: "500 11px/1.5 var(--font-ui)",
+  color: "var(--muted)",
+  maxWidth: 420,
+  margin: "0 auto",
+};
+
 const PERF_PLACEHOLDER: React.CSSProperties = {
   flex: 1,
   display: "flex",
@@ -671,7 +856,7 @@ const ANALYSIS_HEADER: React.CSSProperties = {
 };
 
 const ANALYSIS_TICKER: React.CSSProperties = {
-  font: "700 20px/1 var(--font-ui)",
+  font: "750 28px/1 var(--font-ui)",
   color: "var(--text)",
   letterSpacing: ".01em",
 };
@@ -706,11 +891,12 @@ const AUTH_CHIP: React.CSSProperties = {
 };
 
 const SECTION_BOX: React.CSSProperties = {
-  background: "rgba(255,255,255,0.026)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: "var(--r-lg)",
-  padding: "11px 13px",
-  marginBottom: 10,
+  background: "linear-gradient(145deg, rgba(255,255,255,.045), rgba(255,255,255,.018))",
+  border: "1px solid rgba(255,255,255,0.095)",
+  borderRadius: 14,
+  padding: "14px 15px",
+  marginBottom: 12,
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,.035)",
 };
 
 const SECTION_HDR_ROW: React.CSSProperties = {
@@ -773,14 +959,15 @@ const PROFIT_ROW: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
-  padding: "7px 10px",
-  background: "rgba(255,255,255,0.026)",
+  padding: "9px 10px",
+  background: "rgba(255,255,255,0.035)",
   border: "1px solid rgba(255,255,255,0.07)",
   borderRadius: "var(--r-md)",
 };
 
 const PROFIT_LEVEL: React.CSSProperties = {
   font: "700 13px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
   color: "var(--text)",
   minWidth: 72,
 };
@@ -814,6 +1001,14 @@ const THESIS_TEXT: React.CSSProperties = {
   color: "var(--text-2)",
   margin: 0,
   whiteSpace: "pre-wrap",
+};
+
+const POSITIONING_NOTE: React.CSSProperties = {
+  margin: "9px 0 0",
+  paddingTop: 8,
+  borderTop: "1px solid var(--hairline)",
+  font: "500 10.5px/1.5 var(--font-ui)",
+  color: "var(--text-2)",
 };
 
 // ── Confidence column styles ──────────────────────────────────────────────────
@@ -856,6 +1051,7 @@ const RR_LABEL: React.CSSProperties = {
 
 const RR_VAL: React.CSSProperties = {
   font: "700 14px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
   color: "var(--text)",
 };
 

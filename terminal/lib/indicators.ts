@@ -13,7 +13,9 @@ export type IndKey = "ema" | "bb" | "vwap" | "vol" | "rsi" | "stochrsi" | "macd"
   | "ichimoku" | "ribbon" | "supertrend" | "avwap" | "rvwap" | "wvwap" | "vprofile" | "volbox"
   | "rsistack" | "accum" | "_lab"
   // Day Trade suite
-  | "svwap" | "orb" | "slevels" | "pivots" | "rvol" | "ttmsq" | "adx" | "cvd";
+  | "svwap" | "orb" | "slevels" | "pivots" | "rvol" | "ttmsq" | "adx" | "cvd"
+  // Market Structure Core (R3.1) — dealer-positioning levels from the nightly options build
+  | "optlevels";
 export type IndKind = "overlay" | "pane";
 export type FieldType = "number" | "color" | "bool";
 
@@ -43,17 +45,37 @@ export const IND_ORDER: IndKey[] = [
   "ichimoku", "ribbon", "supertrend", "avwap", "rvwap", "wvwap", "vprofile", "volbox",
   // Day Trade suite overlays (price pane)
   "svwap", "orb", "slevels", "pivots",
+  // Options positioning levels (price pane, data-fed — nightly options build)
+  "optlevels",
   "rsi", "stochrsi", "macd", "rsistack", "accum",
   // Day Trade suite sub-panes
   "rvol", "ttmsq", "adx", "cvd",
   "_lab",
 ];
 
+// TV-parity palette for the native shell only (docs/tv-parity, measured). Web keeps locked v5.
+// Module scope is safe: the pre-paint LOCALE_INIT script (app/layout.tsx) stamps data-shell on
+// <html> before any bundle executes, and these values never reach SSR'd HTML (no hydration risk).
+// Three deliberate deviations from the raw measurement — do NOT "fix" them:
+//  1. C4/CHART-04 RESOLVED the old geometry-vs-alpha trade: the band itself shrank 22% → 12%
+//     (ChartPanel's "volume" scaleMargins), so upFill/downFill no longer have to compensate and
+//     carry 0.70. upHist/downHist stay at 0.55 — the histograms live in their own sub-panes and
+//     were never oversized. Alpha and band size must move TOGETHER; changing one alone re-breaks it.
+//  2. COL.faint (MA-200) darkens — in the shell it was the brightest line on the chart.
+//  3. MACD-RSI cyan/yellow are untouched; TV's own oscillator pills measure the same family.
+const _SHELL = typeof document !== "undefined"
+  && document.documentElement.getAttribute("data-shell") === "app";
 const COL = {
-  warn: "#e8a33d", link: "#4d82ff", faint: "rgba(214,218,227,0.5)",
-  up: "#26c281", down: "#f0566b", gold: "#e8b339", yellow: "#f5c518",
-  upFill: "rgba(38,194,129,0.4)", downFill: "rgba(240,86,107,0.4)",
-  upHist: "rgba(38,194,129,0.5)", downHist: "rgba(240,86,107,0.5)",
+  warn: "#e8a33d",
+  link: _SHELL ? "#2962ff" : "#4d82ff",
+  faint: _SHELL ? "rgba(177,181,190,0.38)" : "rgba(214,218,227,0.5)",
+  up: _SHELL ? "#089981" : "#26c281",
+  down: _SHELL ? "#f23645" : "#f0566b",
+  gold: "#e8b339", yellow: "#f5c518",
+  upFill: _SHELL ? "rgba(8,153,129,0.70)" : "rgba(38,194,129,0.4)",
+  downFill: _SHELL ? "rgba(242,54,69,0.70)" : "rgba(240,86,107,0.4)",
+  upHist: _SHELL ? "rgba(8,153,129,0.55)" : "rgba(38,194,129,0.5)",
+  downHist: _SHELL ? "rgba(242,54,69,0.55)" : "rgba(240,86,107,0.5)",
   bbBand: "rgba(77,130,255,0.55)", bbBasis: "rgba(214,218,227,0.45)",
 };
 
@@ -630,6 +652,38 @@ indicator("Session Levels", overlay = true)
 // Daily bars via dataCache.getOhlc(sym). Implementation: intradayMath.sessionLevels()`,
   },
 
+  optlevels: {
+    key: "optlevels", label: "Options Levels", tag: "OptLvl", kind: "overlay",
+    defaults: {
+      cw: true, pw: true, flip: true, ags: true, em: true,
+      // Colors are NOT user-editable: they resolve from the options desk's level
+      // convention at build time (call wall var(--brand-2), put wall var(--down) —
+      // directional-color law, East-Asian flip safe — flip var(--ai) violet, abs-gamma
+      // var(--signal) amber, EM band muted). The chart and the Exposure desk must never
+      // disagree about which colour a level is.
+    },
+    fields: [
+      { key: "cw", label: "Show call wall", type: "bool", group: "inputs" },
+      { key: "pw", label: "Show put wall", type: "bool", group: "inputs" },
+      { key: "flip", label: "Show gamma flip", type: "bool", group: "inputs" },
+      { key: "ags", label: "Show absolute-gamma strike", type: "bool", group: "inputs" },
+      { key: "em", label: "Show expected-move band", type: "bool", group: "inputs" },
+    ],
+    source: `//@version=6
+indicator("Options Levels", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — dealer-positioning landmarks from the nightly options build
+// (options_hub.gex/v1 + options_hub.moves/v1; EOD open interest, refreshed nightly).
+// CW/PW: strikes with the largest net call/put dealer gamma. FLIP: zero-gamma spot from
+// the re-priced profile curve (crossing nearest spot; scalar fallback). ABS γ: argmax of
+// |gamma_call|+|gamma_put| (yields to a wall at the same strike). EM±: the published
+// expected-move band at its calibrated multiplier.
+// HONESTY: positioning landmarks, NOT support/resistance — the live Level Report Card
+// measures single-name P(hold | touched) ≈ coin flip for every role. Walls/flip inherit
+// the dealer-sign convention (signed estimate); the EM band is arithmetic on quoted
+// prices. Levels are EOD as-of the legend date; nothing here is live.
+// Implemented as createPriceLine() set; excluded from autoscale. lib/optionsLevels.ts`,
+  },
+
   pivots: {
     key: "pivots", label: "Pivot Points", tag: "Pivots", kind: "overlay",
     defaults: {
@@ -772,12 +826,89 @@ export const VIS_UNITS: { key: VisUnit; label: string; max: number }[] = [
   { key: "months", label: "Months", max: 12 },
 ];
 
+// ── Up / Down colors setting (Settings → Terminal) ────────────────────────────────────────────
+// The operator picks the direction convention: WEST = green up / red down, EAST = red up / green
+// down (CN/HK/TW/MO). It is stamped pre-paint on <html data-updown> by app/layout.tsx and carried
+// through CSS by var(--up)/var(--down) — but lightweight-charts paints to CANVAS and cannot resolve
+// a CSS var, so every directional indicator color has to be swapped in JS instead.
+//
+// The registry defaults above stay the WEST pair: they are what `mm.indParams` persists and what
+// the Settings dialog swatches show. DIR_FIELDS names the style params that carry price-DIRECTION
+// semantics; indDefaults()/withDefaults() rewrite such a param to the ACTIVE convention whenever it
+// still holds a convention default. A color the user actually picked matches neither convention's
+// default for that field, so an explicit override always wins over the setting.
+//
+// Params that merely happen to use a green or a red are deliberately NOT listed — rsistack.col1 is
+// one of three palette slots (RSI 7/14/21) and svwap.b3Col is a σ-band magnitude. Neither is a
+// direction, so flipping them under `east` would state something untrue.
+export const DIR_FIELDS: Partial<Record<IndKey, Record<string, "up" | "down">>> = {
+  vol: { upCol: "up", downCol: "down" },
+  stochrsi: { kCol: "up", dCol: "down" },
+  macd: { upHist: "up", downHist: "down" },
+  gaps: { gapUpCol: "up", gapDownCol: "down" },
+  ichimoku: { spanACol: "up", spanBCol: "down" },
+  ribbon: { colUp: "up", colDn: "down", fillUp: "up", fillDn: "down" },
+  supertrend: { colUp: "up", colDn: "down" },
+};
+
+// The two directional hue families, web + native shell (see COL). Only the RGB triple moves —
+// notation and alpha are preserved — so every tint (0.12 … 1) flips with its base color.
+const HUE_RGB_PAIRS: [string, string][] = [["38,194,129", "240,86,107"], ["8,153,129", "242,54,69"]];
+const HUE_HEX_RGB: Record<string, string> = {
+  "#26c281": "38,194,129", "#f0566b": "240,86,107", "#089981": "8,153,129", "#f23645": "242,54,69",
+};
+const RGB_TWIN = new Map<string, string>();
+const RGB_TO_HEX = new Map<string, string>();
+for (const [u, d] of HUE_RGB_PAIRS) { RGB_TWIN.set(u, d); RGB_TWIN.set(d, u); }
+for (const [hex, rgb] of Object.entries(HUE_HEX_RGB)) RGB_TO_HEX.set(rgb, hex);
+
+/** The opposite-convention twin of a directional default, or null if `v` is not one of them. */
+function hueTwin(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  const asHex = HUE_HEX_RGB[s.toLowerCase()];
+  if (asHex) { const t = RGB_TWIN.get(asHex); return t ? RGB_TO_HEX.get(t) ?? null : null; }
+  const m = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,([^)]*))?\)$/i.exec(s);
+  if (!m) return null;
+  const twin = RGB_TWIN.get(`${+m[1]},${+m[2]},${+m[3]}`);
+  if (!twin) return null;
+  return m[4] != null ? `rgba(${twin},${m[4].trim()})` : `rgb(${twin})`;
+}
+
+/** True when the operator's Up/Down colors setting is East (red = up). SSR reads as West. */
+export function isEastUpDown(): boolean {
+  return typeof document !== "undefined"
+    && document.documentElement.getAttribute("data-updown") === "east";
+}
+
+/**
+ * Rewrite `params`' directional style colors to the active Up/Down convention, in place.
+ * Only ever called on a freshly-built params object (indDefaults / withDefaults below).
+ */
+export function applyUpDownConvention(key: string, params: Record<string, any>): Record<string, any> {
+  const map = isIndKey(key) ? DIR_FIELDS[key] : undefined;
+  if (!map) return params;
+  const east = isEastUpDown();
+  const base = IND_DEFS[key as IndKey].defaults;
+  for (const field of Object.keys(map)) {
+    const west = base[field];
+    const twin = hueTwin(west);
+    if (typeof west !== "string" || !twin) continue;
+    const cur = params[field];
+    if (cur !== west && cur !== twin) continue;   // user picked their own → the setting must not touch it
+    params[field] = east ? twin : west;
+  }
+  return params;
+}
+
 export function indDefaults(key: string): Record<string, any> {
-  return isIndKey(key) ? { ...IND_DEFS[key].defaults, _vis: defaultVis() } : {};
+  return isIndKey(key)
+    ? applyUpDownConvention(key, { ...IND_DEFS[key].defaults, _vis: defaultVis() })
+    : {};
 }
 // merge persisted params over the registry defaults so older saved params backfill new fields
 export function withDefaults(key: string, params?: Record<string, any> | null): Record<string, any> {
-  return { ...indDefaults(key), ...(params || {}) };
+  return applyUpDownConvention(key, { ...indDefaults(key), ...(params || {}) });
 }
 export function allDefaults(): Record<string, Record<string, any>> {
   const o: Record<string, Record<string, any>> = {};

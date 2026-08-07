@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import WorkspaceTabs, { type WorkspaceTab } from "@/components/chrome/WorkspaceTabs";
 import OptionsHubView, { type TabKey } from "@/components/OptionsHubView";
 import { useLang } from "@/lib/i18n";
@@ -9,13 +10,24 @@ import { useLang } from "@/lib/i18n";
  * former Research page).
  *
  * Renders the ONE sub-nav (WorkspaceTabs) above the OptionsHubView engine and
- * owns the `?tab=` URL state (shallow, via window.history.replaceState — the
- * codebase idiom that dodges the useSearchParams CSR-bailout; officially blessed
- * by Next 16 app-router "shallow routing"). The hub runs CONTROLLED: this
- * composer is the single writer of the active tab.
+ * owns the `?tab=` URL state. READS resolve synchronously at first render via
+ * useSearchParams — safe here because /options is always dynamically rendered
+ * (the (shell) layout is force-dynamic and the page performs an entitlement
+ * read), so there is no static-prerender CSR-bailout to dodge and the SERVER
+ * already renders the deep-linked tab. WRITES stay shallow via
+ * window.history.replaceState (Next 16 app-router "shallow routing"). The hub
+ * runs CONTROLLED: this composer is the single writer of the active tab.
  *
  * Tab registry order per spec:
- *   tape · desk · tide · tickers · vol (Options Screener) · gex · prism · prophet.
+ *   tape · desk · tide · tickers · vol (Options Screener) · gex · surface ·
+ *   structure · volatility · prophet.
+ * (PRISM was retired in masterplan §5.3 — merged into the Exposure desk's matrix view.
+ * `?tab=prism` is now an alias onto `gex`; see HUB_KEY.)
+ * NOTE the two distinct keys: `vol` is a load-bearing legacy alias for the Options
+ * SCREENER (do not touch); `volatility` is the R3 Volatility tab (IV rank / term /
+ * skew, per-root options_hub.vol payloads); `structure` is the R3 OI suite
+ * (options_hub.oi_time/max_pain/oi_change payloads), ordered before Volatility
+ * per the masterplan §5 category order.
  * (Fundamentals was here as a cross-jump chip; it graduated to the standalone
  * /analysis page. A stray ?tab=fundamentals now redirects there — see below.)
  *
@@ -37,12 +49,18 @@ const HUB_KEY: Record<string, TabKey> = {
   vol: "screener",
   screener: "screener", // legacy flow ?tab=screener alias
   gex: "gex",
-  prism: "prism",
+  surface: "surface",
+  // §5.3: PRISM retired into the Exposure desk. Old deep-links keep working — they
+  // land on `gex`, and GexDeskView opens on its MATRIX view (it reads ?tab=prism too).
+  prism: "gex",
+  structure: "structure",
+  volatility: "volatility",
+  positioning: "positioning",
   prophet: "prophet",
 };
 
 // The tabs the hub is allowed to render under Research (canonical hub keys).
-const RESEARCH_ALLOWED: TabKey[] = ["tape", "desk", "tide", "tickers", "screener", "gex", "prism", "prophet"];
+const RESEARCH_ALLOWED: TabKey[] = ["tape", "desk", "tide", "tickers", "screener", "gex", "surface", "structure", "volatility", "positioning", "prophet"];
 
 const DEFAULT_TAB: TabKey = "tape";
 
@@ -55,7 +73,10 @@ const TABS: WorkspaceTab[] = [
   { key: "tickers", labelKey: "wtTickers" },
   { key: "vol", labelKey: "wtOptionsScreener" },
   { key: "gex", labelKey: "wtGex" },
-  { key: "prism", labelKey: "wtPrism" },
+  { key: "surface", labelKey: "tabSurface" },
+  { key: "structure", labelKey: "wtStructure" },
+  { key: "volatility", labelKey: "wtVolatility" },
+  { key: "positioning", labelKey: "wtPositioning" },
   { key: "prophet", labelKey: "wtProphet" },
 ];
 
@@ -68,34 +89,33 @@ const FUNDAMENTALS_HREF = "/analysis";
 // the canonical entries; `screener` maps back to the `vol` pill).
 const PAGE_KEY: Record<TabKey, string> = {
   tape: "tape", desk: "desk", tide: "tide", tickers: "tickers",
-  screener: "vol", vol: "vol", gex: "gex", prism: "prism", prophet: "prophet",
+  screener: "vol", gex: "gex", surface: "surface",
+  structure: "structure", volatility: "volatility", positioning: "positioning", prophet: "prophet",
   leaders: "tape", radar: "tape", // never shown here (redirected to Discover)
 };
 
 export default function OptionsWorkspace() {
   const { lang } = useLang();
-  const [hubTab, setHubTab] = useState<TabKey>(DEFAULT_TAB);
 
-  // Seed from ?tab= on mount (client-only read — mirrors AppNav's deliberate
-  // avoidance of useSearchParams so this page can stay static-prerenderable).
+  // The deep-linked tab derives SYNCHRONOUSLY from ?tab= — the server renders
+  // the requested tab and hydration starts on it, so a cold /options?tab=X can
+  // never paint (or fetch) the default tab first. The former post-mount
+  // window.location.search → setState seed intermittently lost the deep-link
+  // and was the react-hooks/set-state-in-effect finding.
+  const searchParams = useSearchParams();
+  const rawTab = searchParams.get("tab");
+  const [hubTab, setHubTab] = useState<TabKey>(() => (rawTab && HUB_KEY[rawTab]) || DEFAULT_TAB);
+
+  // leaders/radar belong to Discover and fundamentals to /analysis — forward a
+  // deep-link that slipped past the next.config redirects (preserves the
+  // ex-Flow contract). Pure navigation side effect; no state writes here.
   useEffect(() => {
-    const raw = new URLSearchParams(window.location.search).get("tab");
-    // leaders/radar belong to Discover — a passthrough that slipped past the
-    // redirect gets forwarded there (preserves the ex-Flow deep-link contract).
-    if (raw === "leaders" || raw === "radar") {
-      window.location.replace(`/discover?tab=${raw}`);
-      return;
-    }
-    // fundamentals is a cross-jump, not a hub tab — a cold /research?tab=fundamentals
-    // deep-link lands on the chart's fundamentals pane (matches the pill's action).
-    if (raw === "fundamentals") {
+    if (rawTab === "leaders" || rawTab === "radar") {
+      window.location.replace(`/discover?tab=${rawTab}`);
+    } else if (rawTab === "fundamentals") {
       window.location.replace(FUNDAMENTALS_HREF);
-      return;
     }
-    const mapped = raw ? HUB_KEY[raw] : undefined;
-    if (mapped) setHubTab(mapped);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [rawTab]);
 
   // WorkspaceTabs selection → set hub tab + write ?tab= shallowly (using the page
   // key so the URL reads /research?tab=vol, not ...=screener).

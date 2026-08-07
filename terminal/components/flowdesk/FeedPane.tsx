@@ -18,6 +18,8 @@ import { FlowCard } from "./FlowCard";
 import { FiltersPanel, DEFAULT_FILTERS } from "./FiltersPanel";
 import type { FlowFilters } from "./FiltersPanel";
 import { trackSearch } from "@/lib/searchTrack";
+import { pick } from "@/lib/finFormat";
+import { FD } from "@/lib/flowdeskStrings";
 
 // ── Re-export shared types so FlowCard / FiltersPanel import from one place ──
 
@@ -276,6 +278,8 @@ function presetFilters(preset: ViewPreset): Partial<FlowFilters> {
 
 interface FeedPaneProps {
   feed: FeedPayload | null;
+  /** SSE live-connection state (from useFlowStream). Drives the toolbar LIVE badge. */
+  live?: boolean;
   enrich: EnrichPayload | null;
   lang: "en" | "zh";
   selectedId: string | null;
@@ -288,6 +292,7 @@ interface FeedPaneProps {
 
 export function FeedPane({
   feed,
+  live,
   enrich,
   lang,
   selectedId,
@@ -296,6 +301,18 @@ export function FeedPane({
   onFiltersChange,
 }: FeedPaneProps) {
   const zh = lang === "zh";
+
+  // LIVE = an open SSE connection AND session-current data (same ET calendar day).
+  // Gating on freshness means the badge never contradicts the STALE/asof indicators
+  // and correctly stays dark on old fixture / EOD payloads — it only claims "live"
+  // when we're genuinely streaming today's session flow.
+  const feedSessionCurrent = (() => {
+    const a = feed?.asof ? Date.parse(feed.asof) : 0;
+    if (!a) return false;
+    const etDay = (t: number) =>
+      new Date(t).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    return etDay(a) === etDay(Date.now());
+  })();
 
   // Persist preset + sort across page loads
   const [prefs, setPrefs] = useState<PersistedPrefs>(() => loadPrefs());
@@ -323,6 +340,47 @@ export function FeedPane({
   // FiltersPanel open/close
   const [filtersOpen, setFiltersOpen] = useState(false);
 
+  // ── Card expansion (v7b) ───────────────────────────────────────────────────
+  // Expansion lives HERE, not inside FlowCard.
+  //
+  // Root cause of the old "sticky / unclosable" panel: each card kept its own
+  // `expanded` useState while `.obs-fc-expand-btn` was `position:absolute;
+  // bottom:8px`. Opening a card grew it in-flow (the feed is a CSS grid, so the
+  // whole row stretched and neighbours gaped) and the ONE toggle drifted with the
+  // card's new bottom edge — down onto the honesty note ~200px below the click, at
+  // an ~11×12px hit size. Every miss bubbled to the card's onClick, which only
+  // toggled SELECTION, so the panel stayed open and the desk felt frozen. The
+  // per-card state also meant nothing could ever close a panel from the outside.
+  //
+  // One id here ⇒ one card open at a time, and Esc / outside-click / the card
+  // itself can all close it.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const handleToggleExpand = useCallback((id: string) => {
+    setExpandedId((prev) => (prev === id ? null : id));
+  }, []);
+
+  // Esc + outside-click close. Bound only while a panel is open; the listeners are
+  // attached in an effect (post-commit), so the very click that opened the panel is
+  // already finished dispatching and cannot immediately close it again.
+  useEffect(() => {
+    if (expandedId === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpandedId(null);
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      const el = e.target as Element | null;
+      if (el?.closest?.('[data-fc-open="1"]')) return; // inside the open card/panel
+      setExpandedId(null);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [expandedId]);
+
   // ── Feed virtualization — cap initial render; auto-load via IntersectionObserver ──
   const PAGE_SIZE = 200;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -330,8 +388,11 @@ export function FeedPane({
 
   // Reset visible count when filters/sort change so users always see newest/top results.
   // We compare a serialized key of the effective filter state.
+  // Any re-slice can drop the open card out of the rendered set, which would strand
+  // the expansion state on an event nobody can see — so collapse alongside it.
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
+    setExpandedId(null);
   }, [search, preset, sort, filters]);
 
   // Merge preset overrides into the base filter set
@@ -494,8 +555,30 @@ export function FeedPane({
           </span>{" "}
           {zh ? "信号" : "SIGNALS"}
           {feed?.stale && (
-            <span style={{ marginLeft: 6, color: "var(--warn)", fontSize: 10 }}>
+            <span
+              className="obs-tag"
+              style={{ "--c": "var(--warn)", marginLeft: 6 } as React.CSSProperties}
+            >
               {zh ? "数据较旧" : "STALE"}
+            </span>
+          )}
+          {/* LIVE — the tape rides an open SSE connection AND the data is session-current.
+              --brand-2 (cyan) is non-directional so it never flips in East-Asian mode.
+              Gated on freshness so LIVE never contradicts STALE / an old asof. */}
+          {live && feedSessionCurrent && !feed?.stale && (
+            <span
+              style={{
+                marginLeft: 6, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
+                color: "var(--brand-2)", display: "inline-flex", alignItems: "center", gap: 3,
+              }}
+            >
+              <span
+                style={{
+                  width: 6, height: 6, borderRadius: "50%", display: "inline-block",
+                  background: "var(--brand-2)", boxShadow: "0 0 5px var(--brand-2)",
+                }}
+              />
+              {zh ? "实时" : "LIVE"}
             </span>
           )}
         </div>
@@ -532,7 +615,6 @@ export function FeedPane({
           className="obs-chip"
           onClick={() => setFiltersOpen((v) => !v)}
           aria-expanded={filtersOpen}
-          style={{ fontSize: 11, padding: "5px 12px" }}
         >
           {zh ? "筛选" : "Filters"}
           {isFiltersDirty(filters) && (
@@ -548,7 +630,6 @@ export function FeedPane({
             key={p}
             className={`obs-chip${preset === p ? " on" : ""}`}
             onClick={() => updatePrefs({ preset: p })}
-            style={{ fontSize: 11, padding: "5px 12px" }}
           >
             {p === "ALL"    ? (zh ? "全部" : "ALL")
               : p === "ELITE"  ? (zh ? "精英 — 磁带前2%" : "Elite — top 2% of tape")
@@ -575,7 +656,11 @@ export function FeedPane({
 
         {/* Empty state */}
         {feed !== null && filtered.length === 0 && (
-          <EmptyState zh={zh} hasFilters={isFiltersDirty(effectiveFilters) || search.length > 0} />
+          <EmptyState
+            zh={zh}
+            hasFilters={isFiltersDirty(effectiveFilters) || search.length > 0}
+            stale={feed.stale === true}
+          />
         )}
 
         {/* Cards — capped to visibleCount; sentinel triggers Load-more */}
@@ -587,6 +672,8 @@ export function FeedPane({
             lang={lang}
             selected={ev.id === selectedId}
             onSelect={onSelect}
+            expanded={ev.id === expandedId}
+            onToggleExpand={handleToggleExpand}
           />
         ))}
 
@@ -616,33 +703,63 @@ export function FeedPane({
 
 // ── Empty / loading states ────────────────────────────────────────────────────
 
+/**
+ * Display-only read of the US options session clock in ET. Pure — no fetch, no
+ * state; it exists so the empty state can name the real reason ("market closed"
+ * vs "session open but quiet") instead of a bare "no data".
+ * Holidays are not modelled, so the copy for an open session stays hedged.
+ */
+function isMarketOpenET(now: Date = new Date()): boolean {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(now);
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+    const wd = get("weekday");
+    if (wd === "Sat" || wd === "Sun") return false;
+    const mins = Number(get("hour")) * 60 + Number(get("minute"));
+    if (!Number.isFinite(mins)) return true;
+    return mins >= 9 * 60 + 30 && mins < 16 * 60; // 09:30–16:00 ET
+  } catch {
+    return true; // never claim "closed" on an environment we can't read
+  }
+}
+
 function LoadingState({ zh }: { zh: boolean }) {
   return (
-    <div style={EMPTY_STYLE}>
-      <div style={EMPTY_ICON}>⋯</div>
-      <div style={EMPTY_HEAD}>
-        {zh ? "加载中…" : "Loading feed…"}
+    <>
+      <div className="obs-fd-feed-state obs-fd-feed-status" role="status" aria-live="polite">
+        {pick(zh, FD.feedLoading.en, FD.feedLoading.zh)}
       </div>
-    </div>
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="fin-skel obs-fd-card-skel" aria-hidden="true" />
+      ))}
+    </>
   );
 }
 
-function EmptyState({ zh, hasFilters }: { zh: boolean; hasFilters: boolean }) {
+function EmptyState({ zh, hasFilters, stale }: { zh: boolean; hasFilters: boolean; stale: boolean }) {
+  // Honest "why": the component states which of the three it can actually tell —
+  // filters exclude everything / the payload is stale / the tape is closed or quiet.
+  const title = hasFilters ? FD.feedEmptyFiltered : FD.feedEmptyQuiet;
+  const why = hasFilters
+    ? FD.feedEmptyFilteredWhy
+    : stale
+    ? FD.feedEmptyStaleWhy
+    : isMarketOpenET()
+    ? FD.feedEmptyOpenWhy
+    : FD.feedEmptyClosedWhy;
+
   return (
-    <div style={EMPTY_STYLE}>
-      <div style={EMPTY_ICON}>◌</div>
-      <div style={EMPTY_HEAD}>
-        {hasFilters
-          ? (zh ? "无符合条件的信号" : "No signals match your filters")
-          : (zh ? "暂无信号" : "No signals yet")}
-      </div>
-      {!hasFilters && (
-        <div style={EMPTY_BODY}>
-          {zh
-            ? "此列表基于当日RTH（美东时间9:30–16:00）盘中期权流数据，每约120秒轮询一次。开盘后信号将逐步出现。"
-            : "This feed is session-based — it populates from live options prints during US regular trading hours (09:30–16:00 ET) and polls every ~120 s. Signals appear as the session progresses."}
-        </div>
-      )}
+    <div className="obs-fd-feed-state fin-empty fin-empty-lg">
+      <svg className="fin-empty-icon" viewBox="0 0 56 56" fill="none" aria-hidden="true">
+        <circle cx="28" cy="28" r="19" stroke="currentColor" strokeWidth="2" />
+        <circle cx="28" cy="28" r="7" stroke="currentColor" strokeWidth="2" />
+        <path d="M28 9v10M28 37v10M9 28h10M37 28h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+      <div className="fin-empty-title">{pick(zh, title.en, title.zh)}</div>
+      <div className="fin-empty-why">{pick(zh, why.en, why.zh)}</div>
     </div>
   );
 }
@@ -675,48 +792,25 @@ const FILTER_DOT_STYLE: React.CSSProperties = {
   verticalAlign: "middle",
 };
 
-const EMPTY_STYLE: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  justifyContent: "center",
-  gap: 10,
-  padding: "48px 24px",
-  textAlign: "center",
-};
-
-const EMPTY_ICON: React.CSSProperties = {
-  fontSize: 28,
-  color: "var(--text-dim)",
-  lineHeight: 1,
-};
-
-const EMPTY_HEAD: React.CSSProperties = {
-  font: "600 13px/1.3 var(--font-ui)",
-  color: "var(--text-2)",
-};
-
-const EMPTY_BODY: React.CSSProperties = {
-  font: "500 11.5px/1.55 var(--font-ui)",
-  color: "var(--muted)",
-  maxWidth: 320,
-};
+// Empty / loading states now ride the shared primitives (.fin-empty*, .fin-skel)
+// plus the .obs-fd-feed-state grid-span helper — no bespoke inline shells.
 
 // ── Load-more sentinel ────────────────────────────────────────────────────────
 
 const LOAD_MORE_STYLE: React.CSSProperties = {
-  padding: "10px 0 4px",
+  padding: "var(--sp-3) 0 var(--sp-1)",
   display: "flex",
   justifyContent: "center",
   alignItems: "center",
 };
 
 const LOAD_MORE_BTN: React.CSSProperties = {
-  padding: "6px 16px",
+  padding: "var(--sp-2) var(--sp-4)",
   borderRadius: "var(--r-pill)",
   border: "1px solid var(--line-2)",
   background: "transparent",
   color: "var(--text-2)",
-  font: "500 11px/1 var(--font-ui)",
+  font: "500 var(--fs-label)/1 var(--font-ui)",
+  fontVariantNumeric: "tabular-nums",
   cursor: "pointer",
 };

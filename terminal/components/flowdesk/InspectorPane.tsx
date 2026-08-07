@@ -7,12 +7,18 @@
  *  - Direction shown as soft "lean" chip only
  *  - Tick-rule caveat in amber obs-note
  *  - No "validated" claims
+ *
+ * v7b LAYOUT: the identity hero (ticker · contract · premium · ring · tier chip)
+ * is PINNED — it sits outside the scroller, so the answer to "what am I looking
+ * at" is never scrolled away. Everything below rides a 2-column KV grid at
+ * --fs-ui; long-valued fields (group, vol>OI, signing) span both columns rather
+ * than truncate. No data field was dropped — only padding was cut.
  */
 "use client";
 import type React from "react";
 import { pick, fmtDate } from "../../lib/finFormat";
 import type { Lang } from "../../lib/i18n";
-import { FD, getFlowStr } from "../../lib/flowdeskStrings";
+import { FD, getFlowStr, makeFlowT, scoreComponentLabel } from "../../lib/flowdeskStrings";
 import { RingGauge } from "../ui/RingGauge";
 import type { EnrichEvent, FlowScore } from "./FeedPane";
 
@@ -89,6 +95,20 @@ function sideLean(side: Side, zh: boolean): string {
   return pick(zh, "~Sell lean", "~偏空");
 }
 
+function activityBand(z: number, zh: boolean): string {
+  const az = Math.abs(z);
+  if (az < 0.75) return pick(zh, "Typical", "正常");
+  if (az < 1.5) return pick(zh, "Elevated", "偏高");
+  if (az < 2.5) return pick(zh, "Very high", "很高");
+  return pick(zh, "Extreme", "极高");
+}
+
+function plainBaseline(source: string): string {
+  return source
+    .replace(/EOD[-\s]?252/gi, "past trading year")
+    .replace(/252[-\s]?(session|day|trading day)s?/gi, "past trading year");
+}
+
 const TICK_CAVEAT_EN = "Lean is tick-rule derived — magnitude is the reliable read. Display-only; forward ledger accruing.";
 const TICK_CAVEAT_ZH = "方向倾向基于逐笔规则推断——大小才是可靠的读取。仅供参考；前瞻账本累积中。";
 
@@ -98,21 +118,69 @@ export function InspectorPane({ event, tickerCtx, enrichEv, lang }: InspectorPan
   const zh = lang === "zh";
 
   if (!event) {
+    // Blank-until-selection is a real state, so it says what a selection buys you
+    // rather than sitting mute.
     return (
-      <div className="obs-card obs-fd-inspector" data-tut="flow-inspector">
+      <div className="obs-card obs-fd-inspector" data-tut="flow-inspector" aria-live="polite">
         <div className="obs-insp-empty">
-          {pick(zh, FD.inspectorEmpty.en, FD.inspectorEmpty.zh)}
+          <span className="obs-lbl obs-insp-empty-title">
+            {pick(zh, FD.inspectorEmpty.en, FD.inspectorEmpty.zh)}
+          </span>
+          <span className="obs-insp-empty-why">
+            {pick(zh, FD.inspectorEmptyWhy.en, FD.inspectorEmptyWhy.zh)}
+          </span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="obs-card obs-fd-inspector" data-tut="flow-inspector">
+    <div className="obs-card obs-fd-inspector has-event" data-tut="flow-inspector">
+      {/* Hero is OUTSIDE the scroller — identity stays on screen while the field
+          breakdown below scrolls. */}
+      <InspectorHero event={event} lang={lang} zh={zh} />
       {/* obs-insp-body is a capped internal scroller so the inspector never
           starves Chain Heat above it in the right rail */}
       <div className="obs-insp-body obs-scroll">
-        <EventDetail event={event} zh={zh} tickerCtx={tickerCtx} enrichEv={enrichEv} />
+        <EventDetail event={event} zh={zh} lang={lang} tickerCtx={tickerCtx} enrichEv={enrichEv} />
+      </div>
+    </div>
+  );
+}
+
+// ─── Hero (pinned) ────────────────────────────────────────────────────────
+// Ticker · contract · premium · ring, with the magnitude tier chip at top-right.
+
+function InspectorHero({ event, lang, zh }: { event: FlowEvent; lang: Lang; zh: boolean }) {
+  const t = makeFlowT(lang);
+  const fs = event.flowScore;
+  const score = fs && !isNaN(fs.score) ? fs.score : 0;
+  const tier = fs?.tier ?? "LOW";
+
+  return (
+    <div className="obs-insp-hero">
+      <div className="obs-insp-hero-top">
+        <span className="obs-insp-hero-ticker">{event.root}</span>
+        <span className="obs-insp-hero-ct num">
+          {event.strike}{event.right} · {fmtExp(event.exp)}
+        </span>
+        {/* Tier chip rides the universal tint formula (--c → text/bg/ring).
+            Tones are MAGNITUDE hues, never up/down — a tier is not a direction. */}
+        <span
+          className="obs-insp-tier obs-tag"
+          style={{ "--c": tierTone(tier) } as React.CSSProperties}
+        >
+          {tierLabel(tier, t)}
+        </span>
+      </div>
+      <div className="obs-insp-hero-main">
+        <RingGauge value={score} size="md" tone="auto" />
+        <div className="obs-insp-hero-nums">
+          <span className="obs-insp-hero-prem num">{fmtPrem(event.premium)}</span>
+          <span className="obs-insp-hero-sub num">
+            {event.size.toLocaleString()}{pick(zh, " ct", " 张")} · {event.dte}d · {sideLean(event.side, zh)}
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -120,67 +188,37 @@ export function InspectorPane({ event, tickerCtx, enrichEv, lang }: InspectorPan
 
 // ─── EventDetail ──────────────────────────────────────────────────────────
 
-function EventDetail({ event, zh, tickerCtx, enrichEv }: { event: FlowEvent; zh: boolean; tickerCtx: TickerPayload | null; enrichEv: EnrichEvent | null }) {
+function EventDetail({ event, zh, lang, tickerCtx, enrichEv }: { event: FlowEvent; zh: boolean; lang: Lang; tickerCtx: TickerPayload | null; enrichEv: EnrichEvent | null }) {
   // Score is precomputed server-side and attached to the event (event.flowScore).
   const fs = event.flowScore;
-  const score = fs && !isNaN(fs.score) ? fs.score : 0;
-  const tier = fs?.tier ?? "LOW";
   const components = fs?.components ?? [];
-
-  const contractLabel = `${event.root} ${event.strike}${event.right} ${fmtExp(event.exp)}`;
-  const premStr = fmtPrem(event.premium);
+  const t = makeFlowT(lang);
 
   return (
     <>
-      {/* ── Header ── */}
-      <div className="obs-insp-head">
-        <span className="obs-insp-head-ticker">{event.root}</span>
-        <span className="obs-insp-head-ct">{event.strike}{event.right} · {fmtExp(event.exp)} · {premStr}</span>
-        <span
-          className="obs-insp-tier"
-          style={{ background: tierBg(tier), color: "var(--text)" }}
-        >
-          {tier}
-        </span>
-      </div>
-      <div className="obs-card-hr" />
-
-      {/* ── Big ring + component bars ── */}
-      <div className="obs-insp-bigring-row">
-        <RingGauge value={score} size="lg" tone="auto" />
+      {/* ── Score components — full-width bars, labels wrap instead of truncating ── */}
+      <div className="obs-insp-section">
+        <div className="obs-insp-section-label obs-lbl">{t("inspectorComponents")}</div>
         <div className="obs-insp-comp-bars">
           {components.map((c) => (
-            <ComponentBar key={c.key} component={c} zh={zh} />
+            <ComponentBar key={c.key} component={c} lang={lang} t={t} />
           ))}
         </div>
       </div>
-      <div className="obs-card-hr" />
 
-      {/* ── KV grid (spot / IV / OI / etc) — shown when tickerCtx available ── */}
+      {/* ── Session context (ticker day roll-up) — shown when tickerCtx available ── */}
       {tickerCtx && (
-        <>
-          <div className="obs-insp-kvgrid">
-            <div>
-              <span className="obs-lbl">{pick(zh, "Gross", "总权利金")}</span>
-              <span className="obs-insp-kv-val num">{fmtPrem(tickerCtx.day.gross)}</span>
-            </div>
-            <div>
-              <span className="obs-lbl">{pick(zh, "Call%", "认购%")}</span>
-              <span className="obs-insp-kv-val num">{Math.round(tickerCtx.day.call_share * 100)}%</span>
-            </div>
-            <div>
-              <span className="obs-lbl">{pick(zh, "Events", "事件数")}</span>
-              <span className="obs-insp-kv-val num">{tickerCtx.day.n_events}</span>
-            </div>
+        <div className="obs-insp-section">
+          <div className="obs-insp-section-label obs-lbl">{t("inspectorSessionCtx")}</div>
+          <div className="obs-insp-kv2">
+            <KV k={pick(zh, "Gross", "总权利金")} v={fmtPrem(tickerCtx.day.gross)} num />
+            <KV k={pick(zh, "Call%", "认购%")} v={`${Math.round(tickerCtx.day.call_share * 100)}%`} num />
+            <KV k={pick(zh, "Events", "事件数")} v={String(tickerCtx.day.n_events)} num />
             {tickerCtx.day.prem_z != null && (
-              <div>
-                <span className="obs-lbl">{pick(zh, "Day Z", "日Z值")}</span>
-                <span className="obs-insp-kv-val num">{tickerCtx.day.prem_z.toFixed(2)}</span>
-              </div>
+              <KV k={pick(zh, "Day activity", "当日活跃度")} v={activityBand(tickerCtx.day.prem_z, zh)} />
             )}
           </div>
-          <div className="obs-card-hr" />
-        </>
+        </div>
       )}
 
       {/* ── Direction lean + amber honesty note ── */}
@@ -188,7 +226,7 @@ function EventDetail({ event, zh, tickerCtx, enrichEv }: { event: FlowEvent; zh:
         <span className="obs-lbl">{pick(zh, "Direction lean", "方向倾向")}</span>
         <span className="obs-insp-dir-chip">{sideLean(event.side, zh)}</span>
         {enrichEv?.direction_discounted && (
-          <span style={{ marginLeft: 8, fontSize: 10, color: "var(--muted)" }}>
+          <span className="obs-insp-dir-caveat">
             {zh ? "（价差 — 方向不可靠）" : "(spread — direction unreliable)"}
           </span>
         )}
@@ -198,66 +236,80 @@ function EventDetail({ event, zh, tickerCtx, enrichEv }: { event: FlowEvent; zh:
       {/* ── Detections section (v2 enrich badges with why strings) ── */}
       {enrichEv && enrichEv.badges.length > 0 && (
         <div className="obs-insp-section">
-          <div className="obs-insp-section-label">
+          <div className="obs-insp-section-label obs-lbl">
             {pick(zh, "Detections", "检测信号")}
           </div>
-          {enrichEv.badges.map((badge) => (
-            <div key={badge} style={DETECTION_ROW_STYLE}>
-              <span style={DETECTION_BADGE_STYLE}>{badge.replace(/_/g, "-")}</span>
-            </div>
-          ))}
+          {/* Chips wrap in one row instead of one bordered row each — same badges,
+              a fraction of the vertical budget. */}
+          <div className="obs-insp-det-chips">
+            {enrichEv.badges.map((badge) => (
+              <span
+                key={badge}
+                className="obs-tag obs-insp-det-chip"
+                style={{ "--c": "var(--brand-2)" } as React.CSSProperties}
+              >
+                {badge.replace(/_/g, "-")}
+              </span>
+            ))}
+          </div>
           {/* why is a pipe-separated summary string — show once below badge list */}
           {(() => {
             const whyStr = zh ? (enrichEv.why_zh ?? enrichEv.why) : enrichEv.why;
             return whyStr ? (
-              <div style={DETECTION_WHY_STYLE}>{whyStr}</div>
+              <div className="obs-insp-det-why">{whyStr}</div>
             ) : null;
           })()}
         </div>
       )}
 
-      {/* ── Event field breakdown ── */}
+      {/* ── Event field breakdown — 2-column KV grid; fields whose VALUE runs long
+             (group, vol>OI, signing) span both columns so nothing truncates. ── */}
       <div className="obs-insp-section">
-        <div className="obs-insp-section-label">{pick(zh, "Event Fields", "事件字段")}</div>
+        <div className="obs-insp-section-label obs-lbl">{pick(zh, "Event Fields", "事件字段")}</div>
 
-        <FieldRow k={pick(zh, "Time (ET)", "时间(ET)")} v={fmtTs(event.ts)} />
-        <FieldRow k={pick(zh, "Ticker", "标的")} v={event.root} />
-        <FieldRow k={pick(zh, "Group", "板块")} v={pick(zh, event.group, event.group_zh)} />
-        <FieldRow k={pick(zh, "Type", "期权类型")} v={event.right === "C" ? pick(zh, "Call", "认购") : pick(zh, "Put", "认沽")} />
-        <FieldRow k={pick(zh, "Strike", "行权价")} v={`$${event.strike}`} />
-        <FieldRow k={pick(zh, "Expiry", "到期日")} v={fmtExp(event.exp)} />
-        <FieldRow k={pick(zh, "DTE", "剩余天数")} v={String(event.dte)} />
-        <FieldRow k={pick(zh, "DTE Bucket", "到期分组")} v={event.dte_bucket} />
-        <FieldRow k={pick(zh, "Moneyness", "价值类型")} v={event.mny_bucket} />
-        <FieldRow k={pick(zh, "Size (contracts)", "合约数量")} v={event.size.toLocaleString()} />
-        <FieldRow k={pick(zh, "Avg Price", "均价")} v={`$${event.avg_price.toFixed(2)}`} />
-        <FieldRow k={pick(zh, "Premium", "权利金")} v={fmtPrem(event.premium)} />
-        <FieldRow
-          k={pick(zh, "Premium Z", "权利金Z值")}
-          v={event.premium_z != null ? event.premium_z.toFixed(2) : "—"}
-          note={event.baseline_source}
-        />
-        <FieldRow
-          k={pick(zh, "Vol > OI", "成交量>持仓")}
-          v={event.vol_gt_oi == null
-            ? "—"
-            : event.vol_gt_oi
-              ? getFlowStr(zh ? "zh" : "en", "inspectorVolGtOiYes")
-              : getFlowStr(zh ? "zh" : "en", "inspectorVolGtOiNo")}
-        />
-        <FieldRow k={pick(zh, "Repeated", "重复")} v={bool3(event.repeated, zh)} />
-        <FieldRow k={pick(zh, "Zero DTE", "零日到期")} v={bool3(event.zerodte, zh)} />
-        {event.swept != null && (
-          <FieldRow k={pick(zh, "Swept", "扫货")} v={bool3(event.swept, zh)} />
-        )}
-        <FieldRow k={pick(zh, "N Prints", "打印次数")} v={String(event.n_prints)} />
-        <FieldRow k={pick(zh, "Signing", "签名来源")} v={event.signing_source} />
+        <div className="obs-insp-kv2">
+          {/* value already carries " ET" — no need to repeat it in the key */}
+          <KV k={pick(zh, "Time", "时间")} v={fmtTs(event.ts)} num />
+          <KV k={pick(zh, "Ticker", "标的")} v={event.root} />
+          <KV k={pick(zh, "Group", "板块")} v={pick(zh, event.group, event.group_zh)} wide />
+          <KV k={pick(zh, "Type", "期权类型")} v={event.right === "C" ? pick(zh, "Call", "认购") : pick(zh, "Put", "认沽")} />
+          <KV k={pick(zh, "Strike", "行权价")} v={`$${event.strike}`} num />
+          <KV k={pick(zh, "Expiry", "到期日")} v={fmtExp(event.exp)} num />
+          <KV k={pick(zh, "DTE", "剩余天数")} v={String(event.dte)} num />
+          <KV k={pick(zh, "DTE Bucket", "到期分组")} v={event.dte_bucket} />
+          <KV k={pick(zh, "Moneyness", "价值类型")} v={event.mny_bucket} />
+          <KV k={pick(zh, "Size (ct)", "合约数量")} v={event.size.toLocaleString()} num />
+          <KV k={pick(zh, "Avg Price", "均价")} v={`$${event.avg_price.toFixed(2)}`} num />
+          <KV k={pick(zh, "Premium", "权利金")} v={fmtPrem(event.premium)} num />
+          <KV k={pick(zh, "N Prints", "打印次数")} v={String(event.n_prints)} num />
+          <KV k={pick(zh, "Repeated", "重复")} v={bool3(event.repeated, zh)} />
+          <KV k={pick(zh, "Zero DTE", "零日到期")} v={bool3(event.zerodte, zh)} />
+          {event.swept != null && (
+            <KV k={pick(zh, "Swept", "扫货")} v={bool3(event.swept, zh)} />
+          )}
+          <KV
+            k={pick(zh, "Premium activity", "权利金活跃度")}
+            v={event.premium_z != null ? activityBand(event.premium_z, zh) : "—"}
+            note={plainBaseline(event.baseline_source)}
+            wide
+          />
+          <KV
+            k={pick(zh, "Vol > OI", "成交量>持仓")}
+            v={event.vol_gt_oi == null
+              ? "—"
+              : event.vol_gt_oi
+                ? getFlowStr(zh ? "zh" : "en", "inspectorVolGtOiYes")
+                : getFlowStr(zh ? "zh" : "en", "inspectorVolGtOiNo")}
+            wide
+          />
+          <KV k={pick(zh, "Signing", "签名来源")} v={event.signing_source} wide />
+        </div>
       </div>
 
       {/* ── Ticker context (top contracts) ── */}
       {tickerCtx && tickerCtx.top_contracts.length > 0 && (
         <div className="obs-insp-section">
-          <div className="obs-insp-section-label">
+          <div className="obs-insp-section-label obs-lbl">
             {pick(zh, `${tickerCtx.root} — Top Contracts`, `${tickerCtx.root} — 主要合约`)}
           </div>
           {tickerCtx.top_contracts.slice(0, 5).map((c, i) => (
@@ -283,67 +335,75 @@ interface ScoreComponent {
   value: number;
 }
 
-function ComponentBar({ component, zh }: { component: ScoreComponent; zh: boolean }) {
+function ComponentBar({ component, lang, t }: {
+  component: ScoreComponent;
+  lang: Lang;
+  t: (k: "cardPenalty") => string;
+}) {
   const id = component.key ?? "";
-  const label = zh
-    ? (component.label_zh || id)
-    : (component.label || id);
+  // The wire payload carries an EN `label` only (lib/flowScore.ts) — re-localise by
+  // key so the 中文 view stops leaking English. label_zh is honoured if it ever ships.
+  const label = (lang === "zh" && component.label_zh)
+    ? component.label_zh
+    : scoreComponentLabel(lang, id, component.label);
+
+  const bad = isNaN(component.value);
+  // direction-reliability is a NEGATIVE penalty component; a negative CSS width is
+  // invalid and silently rendered as a FULL bar before this clamp.
+  const neg = !bad && component.value < 0;
+  const pct = bad ? 0 : Math.max(0, Math.min(100, component.value));
 
   return (
-    <div className="obs-insp-crow">
-      <span>{label}</span>
+    <div className={`obs-insp-crow${neg ? " neg" : ""}`}>
+      <span className="obs-insp-crow-label">{label}</span>
       <div className="obs-insp-track">
-        <i className="obs-insp-track-fill" style={{ width: `${Math.min(100, component.value)}%` }} />
+        <i className="obs-insp-track-fill" style={{ width: `${pct}%` }} />
       </div>
-      <span className="obs-insp-crow-val num">{isNaN(component.value) ? "—" : component.value.toFixed(0)}</span>
-    </div>
-  );
-}
-
-// ─── FieldRow ─────────────────────────────────────────────────────────────
-
-function FieldRow({ k, v, note }: { k: string; v: string; note?: string }) {
-  return (
-    <div className="obs-insp-field-row">
-      <span className="obs-insp-field-key">{k}</span>
-      <span className="obs-insp-field-val">
-        {v}
-        {note && <span className="obs-insp-field-note"> ({note})</span>}
+      <span className="obs-insp-crow-val num" aria-label={neg ? t("cardPenalty") : undefined}>
+        {bad ? "—" : component.value.toFixed(0)}
       </span>
     </div>
   );
 }
 
-// ─── Tier background helpers ───────────────────────────────────────────────
+// ─── KV cell ──────────────────────────────────────────────────────────────
+// One key→value pair inside .obs-insp-kv2. `wide` spans both grid columns for
+// fields whose value would otherwise be squeezed; `num` opts the value into
+// tabular figures.
 
-function tierBg(tier: string): string {
-  if (tier === "ELITE")  return "rgba(157,134,255,0.15)";
-  if (tier === "STRONG") return "rgba(232,163,61,0.13)";
-  if (tier === "HIGH")   return "rgba(77,130,255,0.13)";
-  if (tier === "MEDIUM") return "rgba(134,141,156,0.1)";
-  return "rgba(90,97,111,0.08)";
+function KV({ k, v, note, wide, num }: {
+  k: string; v: string; note?: string; wide?: boolean; num?: boolean;
+}) {
+  return (
+    <div className={`obs-insp-kv${wide ? " wide" : ""}`}>
+      <span className="obs-insp-kv-k">{k}</span>
+      <span className={`obs-insp-kv-v${num ? " num" : ""}`}>
+        {v}
+        {note && <span className="obs-insp-kv-note"> ({note})</span>}
+      </span>
+    </div>
+  );
 }
 
-// ─── Detection row styles ──────────────────────────────────────────────────
+// ─── Tier tone helper ──────────────────────────────────────────────────────
+// Magnitude hues only — the tier says how big the event is, never which way it
+// points, so --up/--down never appear here. The chip derives text, fill and ring
+// from this one token via the .obs-tag tint formula.
 
-const DETECTION_ROW_STYLE: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 2,
-  padding: "5px 0",
-  borderBottom: "1px solid var(--line-2)",
-};
+function tierTone(tier: string): string {
+  if (tier === "ELITE")  return "var(--code-fn)";  // violet accent
+  if (tier === "STRONG") return "var(--warn)";
+  if (tier === "HIGH")   return "var(--brand-2)";
+  if (tier === "MEDIUM") return "var(--text-2)";
+  return "var(--muted)";
+}
 
-const DETECTION_BADGE_STYLE: React.CSSProperties = {
-  fontSize: 9,
-  fontWeight: 800,
-  letterSpacing: "0.06em",
-  color: "var(--brand-2)",
-  textTransform: "uppercase" as const,
-};
-
-const DETECTION_WHY_STYLE: React.CSSProperties = {
-  fontSize: 10.5,
-  color: "var(--text-2)",
-  lineHeight: 1.4,
-};
+// The tier chip used to print the raw wire token ("ELITE"), which leaked English
+// into the 中文 view. Route it through the FLOW_LEX tier entries instead.
+function tierLabel(tier: string, t: (k: "tierElite" | "tierStrong" | "tierHigh" | "tierMedium" | "tierLow") => string): string {
+  if (tier === "ELITE")  return t("tierElite");
+  if (tier === "STRONG") return t("tierStrong");
+  if (tier === "HIGH")   return t("tierHigh");
+  if (tier === "MEDIUM") return t("tierMedium");
+  return t("tierLow");
+}

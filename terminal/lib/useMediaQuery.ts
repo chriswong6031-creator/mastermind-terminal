@@ -18,3 +18,15 @@ export function useMediaQuery(query: string): boolean {
 export function useIsMobile(): boolean {
   return useMediaQuery("(max-width: 860px)");
 }
+
+/**
+ * PHONE breakpoint — deliberately narrower than the ≤860px responsive-shell breakpoint above.
+ * The 820×1180 tablet contract viewport is inside `useIsMobile` but must stay pixel-identical to
+ * the desktop-era chrome, so every phone-only surface (roller strip, Drawings sheet, Analysis hub)
+ * keys off this one instead. Mirrored in app/globals.css — change both together.
+ */
+export const PHONE_QUERY = "(max-width: 640px)";
+
+export function useIsPhone(): boolean {
+  return useMediaQuery(PHONE_QUERY);
+}

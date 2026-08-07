@@ -13,6 +13,7 @@
 import { useState } from "react";
 import { makeProphetT } from "./prophetStrings";
 import type { Lang } from "@/lib/i18n";
+import { structureReceiptLine, type StructureReceipt } from "@/lib/eodContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,11 @@ export interface OptionContractPayload {
   entry_premium: number | null;
   /** EOD mark — present only when engine has an EOD price */
   eod_mark?: number | null;
+  /**
+   * Display-tier structure receipt (macro #3500, OEU M-PRO hook 4). Absent on plans built
+   * before it shipped and on contracts macro could not price — the card handles both.
+   */
+  structure?: StructureReceipt | null;
 }
 
 /** Live intraday mark sourced from prophet_marks.json */
@@ -89,11 +95,14 @@ export function OptionCard({ contract, lang, liveMark, liveMarkForced }: OptionC
     : null;
 
   return (
-    <div className="obs-card" style={CARD_STYLE}>
+    <div className="obs-card obs-prophet-option" style={CARD_STYLE}>
       {/* Header row */}
       <div style={HEADER_ROW}>
         <span style={DIAMOND}>◆</span>
         <span style={TITLE_STYLE}>{t("optionCardTitle")}</span>
+        {/* Provenance: the contract is a suggested overlay on a stock signal. Options data
+            never entered the selection, the conviction score or the targets. */}
+        <span className="obs-prophet-overlay-tag">{t("optionOverlayTag")}</span>
         {/* Freshness chip: LIVE (green) or EOD (muted) */}
         {isLive && (
           <span
@@ -186,6 +195,85 @@ export function OptionCard({ contract, lang, liveMark, liveMarkForced }: OptionC
           </Field>
         )}
       </div>
+
+      {/* Structure receipt — how tradeable this contract looked at the close. */}
+      <StructureRow
+        receipt={contract.structure ?? null}
+        lang={lang}
+        open={tipKey === "struct"}
+        onOpen={(v) => setTipKey(v ? "struct" : null)}
+      />
+    </div>
+  );
+}
+
+/**
+ * StructureRow — the glance line + its Tier-2 hover.
+ *
+ * Glance carries the plain word and the compact numbers; the hover carries macro's own full
+ * sentences (note_en / note_zh) VERBATIM, including the OI vintage and the short-history
+ * caveat. Nothing is re-worded here — the receipt's vocabulary is macro's, gauntleted there.
+ *
+ * When a contract has no receipt the row says so rather than rendering nothing: an option
+ * card with no liquidity line reads as "fine to trade", which is a claim we have not earned.
+ */
+function StructureRow({
+  receipt, lang, open, onOpen,
+}: {
+  receipt: StructureReceipt | null;
+  lang: Lang;
+  open: boolean;
+  onOpen: (v: boolean) => void;
+}) {
+  const t = makeProphetT(lang);
+  const line = structureReceiptLine(receipt, lang);
+
+  if (!line) {
+    return (
+      <div style={STRUCT_ROW}>
+        <div style={STRUCT_HEAD}>
+          <span style={STRUCT_LABEL}>{t("structTitle")}</span>
+        </div>
+        <span style={{ ...STRUCT_TEXT, color: "var(--muted)" }}>{t("structAbsent")}</span>
+      </div>
+    );
+  }
+
+  // Worst-first tone, matching macro's band precedence: a wide spread or a thin strike is
+  // the warning that has to win over the reassuring words beside it.
+  const tone =
+    line.band === "wide" || line.band === "thin"
+      ? "var(--warn)"
+      : line.band === "liquid"
+        ? "var(--up)"
+        : "var(--text-2)";
+
+  return (
+    <div style={STRUCT_ROW}>
+      {/* Label + vintage share the caption line; the receipt itself owns the line below.
+          The card is mounted at ~250px in the signal list and ~600px in the detail pane —
+          a single flex row wrapped the receipt to five lines at the narrow end. */}
+      <div style={STRUCT_HEAD}>
+        <span style={STRUCT_LABEL}>{t("structTitle")}</span>
+        <span style={STRUCT_VINTAGE}>{t("structVintage")}</span>
+      </div>
+      <span
+        style={{ ...STRUCT_TEXT, color: tone, cursor: line.detail ? "help" : "default" }}
+        tabIndex={line.detail ? 0 : -1}
+        aria-label={`${t("structAria")}: ${line.glance}`}
+        onMouseEnter={() => onOpen(true)}
+        onMouseLeave={() => onOpen(false)}
+        onFocus={() => onOpen(true)}
+        onBlur={() => onOpen(false)}
+      >
+        {line.glance}
+        {line.young && <span style={STRUCT_CAVEAT}>· {t("structYoung")}</span>}
+        {open && line.detail && (
+          <span style={{ ...TIP_STYLE, whiteSpace: "normal", width: 260, right: "auto", left: 0 }}>
+            {line.detail}
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -212,19 +300,19 @@ const CARD_STYLE: React.CSSProperties = {
 const HEADER_ROW: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: 6,
   marginBottom: 8,
 };
 
 const DIAMOND: React.CSSProperties = {
-  color: "#19c2c2",
+  color: "var(--obs-prophet-cyan, #19c2c2)",
   fontSize: 11,
 };
 
 const TITLE_STYLE: React.CSSProperties = {
   font: "600 11px/1 var(--font-ui)",
   color: "var(--text-2)",
-  flex: 1,
 };
 
 const EOD_CHIP: React.CSSProperties = {
@@ -265,7 +353,8 @@ const TIP_STYLE: React.CSSProperties = {
   color: "var(--text-2)",
   zIndex: 50,
   pointerEvents: "none",
-  boxShadow: "var(--shadow-1)",
+  // --shadow-1 was never defined by globals.css — the tooltip had no elevation at all.
+  boxShadow: "var(--shadow-2)",
 };
 
 const GRID_STYLE: React.CSSProperties = {
@@ -292,6 +381,7 @@ const FIELD_VAL: React.CSSProperties = {
 
 const VAL_STYLE: React.CSSProperties = {
   font: "600 11.5px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
   color: "var(--text)",
 };
 
@@ -301,5 +391,47 @@ const CHIP_BASE: React.CSSProperties = {
   font: "600 10px/1 var(--font-ui)",
   borderRadius: "var(--r-pill)",
   padding: "3px 7px",
+  whiteSpace: "nowrap",
+};
+
+const STRUCT_ROW: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 3,
+  marginTop: 9,
+  paddingTop: 8,
+  borderTop: "1px solid var(--line-2)",
+};
+
+const STRUCT_HEAD: React.CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  gap: 8,
+};
+
+const STRUCT_LABEL: React.CSSProperties = {
+  font: "500 9.5px/1 var(--font-ui)",
+  color: "var(--muted)",
+  whiteSpace: "nowrap",
+};
+
+const STRUCT_TEXT: React.CSSProperties = {
+  position: "relative",
+  display: "block",
+  font: "600 10.5px/1.45 var(--font-ui)",
+  minWidth: 0,
+  outline: "none",
+};
+
+const STRUCT_CAVEAT: React.CSSProperties = {
+  marginLeft: 5,
+  font: "500 9.5px/1 var(--font-ui)",
+  color: "var(--warn)",
+};
+
+const STRUCT_VINTAGE: React.CSSProperties = {
+  font: "500 9px/1 var(--font-ui)",
+  color: "var(--text-dim)",
   whiteSpace: "nowrap",
 };

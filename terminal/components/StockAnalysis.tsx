@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useLang } from "@/lib/i18n";
-import { pick as pickI18n, fmtPct } from "@/lib/finFormat";
+import { daysUntil, pick as pickI18n, fmtPct } from "@/lib/finFormat";
 import type { Fund, Opts, Bar } from "@/lib/fund";
+import { buildKeyStatRows, formatCompactStat } from "@/lib/keyStats";
 import { computeRatings } from "@/lib/techRating";
 import { realizedVolCone } from "@/lib/realizedVol";
 import { Dumbbell, ComboChart, LineSeries, type Series } from "@/components/fin/FinCharts";
@@ -13,6 +14,12 @@ import { ArcGauge } from "@/components/ui/ArcGauge";
 import { analystReading, ratingVerdict, readingToArc } from "@/components/fin/ForecastPage";
 import type { FinPage } from "@/components/fin/MegaPane";
 import EventEdgePop from "@/components/fin/EventEdgePop";
+// R3.2 positioning block: the ONE regime colour/label convention (lib/mscGlance + the
+// desk's gexStrings), staleness via the shared weekday counter. The parent parses the
+// payload (root-match guard needs the authoritative active symbol) and passes the row.
+import { REGIME_COLORS, type GlanceRow } from "@/lib/mscGlance";
+import { makeGexT } from "@/components/gexdesk/gexStrings";
+import { sessionsOldEt } from "@/lib/optionsLevels";
 
 /* ── value formatting ───────────────────────────────────────────────── */
 const fnum = (n: number | null | undefined, d = 2) =>
@@ -98,44 +105,21 @@ function Stat({ k, v, tone }: { k: string; v: React.ReactNode; tone?: "up" | "do
    call onOpenPane(page) → MegaPane. */
 
 type Pick = (en?: string | null, cn?: string | null) => string;
+const MB = formatCompactStat;
 
-const MB = (n: number | null | undefined) => {
-  if (n == null || !isFinite(n)) return "—";
-  const a = Math.abs(n);
-  if (a >= 1e12) return (n / 1e12).toFixed(2) + " T";
-  if (a >= 1e9) return (n / 1e9).toFixed(2) + " B";
-  if (a >= 1e6) return (n / 1e6).toFixed(2) + " M";
-  if (a >= 1e3) return (n / 1e3).toFixed(2) + " K";
-  return fnum(n, 0);
-};
-const daysUntilLocal = (iso?: string | null): number | null => {
-  if (!iso) return null;
-  const d = new Date(iso.length <= 10 ? iso + "T00:00:00Z" : iso);
-  if (isNaN(d.getTime())) return null;
-  const now = new Date();
-  const a = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const b = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-  return Math.round((b - a) / 86400000);
-};
-
-/** Key stats: volume / avg vol 30D / mktcap / next-earnings-in-N-days. */
+/** Cross-market fundamentals plus trading activity; all rows remain null-honest. */
 function KeyStats({ fund, bars, pick }: { fund: Fund | null; bars: Bar[]; pick: Pick }) {
-  const mktcap = fund?.stats?.mktcap ?? null;
-  const lastVol = bars.length ? bars[bars.length - 1].v : null;
-  const avgVol30 = bars.length >= 2
-    ? bars.slice(-30).reduce((s, b) => s + (isFinite(b.v) ? b.v : 0), 0) / Math.min(30, bars.length)
-    : null;
-  const nDays = daysUntilLocal(fund?.earnings?.next_date);
-  const rows: [string, string][] = [];
-  if (nDays != null) rows.push([pick("Next earnings report", "下次财报"), nDays >= 0 ? pick(`In ${nDays} days`, `${nDays} 天后`) : pick(`${-nDays} days ago`, `${-nDays} 天前`)]);
-  if (lastVol != null) rows.push([pick("Volume", "成交量"), MB(lastVol)]);
-  if (avgVol30 != null) rows.push([pick("Avg volume (30D)", "平均成交量(30日)"), MB(avgVol30)]);
-  if (mktcap != null) rows.push([pick("Market capitalization", "总市值"), MB(mktcap)]);
+  const rows = buildKeyStatRows(fund, bars, pick);
   if (!rows.length) return null;
   return (
     <Section title={pick("Key stats", "关键数据")}>
       <div className="sa-kstats">
-        {rows.map(([k, v]) => <div key={k} className="sa-kstat"><span className="k">{k}</span><span className="v num">{v}</span></div>)}
+        {rows.map((row) => (
+          <div key={row.id} className="sa-kstat">
+            <span className="k">{row.label}</span>
+            <span className="v num">{row.value}</span>
+          </div>
+        ))}
       </div>
     </Section>
   );
@@ -151,7 +135,7 @@ function EarningsMini({ fund, pick, onOpen }: { fund: Fund | null; pick: Pick; o
   if (fund?.earnings?.next_eps_est != null)
     points.push({ label: periodShort(fund.earnings.next_period), actual: null, estimate: fund.earnings.next_eps_est });
   if (points.every((p) => p.actual == null && p.estimate == null)) return null;
-  const nDays = daysUntilLocal(fund?.earnings?.next_date);
+  const nDays = daysUntil(fund?.earnings?.next_date);
   return (
     <Section title={pick("Earnings", "盈利")} sub={nDays != null && nDays >= 0 ? `${nDays}${pick("d", "天")}` : undefined}>
       <Dumbbell points={points} vw={300} vh={150} zh={undefined} noWindow />
@@ -481,10 +465,10 @@ function intelStaleDays(intelAsof?: string | null): number {
 
 /* ── main component ─────────────────────────────────────────────────── */
 export default function StockAnalysis({
-  intel, row, slice, deep = false, onExpand, fund = null, opts = null, bars = [], onOpenPane, onOpenSignals, beforeIv,
+  intel, row, slice, deep = false, onExpand, fund = null, opts = null, bars = [], glance = null, onOpenPane, onOpenSignals, beforeIv,
 }: {
   intel: any; row?: any; slice?: any; deep?: boolean; onExpand?: () => void;
-  fund?: Fund | null; opts?: Opts | null; bars?: Bar[]; onOpenPane?: (page: FinPage) => void; onOpenSignals?: () => void;
+  fund?: Fund | null; opts?: Opts | null; bars?: Bar[]; glance?: GlanceRow | null; onOpenPane?: (page: FinPage) => void; onOpenSignals?: () => void;
   beforeIv?: React.ReactNode;
 }) {
   const { lang } = useLang();
@@ -521,7 +505,11 @@ export default function StockAnalysis({
 
   const dec = a?.decision, conv = a?.conviction, entry = a?.entry, fac = a?.factors,
     tech = a?.tech, val = a?.valuation, fin = a?.financials, prof = a?.profile,
-    sm = a?.smart_money, ae = a?.analyst, gex = a?.gex, macro = a?.macro, fl = a?.flows;
+    sm = a?.smart_money, ae = a?.analyst, macro = a?.macro, fl = a?.flows;
+  // R3.2: dealer positioning comes from the OPTIONS flow plane (gexstate:{ROOT}), not intel —
+  // fresh intel payloads no longer carry analysis.gex (the bridge drops it; only stale legacy
+  // files still have one), so the old intel-fed gamma block could only ever show stale data.
+  const gexT = useMemo(() => makeGexT(lang), [lang]);
   // Does the pre-existing intel analyst section render? (mirrors its gate below.) When it does, the
   // new AnalystGauge must NOT show its "no consensus" empty state (CN dual-surface contradiction).
   const hasIntelAnalyst = !!(ae && (ae.next_date || ae.surprises || ae.target != null || ae.rating || ae.buy != null));
@@ -806,23 +794,34 @@ export default function StockAnalysis({
         </Section>
       )}
 
-      {/* ── DEEP: OPTIONS / DEALER GAMMA ── */}
-      {deep && gex && (
-        <Section title={pick("Options · dealer gamma", "期权 · 做市商Gamma")} sub={gex.gamma_regime ? `${cap(gex.gamma_regime)} γ` : undefined} accent="var(--signal)">
-          <div className="sa-grid2">
-            <Stat k={pick("Gamma flip", "Gamma翻转")} v={fnum(gex.gamma_flip)} />
-            <Stat k={pick("Dist to flip", "距翻转")} v={fpct(gex.dist_to_flip_pct)} />
-            <Stat k={pick("Call wall", "看涨墙")} v={fnum(gex.call_wall)} tone="down" />
-            <Stat k={pick("Put wall", "看跌墙")} v={fnum(gex.put_wall)} tone="up" />
-            <Stat k="Net GEX" v={gex.net_gex_bn != null ? `${fnum(gex.net_gex_bn, 2)}B` : "—"} />
-            <Stat k="IV30" v={gex.iv30 != null ? fpct(gex.iv30 * 100, 0, false) : "—"} />
+      {/* ── OPTIONS · DEALER POSITIONING (R3.2) — gexstate:{ROOT} via the flow plane.
+          Replaces the old intel-fed block, which was dead twice over: gated behind a
+          `deep` prop no call site passes, and reading analysis.gex, which fresh intel
+          payloads no longer carry. Renders only when the payload exists (entitled users
+          on covered US names); free users' rail is unchanged. Colours follow the desk:
+          CW cyan var(--brand-2), PW var(--down), flip violet — never role-inverted. */}
+      {glance && (
+        <Section
+          title={pick("Options · dealer positioning", "期权 · 做市商持仓")}
+          sub={glance.asofDate ? `EOD ${glance.asofDate.slice(5)}${sessionsOldEt(glance.asofDate) > 3 ? ` · ${sessionsOldEt(glance.asofDate)}${pick("d old", "日前")}` : ""}` : undefined}
+          accent={REGIME_COLORS[glance.regime]}
+        >
+          {/* regime-dynamics law: the state word never stands alone — stability and
+              dist-to-flip ride in the same chip row */}
+          <div className="sa-chips">
+            <span className="sa-chip" style={{ color: REGIME_COLORS[glance.regime] }}>{gexT(`regime${glance.regime}`) || glance.regime}</span>
+            {glance.stabilityPct != null && <span className="sa-chip">{pick("stability", "稳定度")} {fpct(glance.stabilityPct, 0, false)}</span>}
+            {glance.distToFlipPct != null && <span className="sa-chip">{pick("to flip", "距翻转")} {fpct(glance.distToFlipPct, 1)}</span>}
           </div>
-          {gex.vol_hole?.state && (
-            <div className="sa-volhole">
-              <span className="sa-chip warn">{pick("Vol hole", "波动洞")}: {gex.vol_hole.state.replace(/_/g, " ")}</span>
-              {gex.vol_hole.band_width_pct != null && <span className="vh-meta">{pick("band", "区间")} {fpct(gex.vol_hole.band_width_pct, 1, false)}</span>}
-            </div>
-          )}
+          <div className="sa-grid2">
+            <Stat k={pick("Gamma flip", "伽马翻转")} v={<span style={{ color: "var(--cat-2, var(--ai))" }}>{fnum(glance.gammaFlip)}</span>} />
+            <Stat k="Net GEX" v={glance.netGexBn != null ? `${fnum(glance.netGexBn, 2)}B` : "—"} tone={glance.netGexBn != null ? (glance.netGexBn >= 0 ? "up" : "down") : ""} />
+            <Stat k={pick("Call wall", "看涨墙")} v={<span style={{ color: "var(--brand-2)" }}>{fnum(glance.callWall)}</span>} />
+            <Stat k={pick("Put wall", "看跌墙")} v={<span style={{ color: "var(--down)" }}>{fnum(glance.putWall)}</span>} />
+          </div>
+          <div className="sa-volhole">
+            <span className="vh-meta">{pick("Signed estimate — dealer-sign convention, nightly EOD. Not support/resistance.", "带符号估计 — 做市商方向假设，每日收盘。非支撑/阻力。")}</span>
+          </div>
         </Section>
       )}
 

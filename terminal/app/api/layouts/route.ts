@@ -26,7 +26,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, id: existing.id });
   }
   const { data, error } = await supabase.from("chart_layouts").insert({ user_id: user.id, name, config }).select("id").single();
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+  if (error) {
+    console.error("layouts POST failed:", error);
+    return NextResponse.json({ ok: false, error: "Could not save layout" }, { status: 400 });
+  }
   return NextResponse.json({ ok: true, id: data.id });
 }
 

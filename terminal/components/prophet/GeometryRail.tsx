@@ -35,6 +35,35 @@ interface GeometryRailProps {
   lang: Lang;
 }
 
+export const WIDE_R_PCT = 0.12;
+export const WIDE_T2_STRETCH = 0.35;
+
+export interface GeometryStretch {
+  rAbs: number | null;
+  rPct: number | null;
+  t2Stretch: number | null;
+  wide: boolean;
+}
+
+/**
+ * Large structural stops can make mechanically projected targets look like
+ * forecasts. Keep the audit guard independent of the visual layout.
+ */
+export function geometryStretch(
+  entry: number | null | undefined,
+  stop: number | null | undefined,
+  t2: number | null | undefined,
+): GeometryStretch {
+  const e = entry != null && entry > 0 ? entry : null;
+  const rAbs = e != null && stop != null ? Math.abs(e - stop) : null;
+  const rPct = e != null && rAbs != null ? rAbs / e : null;
+  const t2Stretch = e != null && t2 != null ? Math.abs(t2 - e) / e : null;
+  const wide =
+    (rPct != null && rPct > WIDE_R_PCT) ||
+    (t2Stretch != null && t2Stretch > WIDE_T2_STRETCH);
+  return { rAbs, rPct, t2Stretch, wide };
+}
+
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export function GeometryRail({
@@ -49,20 +78,27 @@ export function GeometryRail({
 }: GeometryRailProps) {
   const t = makeProphetT(lang);
   const isBear = direction === "BEAR";
+  const stretch = geometryStretch(entry, stop, t2 ?? t1);
 
   // Collect all defined price levels for rail scaling
-  const levels: { label: string; price: number; color: string; isLast?: boolean }[] = [];
+  const levels: {
+    label: string;
+    price: number;
+    color: string;
+    isLast?: boolean;
+    isTarget?: boolean;
+  }[] = [];
 
   if (stop != null)  levels.push({ label: t("stop"),  price: stop,  color: "var(--down)" });
   if (entry != null) levels.push({ label: t("entry"), price: entry, color: "var(--text-2)" });
-  if (last != null)  levels.push({ label: t("last"),  price: last,  color: "#19c2c2", isLast: true });
-  if (t1 != null)    levels.push({ label: t("t1"),    price: t1,    color: "var(--up)" });
-  if (t2 != null)    levels.push({ label: t("t2"),    price: t2,    color: "rgba(38,194,129,.6)" });
+  if (last != null)  levels.push({ label: t("last"),  price: last,  color: "var(--obs-prophet-cyan)", isLast: true });
+  if (t1 != null)    levels.push({ label: t("t1"),    price: t1,    color: "var(--up)", isTarget: true });
+  if (t2 != null)    levels.push({ label: t("t2"),    price: t2,    color: "color-mix(in srgb,var(--up) 60%,transparent)", isTarget: true });
 
   if (levels.length < 2) {
     return (
       <div style={EMPTY_STYLE}>
-        {lang === "zh" ? "结构数据不足" : "Insufficient geometry data"}
+        {t("geometryEmpty")}
       </div>
     );
   }
@@ -86,9 +122,12 @@ export function GeometryRail({
   const distStop = hasGeom ? geometry!.dist_to_stop_r : null;
   const distT1   = hasGeom ? geometry!.dist_to_t1_r   : null;
   const horizPct = hasGeom ? geometry!.horizon_pct_used : null;
+  const wideBody = t("wideGeomBody")
+    .replace("{r}", stretch.rAbs != null ? `$${stretch.rAbs.toFixed(2)}` : "—")
+    .replace("{pct}", stretch.rPct != null ? (stretch.rPct * 100).toFixed(0) : "—");
 
   return (
-    <div className="obs-card" style={WRAPPER}>
+    <div className="obs-card obs-prophet-geometry" style={WRAPPER}>
       <div style={TITLE_ROW}>
         <span style={SECTION_LABEL}>{t("geometryTitle")}</span>
         {/* R/R summary */}
@@ -117,6 +156,7 @@ export function GeometryRail({
                   background: lv.color,
                   borderRadius: 2,
                   transform: "translateY(50%)",
+                  opacity: stretch.wide && lv.isTarget ? 0.55 : 1,
                 }}
                 aria-label={`${lv.label} ${lv.price.toFixed(2)}`}
               />
@@ -162,12 +202,13 @@ export function GeometryRail({
                   display: "flex",
                   alignItems: "center",
                   gap: 6,
+                  opacity: stretch.wide && lv.isTarget ? 0.55 : 1,
                 }}
               >
                 <span style={{ font: "600 9.5px/1 var(--font-ui)", color: lv.color, minWidth: 38 }}>
                   {lv.label}
                 </span>
-                <span style={{ font: "600 11px/1 var(--font-num)", color: "var(--text)" }}>
+                <span style={{ font: "600 11px/1 var(--font-num)", fontVariantNumeric: "tabular-nums", color: "var(--text)" }}>
                   ${lv.price.toFixed(2)}
                 </span>
               </div>
@@ -175,6 +216,15 @@ export function GeometryRail({
           })}
         </div>
       </div>
+
+      {stretch.wide && (
+        <div className="obs-note" style={WIDE_NOTE}>
+          <span className="obs-tag" style={{ "--c": "var(--warn)" } as React.CSSProperties}>
+            {t("wideGeomTag")}
+          </span>
+          <span>{wideBody}</span>
+        </div>
+      )}
 
       {/* ── Stat rows below rail ── */}
       <div style={STAT_ROWS}>
@@ -200,6 +250,10 @@ export function GeometryRail({
           />
         )}
       </div>
+
+      <div style={ASOF_NOTE}>
+        {last == null ? t("noLastNote") : t("ladderCaption")}
+      </div>
     </div>
   );
 }
@@ -210,7 +264,7 @@ function StatRow({ label, value, valueColor }: { label: string; value: string; v
   return (
     <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
       <span style={{ font: "500 10px/1 var(--font-ui)", color: "var(--muted)" }}>{label}</span>
-      <span style={{ font: "600 10.5px/1 var(--font-num)", color: valueColor }}>{value}</span>
+      <span style={{ font: "600 10.5px/1 var(--font-num)", fontVariantNumeric: "tabular-nums", color: valueColor }}>{value}</span>
     </div>
   );
 }
@@ -240,6 +294,7 @@ const SECTION_LABEL: React.CSSProperties = {
 
 const RR_CHIP: React.CSSProperties = {
   font: "600 9.5px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
   color: "var(--text-2)",
   border: "1px solid var(--line-2)",
   borderRadius: "var(--r-pill)",
@@ -259,6 +314,21 @@ const STAT_ROWS: React.CSSProperties = {
   marginTop: 10,
   paddingTop: 10,
   borderTop: "1px solid rgba(255,255,255,0.08)",
+};
+
+const WIDE_NOTE: React.CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 8,
+  marginTop: 10,
+  padding: "8px 10px",
+  font: "500 10px/1.45 var(--font-ui)",
+};
+
+const ASOF_NOTE: React.CSSProperties = {
+  marginTop: 8,
+  font: "500 9.5px/1.4 var(--font-ui)",
+  color: "var(--muted)",
 };
 
 const EMPTY_STYLE: React.CSSProperties = {

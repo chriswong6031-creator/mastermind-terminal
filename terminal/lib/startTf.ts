@@ -1,0 +1,47 @@
+// ── Startup timeframe ────────────────────────────────────────────────────────
+// The timeframe the Terminal opens on. Ships as 3D; the user can change it in
+// Settings → Terminal (the settings panel writes it, TerminalShell reads it at mount).
+//
+// This lives in its own module rather than in TerminalShell because the settings panel
+// renders on EVERY page through AppShell — importing TerminalShell there would
+// drag the whole chart bundle onto pages that have no chart.
+//
+// Persistence matches the rest of the Terminal's local prefs: JSON in localStorage,
+// read through the same `load()` idiom (hence JSON.stringify on write).
+
+export const START_TF_KEY = "mm.startTf";
+export const DEFAULT_START_TF = "3D";
+
+// Canonical chronological order for every timeframe the Terminal offers. Also the
+// sort order for the top-bar favourites tray (TerminalShell.tfSortKey).
+export const TF_CANONICAL_ORDER = ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "D", "2D", "3D", "W", "2W", "1M", "3M"];
+
+// The saved value, sanitized. An unknown/absent/corrupt value reads as the 3D default.
+// NOTE: this does NOT check whether the timeframe is functional for a given symbol —
+// intraday isn't available on every market. That guard is resolveStartTf, applied by
+// TerminalShell at mount; the settings UI deliberately offers the full list.
+export function readStartTf(): string {
+  try {
+    const raw = localStorage.getItem(START_TF_KEY);
+    const v = raw ? JSON.parse(raw) : null;
+    return typeof v === "string" && TF_CANONICAL_ORDER.includes(v) ? v : DEFAULT_START_TF;
+  } catch {
+    return DEFAULT_START_TF;
+  }
+}
+
+export function writeStartTf(tf: string) {
+  try { localStorage.setItem(START_TF_KEY, JSON.stringify(tf)); } catch {}
+}
+
+// The timeframe the Terminal should actually open on, given the landing symbol's functional
+// timeframe set (TerminalShell.functionalSet — daily-derived always, intraday only for
+// intraday-capable markets). Two guards, so no saved value can strand a user:
+//   • an unknown string → the 3D default;
+//   • a timeframe the landing symbol's market can't serve (e.g. 5m on a .TO name) → D.
+// `functional` is passed in rather than derived here to keep this module free of the chart
+// bundle — TerminalShell owns the one definition of what's functional.
+export function resolveStartTf(saved: unknown, functional: ReadonlySet<string>): string {
+  const tf = typeof saved === "string" && TF_CANONICAL_ORDER.includes(saved) ? saved : DEFAULT_START_TF;
+  return functional.has(tf) ? tf : "D";
+}

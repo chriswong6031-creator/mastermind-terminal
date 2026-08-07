@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, SOFT_Q } from "../signalVerdict";
+import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs, SOFT_Q } from "../signalVerdict";
 
 // Frozen "today" so ages are deterministic: 2026-07-14 (the NVDA/GOOGL stale-Sell incident date).
 const NOW = Date.parse("2026-07-14T21:00:00Z");
 
-type Sig = { ts: string; type?: string; price?: number | null; quality?: string | null; quality_reason?: string | null; scored?: boolean | null };
+type Sig = { ts: string; known_ts?: string | null; type?: string; price?: number | null; quality?: string | null; quality_reason?: string | null; scored?: boolean | null };
 
 function sliceOf(lastSignal: string, signals: Sig[]) {
   return { indicator: { signals, state: { last_signal: lastSignal } } };
@@ -29,6 +29,31 @@ describe("oracleVerdict — age, dimming, provenance", () => {
     expect(v.dim).toBe(false);
     expect(v.sub).toBe("Jul 10");
     expect(v.color).toBe("var(--buy)");
+  });
+
+  it("uses the availability date for Costco while preserving the 3D chart date", () => {
+    const cost = {
+      ts: "2026-07-24",
+      known_ts: "2026-07-28",
+      type: "BUY",
+      price: 966.58,
+      quality: "take",
+    };
+    const v = oracleVerdict(
+      "BUY",
+      sliceOf("BUY", [cost]),
+      false,
+      Date.parse("2026-07-29T21:00:00Z"),
+    );
+    expect(signalKnownTs(cost)).toBe("2026-07-28");
+    expect(v.sub).toBe("Jul 28");
+    expect(v.dim).toBe(false);
+    expect(v.note).toContain("@ 966.58");
+  });
+
+  it("falls back to the chart date for legacy slices without known_ts", () => {
+    expect(signalKnownTs({ ts: "2026-07-24" })).toBe("2026-07-24");
+    expect(signalKnownTs({ ts: "2026-07-24", known_ts: "not-a-date" })).toBe("2026-07-24");
   });
 
   it("dim boundary sits at ORACLE_STALE_DAYS calendar days", () => {
@@ -73,9 +98,11 @@ describe("oracleVerdict — age, dimming, provenance", () => {
     expect(v.note).toContain("pending");
   });
 
-  it("a regime_blocked tail NEVER anchors the verdict (META incident shape)", () => {
-    // META 2026-07-15 live shape: blocked REBUY + blocked BUY after the May SELL rendered
-    // as a full-authority green "Buy · Jul 6" for a signal the engine explicitly refused.
+  it("a regime_blocked tail NEVER anchors as the event — a fresh one renders the amber blocked-entry caution", () => {
+    // META 2026-07-15 live shape: blocked REBUY + blocked BUY after the May SELL once
+    // rendered as a full-authority green "Buy · Jul 6" for a signal the engine explicitly
+    // refused. Since the 600547.SS washout fix the fresh refused trigger is surfaced
+    // first-class — but as an amber caution that can never read as a Buy.
     const v = oracleVerdict(
       "SELL",
       sliceOf("BUY", [
@@ -86,9 +113,32 @@ describe("oracleVerdict — age, dimming, provenance", () => {
       false,
       NOW,
     );
-    expect(v.raw).toBe("SELL");          // the newest UNREFUSED marker
-    expect(v.sub).toContain("May 4");    // dated from the SELL, not the blocked BUY
+    expect(v.raw).toBe("BLOCKED_ENTRY"); // never the event type — no consumer can anchor on it
+    expect(v.label).toBe("Entry trigger — regime-blocked");
     expect(v.label).not.toBe("Buy");
+    expect(v.color).toBe("var(--signal)"); // amber caution rung, never green
+    expect(v.soft).toBe(true);             // hollow glyph — no scored authority
+    expect(v.sub).toBe("Jul 6");           // dated from the refused trigger
+    expect(v.dim).toBe(false);
+    expect(v.note).toContain("not an entry");
+    expect(v.note).toContain("bear_block: monthly-bear & below-200 & 2W-not-bull");
+    expect(v.note).toContain("@ 603.12");
+    expect(v.note).toContain("last signal: Sell · May 4 @ 612.31");
+  });
+
+  it("a STALE regime_blocked tail keeps the old contract: never anchors, dated render from the unrefused marker", () => {
+    const v = oracleVerdict(
+      "SELL",
+      sliceOf("BUY", [
+        { ts: "2026-02-04", type: "SELL", price: 612.31 },
+        { ts: "2026-04-06", type: "BUY", price: 603.12, quality: "regime_blocked" }, // 99d old at NOW
+      ]),
+      false,
+      NOW,
+    );
+    expect(v.raw).toBe("SELL");
+    expect(v.sub).toContain("Feb 4");
+    expect(v.label).toBe("Sell");
   });
 
   it("a fresh scored RECLAIM renders as a hollow Re-entry verdict (reclaim lane)", () => {
@@ -151,6 +201,7 @@ describe("oracleVerdict — age, dimming, provenance", () => {
 
   it("zh variant localizes the sub-line", () => {
     const v = oracleVerdict("SELL", slice("SELL", "2026-06-03"), true, NOW);
+    expect(v.label).toBe("卖出");
     expect(v.sub).toContain("6月");
   });
 });
@@ -177,7 +228,7 @@ describe("oracleVerdict — stance-first render when the event is history", () =
     expect(v.note).toContain("not a trade signal");
   });
 
-  it("blocked tail rides the stance tooltip as 'blocked — not an entry'", () => {
+  it("a FRESH blocked tail takes primary over the stance; the stance demotes to tooltip context", () => {
     const v = oracleVerdict(
       "SELL",
       stSlice(
@@ -189,10 +240,68 @@ describe("oracleVerdict — stance-first render when the event is history", () =
       ),
       false, NOW,
     );
+    expect(v.label).toBe("Entry trigger — regime-blocked");
+    expect(v.color).toBe("var(--signal)");
+    expect(v.soft).toBe(true);
+    expect(v.note).toContain("current stance: Extended — don't chase");
+    expect(v.note).toContain("not an entry");
+  });
+
+  it("a STALE blocked tail rides the stance tooltip as 'blocked — not an entry' (original contract)", () => {
+    const v = oracleVerdict(
+      "SELL",
+      stSlice(
+        { last_signal: "BUY", last_scored_signal: "SELL", position_hint: "flat", strong_bull: false, overbought: true, weeklyBull: true, above200: true },
+        [
+          { ts: "2026-02-04", type: "SELL", price: 612.31 },
+          { ts: "2026-04-06", type: "BUY", price: 603.12, quality: "regime_blocked" }, // 99d old
+        ],
+      ),
+      false, NOW,
+    );
     expect(v.stance).toBe(true);
     expect(v.label).toBe("Extended — don't chase");
     expect(v.color).toBe("var(--warn)");              // caution: non-flipping accent
     expect(v.note).toContain("blocked — not an entry");
+  });
+
+  it("600547.SS washout shape: fresh bear_block'd BUY at the low + stale SELL + downtrend state → amber blocked-entry primary", () => {
+    // The 2026-08-02 diagnosis case verbatim: the engine fired the entry trigger at the
+    // washout low and vetoed it; the panel used to show only "Downtrend — stand aside".
+    const v = oracleVerdict(
+      "SELL",
+      stSlice(
+        { last_signal: "BUY", last_scored_signal: "SELL", last_scored_ts: "2026-02-05", position_hint: "flat", strong_bull: false, overbought: true, weeklyBull: false, above200: false },
+        [
+          { ts: "2026-02-05", type: "SELL", price: 45.55 },
+          { ts: "2026-07-01", known_ts: "2026-07-03", type: "BUY", price: 25.8896, quality: "regime_blocked", quality_reason: "bear_block: monthly-bear & below-200 & 2W-not-bull" },
+        ],
+      ),
+      false, Date.parse("2026-07-15T21:00:00Z"), "DOWNTREND",
+    );
+    expect(v.label).toBe("Entry trigger — regime-blocked");
+    expect(v.color).toBe("var(--signal)");
+    expect(v.sub).toBe("Jul 3");                       // availability date, not the chart date
+    expect(v.note).toContain("bear_block");
+    expect(v.note).toContain("current stance: Downtrend — stand aside");
+    expect(v.note).toContain("last signal: Sell · Feb 5 @ 45.55");
+  });
+
+  it("zh blocked-entry strings ship", () => {
+    const v = oracleVerdict(
+      "SELL",
+      stSlice(
+        { last_signal: "BUY", last_scored_signal: "SELL", position_hint: "flat", strong_bull: false, overbought: false, weeklyBull: false, above200: false },
+        [
+          { ts: "2026-02-05", type: "SELL", price: 45.55 },
+          { ts: "2026-07-03", type: "BUY", price: 25.89, quality: "regime_blocked" },
+        ],
+      ),
+      true, Date.parse("2026-07-15T21:00:00Z"), "DOWNTREND",
+    );
+    expect(v.label).toBe("买点触发 — 趋势闸拦截");
+    expect(v.note).toContain("非入场信号");
+    expect(v.note).toContain("当前姿态");
   });
 
   it("MSFT shape: flat below-200 weak state → Downtrend stance on --down", () => {
@@ -376,5 +485,72 @@ describe("anchorSignal — the shared scored-lane anchor rule", () => {
 
   it("SOFT_Q stays the engine's three soft qualities (renderSignals + oracleVerdict share it)", () => {
     expect([...SOFT_Q].sort()).toEqual(["block", "pending", "regime_blocked"]);
+  });
+});
+
+// ── the fresh-anchor asymmetry (operator report 2026-08-05) ────────────────────────────────
+// 601696.SS rendered "Entry trigger — regime-blocked" while 300363.SZ, in the same engine
+// state (flat, entries refused by the regime gate), rendered a plain "Sell". The only
+// difference was the age of the older sell: a stale anchor let the caution branch speak, a
+// fresh one returned before it could. A refused entry NEWER than the anchor is now disclosed
+// either way — as the primary read when the anchor is stale, on the sub-line when it is not.
+describe("oracleVerdict — a live blocked entry is disclosed under a fresh anchor too", () => {
+  const blocked = { ts: "2026-07-10", type: "BUY", price: 11.83, quality: "regime_blocked",
+                    quality_reason: "bear_block: monthly-bear & below-200 & 2W-not-bull" };
+
+  it("rides on the sub-line when a FRESH sell anchors the card", () => {
+    // sell 6d old (fresh) with a refused entry 4d later — the case that used to vanish
+    const v = oracleVerdict("SELL", sliceOf("SELL", [
+      { ts: "2026-07-06", type: "SELL", price: 11.88 },
+      blocked,
+    ]), false, NOW);
+    expect(v.raw).toBe("SELL");                 // the scored truth still anchors the card
+    expect(v.label).toBe("Sell");
+    expect(v.blocked).toBe(true);
+    expect(v.sub).toContain("Jul 6");           // anchor date kept
+    expect(v.sub).toContain("entry blocked");   // …and the refusal rides with it
+    expect(v.sub).toContain("Jul 10");
+    expect(v.note).toContain("blocked by the regime gate — not an entry");
+    expect(v.note).toContain("bear_block");
+  });
+
+  it("is the PRIMARY read when the anchor is stale — unchanged contract", () => {
+    const v = oracleVerdict("SELL", sliceOf("SELL", [
+      { ts: "2026-05-20", type: "SELL", price: 11.88 },   // 55d — stale
+      blocked,
+    ]), false, NOW);
+    expect(v.raw).toBe("BLOCKED_ENTRY");
+    expect(v.label).toBe("Entry trigger — regime-blocked");
+    expect(v.blocked).toBe(true);
+    expect(v.sub).toBe("Jul 10");
+  });
+
+  it("says nothing when the refusal is itself stale — no invented caution", () => {
+    const v = oracleVerdict("SELL", sliceOf("SELL", [
+      { ts: "2026-07-08", type: "SELL", price: 15.87 },
+      { ts: "2026-05-01", type: "BUY", price: 15.76, quality: "regime_blocked" },  // older than the anchor
+    ]), false, NOW);
+    expect(v.raw).toBe("SELL");
+    expect(v.blocked).toBeFalsy();
+    expect(v.sub).toBe("Jul 8");
+  });
+
+  it("never lets a refused SELL masquerade as a blocked entry", () => {
+    const v = oracleVerdict("BUY", sliceOf("BUY", [
+      { ts: "2026-07-06", type: "BUY", price: 10 },
+      { ts: "2026-07-10", type: "SELL", price: 11, quality: "regime_blocked" },
+    ]), false, NOW);
+    expect(v.blocked).toBeFalsy();
+    expect(v.sub).toBe("Jul 6");
+  });
+
+  it("carries the disclosure in Chinese too", () => {
+    const v = oracleVerdict("SELL", sliceOf("SELL", [
+      { ts: "2026-07-06", type: "SELL", price: 11.88 },
+      blocked,
+    ]), true, NOW);
+    expect(v.blocked).toBe(true);
+    expect(v.sub).toContain("入场被拦截");
+    expect(v.note).toContain("被趋势闸拦截");
   });
 });

@@ -3,7 +3,7 @@
 /**
  * Tip — the ONE tooltip primitive (v6). Retires six ad-hoc systems: native
  * title=, the two globals.css [data-tip]::after variants, and the hand-rolled
- * React tips (Treemap / MatrixGrid / StrikeLadder / FlowCard / ConfidencePanel).
+ * React tips (Treemap / StrikeExpiryMatrix / StrikeLadder / FlowCard / ConfidencePanel).
  *
  * Behaviour (TradingView feel):
  *  - fixed-position PORTAL to <body> → escapes every overflow:hidden pane.
@@ -39,6 +39,10 @@ export interface TipProps {
   label: ReactNode;
   side?: TipSide;
   size?: TipSize;
+  /** Keep the trigger subtree stable while suppressing the tooltip (for touch layouts). */
+  disabled?: boolean;
+  /** Optional first-open delay. Adjacent warm-open behavior still applies. */
+  delay?: number;
   /** Optional keyboard shortcut, rendered as a .ds-kbd chip (mini only). */
   shortcut?: string;
   /** The trigger element. Must accept a ref + mouse/focus handlers. */
@@ -104,7 +108,7 @@ export function placeTip(
   return { left: Math.round(left), top: Math.round(top), side };
 }
 
-export function Tip({ label, side = "top", size = "mini", shortcut, children }: TipProps) {
+export function Tip({ label, side = "top", size = "mini", disabled = false, delay = OPEN_DELAY, shortcut, children }: TipProps) {
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState(false); // drives the [data-open] enter transition
   const [pos, setPos] = useState<TipPosition>({ left: 0, top: 0, side });
@@ -115,14 +119,13 @@ export function Tip({ label, side = "top", size = "mini", shortcut, children }: 
 
   const clearTimer = () => { if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; } };
 
-  const doOpen = useCallback(() => { clearTimer(); setOpen(true); }, []);
-
   const scheduleOpen = useCallback((instant: boolean) => {
+    if (disabled) return;
     clearTimer();
-    const delay = instant || isWarm(Date.now()) ? 0 : OPEN_DELAY;
-    if (delay === 0) { setOpen(true); return; }
-    openTimer.current = setTimeout(() => setOpen(true), delay);
-  }, []);
+    const wait = instant || isWarm(Date.now()) ? 0 : Math.max(0, delay);
+    if (wait === 0) { setOpen(true); return; }
+    openTimer.current = setTimeout(() => setOpen(true), wait);
+  }, [delay, disabled]);
 
   const close = useCallback(() => {
     clearTimer();
@@ -133,7 +136,7 @@ export function Tip({ label, side = "top", size = "mini", shortcut, children }: 
 
   // Position once the tip is in the DOM and measurable; then flip [data-open] on.
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open || disabled) return;
     const el = anchorRef.current;
     const tip = tipRef.current;
     if (!el || !tip) return;
@@ -148,11 +151,13 @@ export function Tip({ label, side = "top", size = "mini", shortcut, children }: 
     setPos(next);
     const id = requestAnimationFrame(() => setShown(true));
     return () => cancelAnimationFrame(id);
-  }, [open, side, label]);
+  }, [disabled, open, side, label]);
 
   useEffect(() => () => clearTimer(), []);
 
   if (!isValidElement(children)) return children;
+
+  const visible = open && !disabled;
 
   const trigger = cloneElement(children as ReactElement<Record<string, unknown>>, {
     ref: (node: HTMLElement | null) => {
@@ -177,13 +182,13 @@ export function Tip({ label, side = "top", size = "mini", shortcut, children }: 
       close();
       (children.props as { onBlur?: (e: React.FocusEvent) => void }).onBlur?.(e);
     },
-    "aria-describedby": open ? tipId : undefined,
+    "aria-describedby": visible ? tipId : undefined,
   });
 
   return (
     <>
       {trigger}
-      {open && typeof document !== "undefined" &&
+      {visible && typeof document !== "undefined" &&
         createPortal(
           <div
             ref={tipRef}

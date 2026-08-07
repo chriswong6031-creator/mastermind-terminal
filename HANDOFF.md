@@ -14,13 +14,13 @@ It is a sibling to two existing local projects under `/Users/chriswong/Documents
 
 ## 2. Where it lives / how to run
 ```
-Container root:  /Users/chriswong/Documents/Cluade/charting-app   (LOCAL git only — NOT on GitHub)
+Container root:  /Users/chriswong/Documents/Cluade/charting-app   (git-tracked; has a GitHub `origin` remote — see terminal/AGENTS.md)
 Python venv:     /Users/chriswong/Documents/Cluade/Macro Dashboard/.venv/bin/python   (has pandas/numpy/pyarrow)
 ```
 **Run the app (Next.js dev server, port 3002):**
 - Via the Claude preview: `preview_start` with launch config **`mastermind-terminal`** (in `Macro Dashboard/.claude/launch.json`).
 - Or manually: `cd terminal && npm run dev -- --port 3002`
-- App URL: `http://localhost:3002`. **Sign in:** `demo@mastermind.test` / `mastermind123` (this account is set `is_pro=true`).
+- App URL: `http://localhost:3002`. **Sign in:** ask the operator for demo credentials (rotated; not committed).
 
 **Rebuild/refresh market data** (writes `terminal/public/data/*.json` + `manifest.json`):
 ```bash
@@ -90,4 +90,4 @@ web/   = original static design mockups (pre-Next.js reference; web/mockup/index
 ```
 
 ## 10. Git
-Local repo (no remote). Latest commits: `f9b8013` (gap audit doc) → `4b39e6a` (polish) → `5a0009a` (terminal features + Alerts/Portfolio) → `725f544` (screener+pine+nav+is_pro) → `6a16788` (Polygon multi-symbol) → `867a160` (Phase 1 Next.js+Supabase). Standing convention in this workspace: commit autonomously; this container is local-only (do NOT push it to GitHub unless the user asks).
+Now on GitHub via the `origin` remote (work in worktrees off `origin/master`; see `terminal/AGENTS.md` for the current git/PR workflow). Historical local commits: `f9b8013` (gap audit doc) → `4b39e6a` (polish) → `5a0009a` (terminal features + Alerts/Portfolio) → `725f544` (screener+pine+nav+is_pro) → `6a16788` (Polygon multi-symbol) → `867a160` (Phase 1 Next.js+Supabase). Standing convention in this workspace: commit autonomously and follow `terminal/AGENTS.md` for the git/PR workflow (branch off `origin/master`, open a PR).

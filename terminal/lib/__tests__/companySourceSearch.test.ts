@@ -1,0 +1,166 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  browserCompanySourceSearchAdapter,
+  createFixtureCompanySourceSearchAdapter,
+  normalizeCompanySourceSearchResult,
+  normalizeTranscriptLiteralPhrase,
+} from "../companySourceSearch";
+
+const SHA = "a".repeat(64);
+
+function envelope(overrides: Record<string, unknown> = {}) {
+  return {
+    schema: "mastermind.company-source-search/v1",
+    state: "ready",
+    ticker: "NVDA",
+    query: "data center",
+    corpus_revision: "revision-20260801-test",
+    searched_event_ids: ["NVDA-2026Q1"],
+    match_count_by_event: { "NVDA-2026Q1": 1 },
+    count_capped_event_ids: [],
+    truncated: false,
+    spans: [{
+      span_id: `txs1_${"b".repeat(64)}`,
+      event_id: "NVDA-2026Q1",
+      transcript_id: "2026Q1",
+      ticker: "NVDA",
+      document_sha256: SHA,
+      segment_index: 3,
+      start_byte: 0,
+      end_byte: 11,
+      segment_text_sha256: "c".repeat(64),
+      speaker: "Example Speaker",
+      role: "Chief Executive Officer",
+      section: "prepared",
+      excerpt: "Data center demand was discussed in the call.",
+      matched_text: "Data center",
+      receipt: {
+        revision_id: "revision-20260801-test",
+        document_sha256: SHA,
+        indexed_at: "2026-08-01T12:00:00Z",
+        source_label: "Verified transcript corpus",
+        source_url: "/data/tx/NVDA/2026Q1.json.gz",
+        verification: "verified",
+      },
+    }],
+    ...overrides,
+  };
+}
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("exact transcript search boundary", () => {
+  it("keeps quoted phrases literal instead of becoming a query language", () => {
+    expect(normalizeTranscriptLiteralPhrase('  "data   center"  ')).toBe("data center");
+    expect(normalizeTranscriptLiteralPhrase("'data center'")).toBe("data center");
+    expect(normalizeTranscriptLiteralPhrase("   ")).toBeNull();
+    expect(normalizeTranscriptLiteralPhrase("a")).toBeNull();
+    expect(normalizeTranscriptLiteralPhrase("数")).toBeNull();
+    expect(normalizeTranscriptLiteralPhrase("data \ud800center")).toBeNull();
+  });
+
+  it("accepts only a span that is bound to its exact document revision", () => {
+    const normalized = normalizeCompanySourceSearchResult(envelope(), "NVDA", "data center");
+    expect(normalized).toMatchObject({ state: "ready", ticker: "NVDA", query: "data center" });
+
+    const wrongHash = envelope();
+    (wrongHash.spans as Array<Record<string, unknown>>)[0].receipt = {
+      ...(wrongHash.spans as Array<Record<string, unknown>>)[0].receipt as Record<string, unknown>,
+      document_sha256: "b".repeat(64),
+    };
+    expect(normalizeCompanySourceSearchResult(wrongHash, "NVDA", "data center")).toBeNull();
+
+    const expanded = envelope();
+    (expanded.spans as Array<Record<string, unknown>>)[0].matched_text = "demand";
+    expect(normalizeCompanySourceSearchResult(expanded, "NVDA", "data center")).toBeNull();
+
+    const stale = envelope({ state: "stale_revision", message: "The source document changed after indexing." });
+    ((stale.spans as Array<Record<string, unknown>>)[0].receipt as Record<string, unknown>).verification = "stale_revision";
+    expect(normalizeCompanySourceSearchResult(stale, "NVDA", "data center")).toMatchObject({ state: "stale_revision" });
+
+    const mixedRevision = envelope();
+    ((mixedRevision.spans as Array<Record<string, unknown>>)[0].receipt as Record<string, unknown>).revision_id = "another-revision-20260801";
+    expect(normalizeCompanySourceSearchResult(mixedRevision, "NVDA", "data center")).toBeNull();
+
+    const outOfScope = envelope({ searched_event_ids: ["NVDA-2025Q4"] });
+    expect(normalizeCompanySourceSearchResult(outOfScope, "NVDA", "data center")).toBeNull();
+
+    // Source coordinates address the complete segment, not the 2.4K display
+    // excerpt. A multibyte prefix can legitimately put a match far past 9.6K.
+    const multibyteStart = new TextEncoder().encode("数".repeat(5_000)).byteLength;
+    const longSegment = envelope();
+    (longSegment.spans as Array<Record<string, unknown>>)[0].start_byte = multibyteStart;
+    (longSegment.spans as Array<Record<string, unknown>>)[0].end_byte = multibyteStart + 11;
+    expect(normalizeCompanySourceSearchResult(longSegment, "NVDA", "data center"))
+      .toMatchObject({ state: "ready", spans: [{ start_byte: 15_000, end_byte: 15_011 }] });
+
+    const capped = envelope({
+      match_count_by_event: { "NVDA-2026Q1": 10_000 },
+      count_capped_event_ids: ["NVDA-2026Q1"],
+      truncated: true,
+    });
+    expect(normalizeCompanySourceSearchResult(capped, "NVDA", "data center"))
+      .toMatchObject({ state: "ready", count_capped_event_ids: ["NVDA-2026Q1"], truncated: true });
+  });
+
+  it("treats a missing source-search route as an integration error, never as coverage", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("missing", { status: 404 }));
+    await expect(browserCompanySourceSearchAdapter.search({
+      ticker: "NVDA",
+      phrase: "data center",
+      events: [{ event_id: "NVDA-2026Q1", transcript_id: "2026Q1", fiscal_year: 2026, fiscal_quarter: 1, label: "Q1 FY2026", call_date: "2026-05-20" }],
+    })).resolves.toMatchObject({ state: "error", ticker: "NVDA" });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining("/api/company-source-search/NVDA?"),
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
+  it("rejects producer scope substitutions and event-to-transcript remapping", async () => {
+    const requested = [{ event_id: "NVDA-2026Q1", transcript_id: "2026Q1", fiscal_year: 2026, fiscal_quarter: 1, label: "Q1 FY2026", call_date: "2026-05-20" }];
+    const wrongScope = envelope({
+      searched_event_ids: ["NVDA-2025Q4"],
+      match_count_by_event: { "NVDA-2025Q4": 0 },
+      count_capped_event_ids: [],
+      truncated: false,
+      spans: [],
+    });
+    const remapped = envelope();
+    (remapped.spans as Array<Record<string, unknown>>)[0].transcript_id = "2025Q4";
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify(wrongScope), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(remapped), { status: 200 }));
+
+    await expect(browserCompanySourceSearchAdapter.search({ ticker: "NVDA", phrase: "data center", events: requested }))
+      .resolves.toMatchObject({ state: "error", message: expect.stringContaining("invalid verification envelope") });
+    await expect(browserCompanySourceSearchAdapter.search({ ticker: "NVDA", phrase: "data center", events: requested }))
+      .resolves.toMatchObject({ state: "error", message: expect.stringContaining("invalid verification envelope") });
+  });
+
+  it("keeps fixture content quarantined behind a deterministic adapter seam", async () => {
+    const adapter = createFixtureCompanySourceSearchAdapter();
+    const searched = await adapter.search({
+      ticker: "NVDA",
+      phrase: "data center",
+      events: [{ event_id: "NVDA-2026Q1", transcript_id: "2026Q1", fiscal_year: 2026, fiscal_quarter: 1, label: "Q1 FY2026", call_date: "2026-05-20" }],
+    });
+    expect(searched.state).toBe("ready");
+    if (searched.state === "ready") {
+      expect(searched.spans).toHaveLength(2);
+      expect(searched.spans[0].receipt.source_label).toContain("fixture");
+    }
+
+    const compared = await adapter.compare({
+      ticker: "NVDA",
+      phrase: "data center",
+      events: [
+        { event_id: "NVDA-2025Q4", transcript_id: "2025Q4", fiscal_year: 2025, fiscal_quarter: 4, label: "Q4 FY2025", call_date: "2026-02-19" },
+        { event_id: "NVDA-2026Q1", transcript_id: "2026Q1", fiscal_year: 2026, fiscal_quarter: 1, label: "Q1 FY2026", call_date: "2026-05-20" },
+      ],
+      left_event_id: "NVDA-2025Q4",
+      right_event_id: "NVDA-2026Q1",
+    });
+    expect(compared.state).toBe("ready");
+    if (compared.state === "ready") expect(new Set(compared.spans.map((span) => span.event_id))).toEqual(new Set(["NVDA-2025Q4", "NVDA-2026Q1"]));
+  });
+});

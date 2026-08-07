@@ -40,6 +40,14 @@ OUT = ROOT / "terminal" / "public" / "data"
 HONEST = "RSI-MACD × StochRSI MTF confluence on daily→3D. Risk/timing overlay."
 FLAG = set(FLAGSHIP)
 
+# Percent-quoted yield series get NO trade-signal slice. A BUY/SELL/CUT marker on the 10-year
+# benchmark yield is the same category error the single_value_daily guard below already blocks
+# for the FRED real-rate/breakeven family — the number is a rate, not a tradeable price, and a
+# confluence verdict on it reads as advice to trade something that is not on offer. These four
+# carry REAL OHLC (Yahoo prints an intraday range), so nothing else in this file would stop them.
+# Price series — futures, FX, indices including ^VIX — keep their slices.
+RATE_TICKERS = {"^IRX", "^FVX", "^TNX", "^TYX"}
+
 
 def _load_manifest() -> dict:
     try:
@@ -79,6 +87,9 @@ def main() -> None:
         sym = name[:-5]
         if sym in FLAG:
             continue  # flagship keeps its precise build_polygon_universe slice (with backtest)
+        if sym in RATE_TICKERS:
+            n_skip += 1
+            continue  # percent-quoted yield — no trade-signal slice (see RATE_TICKERS above)
         slice_f = OUT / f"{sym}.slice.json"
         if only_missing and slice_f.exists():
             continue
@@ -92,6 +103,12 @@ def main() -> None:
                 pass  # stat failed — fall through and regenerate
         try:
             d = json.loads(jf.read_text())
+            # Single-print daily series (FRED real yields / breakevens: o=h=l=c, v=0) carry no
+            # intrabar information — a confluence slice would print trade signals on a policy
+            # rate. Display-tier only; no slice.
+            if d.get("bar_quality") == "single_value_daily":
+                n_skip += 1
+                continue
             bars = d.get("bars") or []
             if len(bars) < 60:
                 n_skip += 1

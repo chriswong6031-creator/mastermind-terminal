@@ -95,9 +95,52 @@ const LIGHT: EmbedPalette = {
   skelHi: "rgba(15,23,42,.08)",
 };
 
-/** palette — resolve the effective palette for a theme + transparent flag. */
-export function palette(theme: ThemeName, transparent: boolean): EmbedPalette {
-  const base = theme === "light" ? LIGHT : DARK;
+/**
+ * CLEAN — the TV symbol-sheet mini-chart palette, measured off the reference stills in
+ * docs/tv-parity/spec-symbol-detail.md (§0 global palette + §2B chart plot area).
+ *
+ * Deliberately DIFFERENT from the house v5 candles above: TV's sheet chart runs the measured
+ * fill pair (#089981 / #F23645) on a quiet canvas — NO gridlines at all (C11), #B1B5BE axis text,
+ * no scale borders, no last-value badge. Only reachable via ?clean=1; the default widget (and
+ * every existing embed) keeps the house palette byte-for-byte.
+ */
+export interface CleanOverlay {
+  /**
+   * TV's bull/bear **fill** pair — the tokens TV paints CANDLES in (master spec §47-48, token
+   * table §132-135: `tvUpFill` = up candles, `tvUpText` = positive change text).
+   * C11/CHART-10: this was `#22AB94` / `#F7525F`, which are the TEXT tokens — so the sheet chart
+   * and the Chart tab rendered the same instrument in two visibly different greens. A colour
+   * census of IMG_2325.PNG's plot (y900–1750) returns `#089981` at 34,392 px and `#F23645` at
+   * 25,040 px, with the text pair absent from the candles entirely.
+   */
+  up: string;
+  down: string;
+  /** Axis tick text (spec §2B right price axis + time ticks). */
+  axisText: string;
+  /** Horizontal gridline wash — verticals are switched off entirely. */
+  grid: string;
+  /** The dashed prior-session-close rule TV draws across the plot. */
+  priorClose: string;
+}
+
+export const CLEAN: CleanOverlay = {
+  up: "#089981",
+  down: "#F23645",
+  axisText: "#B1B5BE",
+  grid: "rgba(255,255,255,.05)",
+  priorClose: "rgba(180,185,195,.5)",
+};
+
+/**
+ * palette — resolve the effective palette for a theme + transparent flag.
+ * `clean` (opt-in, ?clean=1) swaps the candle/axis/grid neutrals for the measured TV
+ * mini-chart values; every other consumer is untouched because it never passes the flag.
+ */
+export function palette(theme: ThemeName, transparent: boolean, clean = false): EmbedPalette {
+  const base0 = theme === "light" ? LIGHT : DARK;
+  const base = clean
+    ? { ...base0, up: CLEAN.up, down: CLEAN.down, muted: CLEAN.axisText, grid: CLEAN.grid }
+    : base0;
   if (!transparent) return base;
   // Transparent mode: the parent's glass card is the background. Zero both page + chart bg.
   return { ...base, pageBg: "transparent", chartBg: "transparent" };

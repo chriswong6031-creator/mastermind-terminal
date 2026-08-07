@@ -1,19 +1,32 @@
 import type { NextConfig } from "next";
+import { readFileSync } from "node:fs";
 import path from "path";
 
 const isProd = process.env.NODE_ENV === "production";
 
 // ── Deployment id (version-skew protection / stale-chunk self-heal) ───────────
-// Each build gets a DISTINCT id: prefer the git sha wired in by scripts/deploy_terminal.sh
-// (GIT_SHA / NEXT_DEPLOYMENT_ID), else fall back to the build timestamp so a local `next build`
-// still stamps a unique id. Next appends `?dpl=<id>` to every static asset URL and injects
+// Each production deploy gets a DISTINCT id: prefer the git sha wired in by
+// ops/terminal-build.sh (GIT_SHA / NEXT_DEPLOYMENT_ID), then read the deploy marker that the
+// same script installs beside this config. The marker is essential because Next evaluates this
+// file once during `next build` and again during `next start`; a Date.now() fallback at runtime
+// creates a second id and makes embedded clients download duplicate chunks. Ad-hoc local builds
+// omit the id rather than inventing a value that cannot remain stable across those two processes.
+// Next appends `?dpl=<id>` to every static asset URL and injects
 // `data-dpl-id` on <html> + an `x-nextjs-deployment-id` response header — so a client holding a
 // stale /flow shell (served inside its SWR window after a deploy) detects the mismatch and does a
 // full reload instead of resolving lazy chunks against purged content-hashed factories. This is the
 // deterministic half of the options-crash fix (the chunk-retention union in deploy_terminal.sh is
 // the belt-and-suspenders half). Keep the id stable ACROSS the containers of a single deploy.
+function readDeploymentMarker(): string | undefined {
+  try {
+    return readFileSync(path.join(__dirname, ".deployment-id"), "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const DEPLOYMENT_ID =
-  process.env.GIT_SHA || process.env.NEXT_DEPLOYMENT_ID || `t${Date.now()}`;
+  process.env.GIT_SHA || process.env.NEXT_DEPLOYMENT_ID || readDeploymentMarker();
 
 // ── Content-Security-Policy ───────────────────────────────────────────────────
 // Derived from an audit of every external resource the BROWSER actually reaches:
@@ -21,27 +34,32 @@ const DEPLOYMENT_ID =
 //     inject inline <script> → script-src needs 'unsafe-inline' (a nonce migration is the
 //     follow-up hardening; documented in SECURITY.md).
 //   - React inline style attributes → style-src 'unsafe-inline'.
-//   - shared chart-snapshot <img> served from Cloudflare R2 (app/x/[slug]) → img-src *.r2.dev.
+//   - shared chart snapshots from Cloudflare R2 and asset identity logos from Logo.dev.
 //   - Supabase auth (REST + realtime WS) → connect-src. (The former browser→Polygon trades WS was
 //     removed 2026-07-19: any NEXT_PUBLIC_* key is world-readable and a dev sub is not a
 //     redistribution license — live data now flows server-mediated only, so wss://socket.polygon.io
 //     is no longer in connect-src.)
 //   - CN/HK quote hosts are fetched SERVER-side today, but are allowed in connect-src as a safe
 //     superset so a client fallback path can't silently break live quotes.
-// frame-ancestors 'self' + X-Frame-Options block competitors from iframing/rehosting the UI.
+// frame-ancestors allows only the first-party Macro Dashboard (apex + www) to host the
+// full-screen Terminal workspace. Every other origin remains blocked, so the integration
+// does not create a general-purpose rehosting surface.
 // In dev, Turbopack HMR needs 'unsafe-eval'; production stays strict.
 //   - Mastermind Brain widget bundle: components/BrainWidget.tsx loads
 //     https://www.mastermind-x.com/mm_brain.js on the Terminal, so that origin is allowed in script-src.
 const scriptSrc = ["'self'", "'unsafe-inline'", "https://www.mastermind-x.com", ...(isProd ? [] : ["'unsafe-eval'"])].join(" ");
+const dashboardFrameAncestors =
+  "'self' https://mastermind-x.com https://www.mastermind-x.com" +
+  (isProd ? "" : " http://localhost:* http://127.0.0.1:*");
 const CSP = [
   "default-src 'self'",
   "base-uri 'self'",
   "object-src 'none'",
-  "frame-ancestors 'self'",
+  `frame-ancestors ${dashboardFrameAncestors}`,
   "form-action 'self'",
   `script-src ${scriptSrc}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https://*.r2.dev",
+  "img-src 'self' data: blob: https://*.r2.dev https://img.logo.dev",
   "font-src 'self'",
   "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://qt.gtimg.cn https://web.ifzq.gtimg.cn https://ifzq.gtimg.cn",
   "worker-src 'self' blob:",
@@ -54,7 +72,9 @@ const CSP = [
 // its CORP/nosniff headers live in the Caddyfile (app/deploy/Caddyfile, macro repo).
 const securityHeaders = [
   { key: "Content-Security-Policy", value: CSP },
-  { key: "X-Frame-Options", value: "SAMEORIGIN" },
+  // No X-Frame-Options: the legacy header cannot express an exact cross-origin
+  // allowlist and would veto the first-party dashboard frame. CSP frame-ancestors
+  // above is the modern, narrower authority.
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), interest-cohort=()" },
@@ -64,23 +84,17 @@ const securityHeaders = [
 
 // ── Embeddable widget headers (/embed/*) ──────────────────────────────────────
 // The /embed/chart widget is iframed by the ~1,500 SEO stock dossier pages on
-// https://mastermind-x.com/stocks/<TICKER>.html, so it must be FRAMEABLE by that origin — the
-// opposite of every other route (which stays locked with frame-ancestors 'self' + X-Frame-Options
-// to stop competitors rehosting the UI). This header set:
-//   - swaps frame-ancestors to allow the dossier host (apex + www), keeping everything else strict;
-//   - OMITS X-Frame-Options entirely (that legacy header only understands SAMEORIGIN/DENY, so its
-//     presence would veto the cross-origin frame regardless of CSP — X-Frame-Options ⇒ no framing);
+// https://mastermind-x.com/stocks/<TICKER>.html. The full Terminal and this widget now share the
+// same exact first-party frame allowlist; this subtree keeps its separate noindex/cache policy:
+//   - CSP stays strict and frameable only by the dossier/dashboard hosts (apex + www);
+//   - X-Frame-Options remains omitted because the legacy header cannot express that allowlist;
 //   - keeps nosniff / referrer / HSTS / permissions / COOP unchanged;
 //   - adds X-Robots-Tag: noindex so search engines never index the widget shells directly;
 //   - caps edge caching at 5 min (SWR 10 min) like the other prerendered shells.
 // COEP is deliberately not set (an embedded third-party widget must stay cross-origin embeddable).
 // In dev, also allow localhost parents on any port so the dossier repo's local
 // preview (a plain static server on a random port) can frame the widget end-to-end.
-const embedCSP = CSP.replace(
-  "frame-ancestors 'self'",
-  "frame-ancestors 'self' https://mastermind-x.com https://www.mastermind-x.com" +
-    (isProd ? "" : " http://localhost:* http://127.0.0.1:*"),
-);
+const embedCSP = CSP;
 const embedHeaders = [
   { key: "Content-Security-Policy", value: embedCSP },
   // NB: no X-Frame-Options here (its presence would block the cross-origin iframe).
@@ -167,9 +181,10 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
-      // Security headers on every route EXCEPT the /embed subtree (framing, CSP, sniffing, referrer,
-      // HSTS). The negative-lookahead keeps EXACTLY today's strict set on everything else; /embed
-      // gets its own frameable set below. Regex is applied to the path without the leading slash.
+      // Security headers on every route EXCEPT the /embed subtree (CSP, sniffing, referrer,
+      // HSTS). Every app route is frameable only by the exact first-party dashboard origins so
+      // users can move between Terminal workspaces without the frame being rejected mid-session.
+      // /embed gets the same framing policy plus its own noindex/cache headers below.
       {
         source: "/((?!embed).*)",
         headers: securityHeaders,
@@ -203,15 +218,17 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // Wave-3 IA: the workspace shells (now chart/analysis/discover/options/scripts/alerts/
-        // portfolio) need the same 5-minute edge cap or EdgeOne pins their prerendered HTML for
-        // a year (the exact stale-shell class behind the Wave-1 module-factory crash).
-        source: "/(discover|analysis|options|scripts|alerts|portfolio|login)",
+        // Auth-aware shells must never be shared by EdgeOne. Caching these as
+        // public can replay a signed-out redirect or another session's shell.
+        source: "/(terminal|discover|analysis|options|scripts|alerts|portfolio|admin|login)",
         headers: [
           {
             key: "Cache-Control",
-            value: "public, s-maxage=300, stale-while-revalidate=600",
+            value: "private, no-cache, no-store, must-revalidate, max-age=0",
           },
+          { key: "Expires", value: "0" },
+          { key: "Pragma", value: "no-cache" },
+          { key: "Vary", value: "Cookie" },
         ],
       },
     ];

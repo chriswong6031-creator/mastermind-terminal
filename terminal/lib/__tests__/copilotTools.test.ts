@@ -157,7 +157,7 @@ describe("curateSignals", () => {
         { ts: "2026-01-01", type: "BUY", price: 90, strength: 0.5, reasons: ["a"] },
         { ts: "2026-03-03", type: "CUT", price: 95, strength: 0.58, reasons: ["fast_reversal_down", "buy_failed"] },
         { ts: "2026-04-06", type: "BUY", price: 258.9, strength: 0.588, reasons: ["macd_bull_cross", "recent_b1", "confirm_bull", "rsi<65", "extra_dropped"] },
-        { ts: "2026-07-13", type: "RECLAIM", price: 280, quality: "A", quality_reason: "reclaimed 50d" },
+        { ts: "2026-07-10", known_ts: "2026-07-13", type: "RECLAIM", price: 280, quality: "A", quality_reason: "reclaimed 50d" },
       ],
     },
     backtest: { metrics: { n_trades: 7, win_rate: 0.5714, profit_factor: 7.36, cagr: 0.0537, sharpe: 0.387, max_dd: -0.3612, expectancy: 0.0326, exposure: 0.2933, vs_buy_hold: { bh_total_return: 1.0661, beats_return: false } }, honest_read: "As-traded after costs." },
@@ -168,7 +168,7 @@ describe("curateSignals", () => {
     const sigs = out.last_signals as Obj[];
     expect(sigs).toHaveLength(3);
     expect(sigs[0].ts).toBe("2026-03-03");
-    expect(sigs[2]).toMatchObject({ ts: "2026-07-13", type: "RECLAIM", quality: "A", reason: "reclaimed 50d" });
+    expect(sigs[2]).toMatchObject({ ts: "2026-07-10", known_ts: "2026-07-13", type: "RECLAIM", quality: "A", reason: "reclaimed 50d" });
     expect(sigs[1].reason).toBe("macd_bull_cross, recent_b1, confirm_bull, rsi<65"); // reasons joined, capped at 4
   });
   it("labels fraction metrics as % and keeps ratios raw", () => {

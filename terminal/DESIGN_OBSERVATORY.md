@@ -53,7 +53,8 @@ This applies in TSX inline styles too — use CSS variable strings, not hex.
 | `--muted` | `#5a616f` | Tertiary / labels |
 | `--panel` | `#0d0f13` | Panel background (used for ring inner disc) |
 | `--font-ui` | Inter family | UI text |
-| `--font-num` | Monospace family | Numerals — always pair with `tabular-nums` |
+| `--font-num` | Inter family | Numerals — **always** pair with `tabular-nums` (Inter's default figures are proportional, and the `font:` shorthand resets `font-variant-numeric`) |
+| `--font-code` | JetBrains Mono | Code/character-cell surfaces only — Pine editor, gutters, console, source dumps. Never numerals |
 
 ---
 
@@ -137,9 +138,26 @@ Green pulsing dot for "live" status.  Color = `var(--up)` (East-Asian flip aware
 <span className="obs-live-dot" />
 ```
 
+### 4.7b `.obs-tag` (v7)
+The universal one-var tint chip (mirrors `.fin-tag`; macro-framework formula).
+Set the base color per state — east-mode flip rides the token automatically.
+
+```tsx
+<span className="obs-tag" style={{ "--c": "var(--up)" } as React.CSSProperties}>Calls</span>
+```
+
+### 4.7c `.obs-asof` (v7)
+Provenance row under a data section: source + as-of; add `<span className="dot"/>`
+when the feed is live.
+
+```tsx
+<div className="obs-asof"><span className="dot" />Live tape · as of 14:32 ET</div>
+```
+
 ### 4.8 `.num`
 Already defined in `globals.css`.  Re-exported here as a reminder: use on every
-numeral element, together with `var(--font-num)` when monospace is needed.
+numeral element, together with `var(--font-num)`.  Numerals are set in the UI
+grotesque, so `tabular-nums` — not a fixed advance — is what holds columns in line.
 
 ---
 

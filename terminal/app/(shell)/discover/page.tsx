@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import { createClient } from "@/lib/supabase/server";
 import DiscoverWorkspace from "@/components/workspaces/DiscoverWorkspace";
+import SignupGate from "@/components/gates/SignupGate";
 
 // Discover workspace (Wave-2 IA) — find setups. Serves /discover under the (shell)
 // route group; shared chrome from app/(shell)/layout.tsx. Composes the ex-/screener
@@ -7,18 +9,18 @@ import DiscoverWorkspace from "@/components/workspaces/DiscoverWorkspace";
 // Leader Radar) under one WorkspaceTabs sub-nav (?tab=, default screener).
 //
 // email is read client-side from the AppShell context (useShellEmail), which the
-// (shell) layout resolves once — no per-page auth read needed here. All view data
-// is fetched client-side, so this page is a thin server shell (auto-dynamic via the
-// layout's cookie read).
-
-// Belt-and-suspenders vs the EdgeOne year-long s-maxage pin (the Wave-1 crash class):
-// the (shell) layout's cookie read already makes this route dynamic, and next.config
-// headers cap the edge cache at 5min — this export documents the cap and keeps it if
-// either of those ever changes. (Old /screener|/heatmap|/flow pages carried the same.)
-export const revalidate = 300;
+// (shell) layout resolves once. All view data is fetched client-side, so this page
+// is a thin server shell (auto-dynamic via the layout's cookie read) — the only
+// server work is the signed-out gate: the chart (/terminal) is open to guests,
+// Discover is a member surface.
 
 export const metadata: Metadata = { title: "Discover · Mastermind Terminal" };
 
-export default function DiscoverPage() {
+export default async function DiscoverPage() {
+  if (process.env.TERMINAL_E2E_FIXTURE === "1") return <DiscoverWorkspace />;
+
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getClaims();
+  if (typeof data?.claims?.sub !== "string") return <SignupGate surface="discover" />;
   return <DiscoverWorkspace />;
 }

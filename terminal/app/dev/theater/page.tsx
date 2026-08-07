@@ -184,7 +184,7 @@ export default function TheaterHarness() {
             style={{ font: "600 13px var(--font-ui)", color: "var(--text)", background: narrowFrame ? "rgba(157,134,255,.2)" : "var(--panel-2)", border: "1px solid var(--line-3)", borderRadius: 6, padding: "8px 16px", cursor: "pointer" }}>
             390px frame: {narrowFrame ? "ON" : "off"}
           </button>
-          <span style={{ font: "500 12px var(--font-num)", color: "var(--text-2)", alignSelf: "center" }}>AI objects on chart: {aiCount}</span>
+          <span style={{ font: "500 12px var(--font-num)", fontVariantNumeric: "tabular-nums", color: "var(--text-2)", alignSelf: "center" }}>AI objects on chart: {aiCount}</span>
         </div>
 
         {/* The pane. .cmx-rm on the wrapper simulates reduced-motion for the conductor (mirrors the media query). */}

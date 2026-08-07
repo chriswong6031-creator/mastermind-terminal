@@ -469,7 +469,7 @@ function SectorBlockGroup({
             fontSize={9}
             fontWeight={700}
             fill="#94a3b8"
-            style={{ userSelect: "none", fontFamily: "var(--font-num, monospace)", letterSpacing: "0.06em" }}
+            style={{ userSelect: "none", fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums", letterSpacing: "0.06em" }}
           >
             {abbrev}
           </text>
@@ -481,7 +481,7 @@ function SectorBlockGroup({
               fontWeight={700}
               fill={avgColor}
               textAnchor="end"
-              style={{ userSelect: "none", fontFamily: "var(--font-num, monospace)" }}
+              style={{ userSelect: "none", fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums" }}
             >
               {layer === "price"
                 ? `${avg >= 0 ? "+" : ""}${avg.toFixed(1)}%`
@@ -495,7 +495,7 @@ function SectorBlockGroup({
             y={block.y + 19}
             fontSize={6}
             fill="rgba(255,255,255,0.18)"
-            style={{ userSelect: "none", fontFamily: "var(--font-num, monospace)" }}
+            style={{ userSelect: "none", fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums" }}
           >
             {block.nodes.length > 0 ? block.nodes[0].tile.ticker : ""}
           </text>
@@ -518,7 +518,7 @@ function SectorBlockGroup({
             fontSize={7}
             fontWeight={700}
             fill="#8b95a5"
-            style={{ userSelect: "none", fontFamily: "var(--font-num, monospace)", letterSpacing: "0.04em" }}
+            style={{ userSelect: "none", fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums", letterSpacing: "0.04em" }}
           >
             {abbrev}
           </text>
@@ -530,7 +530,7 @@ function SectorBlockGroup({
               fontWeight={600}
               fill={avgColor.replace("0.6)", "0.5)")}
               textAnchor="end"
-              style={{ userSelect: "none", fontFamily: "var(--font-num, monospace)" }}
+              style={{ userSelect: "none", fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums" }}
             >
               {layer === "price"
                 ? `${avg >= 0 ? "+" : ""}${avg.toFixed(1)}%`
@@ -643,7 +643,7 @@ function TileRect({ node, layer, isSelected, fill, onMouseEnter, onClick }: Tile
           fill="rgba(255,255,255,0.92)"
           style={{
             userSelect: "none",
-            fontFamily: "var(--font-num, monospace)",
+            fontFamily: "var(--font-num)",
             fontVariantNumeric: "tabular-nums",
             pointerEvents: "none",
             textShadow: "0 1px 2px rgba(0,0,0,0.55)",

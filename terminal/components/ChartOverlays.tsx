@@ -9,6 +9,7 @@
 // It owns NO chart logic — every action is a callback into ChartPanel, which holds the chart refs.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useT } from "@/lib/i18n";
 
 export type LegendEntry = {
   key: string;          // "ema" | "bb" | … | "pine" | "cmp:SYM"
@@ -18,11 +19,14 @@ export type LegendEntry = {
   isPine: boolean;
   isCompare?: boolean;  // compare symbol pseudo-indicator — no read-only source view
   noParams?: boolean;   // signal-style row (e.g. Golden Oracle) — no Settings / Source, just eye + remove
+  noSource?: boolean;   // premium suite row — Settings works but there is no pseudo-Pine source view
   color?: string;       // line color (used for the compare row's swatch dot)
 };
 
 export type PaneInfo = {
   key: string;          // stable pane identity ("__price__" | indicator key) — survives reorder
+  /** Optional group key used by the pane-level trash action (individual rows keep their own keys). */
+  removeKey?: string;
   paneIndex: number;
   isPrice: boolean;
   top: number;          // px, relative to the chart-wrap
@@ -73,10 +77,20 @@ const ICONS = {
   maximize: "M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5",
 };
 
-type MoreState = { key: string; label: string; paneIndex: number; isPane: boolean; hidden: boolean; isCompare: boolean; noParams: boolean; x: number; y: number; rowTop: number };
+type MoreState = { key: string; label: string; paneIndex: number; isPane: boolean; hidden: boolean; isCompare: boolean; noParams: boolean; noSource: boolean; x: number; y: number; rowTop: number };
 
-export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: string | null; legendOpen: boolean; onToggleLegend: () => void; coarse?: boolean } & OverlayActions) {
+export default function ChartOverlays(props: {
+  panes: PaneInfo[];
+  hoveredKey: string | null;
+  legendOpen: boolean;
+  onToggleLegend: () => void;
+  coarse?: boolean;
+  showTitles?: boolean;
+  backgroundOpacity?: number;
+  paneButtons?: "always" | "hover" | "never";
+} & OverlayActions) {
   const coarse = !!props.coarse;
+  const t = useT();
   const [more, setMore] = useState<MoreState | null>(null);
   const [flip, setFlip] = useState<{ key: string; n: number } | null>(null);
   // Static Legend (touch): tapping a row's name ARMS it — the icon strip appears INSIDE the same
@@ -135,7 +149,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
 
   const stop = (fn: () => void) => (ev: React.MouseEvent) => { ev.stopPropagation(); ev.preventDefault(); fn(); };
   const openMore = (e: LegendEntry, paneIndex: number, rect: DOMRect) =>
-    setMore({ key: e.key, label: e.label, paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: rect.left, y: rect.bottom + 4, rowTop: rect.top });
+    setMore({ key: e.key, label: e.label, paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, noSource: !!e.noSource, x: rect.left, y: rect.bottom + 4, rowTop: rect.top });
 
   // B5: total entries count across all panes (for the count chip)
   const totalEntries = props.panes.reduce((s, p) => s + p.entries.length, 0);
@@ -145,16 +159,23 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
       {props.panes.map((p) => {
         const legendTop = p.top + (p.isPrice ? 38 : 4);   // price legend clears the OHLC status line; sub-panes hug the corner (TV-tight)
         const primaryKey = p.entries[0]?.key;
+        const paneRemoveKey = p.removeKey ?? primaryKey;
         const showOps = !p.isPrice && primaryKey != null;
         // B5: on coarse, pane-ops only visible when collapsed or maximized (restore affordance)
         // a maximized PRICE pane renders a restore-only ops strip (it is reachable via double-click/tap,
         // and without this there is no visible way back — the flattened sub-panes show no ops of their own)
         const priceRestoreOnly = p.isPrice && p.maximized;
-        const showPaneOps = priceRestoreOnly || (showOps && (coarse ? (p.collapsed || p.maximized) : (props.hoveredKey === p.key || p.collapsed || p.maximized)));
+        const paneButtons = props.paneButtons ?? "hover";
+        const showPaneOps = priceRestoreOnly || (showOps && (
+          p.collapsed ||
+          p.maximized ||
+          paneButtons === "always" ||
+          (paneButtons === "hover" && !coarse && props.hoveredKey === p.key)
+        ));
         // B5: entry row visibility — price pane gated by legendOpen; sub-pane gated by legendOpen on coarse only
         const entriesVisible = p.isPrice ? props.legendOpen : (coarse ? props.legendOpen : true);
         // B5: render the price-pane lg-block even on coarse when it has no entries (so the count chip always shows)
-        const showBlock = p.entries.length > 0 || (p.isPrice && coarse);
+        const showBlock = props.showTitles !== false && (p.entries.length > 0 || (p.isPrice && coarse));
         return (
           <div key={p.key}>
             {showBlock && (
@@ -167,7 +188,9 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
                       key={e.key}
                       ref={isArmed ? armedRowRef : undefined}
                       className={`lg-row${e.hidden ? " is-hidden" : ""}${e.isCompare ? " is-cmp" : ""}${isArmed ? " is-armed" : ""}`}
-                      style={visible ? undefined : { display: "none" }}
+                      style={visible
+                        ? { background: `rgba(6,9,14,${Math.max(0, Math.min(100, props.backgroundOpacity ?? 70)) * 0.0054})` }
+                        : { display: "none" }}
                     >
                       {e.isCompare && <span className="lg-dot" style={{ background: e.color || "currentColor" }} />}
                       {/* Static Legend: tapping the name area on touch ARMS the row (fires no action) */}
@@ -187,22 +210,22 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
                             ev.stopPropagation(); ev.preventDefault();
                             const rowEl = (ev.currentTarget as HTMLElement).closest(".lg-row") as HTMLElement | null;
                             const r = (rowEl ?? (ev.currentTarget as HTMLElement)).getBoundingClientRect();
-                            setMore({ key: e.key, label: e.label, paneIndex: p.paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: r.left, y: r.bottom + 4, rowTop: r.top });
+                            setMore({ key: e.key, label: e.label, paneIndex: p.paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, noSource: !!e.noSource, x: r.left, y: r.bottom + 4, rowTop: r.top });
                           }}>{I(ICONS.more, 2.4)}</button>
                         </span>
                       ) : !coarse ? (
                         <span className="lg-menu">
-                          <button className="lg-ic eye" data-tip={e.hidden ? "Show" : "Hide"} onClick={stop(() => props.onEye(e.key))} aria-label={e.hidden ? "Show" : "Hide"}><EyeIcon off={e.hidden} /></button>
-                          {!e.noParams && <button className="lg-ic" data-tip="Settings" onClick={stop(() => props.onSettings(e.key))} aria-label="Settings">{I(ICONS.settings, 1.6)}</button>}
-                          {!e.isCompare && !e.noParams && <button className="lg-ic" data-tip="Source code" onClick={stop(() => props.onSource(e.key))} aria-label="Source code">{I(ICONS.source)}</button>}
-                          <button className="lg-ic" data-tip="Remove" onClick={stop(() => props.onRemove(e.key))} aria-label="Remove">{I(ICONS.remove)}</button>
-                          <button className="lg-ic" data-tip="More" onClick={(ev) => { ev.stopPropagation(); ev.preventDefault(); openMore(e, p.paneIndex, (ev.currentTarget as HTMLElement).getBoundingClientRect()); }} aria-label="More">{I(ICONS.more, 2.4)}</button>
+                          <button className="lg-ic eye" data-tip={e.hidden ? t("lgShow") : t("lgHide")} onClick={stop(() => props.onEye(e.key))} aria-label={e.hidden ? t("lgShow") : t("lgHide")}><EyeIcon off={e.hidden} /></button>
+                          {!e.noParams && <button className="lg-ic" data-tip={t("lgSettings")} onClick={stop(() => props.onSettings(e.key))} aria-label={t("lgSettings")}>{I(ICONS.settings, 1.6)}</button>}
+                          {!e.isCompare && !e.noParams && !e.noSource && <button className="lg-ic" data-tip={t("pmSourceCode")} onClick={stop(() => props.onSource(e.key))} aria-label={t("pmSourceCode")}>{I(ICONS.source)}</button>}
+                          <button className="lg-ic" data-tip={t("lgRemove")} onClick={stop(() => props.onRemove(e.key))} aria-label={t("lgRemove")}>{I(ICONS.remove)}</button>
+                          <button className="lg-ic" data-tip={t("lgMore")} onClick={(ev) => { ev.stopPropagation(); ev.preventDefault(); openMore(e, p.paneIndex, (ev.currentTarget as HTMLElement).getBoundingClientRect()); }} aria-label="More">{I(ICONS.more, 2.4)}</button>
                         </span>
                       ) : e.hidden ? (
                         // C1 coarse: hidden indicator keeps a persistent crossed-eye in the pill's eye
                         // slot (right after the name) — one tap un-hides without opening the pill
                         <span className="lg-menu">
-                          <button className="lg-ic eye" aria-label="Show" onClick={stop(() => props.onEye(e.key))}><EyeIcon off /></button>
+                          <button className="lg-ic eye" aria-label={t("lgShow")} onClick={stop(() => props.onEye(e.key))}><EyeIcon off /></button>
                         </span>
                       ) : null}
                     </div>
@@ -210,7 +233,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
                 })}
                 {/* B5: count chip on the collapse button — shows total entry count on coarse */}
                 {p.isPrice && (
-                  <button className="lg-collapse" title={props.legendOpen ? "Minimize indicator list" : "Show indicator list"} onClick={stop(() => { setArmedKey(null); props.onToggleLegend(); })}>
+                  <button className="lg-collapse" title={props.legendOpen ? t("lgMinimizeList") : t("lgShowList")} onClick={stop(() => { setArmedKey(null); props.onToggleLegend(); })}>
                     <svg viewBox="0 0 24 24" style={{ width: 13, height: 13, stroke: "currentColor", fill: "none", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", transform: props.legendOpen ? "none" : "rotate(180deg)" }}><path d="M6 15l6-6 6 6" /></svg>
                     {coarse && totalEntries > 0 && <span className="lg-cnt">{totalEntries}</span>}
                   </button>
@@ -222,12 +245,12 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
               <div className="pane-ops" style={{ top: p.top + 3, right: 10 }}>
                 {/* on coarse, hide move/remove — only restore affordance (collapse/maximize) */}
                 {!coarse && !priceRestoreOnly && <>
-                  <button className="po-ic" data-tip="Move pane up" disabled={!props.canMoveUp(p.paneIndex)} onClick={stop(() => { props.onMoveUp(p.paneIndex); doFlip(p.paneIndex + ":up"); })} aria-label="Move pane up">{flip?.key === p.paneIndex + ":up" ? <span key={flip.n} className="po-flip">{I(ICONS.up)}</span> : I(ICONS.up)}</button>
-                  <button className="po-ic" data-tip="Move pane down" disabled={!props.canMoveDown(p.paneIndex)} onClick={stop(() => { props.onMoveDown(p.paneIndex); doFlip(p.paneIndex + ":down"); })} aria-label="Move pane down">{flip?.key === p.paneIndex + ":down" ? <span key={flip.n} className="po-flip">{I(ICONS.down)}</span> : I(ICONS.down)}</button>
-                  <button className="po-ic" data-tip="Remove" onClick={stop(() => props.onRemove(primaryKey!))} aria-label="Remove">{I(ICONS.remove)}</button>
+                  <button className="po-ic" data-tip={t("pmMovePaneUp")} disabled={!props.canMoveUp(p.paneIndex)} onClick={stop(() => { props.onMoveUp(p.paneIndex); doFlip(p.paneIndex + ":up"); })} aria-label="Move pane up">{flip?.key === p.paneIndex + ":up" ? <span key={flip.n} className="po-flip">{I(ICONS.up)}</span> : I(ICONS.up)}</button>
+                  <button className="po-ic" data-tip={t("pmMovePaneDown")} disabled={!props.canMoveDown(p.paneIndex)} onClick={stop(() => { props.onMoveDown(p.paneIndex); doFlip(p.paneIndex + ":down"); })} aria-label="Move pane down">{flip?.key === p.paneIndex + ":down" ? <span key={flip.n} className="po-flip">{I(ICONS.down)}</span> : I(ICONS.down)}</button>
+                  <button className="po-ic" data-tip={t("pmRemovePane")} onClick={stop(() => props.onRemove(paneRemoveKey!))} aria-label={t("pmRemovePane")}>{I(ICONS.remove)}</button>
                 </>}
-                {!priceRestoreOnly && <button className={`po-ic${p.collapsed ? " on" : ""}`} data-tip={p.collapsed ? "Restore pane" : "Collapse pane"} onClick={stop(() => props.onCollapse(p.paneIndex))} aria-label="Collapse pane">{I(ICONS.collapse)}</button>}
-                <button className={`po-ic${p.maximized ? " on" : ""}`} data-tip={p.maximized ? "Restore pane" : "Maximize pane"} onClick={stop(() => props.onMaximize(p.paneIndex))} aria-label="Maximize pane">{I(ICONS.maximize)}</button>
+                {!priceRestoreOnly && <button className={`po-ic${p.collapsed ? " on" : ""}`} data-tip={p.collapsed ? t("pmRestorePane") : t("pmCollapsePane")} onClick={stop(() => props.onCollapse(p.paneIndex))} aria-label="Collapse pane">{I(ICONS.collapse)}</button>}
+                <button className={`po-ic${p.maximized ? " on" : ""}`} data-tip={p.maximized ? t("pmRestorePane") : t("pmMaximizePane")} onClick={stop(() => props.onMaximize(p.paneIndex))} aria-label="Maximize pane">{I(ICONS.maximize)}</button>
               </div>
             )}
           </div>
@@ -238,15 +261,15 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
           border, anchored flush under the row's left edge, viewport-clamped (effect above). */}
       {more && (() => { const done = () => { setMore(null); setArmedKey(null); }; return (
         <div ref={moreRef} className="lg-more" style={{ left: more.x, top: more.y }} onPointerDown={(e) => e.stopPropagation()}>
-          <div className="lg-more-row" onClick={stop(() => { props.onEye(more.key); done(); })}><span className="mi"><EyeIcon off={more.hidden} /></span>{more.hidden ? "Show" : "Hide"}</div>
-          {!more.noParams && <div className="lg-more-row" onClick={stop(() => { props.onSettings(more.key); done(); })}><span className="mi">{I(ICONS.settings, 1.6)}</span>Settings…</div>}
-          {!more.isCompare && !more.noParams && <div className="lg-more-row" onClick={stop(() => { props.onSource(more.key); done(); })}><span className="mi">{I(ICONS.source)}</span>Source code…</div>}
+          <div className="lg-more-row" onClick={stop(() => { props.onEye(more.key); done(); })}><span className="mi"><EyeIcon off={more.hidden} /></span>{more.hidden ? t("lgShow") : t("lgHide")}</div>
+          {!more.noParams && <div className="lg-more-row" onClick={stop(() => { props.onSettings(more.key); done(); })}><span className="mi">{I(ICONS.settings, 1.6)}</span>{t("lgSettingsMore")}</div>}
+          {!more.isCompare && !more.noParams && !more.noSource && <div className="lg-more-row" onClick={stop(() => { props.onSource(more.key); done(); })}><span className="mi">{I(ICONS.source)}</span>{t("pmSourceCodeMore")}</div>}
           {more.isPane && <>
             <div className="lg-more-sep" />
-            <div className={`lg-more-row${props.canMoveUp(more.paneIndex) ? "" : " dis"}`} onClick={stop(() => { if (props.canMoveUp(more.paneIndex)) { props.onMoveUp(more.paneIndex); done(); } })}><span className="mi">{I(ICONS.up)}</span>Move pane up</div>
-            <div className={`lg-more-row${props.canMoveDown(more.paneIndex) ? "" : " dis"}`} onClick={stop(() => { if (props.canMoveDown(more.paneIndex)) { props.onMoveDown(more.paneIndex); done(); } })}><span className="mi">{I(ICONS.down)}</span>Move pane down</div>
-            <div className="lg-more-row" onClick={stop(() => { props.onCollapse(more.paneIndex); done(); })}><span className="mi">{I(ICONS.collapse)}</span>Collapse pane</div>
-            <div className="lg-more-row" onClick={stop(() => { props.onMaximize(more.paneIndex); done(); })}><span className="mi">{I(ICONS.maximize)}</span>Maximize pane</div>
+            <div className={`lg-more-row${props.canMoveUp(more.paneIndex) ? "" : " dis"}`} onClick={stop(() => { if (props.canMoveUp(more.paneIndex)) { props.onMoveUp(more.paneIndex); done(); } })}><span className="mi">{I(ICONS.up)}</span>{t("pmMovePaneUp")}</div>
+            <div className={`lg-more-row${props.canMoveDown(more.paneIndex) ? "" : " dis"}`} onClick={stop(() => { if (props.canMoveDown(more.paneIndex)) { props.onMoveDown(more.paneIndex); done(); } })}><span className="mi">{I(ICONS.down)}</span>{t("pmMovePaneDown")}</div>
+            <div className="lg-more-row" onClick={stop(() => { props.onCollapse(more.paneIndex); done(); })}><span className="mi">{I(ICONS.collapse)}</span>{t("pmCollapsePane")}</div>
+            <div className="lg-more-row" onClick={stop(() => { props.onMaximize(more.paneIndex); done(); })}><span className="mi">{I(ICONS.maximize)}</span>{t("pmMaximizePane")}</div>
           </>}
           <div className="lg-more-sep" />
           <div className="lg-more-row danger" onClick={stop(() => { props.onRemove(more.key); done(); })}><span className="mi">{I(ICONS.remove)}</span>Remove</div>

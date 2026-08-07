@@ -39,30 +39,10 @@ interface ConfidencePanelProps {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const CEILING = 92;
-const ARC_SIZE = 120;    // px, outer diameter
-const STROKE   = 9;
-const RADIUS   = (ARC_SIZE - STROKE) / 2;
-const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Convert score 0–92 to arc dash offset (arc spans 270° — left cap to right cap) */
-function scoreToOffset(score: number): number {
-  const clampedFraction = Math.min(score, CEILING) / CEILING;
-  // 270° arc = 0.75 of circumference used
-  const filled = clampedFraction * CIRCUMFERENCE * 0.75;
-  return CIRCUMFERENCE - filled;
-}
-
-function scoreToColor(score: number): string {
-  if (score >= 75) return "#26c281"; // strong — green
-  if (score >= 55) return "#e8a33d"; // moderate — amber
-  return "var(--down)";              // weak — red
-}
 
 function barColor(val: number): string {
-  if (val >= 70) return "#26c281";
-  if (val >= 40) return "#e8a33d";
+  if (val >= 70) return "var(--up)";
+  if (val >= 40) return "var(--warn)";
   return "var(--down)";
 }
 
@@ -77,11 +57,8 @@ export function ConfidencePanel({
   lang,
 }: ConfidencePanelProps) {
   const t = makeProphetT(lang);
-  const zh = lang === "zh";
 
   const score = confidence ?? 0;
-  const arcColor = scoreToColor(score);
-  const offset   = scoreToOffset(score);
 
   const componentDefs: { key: keyof ConfidenceComponents; labelKey: Parameters<typeof t>[0]; tipKey: Parameters<typeof t>[0] }[] = [
     { key: "validity",  labelKey: "componentValidity",  tipKey: "componentTooltipValidity"  },
@@ -124,7 +101,7 @@ export function ConfidencePanel({
     : "var(--text-2)";
 
   return (
-    <div className="obs-card" style={PANEL_STYLE}>
+    <div className="obs-card obs-prophet-confidence" style={PANEL_STYLE}>
       {/* Header — VERBATIM label required by spec */}
       <div style={HEADER}>
         <span style={HEADER_LABEL}>{t("confidenceHeader")}</span>
@@ -173,7 +150,6 @@ export function ConfidencePanel({
               label={t(labelKey)}
               tooltip={t(tipKey)}
               value={components[key]}
-              lang={lang}
             />
           ))}
         </div>
@@ -196,12 +172,10 @@ function ComponentBar({
   label,
   tooltip,
   value,
-  lang: _lang,
 }: {
   label: string;
   tooltip: string;
   value: number | null;
-  lang: Lang;
 }) {
   const [tipVisible, setTipVisible] = useState(false);
   const pct = value != null ? Math.max(0, Math.min(100, value)) : null;
@@ -307,6 +281,7 @@ const BAR_LABEL: React.CSSProperties = {
 
 const BAR_VAL: React.CSSProperties = {
   font: "600 10px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
   color: "var(--text)",
 };
 

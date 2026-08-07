@@ -147,8 +147,13 @@ function RevenueModule({
   if (allRevNull && !estimates?.rev_fy) {
     return (
       <div className="fin-sec fin-earn-module">
-        <div className="fin-earn-module-hdr">
-          <span className="fin-earn-module-title">{pick(!!zh, "Revenue", "营收")}</span>
+        <div className="fin-earn-module-hdr fin-rule">
+          <div
+            className="fin-sec-h fin-rail fin-earn-module-title"
+            style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+          >
+            {pick(!!zh, "Revenue", "营收")}
+          </div>
           <div className="fin-toggle">
             <button className={mode === "annual" ? "on" : ""} onClick={() => setMode("annual")}>
               {pick(!!zh, "Annual", "年度")}
@@ -158,12 +163,15 @@ function RevenueModule({
             </button>
           </div>
         </div>
-        <div className="fin-empty fin-earn-rev-empty" role="status">
-          {pick(
-            !!zh,
-            "Revenue reported figures are not available for this security.",
-            "该证券暂无营收实际数据。"
-          )}
+        <div className="fin-empty fin-empty-lg fin-earn-rev-empty" role="status">
+          <div className="fin-empty-title">{pick(!!zh, "No reported revenue", "无营收实际数据")}</div>
+          <div className="fin-empty-why">
+            {pick(
+              !!zh,
+              "The fundamentals feed files EPS but no revenue actuals for this security, and no analyst revenue estimates are published either.",
+              "基本面数据源为该证券提供了每股盈利，但未提供营收实际数据，也没有分析师营收预期。"
+            )}
+          </div>
         </div>
       </div>
     )
@@ -171,8 +179,13 @@ function RevenueModule({
 
   return (
     <div className="fin-sec fin-earn-module">
-      <div className="fin-earn-module-hdr">
-        <span className="fin-earn-module-title">{pick(!!zh, "Revenue", "营收")}</span>
+      <div className="fin-earn-module-hdr fin-rule">
+        <div
+          className="fin-sec-h fin-rail fin-earn-module-title"
+          style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+        >
+          {pick(!!zh, "Revenue", "营收")}
+        </div>
         <div className="fin-toggle">
           <button className={mode === "annual" ? "on" : ""} onClick={() => setMode("annual")}>
             {pick(!!zh, "Annual", "年度")}
@@ -344,7 +357,7 @@ export default function EarningsPage({ fund, zh, sym }: EarningsPageProps) {
       <div className="fin-body">
         <div className="fin-empty fin-empty-lg" role="status">
           <span className="fin-empty-title">{pick(!!zh, "Fundamentals not yet covered", "尚未覆盖基本面数据")}</span>
-          <span>{pick(!!zh,
+          <span className="fin-empty-why">{pick(!!zh,
             `Earnings data for ${sym ?? "this symbol"} hasn't been collected yet.`,
             `${sym ?? "该标的"} 的盈利数据尚未采集。`
           )}</span>
@@ -383,13 +396,25 @@ export default function EarningsPage({ fund, zh, sym }: EarningsPageProps) {
     <div className="fin-body">
       {/* ── Summary strip ── */}
       <div className="fin-sec">
+        <div className="fin-eyebrow">{pick(!!zh, "EARNINGS CALENDAR", "财报日历")}</div>
+        <div
+          className="fin-sec-h fin-rail fin-rule"
+          style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+        >
+          {pick(!!zh, "Next report", "下次财报")}
+        </div>
         <div className="fin-grid4 fin-earn-strip">
           <div className="fin-fact">
             <span className="k">{pick(!!zh, "Next report date", "下次报告日期")}</span>
-            <span className="v">
-              {nextDate ? "~ " + fmtDate(nextDate) : "—"}
+            <span className="v fin-earn-next">
+              <span>{nextDate ? "~ " + fmtDate(nextDate) : "—"}</span>
               {daysAway != null && daysAway > 0 && (
-                <span className="fin-earn-days"> ({pick(!!zh, "in " + daysAway + "d", daysAway + "天后")})</span>
+                <span
+                  className="fin-tag num fin-earn-days"
+                  style={{ "--c": "var(--brand-2)" } as React.CSSProperties}
+                >
+                  {pick(!!zh, "in " + daysAway + "d", daysAway + "天后")}
+                </span>
               )}
             </span>
           </div>
@@ -412,8 +437,13 @@ export default function EarningsPage({ fund, zh, sym }: EarningsPageProps) {
 
       {/* ── EPS Module ── */}
       <div className="fin-sec fin-earn-module">
-        <div className="fin-earn-module-hdr">
-          <span className="fin-earn-module-title">{pick(!!zh, "EPS", "每股盈利")}</span>
+        <div className="fin-earn-module-hdr fin-rule">
+          <div
+            className="fin-sec-h fin-rail fin-earn-module-title"
+            style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+          >
+            {pick(!!zh, "EPS", "每股盈利")}
+          </div>
           <div className="fin-toggle">
             <button className={epsMode === "annual" ? "on" : ""} onClick={() => setEpsMode("annual")}>
               {pick(!!zh, "Annual", "年度")}
@@ -426,11 +456,14 @@ export default function EarningsPage({ fund, zh, sym }: EarningsPageProps) {
 
         {/* Estimates-only state: no reported history but estimates available */}
         {estimatesOnlyEps && (
-          <div className="fin-empty fin-earn-rev-empty" role="status">
-            {pick(!!zh,
-              "No reported EPS history yet. Analyst estimates are shown below.",
-              "暂无已报告每股盈利历史。以下为分析师预期数据。"
-            )}
+          <div className="fin-empty fin-empty-lg fin-earn-rev-empty" role="status">
+            <div className="fin-empty-title">{pick(!!zh, "No reported EPS history", "暂无已报告每股盈利历史")}</div>
+            <div className="fin-empty-why">
+              {pick(!!zh,
+                "This security has not filed a reported EPS series yet — the columns below are forward analyst estimates only.",
+                "该证券尚未披露已报告每股盈利序列——下方各列仅为分析师前瞻预期。"
+              )}
+            </div>
           </div>
         )}
 
@@ -454,8 +487,14 @@ export default function EarningsPage({ fund, zh, sym }: EarningsPageProps) {
             zh={zh}
           />
         ) : !estimatesOnlyEps ? (
-          <div className="fin-empty" role="status">
-            {pick(!!zh, "No EPS data", "暂无每股盈利数据")}
+          <div className="fin-empty fin-empty-lg fin-earn-rev-empty" role="status">
+            <div className="fin-empty-title">{pick(!!zh, "No EPS data", "暂无每股盈利数据")}</div>
+            <div className="fin-empty-why">
+              {pick(!!zh,
+                "Neither the earnings table nor the quarterly statements carry an EPS series for this security.",
+                "该证券的财报表与季度报表中均无每股盈利序列。"
+              )}
+            </div>
           </div>
         ) : null}
 
@@ -531,6 +570,15 @@ export default function EarningsPage({ fund, zh, sym }: EarningsPageProps) {
 
       {/* ── Revenue Module ── */}
       <RevenueModule fund={fund} zh={zh} />
+
+      {fund.asof && (
+        <div className="fin-asof">
+          {pick(!!zh,
+            `Earnings & estimates · as of ${fmtDate(fund.asof)}`,
+            `财报与预期数据 · 截至 ${fmtDate(fund.asof)}`
+          )}
+        </div>
+      )}
     </div>
   )
 }

@@ -27,12 +27,20 @@ interface ConceptCard {
   bodyKey: Parameters<ReturnType<typeof makeGexT>>[0];
 }
 
+/**
+ * Flip violet. `--cat-2` is used across this desk but is defined nowhere in the token
+ * set, so `background:var(--cat-2)` resolved to nothing and the flip legend dot rendered
+ * INVISIBLE. `--ai` is defined and is the identical hue (#9d86ff) the ladder hardcodes as
+ * rgba(157,134,255,…) — used as the fallback so a real --cat-2 would still win.
+ */
+const FLIP_VIOLET = "var(--cat-2, var(--ai))";
+
 const CONCEPT_CARDS: ConceptCard[] = [
   { dot: "var(--brand-2)",  termKey: "guideGexTerm",         bodyKey: "guideGexBody" },
   { dot: "var(--brand-2)",  termKey: "guideCallWallTerm",    bodyKey: "guideCallWallBody" },
   { dot: "var(--down)",     termKey: "guidePutSupportTerm",  bodyKey: "guidePutSupportBody" },
   { dot: "var(--signal)",   termKey: "guideMagnetTerm",      bodyKey: "guideMagnetBody" },
-  { dot: "var(--cat-2)",    termKey: "guideFlipTerm",        bodyKey: "guideFlipBody" },
+  { dot: FLIP_VIOLET,       termKey: "guideFlipTerm",        bodyKey: "guideFlipBody" },
   { dot: "var(--text-2)",   termKey: "guideRegimeTerm",      bodyKey: "guideRegimeBody" },
   { dot: "var(--muted)",    termKey: "guideDealerSignTerm",  bodyKey: "guideDealerSignBody" },
 ];
@@ -41,7 +49,7 @@ const LEGEND_DOTS: { color: string; labelKey: Parameters<ReturnType<typeof makeG
   { color: "var(--brand-2)",  labelKey: "ladderNetGex" },
   { color: "var(--down)",     labelKey: "sumPutSupport" },
   { color: "var(--signal)",   labelKey: "sumMagnet" },
-  { color: "var(--cat-2)",    labelKey: "sumFlip" },
+  { color: FLIP_VIOLET,       labelKey: "sumFlip" },
 ];
 
 export function GexGuide({ lang }: GexGuideProps) {
@@ -101,14 +109,14 @@ const GUIDE_OUTER: React.CSSProperties = {
 const LEGEND_ROW: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  padding: "5px 12px",
-  gap: 12,
+  padding: "var(--sp-1) var(--sp-3)",
+  gap: "var(--sp-3)",
   flexWrap: "wrap",
 };
 
 const DOTS_ROW: React.CSSProperties = {
   display: "flex",
-  gap: 10,
+  gap: "var(--sp-3)",
   flex: 1,
   flexWrap: "wrap",
   alignItems: "center",
@@ -117,28 +125,28 @@ const DOTS_ROW: React.CSSProperties = {
 const DOT_ITEM: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 4,
+  gap: "var(--sp-1)",
 };
 
 const DOT: React.CSSProperties = {
   width: 8,
   height: 8,
-  borderRadius: "50%",
+  borderRadius: "var(--r-pill)",
   flexShrink: 0,
 };
 
 const DOT_LABEL: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: "var(--fs-micro)",
   color: "var(--text-2)",
 };
 
 const TOGGLE_BTN: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: "var(--fs-micro)",
   color: "var(--brand-2)",
   background: "none",
   border: "none",
   cursor: "pointer",
-  padding: "2px 0",
+  padding: "var(--sp-1) 0",
   letterSpacing: "0.04em",
   fontWeight: 600,
   flexShrink: 0,
@@ -148,40 +156,40 @@ const TOGGLE_BTN: React.CSSProperties = {
 const CARDS_GRID: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-  gap: 8,
-  padding: "8px 12px 12px",
+  gap: "var(--sp-2)",
+  padding: "var(--sp-2) var(--sp-3) var(--sp-3)",
   borderTop: "1px solid var(--line-2)",
 };
 
 const CONCEPT_CARD: React.CSSProperties = {
   background: "var(--panel-2)",
   border: "1px solid var(--line)",
-  borderRadius: "var(--r-md)",
-  padding: "8px 10px",
+  borderRadius: "var(--r-tile)",
+  padding: "var(--sp-2) var(--sp-3)",
 };
 
 const CONCEPT_HEADER: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 6,
-  marginBottom: 5,
+  gap: "var(--sp-2)",
+  marginBottom: "var(--sp-1)",
 };
 
 const CONCEPT_DOT: React.CSSProperties = {
   width: 8,
   height: 8,
-  borderRadius: "50%",
+  borderRadius: "var(--r-pill)",
   flexShrink: 0,
 };
 
 const CONCEPT_TERM: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--fs-label)",
   fontWeight: 700,
   color: "var(--text)",
 };
 
 const CONCEPT_BODY: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: "var(--fs-micro)",
   color: "var(--text-2)",
   lineHeight: 1.5,
   margin: 0,

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "features": {
+    "chart": true,
+    "search": true,
+    "watchlist": true,
+    "markets": true,
+    "analysis": true,
+    "discover": true,
+    "options": false,
+    "alerts": false,
+    "portfolio": false,
+    "scripts": false,
+    "admin": false,
+    "broker": false
+  },
+  "allowedRoutes": ["/terminal", "/analysis", "/discover", "/embed/chart"]
+}

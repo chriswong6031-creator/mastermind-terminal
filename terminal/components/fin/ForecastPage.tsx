@@ -27,6 +27,7 @@ import {
   fmtNum,
   fmtPct,
   fmtCur,
+  fmtDate,
   pick,
   signColor,
 } from "../../lib/finFormat";
@@ -133,6 +134,16 @@ function ForecastPage({ sym, fund, bars = [], zh = false, loading = false }: For
   const [revFreq, setRevFreq] = useState<"A" | "Q">("A");
   const [stmt, setStmt] = useState<"income" | "balance" | "cashflow">("income");
 
+  // Live/last price from the price-history line (last finite close).
+  // Hoisted ABOVE the loading early-return: hooks must run on every render —
+  // with the memo below the return, the hook count changed when `loading`
+  // flipped and React threw (MegaPane renders this page without a key, so it
+  // reconciles in place rather than remounting).
+  const lastPrice = useMemo(() => {
+    for (let i = bars.length - 1; i >= 0; i--) if (isFinite(bars[i]?.c)) return bars[i].c;
+    return null;
+  }, [bars]);
+
   // Loading skeleton — while the fund fetch is in flight, show shimmer blocks
   // instead of the false "No analyst coverage" empty state.
   if (loading && !fund) {
@@ -153,12 +164,6 @@ function ForecastPage({ sym, fund, bars = [], zh = false, loading = false }: For
   const stmtCcy = fund?.stmt_currency ?? ccy;
   const est = fund?.estimates ?? null;
   const analyst = fund?.analyst ?? null;
-
-  // Live/last price from the price-history line (last finite close).
-  const lastPrice = useMemo(() => {
-    for (let i = bars.length - 1; i >= 0; i--) if (isFinite(bars[i]?.c)) return bars[i].c;
-    return null;
-  }, [bars]);
 
   return (
     <div className="fin-fc">
@@ -242,7 +247,13 @@ function PriceTargetTab({
       <div className="fin-grid2 fin-fc-top">
         {/* left: price-target header + fan */}
         <div className="fin-card">
-          <div className="fin-fc-lbl">{pick(zh, "Price target", "目标价")}</div>
+          <div className="fin-eyebrow">{pick(zh, "PRICE TARGETS", "目标价")}</div>
+          <div
+            className="fin-sec-h fin-rail fin-rule"
+            style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+          >
+            {pick(zh, "12-month consensus", "12个月一致目标")}
+          </div>
           {mean != null ? (
             <>
               <div className="fin-fc-price">
@@ -251,11 +262,18 @@ function PriceTargetTab({
               {avgUp != null && (
                 <div className="fin-fc-chg">
                   {lastPrice != null && (
-                    <span style={{ color: signColor(mean - lastPrice) }}>
+                    <span className="d" style={{ color: signColor(mean - lastPrice) }}>
                       {fmtNum(mean - lastPrice, { decimals: 2 })}
                     </span>
                   )}
-                  <span style={{ color: signColor(avgUp) }}>{fmtPct(avgUp, { sign: true })}</span>
+                  <span
+                    className="fin-tag num"
+                    style={{
+                      "--c": avgUp > 0 ? "var(--up)" : avgUp < 0 ? "var(--down)" : "var(--muted)",
+                    } as React.CSSProperties}
+                  >
+                    {fmtPct(avgUp, { sign: true })}
+                  </span>
                 </div>
               )}
               {nTargets != null && high != null && low != null && (
@@ -277,7 +295,13 @@ function PriceTargetTab({
 
         {/* right: analyst rating gauge + distribution */}
         <div className="fin-card">
-          <div className="fin-sec-h">{pick(zh, "Analyst rating", "分析师评级")}</div>
+          <div className="fin-eyebrow">{pick(zh, "SELL-SIDE CONSENSUS", "卖方一致预期")}</div>
+          <div
+            className="fin-sec-h fin-rail fin-rule"
+            style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+          >
+            {pick(zh, "Analyst rating", "分析师评级")}
+          </div>
           {analyst ? (
             <AnalystRating analyst={analyst} est={est} zh={zh} />
           ) : (
@@ -311,7 +335,28 @@ function PriceTargetTab({
         ccy={stmtCcy}
         zh={zh}
       />
+
+      <EstimatesAsOf fund={fund} zh={zh} />
     </>
+  );
+}
+
+/**
+ * EstimatesAsOf — provenance row for the consensus block: which feed produced
+ * the estimates and how fresh the snapshot is. Reads only fields already on the
+ * fund contract (`src.estimates`, `asof`); renders nothing when neither exists.
+ */
+function EstimatesAsOf({ fund, zh }: { fund: Fund | null; zh: boolean }) {
+  const asof = fund?.asof ?? null;
+  const src = fund?.src?.estimates ?? null;
+  if (!asof && !src) return null;
+  const srcPart = src ? ` · ${src}` : "";
+  return (
+    <div className="fin-asof">
+      {asof
+        ? pick(zh, `Consensus estimates${srcPart} · as of ${fmtDate(asof)}`, `一致预期数据${srcPart} · 截至 ${fmtDate(asof)}`)
+        : pick(zh, `Consensus estimates${srcPart}`, `一致预期数据${srcPart}`)}
+    </div>
   );
 }
 
@@ -339,6 +384,10 @@ function TargetBand({
   const pos = (v: number | null) => (v == null ? null : Math.max(0, Math.min(100, ((v - low) / span) * 100)));
   const meanPos = pos(mean);
   const curPos = pos(cur);
+  // The "Now" tag rides a reserved lane ABOVE the track, centred over its dot.
+  // Near either end a centred tag would overhang the card, so it flips to
+  // edge-aligned instead of being allowed to spill.
+  const curEdge = curPos == null ? "" : curPos <= 14 ? " at-lo" : curPos >= 86 ? " at-hi" : "";
   return (
     <div className="fin-fc-band" role="group" aria-label={pick(zh, "Analyst target range", "分析师目标区间")}>
       <div className="fin-fc-band-track">
@@ -346,9 +395,12 @@ function TargetBand({
         {meanPos != null && <span className="fin-fc-band-mean" style={{ left: `${meanPos}%` }} />}
         {/* current-price marker */}
         {curPos != null && (
-          <span className="fin-fc-band-cur" style={{ left: `${curPos}%` }}>
+          <span className={"fin-fc-band-cur" + curEdge} style={{ left: `${curPos}%` }}>
             <span className="dot" />
-            <span className="tag">{pick(zh, "Now", "现价")} {fmtNum(cur)}</span>
+            <span className="tag">
+              <span className="k">{pick(zh, "Now", "现价")}</span>
+              <span className="v num">{fmtNum(cur)}</span>
+            </span>
           </span>
         )}
       </div>
@@ -543,11 +595,18 @@ function AnalystRating({ analyst, est, zh }: { analyst: NonNullable<Fund["analys
 function GrowthStrip({ est, zh }: { est: Fund["estimates"]; zh: boolean }) {
   const g = est?.growth;
   if (!g || (g.eps_yoy == null && g.rev_yoy == null)) return null;
+  // Tint formula: --c drives background, ring and text together. Forward growth
+  // IS directional, so --c rides --up/--down (never brand) and flips correctly
+  // under html[data-updown="east"].
   const chip = (label: string, v: number | null) =>
     v == null ? null : (
-      <span className="fin-fc-growth-chip" key={label}>
+      <span
+        className="fin-tag num"
+        key={label}
+        style={{ "--c": v >= 0 ? "var(--up)" : "var(--down)" } as React.CSSProperties}
+      >
         <span className="k">{label}</span>
-        <span className="v" style={{ color: v >= 0 ? "var(--up)" : "var(--down)" }}>{fmtPct(v, { sign: true })}</span>
+        {fmtPct(v, { sign: true })}
       </span>
     );
   return (
@@ -564,10 +623,23 @@ function AnalystEmpty({ fund, zh }: { fund: Fund | null; zh: boolean }) {
   const g = fund?.guidance ?? null;
   return (
     <div className="fin-empty fin-fc-analyst-empty">
-      <div>{pick(zh, "No analyst coverage", "暂无分析师覆盖")}</div>
+      <div className="fin-empty-title">{pick(zh, "No analyst coverage", "暂无分析师覆盖")}</div>
+      <div className="fin-empty-why">
+        {g
+          ? pick(
+              zh,
+              "No sell-side estimates are published for this listing. The company's own guidance is shown instead.",
+              "该标的没有卖方分析师预期数据，以下改为展示公司自身的业绩指引。",
+            )
+          : pick(
+              zh,
+              "No sell-side analyst estimates or price targets are published for this listing.",
+              "该标的没有卖方分析师预期或目标价数据。",
+            )}
+      </div>
       {g && (
         <div className="fin-fc-guidance">
-          <span className="chip">{g.type}</span>
+          <span className="fin-tag" style={{ "--c": "var(--brand-2)" } as React.CSSProperties}>{g.type}</span>
           <span className="txt">
             {pick(zh, "Company guidance", "公司业绩预告")}
             {g.chg_min != null && g.chg_max != null && (
@@ -633,15 +705,29 @@ function EstimateBarSection({
 
   return (
     <div className="fin-sec">
-      <div className="fin-fc-sec-head">
-        <div className="fin-sec-h">{pick(zh, title, titleZh)}</div>
+      <div className="fin-fc-sec-head fin-rule">
+        <div
+          className="fin-sec-h fin-rail"
+          style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+        >
+          {pick(zh, title, titleZh)}
+        </div>
         <div className="fin-toggle">
           <button className={freq === "A" ? "on" : ""} onClick={() => setFreq("A")}>{pick(zh, "Annual", "年度")}</button>
           <button className={freq === "Q" ? "on" : ""} onClick={() => setFreq("Q")}>{pick(zh, "Quarterly", "季度")}</button>
         </div>
       </div>
       {built.labels.length === 0 ? (
-        <div className="fin-empty">{pick(zh, "No estimate data", "暂无预期数据")}</div>
+        <div className="fin-empty fin-empty-lg">
+          <div className="fin-empty-title">{pick(zh, "No estimate data", "暂无预期数据")}</div>
+          <div className="fin-empty-why">
+            {pick(
+              zh,
+              `No reported ${kind === "eps" ? "EPS" : "revenue"} history or consensus estimates are filed for this security on the ${freq === "A" ? "annual" : "quarterly"} axis.`,
+              `该证券在${freq === "A" ? "年度" : "季度"}口径下既无已报告${titleZh}历史，也无一致预期数据。`,
+            )}
+          </div>
+        </div>
       ) : (
         <>
           <Dumbbell
@@ -812,7 +898,12 @@ function ActualsTab({
       {chart && (
         <div className="fin-sec">
           {/* Heading so the naked line chart is legible as the EPS estimate trend */}
-          <div className="fin-sec-h">{pick(zh, "EPS estimate trend", "每股收益预期走势")}</div>
+          <div
+            className="fin-sec-h fin-rail fin-rule"
+            style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+          >
+            {pick(zh, "EPS estimate trend", "每股收益预期走势")}
+          </div>
           <LineSeries
             labels={chart.labels}
             series={chart.series}
@@ -827,8 +918,13 @@ function ActualsTab({
       )}
       {/* Statement toggle bound to the TABLE it controls (not the EPS chart above) */}
       <div className="fin-sec">
-        <div className="fin-fc-sec-head">
-          <div className="fin-sec-h">{pick(zh, "Estimates table", "预期数据表")}</div>
+        <div className="fin-fc-sec-head fin-rule">
+          <div
+            className="fin-sec-h fin-rail"
+            style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+          >
+            {pick(zh, "Estimates table", "预期数据表")}
+          </div>
           <div className="fin-toggle">
             <button className={stmt === "income" ? "on" : ""} onClick={() => setStmt("income")}>{pick(zh, "Income statement", "利润表")}</button>
             <button className={stmt === "balance" ? "on" : ""} onClick={() => setStmt("balance")}>{pick(zh, "Balance sheet", "资产负债表")}</button>
@@ -843,6 +939,7 @@ function ActualsTab({
           zh={zh}
           cornerLabel={pick(zh, `Currency: ${ccy}`, `货币：${ccy}`)}
         />
+        <EstimatesAsOf fund={fund} zh={zh} />
       </div>
     </>
   );
@@ -979,7 +1076,12 @@ function buildActualsTable(fund: Fund | null, est: Fund["estimates"], stmt: "inc
 export function Disclaimer({ zh }: { zh: boolean }) {
   return (
     <div className="fin-sec fin-disclaimer">
-      <div className="fin-sec-h">{pick(zh, "Disclaimer", "免责声明")}</div>
+      <div
+        className="fin-sec-h fin-rail"
+        style={{ "--rail": "var(--warn)" } as React.CSSProperties}
+      >
+        {pick(zh, "Disclaimer", "免责声明")}
+      </div>
       <p>
         {pick(
           zh,

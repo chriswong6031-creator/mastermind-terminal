@@ -37,7 +37,7 @@ import pandas as pd
 
 from signal_layer import regime_calendar as rc
 
-ENGINE_VERSION = "0.1.0"
+ENGINE_VERSION = "0.2.0"
 SCHEMA = "mastermind.seasonal_outlook/v1"
 
 N_BUCKETS = 24
@@ -48,6 +48,8 @@ DELTA = 0.004            # ±0.4% dead-zone: smaller bucket means are treated as
 WIN_BULL, WIN_BEAR = 0.55, 0.45
 CYCLE_EXACT, CYCLE_OTHER = 1.0, 0.30
 WHIPSAW_SOFT = 0.6       # whipsaw years' annual rate label is lossy → soft-cap their rate affinity
+BOOTSTRAP_DRAWS = 2000    # deterministic four-year-block resamples for validation uncertainty
+BOOTSTRAP_SEED = 73026
 # reverse-severity order for relaxation (least severe re-admitted first)
 _RELAX_ORDER = ["high_inflation", "mania_bubble", "war_oil_shock", "crisis", "covid", "recession"]
 _HALF_LABEL = {0: "H1", 1: "H2"}
@@ -225,39 +227,94 @@ def _r(x, nd=4):
 
 
 # ── leave-one-year-out validation (the honest core) ──────────────────────────
+def _block_skill_ci(year_diffs: list[tuple[int, float]]) -> tuple[float | None, float | None, int]:
+    """Deterministic 90% bootstrap interval for mean year-level skill.
+
+    Presidential-cycle years are not independent observations. Resampling complete
+    four-year blocks keeps that dependence together and prevents 24 bucket calls in
+    one year from masquerading as 24 independent validation wins.
+    """
+    blocks: dict[int, list[float]] = {}
+    for year, diff in year_diffs:
+        blocks.setdefault(year // 4, []).append(float(diff))
+    samples = [np.asarray(v, dtype=float) for _, v in sorted(blocks.items()) if v]
+    n_blocks = len(samples)
+    if n_blocks < 3:
+        return None, None, n_blocks
+    rng = np.random.default_rng(BOOTSTRAP_SEED)
+    draws = np.empty(BOOTSTRAP_DRAWS, dtype=float)
+    for i in range(BOOTSTRAP_DRAWS):
+        chosen = rng.integers(0, n_blocks, size=n_blocks)
+        draws[i] = float(np.concatenate([samples[j] for j in chosen]).mean())
+    lo, hi = np.quantile(draws, [0.05, 0.95])
+    return float(lo), float(hi), n_blocks
+
+
 def loyo_validation(rets_by_year: dict[int, np.ndarray], complete_years: list[int]) -> dict:
     """For each complete year, predict every bucket's sign from the OTHER years' regime-weighted
-    composite; score directional hit-rate vs an equal-weight baseline. Skill = regime − baseline."""
+    composite; score directional hit-rate vs an equal-weight baseline.
+
+    The headline skill is the equal-weight mean of YEAR-LEVEL hit-rate differences.
+    Its interval is bootstrapped over four-year cycle blocks. Bucket predictions are
+    still reported as diagnostics, but never treated as independent trials.
+    """
     if len(complete_years) < 4:
         return {"loyo_years": len(complete_years), "regime_hit": None, "baseline_hit": None,
                 "skill": None, "verdict": "untested"}
     reg_hits, base_hits, k = 0.0, 0.0, 0
+    year_scores: list[dict] = []
     for target in complete_years:
         others = [y for y in complete_years if y != target]
         aset = select_analogs(target, others)
         if not aset.years:
             continue
         actual = rets_by_year[target]
+        yr_reg, yr_base, yr_n = 0.0, 0.0, 0
         for idx in range(N_BUCKETS):
             a = actual[idx]
             if not np.isfinite(a) or abs(a) < DELTA:      # skip directionless actuals
                 continue
             reg = _bucket_stat(rets_by_year, aset.years, aset.weights, idx, others)
             base = _bucket_stat(rets_by_year, others, np.ones(len(others)) / len(others), idx, others)
-            if reg["mean"] is not None:
-                reg_hits += 1.0 if math.copysign(1, reg["mean"]) == math.copysign(1, a) else 0.0
-            if base["mean"] is not None:
-                base_hits += 1.0 if math.copysign(1, base["mean"]) == math.copysign(1, a) else 0.0
+            if reg["mean"] is None or base["mean"] is None:
+                continue
+            rh = 1.0 if math.copysign(1, reg["mean"]) == math.copysign(1, a) else 0.0
+            bh = 1.0 if math.copysign(1, base["mean"]) == math.copysign(1, a) else 0.0
+            reg_hits += rh
+            base_hits += bh
+            yr_reg += rh
+            yr_base += bh
+            yr_n += 1
             k += 1
+        if yr_n:
+            rhr, bhr = yr_reg / yr_n, yr_base / yr_n
+            year_scores.append({"year": target, "regime_hit": rhr, "baseline_hit": bhr,
+                                "skill": rhr - bhr, "n": yr_n})
     if k == 0:
         return {"loyo_years": len(complete_years), "regime_hit": None, "baseline_hit": None,
                 "skill": None, "verdict": "untested"}
     reg_hit, base_hit = reg_hits / k, base_hits / k
-    skill = reg_hit - base_hit
-    verdict = "edge" if skill > 0.03 else "no_edge" if skill >= -0.03 else "anti"
+    diffs = [(s["year"], s["skill"]) for s in year_scores]
+    skill = float(np.mean([d for _, d in diffs])) if diffs else reg_hit - base_hit
+    ci_lo, ci_hi, n_blocks = _block_skill_ci(diffs)
+    better = sum(1 for _, d in diffs if d > 1e-12)
+    worse = sum(1 for _, d in diffs if d < -1e-12)
+    tied = len(diffs) - better - worse
+    # A regime story is allowed to lead only when it wins across years AND its
+    # cycle-block uncertainty interval clears zero. A point estimate is not proof.
+    verdict = (
+        "edge" if skill > 0.03 and ci_lo is not None and ci_lo > 0 and better > worse
+        else "anti" if skill < -0.03 and ci_hi is not None and ci_hi < 0 and worse > better
+        else "no_edge"
+    )
     return {"loyo_years": len(complete_years), "n_predictions": k,
             "regime_hit": round(reg_hit, 3), "baseline_hit": round(base_hit, 3),
-            "skill": round(skill, 3), "verdict": verdict}
+            "skill": round(skill, 3),
+            "skill_ci_lo": round(ci_lo, 3) if ci_lo is not None else None,
+            "skill_ci_hi": round(ci_hi, 3) if ci_hi is not None else None,
+            "n_blocks": n_blocks,
+            "regime_better_years": better, "baseline_better_years": worse,
+            "tied_years": tied, "verdict": verdict}
 
 
 # ── adjustment sanity (precondition, not open question) ──────────────────────
@@ -289,8 +346,78 @@ def _forward_buckets(as_of: pd.Timestamp, months_ahead: int = 18) -> list[dict]:
     return out[:26]
 
 
-def _merge_intervals(forward: list[dict], stats: dict[int, dict]) -> list[dict]:
-    """Merge contiguous same-direction forward buckets into display intervals with pooled stats."""
+def _interval_distribution(rets_by_year: dict[int, np.ndarray], years: list[int],
+                           weights: np.ndarray, idxs: list[int]) -> dict:
+    """Robust realized-return distribution for one merged interval.
+
+    A window is one observation per historical year, not one observation per
+    semi-monthly bucket. The median/range and leave-one-year-out sign stability
+    therefore describe what whole windows actually did.
+    """
+    vals, wts = [], []
+    for year, weight in zip(years, weights):
+        parts = rets_by_year[year][idxs]
+        if not np.isfinite(parts).all():
+            continue
+        vals.append(float(np.prod(1.0 + parts) - 1.0))
+        wts.append(float(weight))
+    if not vals:
+        return {"n": 0, "n_eff": 0.0, "mean": None, "median": None,
+                "win_rate": None, "lo": None, "hi": None, "stability": None}
+    v = np.asarray(vals, dtype=float)
+    w = np.asarray(wts, dtype=float)
+    w = w / w.sum()
+    n_eff = float(1.0 / np.sum(w ** 2))
+    mean_v = float(np.sum(v * w))
+    med_v = _weighted_quantile(v, w, 0.5)
+    win_rate = float(np.sum(w[v > 0]))
+    lo = _weighted_quantile(v, w, 0.20)
+    hi = _weighted_quantile(v, w, 0.80)
+
+    full_sign = 1 if med_v > DELTA else -1 if med_v < -DELTA else 0
+    stable, trials = 0, 0
+    if v.size >= 3 and full_sign:
+        for i in range(v.size):
+            keep = np.arange(v.size) != i
+            rw = w[keep]
+            if rw.sum() <= 0:
+                continue
+            loo = float(np.sum(v[keep] * (rw / rw.sum())))
+            stable += int((loo > 0) == (full_sign > 0))
+            trials += 1
+    stability = stable / trials if trials else None
+    return {"n": int(v.size), "n_eff": round(n_eff, 2), "mean": _r(mean_v),
+            "median": _r(med_v), "win_rate": round(win_rate, 3),
+            "lo": _r(lo), "hi": _r(hi),
+            "stability": round(stability, 3) if stability is not None else None}
+
+
+def _interval_evidence(dist: dict, verdict: str, relaxed: bool, view_mode: str) -> tuple[int, str]:
+    """0–100 support score + conservative confidence tier for a whole window."""
+    if not dist["n"] or dist["win_rate"] is None:
+        return 0, "low"
+    sample = min(1.0, float(dist["n_eff"]) / 12.0)
+    direction = min(1.0, abs(float(dist["win_rate"]) - 0.5) / 0.20)
+    stability = float(dist["stability"]) if dist["stability"] is not None else 0.35
+    range_support = 1.0 if (
+        dist["lo"] is not None and dist["hi"] is not None
+        and (dist["lo"] > 0 or dist["hi"] < 0)
+    ) else 0.25
+    score = 100.0 * (0.30 * sample + 0.25 * direction + 0.25 * stability + 0.20 * range_support)
+    if view_mode == "regime" and verdict != "edge":
+        score *= 0.60
+    if relaxed:
+        score = min(score, 49.0)
+    out = int(round(max(0.0, min(100.0, score))))
+    confidence = "high" if out >= 75 else "medium" if out >= 50 else "low"
+    return out, confidence
+
+
+def _merge_intervals(forward: list[dict], stats: dict[int, dict],
+                     rets_by_year: dict[int, np.ndarray], years: list[int],
+                     weights: np.ndarray, verdict: str, relaxed: bool,
+                     view_mode: str) -> list[dict]:
+    """Merge contiguous same-direction buckets and score whole-window evidence."""
     intervals = []
     cur = None
     for fb in forward:
@@ -304,22 +431,24 @@ def _merge_intervals(forward: list[dict], stats: dict[int, dict]) -> list[dict]:
             cur = {"dir": d, "start": fb["start"], "end": fb["end"], "_idxs": [fb["idx"]]}
     if cur and cur["dir"] != "neutral":
         intervals.append(cur)
-    # pool: compounded shown mean, min win-rate, min n across the merged buckets
+    # Keep the compounded, shrinkage-aware bucket means for compatibility, but
+    # add the realized whole-window median/range/stability as the robust read.
     out = []
     for iv in intervals:
         idxs = iv["_idxs"]
         comp = 1.0
-        wins, ns = [], []
         for i in idxs:
             m = stats[i]["mean"]
             comp *= (1 + (m or 0) / 100)
-            if stats[i]["win_rate"] is not None:
-                wins.append(stats[i]["win_rate"])
-            ns.append(stats[i]["n"])
+        dist = _interval_distribution(rets_by_year, years, weights, idxs)
+        evidence_score, confidence = _interval_evidence(dist, verdict, relaxed, view_mode)
         out.append({"dir": iv["dir"], "start": iv["start"], "end": iv["end"],
                     "expected_move": round((comp - 1) * 100, 2),
-                    "win_rate": round(min(wins), 3) if wins else None,
-                    "n": min(ns) if ns else 0,
+                    "typical_move": dist["median"],
+                    "win_rate": dist["win_rate"], "n": dist["n"],
+                    "n_eff": dist["n_eff"], "lo": dist["lo"], "hi": dist["hi"],
+                    "stability": dist["stability"], "evidence_score": evidence_score,
+                    "confidence": confidence,
                     "buckets": [bucket_label(i) for i in idxs]})
     return out
 
@@ -409,8 +538,13 @@ def build_outlook(symbol: str, close: pd.Series, as_of: pd.Timestamp | None = No
         fb_out.append({"start": fb["start"], "end": fb["end"], "label": bucket_label(i),
                        "baseline": view_bucket(baseline_stats[i], "baseline_fallback"),
                        "regime": view_bucket(regime_stats[i], "regime_weighted")})
-    intervals_baseline = _merge_intervals(forward, baseline_stats)
-    intervals_regime = _merge_intervals(forward, regime_stats)
+    intervals_baseline = _merge_intervals(
+        forward, baseline_stats, rets, complete, eq_w, val["verdict"], False, "baseline")
+    regime_years = aset.years if aset.years else complete
+    regime_weights = aset.weights if aset.years else eq_w
+    intervals_regime = _merge_intervals(
+        forward, regime_stats, rets, regime_years, regime_weights,
+        val["verdict"], bool(aset.relaxed), "regime")
 
     # The analog set is ALWAYS surfaced — the regime analysis is the point, even when validation
     # says to trust the baseline. The display shows which years it leaned on + how much they tilt it.

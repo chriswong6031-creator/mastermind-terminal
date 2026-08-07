@@ -57,11 +57,13 @@ from __future__ import annotations
 
 import glob
 import json
+import math
 import os
 import sys
 import time
 import datetime as dt
 import urllib.request
+from numbers import Integral, Real
 from pathlib import Path
 
 import pandas as pd
@@ -117,9 +119,34 @@ def ts_call(api: str, params: dict, fields: str = "", retries: int = 4):
 def _f(v):
     try:
         x = float(v)
-        return None if x != x else x
+        return x if math.isfinite(x) else None
     except (TypeError, ValueError):
         return None
+
+
+def _json_safe(value):
+    """Normalize dataframe scalars and replace NaN/±Infinity before writing resumable caches."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Real):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _strict_json_dumps(value) -> str:
+    return json.dumps(
+        _json_safe(value),
+        ensure_ascii=False,
+        default=str,
+        allow_nan=False,
+    )
 
 
 def _atomic_write(dest: Path, text: str) -> None:
@@ -425,7 +452,7 @@ def _hk_yf(sym: str) -> dict:
     try:
         et = t.earnings_estimate
         if et is not None and not et.empty:
-            out["eps_est"] = {str(k): et.loc[k].to_dict() for k in et.index}
+            out["eps_est"] = {str(k): _json_safe(et.loc[k].to_dict()) for k in et.index}
     except Exception:
         pass
     try:
@@ -474,7 +501,7 @@ def collect_hk_fund(syms: list[str], force: bool, stale_days: int = 7) -> None:
                         yf = _hk_yf(sym)
                         if yf:
                             rec["yf"] = yf
-                            _atomic_write(cache, json.dumps(rec, ensure_ascii=False, default=str))
+                            _atomic_write(cache, _strict_json_dumps(rec))
                             healed += 1
                         done += 1
                         continue
@@ -485,7 +512,7 @@ def collect_hk_fund(syms: list[str], force: bool, stale_days: int = 7) -> None:
             rec = _fetch_hk(sym)
             done += 1
             if rec:
-                _atomic_write(cache, json.dumps(rec, ensure_ascii=False, default=str))
+                _atomic_write(cache, _strict_json_dumps(rec))
                 ok += 1
             if done % 25 == 0 or done == len(syms):
                 print(f"  hk_fund: {done}/{len(syms)} done, {ok} newly cached, {healed} yf-healed", flush=True)

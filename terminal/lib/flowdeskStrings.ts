@@ -75,9 +75,9 @@ const FLOW_LEX = {
   badgeBlock:   ["BLOCK",   "大宗"],
 
   badgeWhaleDesc:   ["Premium ≥$1M single event", "单笔权利金≥100万美元"],
-  badgeClusterDesc: ["Contract-day accumulation ≥$3M across multiple prints", "合约日累计权利金≥300万美元（多笔）"],
+  badgeClusterDesc: ["Repeat-root: multiple prints on this underlying this session (not a $-sized campaign)", "重复标的：本时段该标的多次成交（非按金额的集群）"],
   badgeSweepDesc:   ["Multi-exchange heuristic — labeled, not confirmed aggressor", "多交易所启发式扫单 — 标记，非确认主动方"],
-  badgeUnusualDesc: ["z-score ≥2 vs 252-session baseline", "z值≥2（相对252交易日基线）"],
+  badgeUnusualDesc: ["Premium activity is much higher than its typical one-year level", "权利金活跃度显著高于过去一年的常态"],
   badgeBlockDesc:   ["Large single-print block; size ≥500 contracts", "单笔大宗；规模≥500张"],
 
   // ── Flow Gauge labels ──────────────────────────────────────────────────────
@@ -90,8 +90,8 @@ const FLOW_LEX = {
 
   // ── Smart Money Radar ──────────────────────────────────────────────────────
   radarTitle:     ["Smart Money Radar", "聪明钱雷达"],
-  radarSubtitle:  ["Ranked by relative premium activity vs 252d baseline", "按权利金活动相对基线（252日）排名"],
-  radarPremZ:     ["Prem z", "权利金z值"],
+  radarSubtitle:  ["Ranked by premium activity versus the past trading year", "按权利金活动相对过去一年排名"],
+  radarPremZ:     ["Activity", "活跃度"],
   radarGrossPrem: ["Gross prem", "总权利金"],
   radarCallShare: ["Call share", "认购占比"],
   radarNEvents:   ["Events", "事件数"],
@@ -122,6 +122,12 @@ const FLOW_LEX = {
   inspectorLean:       ["Lean (~soft)", "倾向（~软性）"],
   inspectorLeanNote:   ["Tick-rule derived — magnitude is the reliable read", "基于tick规则推算 — 权利金规模是可靠的读数"],
   inspectorClose:      ["Close", "关闭"],
+  inspectorSessionCtx: ["Session context", "当日概况"],
+
+  // ── Card expand affordance (v7b — chevron button with its own hit slot) ───
+  cardExpand:   ["Show score breakdown", "展开评分拆解"],
+  cardCollapse: ["Hide score breakdown", "收起评分拆解"],
+  cardPenalty:  ["penalty", "扣分"],
 
   // ── Chain Heat rail ────────────────────────────────────────────────────────
   chainHeatTitle:     ["Chain Heat", "链式热度"],
@@ -228,6 +234,95 @@ export const FD = {
   inspectorEmpty:  bi("Select an event to inspect", "选择事件查看详情"),
   // Used in watchlist rail
   watchlist:       bi(...FLOW_LEX.watchlistTitle),
+
+  // ── v7 institutional pass (additive) ─────────────────────────────────────
+  // Inspector: the blank-until-selection state now says what a selection buys you.
+  inspectorEmptyWhy: bi(
+    "Click any card in the feed to open its full breakdown — score components, contract fields, detections, and the ticker's session context.",
+    "点击信息流中的任意卡片，即可展开完整拆解——评分分项、合约字段、检测信号，以及该标的当日概况。",
+  ),
+
+  // Watchlist rail column label (was an untranslated literal).
+  watchlistScoreCol: bi(...FLOW_LEX.scoreLabel),
+
+  // Radar empty state — states WHY the list is empty, never a bare "no data".
+  radarEmpty:    bi("No unusual activity", "暂无异常活动"),
+  radarEmptyWhy: bi(
+    "Nothing on the tape is running far enough above its one-year premium norm to rank yet.",
+    "目前尚无标的的权利金明显高于其一年常态水平，故暂无排名。",
+  ),
+
+  // Feed empty / loading states — each branch names the real reason.
+  feedLoading:      bi(...FLOW_LEX.loadingFeed),
+  feedEmptyFiltered: bi("No signals match your filters", "无符合筛选条件的信号"),
+  feedEmptyFilteredWhy: bi(
+    "Every event on today's tape is excluded by the active filters. Clear them, or lower the min-premium / min-score threshold.",
+    "当前筛选条件排除了今日磁带上的所有事件。请清除筛选，或降低最低权利金／最低评分阈值。",
+  ),
+  feedEmptyQuiet: bi("No signals yet", "暂无信号"),
+  feedEmptyClosedWhy: bi(
+    "US options are closed right now. This feed fills from live prints during regular hours (09:30–16:00 ET) and resumes at the next open.",
+    "美股期权当前休市。本信息流在常规交易时段（美东 09:30–16:00）从实时成交中累积，将于下次开盘后恢复。",
+  ),
+  feedEmptyOpenWhy: bi(
+    "The session is open but nothing has cleared the desk's magnitude bar yet. The tape refreshes about every 120 s.",
+    "当前处于交易时段，但尚无事件达到本台的规模门槛。磁带约每 120 秒刷新一次。",
+  ),
+  feedEmptyStaleWhy: bi(
+    "The last payload is stale, so this is the previous session's tape rather than today's.",
+    "最新数据已过期，此处显示的是上一交易时段的磁带，而非今日数据。",
+  ),
+
+  // Filter-panel badge tooltips — EN text unchanged; zh added so the aria-label
+  // no longer leaks English into the 中文 view.
+  filterTipWhale: bi(
+    "Premium ≥$1M (magnitude gate — reliable)",
+    "权利金≥100万美元（规模门槛——可靠）",
+  ),
+  filterTipCluster: bi(
+    "Repeat-root: multiple prints on the same underlying this session (repeat/multi-print flag — not a $ threshold)",
+    "重复标的：本时段同一标的多次成交（重复／多笔标记——非金额门槛）",
+  ),
+  filterTipSweep: bi(
+    "Multi-print heuristic — aggressor direction is unverified (no NBBO)",
+    "多笔成交启发式——主动方方向未经确认（无NBBO）",
+  ),
+  filterTipUnusual: bi(
+    "Premium activity is much higher than its typical level over the past trading year.",
+    "权利金活跃度显著高于过去一个交易年度的常态水平。",
+  ),
+  filterTipBlock: bi(
+    "Single-print size ≥ block threshold (exchange-reported; not direction-signed)",
+    "单笔成交规模≥大宗门槛（交易所报告；未标注方向）",
+  ),
+  detTipWhale: bi(
+    "Single-event premium ≥$1M. Magnitude gate — reliable.",
+    "单笔事件权利金≥100万美元。规模门槛——可靠。",
+  ),
+  detTipMultiLeg: bi(
+    "Spread detected: 2+ strikes, same root, ≤60s. Direction is DISCOUNTED — reads as spread, not naked.",
+    "识别为价差：同一标的、2个及以上行权价、间隔≤60秒。方向已降权——按价差解读，而非单腿。",
+  ),
+  detTipLadder: bi(
+    "Same root+right, ≥3 distinct strikes, same lean within 30 min — staged accumulation.",
+    "同一标的与期权类型、≥3个不同行权价、30分钟内同向——分批建仓。",
+  ),
+  detTipRepeat: bi(
+    "Same OCC contract in ≥3 separate events this session — conviction re-load.",
+    "本时段同一OCC合约出现于≥3次独立事件——反复加仓。",
+  ),
+  detTipSizeVsOi: bi(
+    "Event size ≥ 2× prior-day OI — new positioning that can't hide in existing interest.",
+    "事件规模≥前一日持仓量的2倍——新增头寸，无法藏于既有持仓中。",
+  ),
+  detTipFresh: bi(
+    "Vol > OI: new positioning, not recycled open interest.",
+    "成交量>持仓量：新建头寸，而非既有持仓的换手。",
+  ),
+  detTipZOutlier: bi(
+    "Ticker-level premium activity is much higher than its typical level over the past trading year.",
+    "该标的的权利金活跃度显著高于过去一个交易年度的常态水平。",
+  ),
 } as const;
 
 /**
@@ -238,3 +333,36 @@ export const strings = {
   get: getFlowStr,
   make: makeFlowT,
 } as const;
+
+// ─── Score-component labels (v7b) ─────────────────────────────────────────────
+/**
+ * The flow-score components arrive from the server (lib/flowScore.ts) carrying an
+ * ENGLISH `label` only — there is no `label_zh` on the wire. Rendering that label
+ * directly leaked English into the 中文 view on both the card detail panel and the
+ * inspector. This table re-localises by the component's stable `key`; the server
+ * label stays the fallback for any key added upstream before this table catches up.
+ *
+ * Keys mirror lib/flowScore.ts `components[].key` exactly.
+ */
+const FLOW_SCORE_LABELS: Record<string, readonly [string, string]> = {
+  premiumMagnitude:     ["Premium magnitude",            "权利金规模"],
+  unusualness:          ["Activity vs one-year norm",    "相对一年常态的活跃度"],
+  dteRelevance:         ["DTE relevance",                "到期天数相关性"],
+  freshPositioning:     ["Fresh positioning (vol>OI)",   "新建头寸（量>持仓）"],
+  moneynessProximity:   ["Moneyness proximity",          "价值状态接近度"],
+  repeatCluster:        ["Repeat / cluster",             "重复／集群"],
+  directionReliability: ["Direction-reliability penalty", "方向可靠性扣分"],
+};
+
+/**
+ * Localised label for one flow-score component.
+ *
+ * @param lang     - "en" | "zh"
+ * @param key      - component key from the server payload
+ * @param fallback - the server-supplied EN label (used when the key is unknown)
+ */
+export function scoreComponentLabel(lang: Lang, key: string, fallback?: string): string {
+  const entry = FLOW_SCORE_LABELS[key];
+  if (entry) return lang === "zh" ? entry[1] : entry[0];
+  return fallback || key;
+}

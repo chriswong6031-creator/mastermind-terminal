@@ -1,0 +1,766 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ACCOUNT SETTINGS DASHBOARD (.acs-*)
+   ---------------------------------------------------------------------------
+   A React port of the Macro Dashboard's account-settings modal (SDASH_CSS in
+   the macro repo's templates/theme.js). One settings dashboard shared across
+   both products: same shell, same dimensions, same motion — expressed here in
+   Terminal tokens instead of the macro palette.
+
+   PREFIX: `.acs-`, NOT `.sd-`. The Terminal's fin.css already owns `.sd-*` for
+   the Signal Desk (.sd-dock/.sd-cont/.sd-head/.sd-x/.sd-body/…), and `.set-*`
+   belonged to the settings dropdown this panel replaces. `.acs-` collides with
+   neither.
+
+   TOKEN MAPPING (macro → Terminal):
+     --link      → --brand      (fills, borders, gradients)
+                 → --brand-2    (accent TEXT — the house idiom: globals.css
+                                 `.set-tfg button.on{color:var(--brand-2)}`.
+                                 #2962ff as small text on a dark panel is under
+                                 the legibility bar; #4d82ff is what the rest of
+                                 the Terminal uses for the same job.)
+     --panel     → --panel-2    (the floating card)
+     --panel2    → --panel-3    (rows/tiles inside it — lighter than the card)
+     --bg        → --inset      (recessed: inputs, segmented controls, chips)
+     --muted     → --text-2     (macro's --ink-3 #8b93a7 ≈ --text-2 #9ba3b4;
+                                 Terminal's --muted #717a8e is a tertiary tone
+                                 and is used here only for micro eyebrows)
+     --line      → --line       (direct)   --text → --text (direct)
+     --up/--down/--warn         (direct)
+   #9b5cff is kept verbatim — it is the house accent shared with macro, not a
+   palette token on either side.
+
+   Terminal is dark-only, so the macro `html[data-theme="light"]` branch is not
+   ported. Every animation is gated by prefers-reduced-motion, as upstream.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.acs-overlay {
+  --acs-accent: var(--brand);
+  --acs-accent-t: var(--brand-2);
+  position: fixed;
+  inset: 0;
+  /* Above the mobile nav (220), below the onboarding scrim (230): the guest and
+     upgrade paths hand off from this panel to the onboarding sheet, which must
+     land on top of it. */
+  z-index: 228;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--pop-scrim);
+  -webkit-backdrop-filter: blur(9px) saturate(1.05);
+  backdrop-filter: blur(9px) saturate(1.05);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity .22s ease, visibility 0s linear .22s;
+  font-family: var(--font-ui);
+}
+.acs-overlay.open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity .22s ease, visibility 0s;
+}
+
+/* Page scroll-lock while the panel is up. */
+html.acs-lock, html.acs-lock body { overflow: hidden; }
+
+/* 100vh line first = fallback for browsers without dvh (old iOS Safari drops
+   the whole min(...dvh...) declaration); the dvh line wins where supported. */
+.acs-card {
+  position: relative;
+  display: flex;
+  width: min(1140px, 94vw);
+  height: min(772px, calc(100vh - 40px));
+  height: min(772px, calc(100dvh - 40px));
+  box-sizing: border-box;
+  border-radius: 22px;
+  overflow: hidden;
+  isolation: isolate;
+  background: color-mix(in srgb, var(--panel-2) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+  box-shadow:
+    0 32px 90px -20px rgba(3, 7, 18, .8),
+    0 10px 28px -12px rgba(3, 7, 18, .5),
+    inset 0 1px 0 color-mix(in srgb, #fff 8%, transparent);
+  transform: translateY(14px) scale(.985);
+  opacity: .4;
+  transition: transform .3s cubic-bezier(.32, 1.28, .5, 1), opacity .22s ease;
+  color: var(--text);
+}
+/* An ANIMATION, not just the transition above: the panel is mounted lazily, so
+   on the very first open the card is created with `.open` already applied and a
+   transition would have no prior state to run from (it would simply appear).
+   A keyframe animation plays on element creation AND replays whenever `.open`
+   is removed and re-added, so the entry motion is identical on every open. */
+.acs-overlay.open .acs-card {
+  transform: none;
+  opacity: 1;
+  animation: acsCardIn .3s cubic-bezier(.32, 1.28, .5, 1);
+}
+@keyframes acsCardIn {
+  from { transform: translateY(14px) scale(.985); opacity: .4; }
+  to { transform: none; opacity: 1; }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .acs-card { background: var(--panel-2); }
+}
+
+/* laser hairline — brand-bar idiom; sweeps ONCE on open, then rests */
+.acs-laser {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  z-index: 3;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent 0%, var(--acs-accent) 30%, #9b5cff 62%, transparent 100%);
+  background-size: 220% 100%;
+  background-position: 120% 0;
+}
+.acs-overlay.open .acs-laser { animation: acsLaser .9s cubic-bezier(.4, .1, .2, 1) .12s forwards; }
+@keyframes acsLaser { from { background-position: 120% 0; } to { background-position: 0% 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .acs-overlay, .acs-card { transition: opacity .15s ease; }
+  .acs-card { transform: none; }
+  .acs-overlay.open .acs-card { animation: none; }
+  .acs-overlay.open .acs-laser { animation: none; background-position: 0% 0; }
+}
+
+/* ── left rail ─────────────────────────────────────────────────────────── */
+.acs-rail {
+  flex: none;
+  width: 238px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px 14px 16px;
+  border-right: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  background: color-mix(in srgb, var(--panel-3) 44%, transparent);
+}
+.acs-me { display: flex; align-items: center; gap: 9px; padding: 4px 4px 12px; }
+.acs-me-av {
+  flex: none;
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 800; color: #fff;
+  background: linear-gradient(135deg, var(--acs-accent), color-mix(in srgb, var(--acs-accent) 55%, #9b5cff));
+}
+.acs-me-main { flex: 1; min-width: 0; }
+.acs-me-name {
+  display: block; font-size: 12.5px; font-weight: 750; line-height: 1.25;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acs-me-sub {
+  display: block; font-size: 10.5px; color: var(--text-2); margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acs-nav { display: flex; flex-direction: column; gap: 3px; }
+.acs-nav-b {
+  position: relative;
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; box-sizing: border-box;
+  padding: 8px 10px;
+  border: 0; border-radius: 9px;
+  background: transparent;
+  color: var(--text-2);
+  font: 650 12.5px/1.3 var(--font-ui);
+  cursor: pointer; text-align: left;
+  transition: background .16s, color .16s;
+  -webkit-tap-highlight-color: transparent;
+}
+.acs-nav-b svg { width: 16px; height: 16px; flex: none; stroke-width: 1.8; }
+.acs-nav-b:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.acs-nav-b.active {
+  background: color-mix(in srgb, var(--acs-accent) 13%, transparent);
+  color: var(--acs-accent-t);
+}
+.acs-nav-b.active::before {
+  content: "";
+  position: absolute; left: 0; top: 7px; bottom: 7px;
+  width: 2px; border-radius: 2px;
+  background: linear-gradient(180deg, var(--acs-accent), #9b5cff);
+}
+.acs-nav-b:focus-visible { outline: 2px solid var(--acs-accent); outline-offset: 2px; }
+.acs-rail-spacer { flex: 1; }
+.acs-signout {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; box-sizing: border-box;
+  padding: 8px 10px;
+  border: 0; border-radius: 9px;
+  background: transparent;
+  color: var(--text-2);
+  font: 650 12.5px/1.3 var(--font-ui);
+  cursor: pointer; text-align: left;
+  transition: background .16s, color .16s;
+}
+.acs-signout svg { width: 16px; height: 16px; flex: none; }
+.acs-signout:hover { background: color-mix(in srgb, var(--down) 10%, transparent); color: var(--down); }
+.acs-signout:focus-visible { outline: 2px solid var(--down); outline-offset: 2px; }
+/* the rail sign-out is a submit inside <form action="/auth/signout">, so the
+   form must not introduce a block box between the rail's flex children */
+.acs-rail form { display: contents; }
+
+/* ── right pane ────────────────────────────────────────────────────────── */
+.acs-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.acs-head { flex: none; display: flex; align-items: flex-start; gap: 10px; padding: 24px 26px 14px 30px; }
+.acs-head-main { flex: 1; min-width: 0; }
+.acs-head h2 { margin: 0; font-size: 19px; font-weight: 800; letter-spacing: -.01em; line-height: 1.15; color: var(--text); }
+.acs-head .acs-sub { margin: 4px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--text-2); }
+.acs-x {
+  flex: none;
+  width: 28px; height: 28px;
+  border-radius: 9px; border: 1px solid transparent;
+  background: transparent; color: var(--text-2);
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background .16s, color .16s;
+}
+.acs-x:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+.acs-x svg { width: 15px; height: 15px; }
+.acs-x:focus-visible { outline: 2px solid var(--acs-accent); outline-offset: 2px; }
+.acs-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 26px 26px 30px; }
+
+/* two-column content grid — fills the card on wide panes, collapses when narrow */
+.acs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 22px; align-items: start; }
+.acs-grid > .acs-group { margin-bottom: 6px; }
+.acs-span2 { grid-column: 1 / -1; }
+
+/* section switch: one-shot rise on entry.
+   FLEX column, never block: a block here lets tall sections overflow the pane,
+   which makes the overflow:hidden card silently scrollable and a focus() on
+   open decapitates the header. (Ported warning — it is a real bug upstream.) */
+.acs-sect { display: none; }
+.acs-sect.on { display: flex; flex-direction: column; flex: 1; min-height: 0; animation: acsRise .18s ease; }
+@keyframes acsRise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .acs-sect.on { animation: none; } }
+
+/* ── the aurora ID card (signature) ────────────────────────────────────── */
+.acs-id {
+  position: relative;
+  display: flex; align-items: center; gap: 14px;
+  padding: 16px; margin: 4px 0 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--acs-accent) 22%, var(--line));
+  overflow: hidden;
+  background:
+    radial-gradient(120% 180% at 8% 0%, color-mix(in srgb, var(--acs-accent) 13%, transparent) 0%, transparent 55%),
+    radial-gradient(90% 160% at 55% -20%, color-mix(in srgb, #9b5cff 9%, transparent) 0%, transparent 60%),
+    color-mix(in srgb, var(--panel-3) 72%, transparent);
+}
+.acs-id-av {
+  position: relative; flex: none;
+  width: 54px; height: 54px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 21px; font-weight: 800; color: #fff;
+  background: linear-gradient(135deg, var(--acs-accent), color-mix(in srgb, var(--acs-accent) 55%, #9b5cff));
+}
+.acs-id-av::after {
+  content: "";
+  position: absolute; inset: -4px;
+  border-radius: 50%; padding: 2px;
+  background: conic-gradient(from 210deg, var(--acs-accent), #9b5cff 40%, transparent 75%, var(--acs-accent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: .85;
+}
+.acs-id-main { flex: 1; min-width: 0; }
+.acs-id-name {
+  display: block; font-size: 17px; font-weight: 800; line-height: 1.2;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acs-id-mail {
+  display: block; font-size: 12.5px; color: var(--text-2); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acs-id-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.acs-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10.5px; font-weight: 700;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--panel-2) 65%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+.acs-chip svg { width: 11px; height: 11px; }
+
+/* ── groups & rows ─────────────────────────────────────────────────────── */
+.acs-group { margin: 0 0 14px; }
+.acs-group-t {
+  display: block;
+  font-size: 9.5px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted);
+  margin: 0 2px 7px;
+}
+.acs-row {
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--panel-3) 78%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 11px 13px;
+}
+.acs-row + .acs-row { margin-top: 7px; }
+.acs-row-line { display: flex; align-items: center; gap: 11px; min-height: 24px; }
+.acs-row-main { flex: 1; min-width: 0; }
+.acs-row-lbl { display: block; font-size: 12.5px; font-weight: 700; color: var(--text); }
+.acs-mailv { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acs-row-desc { display: block; font-size: 11px; color: var(--text-2); margin-top: 2px; line-height: 1.4; }
+.acs-row-val {
+  flex: none; max-width: 45%;
+  font-size: 13px; color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acs-row-val.strong { color: var(--text); }
+.acs-edit {
+  flex: none;
+  font-size: 11.5px; font-weight: 700;
+  color: var(--acs-accent-t);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 11px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  transition: border-color .15s, background .15s;
+}
+.acs-edit:hover { border-color: var(--acs-accent); background: color-mix(in srgb, var(--acs-accent) 10%, transparent); }
+.acs-edit:focus-visible { outline: 2px solid var(--acs-accent); outline-offset: 2px; }
+
+/* inline edit expansion inside a row */
+.acs-form { display: none; margin-top: 10px; }
+.acs-row.editing .acs-form { display: block; }
+.acs-row.editing .acs-edit { display: none; }
+.acs-in {
+  width: 100%; box-sizing: border-box;
+  padding: 9px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--inset);
+  color: var(--text);
+  font-size: 13.5px;
+  font-family: var(--font-ui);
+  outline: none;
+  display: block;
+  transition: border-color .15s, box-shadow .15s;
+}
+.acs-in + .acs-in { margin-top: 7px; }
+.acs-in:focus { border-color: var(--acs-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acs-accent) 20%, transparent); }
+.acs-note { font-size: 11px; color: var(--text-2); line-height: 1.45; margin: 6px 0 0; }
+.acs-msg { font-size: 11.5px; line-height: 1.4; margin-top: 6px; display: none; }
+.acs-msg.show { display: block; }
+.acs-msg.ok { color: var(--up); }
+.acs-msg.err { color: var(--down); }
+.acs-btns { display: flex; gap: 7px; margin-top: 9px; justify-content: flex-end; }
+.acs-btn {
+  font-size: 12.5px; font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  font-family: var(--font-ui);
+  transition: all .15s;
+}
+.acs-btn:disabled { opacity: .55; cursor: default; }
+.acs-btn.primary { background: var(--acs-accent); border-color: var(--acs-accent); color: #fff; }
+.acs-btn.primary:hover:not(:disabled) { filter: brightness(1.07); transform: translateY(-1px); }
+.acs-btn.ghost { background: transparent; color: var(--text); }
+.acs-btn.ghost:hover:not(:disabled) { border-color: var(--acs-accent); }
+.acs-btn:focus-visible { outline: 2px solid var(--acs-accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .acs-btn.primary:hover:not(:disabled) { transform: none; } }
+
+/* small utility: copy button + provider pill in the value slot */
+.acs-mini {
+  flex: none;
+  font-size: 10.5px; font-weight: 700;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 3px 9px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  transition: border-color .15s, color .15s;
+}
+.acs-mini:hover { border-color: var(--acs-accent); color: var(--acs-accent-t); }
+.acs-mini:focus-visible { outline: 2px solid var(--acs-accent); outline-offset: 2px; }
+.acs-provider {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; font-weight: 700;
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel-2) 65%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 11px;
+}
+.acs-provider svg { width: 12px; height: 12px; }
+
+/* ── controls (segmented / multi-select chips) ─────────────────────────── */
+.acs-seg {
+  display: inline-flex;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px; gap: 2px;
+  flex: none;
+}
+.acs-seg-b {
+  padding: 4px 12px;
+  border: none; border-radius: 999px;
+  font-size: 11.5px; font-weight: 650;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  background: transparent;
+  color: var(--text-2);
+  transition: background .2s, color .2s;
+  white-space: nowrap;
+}
+.acs-seg-b.active { background: var(--acs-accent); color: #fff; }
+.acs-seg-b:hover:not(.active) { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+.acs-seg-b:focus-visible { outline: 2px solid var(--acs-accent); outline-offset: 2px; }
+/* colour swatch inside a segment button (up/down convention) */
+.acs-seg-b i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 6px; vertical-align: -1px; }
+
+/* multi-select preference chips (markets · what you trade). The check slot is
+   ALWAYS in the layout so selecting one never reflows the row. */
+.acs-pchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.acs-pchip {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 7px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--inset);
+  color: var(--text-2);
+  font: 650 12px/1.2 var(--font-ui);
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.acs-pchip:hover { border-color: color-mix(in srgb, var(--acs-accent) 55%, var(--line)); }
+.acs-pchip[aria-pressed="true"] {
+  border-color: var(--acs-accent);
+  background: color-mix(in srgb, var(--acs-accent) 13%, transparent);
+  color: var(--text);
+}
+.acs-pchip:focus-visible { outline: 2px solid var(--acs-accent); outline-offset: 2px; }
+.acs-pchip .box {
+  position: relative; flex: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-3);
+  display: grid; place-items: center;
+  transition: border-color .15s, background .15s;
+}
+.acs-pchip[aria-pressed="true"] .box { border-color: var(--acs-accent); background: var(--acs-accent); }
+.acs-pchip .box svg {
+  width: 8px; height: 8px;
+  stroke: #fff; stroke-width: 3.4; fill: none;
+  opacity: 0; transform: scale(.5);
+  transition: opacity .14s, transform .16s cubic-bezier(.3, 1.4, .5, 1);
+}
+.acs-pchip[aria-pressed="true"] .box svg { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .acs-pchip .box svg { transition: none; } }
+
+/* square-check variant for the Terminal market visibility rows (a market is on
+   or off, not a multi-pick taste) — mirrors the Terminal's own .cbx idiom. */
+.acs-check {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%;
+  background: none; border: 0; padding: 0;
+  color: var(--text);
+  font: 650 12.5px/1.3 var(--font-ui);
+  cursor: pointer; text-align: left;
+}
+.acs-check .box {
+  flex: none;
+  width: 16px; height: 16px;
+  border-radius: var(--r);
+  border: 1.5px solid var(--line-3);
+  display: grid; place-items: center;
+  transition: border-color .15s, background .15s;
+}
+.acs-check .box svg { width: 10px; height: 10px; stroke: #fff; stroke-width: 3; fill: none; opacity: 0; }
+.acs-check[aria-pressed="true"] .box { background: var(--acs-accent); border-color: var(--acs-accent); }
+.acs-check[aria-pressed="true"] .box svg { opacity: 1; }
+.acs-check:focus-visible { outline: 2px solid var(--acs-accent); outline-offset: 3px; border-radius: 4px; }
+.acs-check[aria-disabled="true"] { cursor: default; }
+.acs-tag {
+  margin-left: auto; flex: none;
+  font: 700 9px/1 var(--font-ui);
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--acs-accent-t);
+  border: 1px solid var(--acs-accent);
+  border-radius: 999px;
+  padding: 3px 6px;
+}
+
+/* timeframe grid (Terminal → default timeframe on open) */
+.acs-tfg { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin-top: 10px; }
+.acs-tfg button {
+  height: 28px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--inset);
+  color: var(--text-2);
+  font: 600 11px/1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.acs-tfg button:hover { color: var(--text); border-color: var(--line-3); }
+.acs-tfg button.on {
+  border-color: var(--acs-accent);
+  color: var(--acs-accent-t);
+  background: color-mix(in srgb, var(--acs-accent) 13%, transparent);
+}
+.acs-tfg button:focus-visible { outline: 2px solid var(--acs-accent); outline-offset: 2px; }
+
+/* ── sync status card ──────────────────────────────────────────────────── */
+.acs-sync {
+  display: flex; align-items: center; gap: 11px;
+  padding: 13px 14px; margin: 4px 0 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--up) 26%, var(--line));
+  background: color-mix(in srgb, var(--up) 7%, transparent);
+}
+.acs-sync .dot {
+  flex: none;
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--up);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--up) 18%, transparent);
+}
+.acs-sync.off { border-color: var(--line); background: color-mix(in srgb, var(--panel-3) 78%, transparent); }
+.acs-sync.off .dot { background: var(--text-2); box-shadow: 0 0 0 4px color-mix(in srgb, var(--text-2) 14%, transparent); }
+.acs-sync-main { flex: 1; min-width: 0; }
+.acs-sync-t { display: block; font-size: 12.5px; font-weight: 750; color: var(--text); }
+.acs-sync-s {
+  display: block; font-size: 11px; color: var(--text-2); margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acs-link {
+  flex: none;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11.5px; font-weight: 700;
+  color: var(--acs-accent-t);
+  text-decoration: none;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 11px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  transition: border-color .15s, background .15s;
+}
+.acs-link:hover { border-color: var(--acs-accent); background: color-mix(in srgb, var(--acs-accent) 10%, transparent); }
+.acs-link:focus-visible { outline: 2px solid var(--acs-accent); outline-offset: 2px; }
+.acs-link svg { width: 11px; height: 11px; }
+
+/* ── Billing: plan hero (tier-gradient signature card) ─────────────────── */
+.acs-plan-hero {
+  position: relative; overflow: hidden;
+  border-radius: 16px;
+  padding: 18px 18px 16px;
+  margin: 4px 0 14px;
+  border: 1px solid color-mix(in srgb, var(--acs-accent) 26%, var(--line));
+  background:
+    radial-gradient(130% 190% at 6% 0%, color-mix(in srgb, var(--acs-accent) 16%, transparent) 0%, transparent 55%),
+    radial-gradient(95% 150% at 72% -12%, color-mix(in srgb, #9b5cff 13%, transparent) 0%, transparent 60%),
+    color-mix(in srgb, var(--panel-3) 74%, transparent);
+}
+.acs-plan-hero.free { border-color: var(--line); background: color-mix(in srgb, var(--panel-3) 74%, transparent); }
+.acs-ph-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.acs-ph-eyebrow { font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
+.acs-ph-name {
+  display: flex; align-items: baseline; gap: 9px;
+  margin-top: 6px;
+  font-size: 25px; font-weight: 800; letter-spacing: -.02em; line-height: 1.05;
+  color: var(--text);
+}
+.acs-ph-price { font-size: 13px; color: var(--text-2); margin-top: 9px; }
+.acs-ph-price b { color: var(--text); font-weight: 800; font-variant-numeric: tabular-nums; }
+.acs-plan-chip {
+  display: inline-flex; align-items: center; flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px; font-weight: 700; line-height: 1.5;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.acs-plan-chip.live {
+  color: var(--acs-accent-t);
+  background: color-mix(in srgb, var(--acs-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--acs-accent) 30%, transparent);
+}
+.acs-plan-chip.trial {
+  color: var(--acs-accent-t);
+  background: color-mix(in srgb, var(--acs-accent) 9%, transparent);
+  border-color: color-mix(in srgb, var(--acs-accent) 22%, transparent);
+}
+.acs-plan-chip.warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+}
+.acs-plan-cta { margin: 0 0 14px; }
+.acs-plan-cta .acs-btn { width: 100%; }
+.acs-muted { color: var(--text-2); }
+.acs-incl-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 6px 3px;
+  font-size: 12.5px; line-height: 1.35;
+  color: var(--text);
+}
+.acs-incl-row svg { flex: none; width: 15px; height: 15px; margin-top: 1px; color: var(--up); }
+
+/* ── Usage: capacity meters (draw-on-reveal instrument) ────────────────── */
+.acs-meter {
+  position: relative;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-3) 78%, transparent);
+  padding: 15px 16px;
+}
+.acs-meter-h { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.acs-meter-lbl { font-size: 13px; font-weight: 750; color: var(--text); }
+.acs-meter-cap {
+  font-size: 10.5px; font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase; letter-spacing: .05em;
+  white-space: nowrap;
+}
+.acs-meter-big { display: flex; align-items: baseline; gap: 7px; margin: 9px 0 11px; }
+.acs-meter-num {
+  font-size: 32px; font-weight: 800; letter-spacing: -.025em; line-height: .95;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.acs-meter-of { font-size: 12px; color: var(--text-2); }
+.acs-meter-bar {
+  position: relative;
+  height: 8px; border-radius: 99px;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  overflow: hidden;
+}
+.acs-meter-fill {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--acs-accent), #9b5cff);
+  width: 0;
+  transition: width .95s cubic-bezier(.3, .75, .2, 1);
+}
+.acs-meter.low .acs-meter-fill { background: linear-gradient(90deg, var(--warn), #e0764a); }
+.acs-meter.low .acs-meter-num { color: var(--warn); }
+.acs-meter.out .acs-meter-fill { background: linear-gradient(90deg, var(--down), #e0764a); }
+.acs-meter.out .acs-meter-num { color: var(--down); }
+.acs-meter.unl .acs-meter-num { color: var(--acs-accent-t); font-size: 26px; }
+.acs-meter-foot { font-size: 11px; color: var(--text-2); margin-top: 10px; line-height: 1.4; }
+@media (prefers-reduced-motion: reduce) { .acs-meter-fill { transition: none; } }
+
+/* ── Upgrade nudge (a lane runs low / a tier can climb) ────────────────── */
+.acs-nudge {
+  display: flex; align-items: center; gap: 12px;
+  border-radius: 12px;
+  padding: 12px 14px; margin-top: 12px;
+  border: 1px solid color-mix(in srgb, var(--acs-accent) 28%, var(--line));
+  background: color-mix(in srgb, var(--acs-accent) 8%, transparent);
+}
+.acs-nudge-main { flex: 1; min-width: 0; }
+.acs-nudge-t { font-size: 12.5px; font-weight: 750; color: var(--text); }
+.acs-nudge-s { font-size: 11px; color: var(--text-2); margin-top: 1px; line-height: 1.4; }
+.acs-nudge .acs-btn { flex: none; white-space: nowrap; }
+
+/* usage skeleton + collapse the 2-col grid when the card narrows */
+.acs-skel {
+  height: 96px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: linear-gradient(100deg,
+    color-mix(in srgb, var(--panel-3) 78%, transparent) 30%,
+    color-mix(in srgb, var(--text) 6%, transparent) 50%,
+    color-mix(in srgb, var(--panel-3) 78%, transparent) 70%);
+  background-size: 220% 100%;
+  animation: acsShimmer 1.3s linear infinite;
+}
+@keyframes acsShimmer { from { background-position: 180% 0; } to { background-position: -40% 0; } }
+@media (prefers-reduced-motion: reduce) { .acs-skel { animation: none; } }
+@media (max-width: 1000px) { .acs-grid { grid-template-columns: 1fr; } }
+
+/* mobile sign-out (rail hidden → row at the end of Account) */
+.acs-signout-m { display: none; }
+/* desktop: hide the mobile close slot */
+.acs-x-m { display: none; }
+
+/* ── MOBILE ≤640px — full sheet, rail → header + horizontal pill nav ───── */
+@media (max-width: 640px) {
+  .acs-overlay { padding: 0; align-items: stretch; }
+  .acs-card {
+    flex-direction: column;
+    width: 100%;
+    height: 100vh; height: 100dvh;
+    border-radius: 0; border-left: 0; border-right: 0;
+    transform: translateY(24px);
+  }
+  .acs-overlay.open .acs-card { transform: none; }
+  .acs-rail {
+    width: auto;
+    flex-direction: row; flex-wrap: wrap; align-items: center;
+    gap: 2px 8px;
+    padding: 12px 14px 8px;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  }
+  .acs-me { flex: 1; min-width: 0; padding: 0; order: 1; }
+  .acs-x-m { order: 2; }
+  .acs-nav {
+    order: 3;
+    flex-direction: row; width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+    overscroll-behavior-x: contain; touch-action: pan-x; -webkit-overflow-scrolling: touch;
+    scroll-padding-inline: 12px;
+    gap: 4px; padding: 8px 12px 2px 0;
+  }
+  .acs-nav::-webkit-scrollbar { display: none; }
+  .acs-nav-b { width: auto; flex: none; padding: 6px 12px; border-radius: 999px; }
+  .acs-nav-b.active::before { display: none; }
+  .acs-rail-spacer, .acs-signout { display: none; }
+  .acs-rail form { display: none; }
+  .acs-signout-m {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; box-sizing: border-box;
+    margin-top: 14px;
+    padding: 11px;
+    border-radius: 11px;
+    border: 1px solid color-mix(in srgb, var(--down) 40%, var(--line));
+    background: transparent;
+    color: var(--down);
+    font: 700 13px/1 var(--font-ui);
+    cursor: pointer;
+  }
+  .acs-signout-m:hover { background: color-mix(in srgb, var(--down) 10%, transparent); }
+  .acs-signout-m svg { width: 15px; height: 15px; flex: none; }
+  .acs-head { padding: 14px 14px 10px 16px; }
+  .acs-head .acs-x { display: none; }
+  .acs-body { padding: 2px 14px 20px 16px; }
+  .acs-row-val { max-width: 38%; }
+  /* 4-up so each timeframe chip clears the repo's 40×40 tap-target floor
+     (carried over from the globals.css rule the old dropdown used). */
+  .acs-tfg { grid-template-columns: repeat(4, 1fr); }
+  .acs-tfg button { min-height: 40px; }
+  .acs-seg-b { padding: 8px 14px; }
+  .acs-x-m {
+    display: inline-flex; flex: none;
+    width: 30px; height: 30px;
+    border-radius: 9px; border: 1px solid transparent;
+    background: transparent; color: var(--text-2);
+    cursor: pointer;
+    align-items: center; justify-content: center;
+  }
+  .acs-x-m:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+  .acs-x-m svg { width: 16px; height: 16px; }
+  .acs-x-m:focus-visible { outline: 2px solid var(--acs-accent); outline-offset: 2px; }
+}

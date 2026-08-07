@@ -2,12 +2,19 @@ import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import "./fin.css";
+import "./company-intelligence.css";
 import "./observatory.css";
+import "./onboarding.css";
+import "./settings.css";
 import { LangProvider } from "@/lib/i18n";
 import Tracker from "@/components/Tracker";
+import EmbeddedTerminalBridge from "@/components/EmbeddedTerminalBridge";
 
-const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
-const jetbrainsMono = JetBrains_Mono({ variable: "--font-jetbrains-mono", subsets: ["latin"], display: "swap" });
+// Inter carries the whole product now — UI text *and* every numeral (--font-ui / --font-num).
+const inter = Inter({ variable: "--font-inter", subsets: ["latin"], display: "swap" });
+// JetBrains Mono is code-only (--font-code: Pine editor, gutters, console, source dumps), so it
+// no longer needs to preload on pages that never render a character cell.
+const jetbrainsMono = JetBrains_Mono({ variable: "--font-jetbrains-mono", subsets: ["latin"], display: "swap", preload: false });
 
 // Viewport config: device-width, no zoom (full-bleed chart UX), safe-area insets via viewportFit.
 export const viewport: Viewport = {
@@ -31,13 +38,18 @@ const LOCALE_INIT = `(function(){try{
   document.documentElement.setAttribute('data-updown',ud);
   var lg=localStorage.getItem('mm.lang'); if(lg!=='zh'&&lg!=='en') lg=/^zh/.test(L)?'zh':'en';
   document.documentElement.setAttribute('data-lang',lg);
+  var sp=new URLSearchParams(location.search);
+  if(sp.get('shell')==='app'){
+    document.documentElement.setAttribute('data-shell','app');
+    if(sp.get('tray')==='1') document.documentElement.setAttribute('data-tray','1');
+  }
 }catch(e){}})();`;
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" data-theme="dark" className={`${inter.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
       <head><script dangerouslySetInnerHTML={{ __html: LOCALE_INIT }} /></head>
-      <body><LangProvider>{children}</LangProvider><Tracker /></body>
+      <body><LangProvider>{children}</LangProvider><EmbeddedTerminalBridge /><Tracker /></body>
     </html>
   );
 }

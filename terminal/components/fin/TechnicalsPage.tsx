@@ -7,7 +7,7 @@
  *     the daily `bars`) are ALWAYS available; intraday pills (15m / 1h / 4h …)
  *     are enabled per intradayCapable(market) and fetch /api/intraday directly
  *     (no cache).
- *   - Summary: three ArcGauges (Oscillators / Summary / Moving Averages).
+ *   - Signal gauges: Oscillators / Moving Averages.
  *   - Oscillators + Moving Averages tables (name+params, value, action).
  *   - Pivots table across Classic / Fibonacci / Camarilla / Woodie / DM.
  *
@@ -15,10 +15,10 @@
  * (the frozen helpers) — not reimplemented. Null-safe: bars=[] → gauges show the
  * "No signal" empty state and tables render em-dashes.
  */
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { Bar } from "../../lib/fund";
 import { computeRatings, type Ratings, type Vote, type PivotLevels } from "../../lib/techRating";
-import { fmtNum, pick } from "../../lib/finFormat";
+import { fmtDate, fmtNum, pick } from "../../lib/finFormat";
 import { ArcGauge } from "../ui/ArcGauge";
 import { intradayCapable } from "../ChartPanel";
 import { classify, isIntradayTf } from "../../lib/intradaySources";
@@ -87,6 +87,9 @@ function toBars(rows: any[]): Bar[] {
 
 const voteClass = (v: Vote) => (v === "Buy" ? "up" : v === "Sell" ? "down" : "mut");
 
+/* Every section on this page rides the analytical (brand) rail. */
+const RAIL: CSSProperties = { "--rail": "var(--brand)" } as CSSProperties;
+
 export default memo(TechnicalsPage);   // pure prop-driven page — skip re-render on the 6s live-quote poll
 function TechnicalsPage({ sym, bars = [], zh = false }: TechnicalsPageProps) {
   const market = classify(sym);
@@ -133,6 +136,11 @@ function TechnicalsPage({ sym, bars = [], zh = false }: TechnicalsPageProps) {
     }
   }, [active, tf]);
 
+  // provenance for the .fin-asof row: which bar basis fed the ratings, and how fresh it is.
+  const tfMeta = [...INTRADAY_PILLS, ...DAILY_PILLS].find((p) => p.tf === tf);
+  const tfLabel = tfMeta ? pick(zh, tfMeta.en, tfMeta.zh) : tf;
+  const lastBar = active.length ? fmtDate(active[active.length - 1].time) : null;
+
   return (
     <div className="fin-tech">
       {/* TF pill row */}
@@ -150,14 +158,36 @@ function TechnicalsPage({ sym, bars = [], zh = false }: TechnicalsPageProps) {
         ))}
       </div>
 
-      {loading && <div className="fin-sec-cap">{pick(zh, "Loading intraday…", "加载盘中数据…")}</div>}
+      {loading && (
+        <div className="fin-skel fin-tech-loading">
+          <span className="fin-skel-sr" role="status">{pick(zh, "Loading intraday…", "加载盘中数据…")}</span>
+        </div>
+      )}
 
-      {/* Summary — three gauges */}
+      {/* The aggregate summary duplicated the two underlying signal groups. */}
       <div className="fin-sec">
+        <div className="fin-eyebrow">{pick(zh, "SIGNAL SUMMARY", "信号总览")}</div>
+        <div className="fin-sec-h fin-rail fin-rule" style={RAIL}>
+          {pick(zh, "Technical rating", "技术评级")}
+        </div>
         <div className="fin-tech-summary">
           <Gauge title={pick(zh, "Oscillators", "震荡指标")} group={ratings?.summary[0]} zh={zh} />
-          <Gauge title={pick(zh, "Summary", "综合")} group={ratings?.summary[2]} zh={zh} big />
           <Gauge title={pick(zh, "Moving Averages", "移动平均")} group={ratings?.summary[1]} zh={zh} />
+        </div>
+        <div className="fin-asof">
+          <span className="num">
+            {lastBar
+              ? pick(
+                  zh,
+                  `${tfLabel} timeframe · computed client-side · last bar ${lastBar} · N=${active.length}`,
+                  `${tfLabel}周期 · 本地计算 · 最新K线 ${lastBar} · N=${active.length}`,
+                )
+              : pick(
+                  zh,
+                  `${tfLabel} timeframe · computed client-side · no bars loaded for this timeframe`,
+                  `${tfLabel}周期 · 本地计算 · 该周期暂无K线数据`,
+                )}
+          </span>
         </div>
       </div>
 
@@ -179,16 +209,14 @@ function Gauge({
   title,
   group,
   zh,
-  big,
 }: {
   title: string;
   group: Ratings["summary"][number] | undefined;
   zh: boolean;
-  big?: boolean;
 }) {
   const arc = readingToArc(group ? group.score : null);
   return (
-    <div className={"fin-tech-gauge" + (big ? " big" : "")}>
+    <div className="fin-tech-gauge">
       <div className="fin-tech-gauge-t">{title}</div>
       <div className="fin-arc-wrap">
         {group ? (
@@ -196,7 +224,7 @@ function Gauge({
             <ArcGauge
               value={arc.value}
               state={arc.state}
-              size={big ? 148 : 118}
+              size={118}
               sublabel={verdictWord(group.verdict, zh)}
             />
             {/* vote tally demoted beneath the arc (was the old gauge's counts row) */}
@@ -209,7 +237,7 @@ function Gauge({
         ) : (
           // No bars yet → grey mid arc, numeral suppressed so an empty gauge can't
           // read as a real "50" score.
-          <ArcGauge value={50} state="neutral" size={big ? 148 : 118} showValue={false} sublabel={pick(zh, "No signal", "无信号")} />
+          <ArcGauge value={50} state="neutral" size={118} showValue={false} sublabel={pick(zh, "No signal", "无信号")} />
         )}
       </div>
     </div>
@@ -242,8 +270,8 @@ function RatingTable({
   const voteLabel = (v: Vote) => pick(zh, v, v === "Buy" ? "买入" : v === "Sell" ? "卖出" : "中性");
   return (
     <div className="fin-card fin-tech-tbl">
-      <div className="fin-sec-h link">
-        {title} <span className="chev">›</span>
+      <div className="fin-sec-h fin-rail fin-rule" style={RAIL}>
+        {title}
       </div>
       <table className="fin-table fin-tech-table">
         <thead>
@@ -296,8 +324,8 @@ function PivotsTable({ pivots, zh }: { pivots: Ratings["pivots"] | undefined; zh
   ];
   return (
     <div className="fin-sec">
-      <div className="fin-sec-h link">
-        {pick(zh, "Pivots", "枢轴点")} <span className="chev">›</span>
+      <div className="fin-sec-h fin-rail fin-rule" style={RAIL}>
+        {pick(zh, "Pivots", "枢轴点")}
       </div>
       <div className="fin-table-scroll">
         <table className="fin-table fin-tech-table fin-pivots">

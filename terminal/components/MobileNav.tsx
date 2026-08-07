@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { BrandLockup, BrandMark } from "@/components/BrandMark";
 import { TOP, Glyph as NavGlyph } from "@/components/AppNav";
-import SettingsMenu from "@/components/SettingsMenu";
+import SettingsButton from "@/components/settings/SettingsButton";
 import { useT } from "@/lib/i18n";
 
 /**
@@ -17,7 +17,7 @@ import { useT } from "@/lib/i18n";
  *
  * Props
  * -----
- * email          — passed to SettingsMenu (cosmetic; guest = "")
+ * email          — passed to SettingsButton (cosmetic; guest = "")
  * fromMacro      — when true, shows a prominent "back" pill in the left slot
  *                  and moves the hamburger to the right cluster
  * onBack         — called when the Back pill is tapped (fromMacro only)
@@ -97,7 +97,7 @@ export default function MobileNav({
               <path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" />
             </svg>
           </button>
-          <SettingsMenu email={email} />
+          <SettingsButton email={email} />
         </div>
       </div>
 
@@ -132,7 +132,7 @@ export default function MobileNav({
             {t("ai")}
           </button>
         </nav>
-        <div className="m-drawer-ft"><SettingsMenu email={email} /></div>
+        <div className="m-drawer-ft"><SettingsButton email={email} /></div>
       </div>
     </>
   );

@@ -13,6 +13,9 @@ export async function DELETE(req: Request) {
   if (!id) return NextResponse.json({ ok: false, error: "missing id" }, { status: 400 });
 
   const { error } = await supabase.from("saved_scripts").delete().eq("id", id).eq("user_id", user.id);
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+  if (error) {
+    console.error("scripts/delete DELETE failed:", error);
+    return NextResponse.json({ ok: false, error: "Could not delete script" }, { status: 400 });
+  }
   return NextResponse.json({ ok: true });
 }

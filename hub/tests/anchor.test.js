@@ -178,6 +178,90 @@ describe("AnchorCache daily file rolled for today", () => {
   });
 });
 
+// ── AnchorCache — same-session daily-file roll (MSFT 2026-08-03 regression) ──
+
+describe("AnchorCache refreshes when the daily file rolls inside one ET session", () => {
+  const { Store } = require("../lib/store");
+  const NOW_AFTERHOURS = Date.UTC(2026, 7, 3, 21, 0); // 17:00 ET
+  const CLOSE_DAY_BEFORE = 451.10;
+  const CLOSE_PREVIOUS = 464.72;
+  const CLOSE_TODAY = 487.65;
+  const EXT_PRICE = 484.02;
+  let tmpDir;
+
+  after(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("updates regular and AH baselines without waiting for the next session date", async () => {
+    tmpDir = makeTmpDir();
+    // Hub warmed this anchor during RTH, before today's daily bar existed.
+    writeDailyFile(tmpDir, "MSFT", [
+      bar("2026-07-30", CLOSE_DAY_BEFORE),
+      bar("2026-07-31", CLOSE_PREVIOUS),
+    ]);
+    const manifestPath = path.join(tmpDir, "manifest.json");
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      as_of: "2026-07-31",
+      symbols: { MSFT: { last: CLOSE_PREVIOUS, chg: 3.0192861893150087 } },
+    }));
+
+    let store;
+    const cache = new AnchorCache({
+      dataDir: tmpDir,
+      apiKey: "",
+      getManifest: () => store ? store.manifest : null,
+    });
+    store = new Store(manifestPath, cache);
+    store.loadManifestIfStale(true);
+    await cache.resolve("MSFT", NOW_AFTERHOURS);
+    store.setQuote("MSFT", { last: 489.13, market: "us" }, NOW_AFTERHOURS);
+
+    const stale = store.getQuotes(["MSFT"], NOW_AFTERHOURS).MSFT;
+    const previousSessionMove = (CLOSE_PREVIOUS - CLOSE_DAY_BEFORE) / CLOSE_DAY_BEFORE * 100;
+    assert.ok(Math.abs(stale.chg - previousSessionMove) < 0.001,
+      "fixture reproduces the stale +3.02% completed-session value");
+    assert.equal(stale.close, undefined, "today's close is absent before the file rolls");
+
+    // The EOD writer atomically replaces the file after the cache key already exists.
+    writeDailyFile(tmpDir, "MSFT", [
+      bar("2026-07-30", CLOSE_DAY_BEFORE),
+      bar("2026-07-31", CLOSE_PREVIOUS),
+      bar("2026-08-03", CLOSE_TODAY),
+    ]);
+
+    let closeRef = null;
+    const extFeed = {
+      getExt(_sym, _now, reference) {
+        closeRef = reference;
+        return {
+          extPrice: EXT_PRICE,
+          extChg: (EXT_PRICE - reference) / reference * 100,
+          extTs: Math.floor(NOW_AFTERHOURS / 1000),
+          extSession: "post",
+        };
+      },
+    };
+    const corrected = store.getQuotes(
+      ["MSFT"],
+      NOW_AFTERHOURS + 6_000,
+      extFeed,
+    ).MSFT;
+
+    const expectedRegular = (CLOSE_TODAY - CLOSE_PREVIOUS) / CLOSE_PREVIOUS * 100;
+    const expectedExt = (EXT_PRICE - CLOSE_TODAY) / CLOSE_TODAY * 100;
+    assert.equal(corrected.prevClose, CLOSE_PREVIOUS);
+    assert.equal(corrected.close, CLOSE_TODAY, "same-session file roll supplies today's official close");
+    assert.ok(Math.abs(corrected.chg - expectedRegular) < 0.001,
+      `regular chg=${corrected.chg} expected≈${expectedRegular}`);
+    assert.equal(corrected.prevSessionChg, undefined,
+      "stale previous-session move is removed once today's close exists");
+    assert.equal(closeRef, CLOSE_TODAY, "AH baseline is today's official close");
+    assert.ok(Math.abs(corrected.extChg - expectedExt) < 0.001,
+      `AH chg=${corrected.extChg} expected≈${expectedExt}`);
+  });
+});
+
 // ── AnchorCache — manifest fallback when no daily file ──
 
 describe("AnchorCache manifest fallback", () => {
@@ -429,33 +513,32 @@ describe("Store.getQuotes after-hours close/afterHours emission", () => {
     // Warm the anchor
     await cache.resolve("NVDA", NOW_AH);
 
-    // Simulate a delayed AM last that differs from official close (AH move)
-    store.setQuote("NVDA", { last: 205.50, market: "us" }, NOW_AH);
+    // The primary lane carries only the completed regular-session price.
+    store.setQuote("NVDA", { last: 202.78, market: "us" }, NOW_AH);
   });
 
   after(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("emits close=202.78, afterHours=205.50, and chg vs prevClose=204.12", () => {
+  it("emits close=last=202.78 with no legacy afterHours field", () => {
     const q = store.getQuotes(["NVDA"], NOW_AH)["NVDA"];
     assert.ok(q, "NVDA must be present");
     // anchor: prevClose=204.12 (yesterday), close=202.78 (today's official EOD)
     assert.equal(q.prevClose, 204.12, "prevClose = yesterday's close");
     assert.equal(q.close, 202.78, "close = today's official EOD close");
-    // afterHours: delayed print 205.50 differs materially from close 202.78
-    assert.equal(q.afterHours, 205.50, "afterHours = delayed last print");
+    assert.equal(q.last, 202.78, "last = completed regular-session price");
+    assert.equal(q.afterHours, undefined, "extended prints use the separate ext namespace");
     // chg = (close - prevClose) / prevClose * 100 = (202.78 - 204.12) / 204.12 * 100
     const expectedChg = (202.78 - 204.12) / 204.12 * 100;
     assert.ok(Math.abs(q.chg - expectedChg) < 0.001, `chg=${q.chg} expected ≈ ${expectedChg}`);
     assert.equal(q.anchor_source, "daily_file");
   });
 
-  it("afterHours is absent when live last matches close within $0.01", async () => {
-    // Override: set last = 202.79 (within $0.01 of close 202.78 → no AH line)
+  it("afterHours stays absent for every regular quote value", async () => {
     store.setQuote("NVDA", { last: 202.79, market: "us" }, NOW_AH);
     const q = store.getQuotes(["NVDA"], NOW_AH)["NVDA"];
-    assert.equal(q.afterHours, undefined, "afterHours must be absent when last ≈ close");
+    assert.equal(q.afterHours, undefined, "afterHours must always be absent");
   });
 });
 
@@ -548,13 +631,12 @@ describe("prevSessionChg — three-state RTH / post-close / overnight", () => {
   });
 
   it("STATE B — post-close (file rolled): chg uses official close; prevSessionChg absent", async () => {
-    // File has today's bar; AH print differs from official close.
-    const ahLast = 205.50;
+    // File has today's bar; the regular lane remains pinned to the official close.
     const { store } = await makeStore([
       bar("2026-07-07", CLOSE_DAY_BEFORE),
       bar("2026-07-08", CLOSE_YESTERDAY),
       bar("2026-07-09", CLOSE_TODAY),
-    ], ahLast, NOW_POST_CLOSE);
+    ], CLOSE_TODAY, NOW_POST_CLOSE);
 
     const q = store.getQuotes(["MSFT"], NOW_POST_CLOSE)["MSFT"];
     assert.ok(q, "MSFT must be present");
@@ -563,9 +645,9 @@ describe("prevSessionChg — three-state RTH / post-close / overnight", () => {
     const expectedChg = (CLOSE_TODAY - CLOSE_YESTERDAY) / CLOSE_YESTERDAY * 100;
     assert.ok(Math.abs(q.chg - expectedChg) < 0.001,
       `post-close chg=${q.chg?.toFixed(4)} expected≈${expectedChg.toFixed(4)}`);
-    // afterHours is present (AH print differs from official close)
     assert.equal(q.close, CLOSE_TODAY, "close = official today EOD");
-    assert.equal(q.afterHours, ahLast, "afterHours = delayed AH print");
+    assert.equal(q.last, CLOSE_TODAY, "last = official today EOD");
+    assert.equal(q.afterHours, undefined, "extended prints use the separate ext namespace");
     assert.equal(q.prevSessionChg, undefined,
       "prevSessionChg must be absent post-close (today-close present)");
   });
@@ -590,9 +672,7 @@ describe("prevSessionChg — three-state RTH / post-close / overnight", () => {
       `prevSessionChg=${q.prevSessionChg?.toFixed(4)} expected≈${expectedPrevSessionChg.toFixed(4)}`);
     assert.equal(q.close, undefined, "no today-close overnight");
     assert.equal(q.afterHours, undefined, "no afterHours overnight");
-    // chg ≈ 0 (live = prevClose exactly) — this is correct but prevSessionChg carries meaning
-    const expectedChg = (overnightLast - CLOSE_YESTERDAY) / CLOSE_YESTERDAY * 100;
-    assert.ok(Math.abs(q.chg - expectedChg) < 0.001,
-      `chg should be ~0 overnight; got ${q.chg}`);
+    assert.ok(Math.abs(q.chg - expectedPrevSessionChg) < 0.001,
+      `chg retains the completed-session move overnight; got ${q.chg}`);
   });
 });

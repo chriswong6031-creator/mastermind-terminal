@@ -345,6 +345,36 @@
         ]
       },
       {
+        "root": "SPY",
+        "group": "Index ETF",
+        "group_zh": "指数ETF",
+        "gross_premium_today": 6800000,
+        "prem_z": 2.6,
+        "baseline_source": "eod252",
+        "n_obs": 252,
+        "call_prem_share": 0.42,
+        "top_contracts": [
+          { "right": "P", "exp": "2026-07-05", "strike": 545, "premium": 2600000 },
+          { "right": "C", "exp": "2026-07-11", "strike": 555, "premium": 2400000 },
+          { "right": "P", "exp": "2026-08-15", "strike": 540, "premium": 1800000 }
+        ]
+      },
+      {
+        "root": "QQQ",
+        "group": "Index ETF",
+        "group_zh": "指数ETF",
+        "gross_premium_today": 4600000,
+        "prem_z": 2.2,
+        "baseline_source": "eod252",
+        "n_obs": 252,
+        "call_prem_share": 0.58,
+        "top_contracts": [
+          { "right": "C", "exp": "2026-07-11", "strike": 510, "premium": 2100000 },
+          { "right": "P", "exp": "2026-07-05", "strike": 490, "premium": 1400000 },
+          { "right": "C", "exp": "2026-08-15", "strike": 515, "premium": 1100000 }
+        ]
+      },
+      {
         "root": "XLF",
         "group": "Financials",
         "group_zh": "金融",

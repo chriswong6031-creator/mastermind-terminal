@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useT } from "@/lib/i18n";
 import { useRouter, useSearchParams } from "next/navigation";
 import { type Bar, type PineError } from "@/lib/pine-engine";
 import { createPineHost, type PineHost } from "@/lib/pine-engine/host";
@@ -63,12 +64,14 @@ async function diagnose(host: PineHost, src: string, params: Record<string, any>
 const DIAG_SLOT = "@diag";   // shared supersession slot for editor diagnostics (compile + dry-run)
 
 // Code-layer font metrics (must mirror .code / .code-wrap textarea in globals.css: 12.5px/1.65
-// JetBrains-Mono, 12px top pad, 14px left pad) so the error line-tint + column caret register
-// exactly over the highlighted source.
+// var(--font-code) — JetBrains Mono — 12px top pad, 14px left pad) so the error line-tint +
+// column caret register exactly over the highlighted source. This is why the editor stays on
+// --font-code and never --font-num: the caret math needs a fixed character advance.
 const LINE_H = 12.5 * 1.65;        // px per line
 const COL_W = 12.5 * 0.6;          // px per mono char (JetBrains Mono advance ≈ 0.6em)
 
 export default function PineEditor({ scripts, isPro, email }: { scripts: Script[]; isPro: boolean; email: string }) {
+  const t = useT();
   const router = useRouter();
   const searchParams = useSearchParams();
   // ?id=<scriptId> deep-links a specific script (from the terminal legend "Source code" / "Edit"); fall
@@ -174,7 +177,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
   const head = (
     <>
       <header className="topbar pine-topbar">
-        <span className="page-title">Pine Editor</span>
+        <span className="page-title">{t("peTitle")}</span>
         {active && (
           <span className="pair pophost" style={{ marginLeft: 14, cursor: scripts.length > 1 ? "pointer" : "default" }}
             onClick={(e) => { e.stopPropagation(); if (scripts.length > 1) setPicker((p) => !p); }}>
@@ -184,7 +187,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
               <div className="pop show" style={{ top: 38, left: 0 }} onClick={(e) => e.stopPropagation()}>
                 {scripts.map((s, i) => (
                   <div key={s.id} className="menu-row" onClick={() => { setIdx(i); setPicker(false); }}>
-                    {s.locked && <span style={{ marginRight: 6, color: "var(--brand-2)" }} title="proprietary · read-only">🔒</span>}{s.name}{i === idx && <span style={{ marginLeft: "auto", color: "var(--brand-2)" }}>●</span>}
+                    {s.locked && <span style={{ marginRight: 6, color: "var(--brand-2)" }} title={t("peReadOnly")}>🔒</span>}{s.name}{i === idx && <span style={{ marginLeft: "auto", color: "var(--brand-2)" }}>●</span>}
                   </div>
                 ))}
               </div>
@@ -204,7 +207,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
           </button>
         )}
         <button className="ai" style={{ marginLeft: 6 }} onClick={addToChart} disabled={!active || hasErrors || isLocked}
-          title={isLocked ? "The proprietary flagship already backs the chart's built-in BUY/SELL signals — it can't be added as a separate script" : hasErrors ? "Fix compile errors before adding to the chart" : "Add this script to the chart"}>Add to chart</button>
+          title={isLocked ? t("peLockedAddTip") : hasErrors ? t("peFixErrorsTip") : t("peAddTip")}>{t("peAddToChart")}</button>
       </header>
     </>
   );
@@ -215,7 +218,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
         {head}
         <div className="pine-main" style={{ flex: 1 }}>
           <div className="editor-pane" style={{ alignItems: "center", justifyContent: "center" }}>
-            <div className="pine-empty">No scripts yet.<br />Saved Pine indicators will appear here.</div>
+            <div className="pine-empty">{t("peNoScripts")}<br />{t("peNoScriptsSub")}</div>
           </div>
         </div>
       </main>
@@ -230,9 +233,9 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
           <div className="editor-head">
             <span>{active.name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.pine</span>
             <span className="badge">PINE v6</span>
-            {isLocked && <span className="badge" style={{ borderColor: "var(--brand-2)", color: "var(--brand-2)" }} title="Proprietary — protected source, editing disabled">🔒 PROPRIETARY</span>}
+            {isLocked && <span className="badge" style={{ borderColor: "var(--brand-2)", color: "var(--brand-2)" }} title={t("peProtected")}>🔒 {t("peProprietaryBadge")}</span>}
             <div className="editor-actions">
-              <button className="tbtn" title="Run / compile" onClick={compile}><svg viewBox="0 0 24 24" style={{ fill: "var(--up)", stroke: "none" }}><path d="M5 3l14 9-14 9V3z" /></svg></button>
+              <button className="tbtn" title={t("peRun")} onClick={compile}><svg viewBox="0 0 24 24" style={{ fill: "var(--up)", stroke: "none" }}><path d="M5 3l14 9-14 9V3z" /></svg></button>
             </div>
           </div>
           <div className="editor">
@@ -290,7 +293,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
         </div>
         <div className="pine-side">
           <div className="side-sec">
-            <h4>My Scripts</h4>
+            <h4>{t("peMyScripts")}</h4>
             {scripts.map((s, i) => (
               <div key={s.id} className={`script-row${i === idx ? " on" : ""}`} onClick={() => setIdx(i)}>
                 <span className="si">{s.lang === "pine" ? "ƒ" : "λ"}</span>
@@ -299,10 +302,10 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
               </div>
             ))}
           </div>
-          {!isPro && <div className="gate"><b>Pro feature.</b> Free accounts can read &amp; experiment with scripts; saving custom indicators &amp; adding the proprietary Mastermind suite to charts requires <b>Pro</b>.</div>}
+          {!isPro && <div className="gate"><b>{t("peProFeature")}</b> {t("peProGateBody")} <b>Pro</b>.</div>}
           <div className="side-sec">
             <h4>Inputs</h4>
-            {inputs.length === 0 && <div style={{ color: "var(--muted)", fontSize: 12 }}>No inputs.</div>}
+            {inputs.length === 0 && <div style={{ color: "var(--muted)", fontSize: 12 }}>{t("peNoInputs")}</div>}
             {inputs.map(([k]) => (
               <div key={k} className="inp-row"><span>{k}</span>
                 <span className="stepper">

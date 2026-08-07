@@ -3,6 +3,8 @@ import {
   arcStateColor,
   clampArcValue,
   arcGeometry,
+  arcAccessibleLabel,
+  arcStackMetrics,
   ARC_SWEEP_DEG,
 } from "@/components/ui/ArcGauge";
 import { placeTip, isWarm, type Rect } from "@/components/ui/Tip";
@@ -41,6 +43,28 @@ describe("ArcGauge logic", () => {
     expect(g100.offset).toBeCloseTo(0, 6);
     // 50% sits halfway
     expect(gMid.offset).toBeCloseTo(gMid.arcLen / 2, 6);
+  });
+
+  it("reserves vertical clearance for a two-line verdict without moving single-line gauges", () => {
+    expect(arcStackMetrics(118, "Sell")).toEqual({
+      tight: false,
+      valueFontSize: 31,
+      translateY: 0,
+      gap: 2,
+    });
+    expect(arcStackMetrics(118, "Strong sell")).toEqual({
+      tight: true,
+      valueFontSize: 28,
+      translateY: 5,
+      gap: 3,
+    });
+  });
+
+  it("announces a textual state instead of a fake score when the numeral is withheld", () => {
+    expect(arcAccessibleLabel("Insider Power", 50, false, "No material signal"))
+      .toBe("Insider Power: No material signal");
+    expect(arcAccessibleLabel("Insider Power", 72))
+      .toBe("Insider Power: 72 of 100");
   });
 });
 

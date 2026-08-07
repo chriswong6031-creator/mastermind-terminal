@@ -24,14 +24,31 @@
 //       reads that relay file. asof_utc older than 5 min → treated as absent (stale).
 //       extSource="yahoo-relay". Covers pre-market (04:00–09:30 ET) and post-market
 //       (16:00–20:00 ET) but NOT true overnight (20:00–04:00 ET).
-//   (c) Keyless Yahoo fallback (legacy, kept for local dev) — direct REST polling of
+//       Cache entries are written in the SAME { price, ts, session, source } shape as every
+//       other leg — the relay file's own extPrice/extTs field names stay in the file.
+//   (c) Webull keyless quote API — quotes-gw.webullfintech.com. Resolves a tickerId per
+//       symbol once (cached for the process lifetime), then polls getQuote every 60 s
+//       outside RTH. Serves pPrice + tradeTime — the only fields verified against a live
+//       payload. Candidate "overnight price" key names are logged once each as discovery
+//       telemetry and never served. VERIFIED ABSENT 2026-07-27: a live probe from the VPS
+//       (20:33–20:37 ET, during an active Blue Ocean overnight session) showed getQuote does
+//       NOT carry true overnight (20:00–04:00 ET) prints — pPrice/pChange/tradeTime stayed
+//       frozen at the final post-market print (~19:59 ET) across samples 65 s apart
+//       (NVDA/SOFI/TSLA). The session gate in webullExtractPrint() therefore rejects the
+//       stale post print overnight, and this leg serves nothing 20:00–04:00 ET by design;
+//       the overnight unlock is Alpaca keys (leg (a)). extSource="webull".
+//   (d) Keyless Yahoo fallback (legacy, kept for local dev) — direct REST polling of
 //       query1.finance.yahoo.com/v8/finance/chart/<SYM>?interval=1m&range=1d&includePrePost=true
 //       every ~60 s for the demanded symbols. Covers pre-market and post-market only.
 //       Clearly labelled extSource="yahoo_unofficial". Grey endpoint — ToS-grey risk noted.
 //       429s on DigitalOcean VPS IPs; r2file mode exists to bypass this.
 //
-// KILL-SWITCH
+//   Serve priority in getExt(): licensed stream (Alpaca/Polygon) → Webull →
+//   Yahoo / R2 relay. An Alpaca entry is ignored when authentication failed.
+//
+// KILL-SWITCHES
 //   EXT_FEED_DISABLE=1 → disables entirely (extPrice fields never emitted).
+//   WEBULL_DISABLE=1   → disables the Webull leg only; Alpaca/Yahoo unaffected.
 //
 // SESSION-WINDOW LOGIC
 //   Windows use ET (America/New_York). Half-open intervals:
@@ -47,33 +64,9 @@
 const https = require("https");
 const WebSocket = require("ws");
 const log = require("./log");
+const { classifySession } = require("./usSession");
 
 // ── Session window classification ──────────────────────────────────────────────
-
-const ET_FMT = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/New_York",
-  hour: "numeric",
-  minute: "numeric",
-  hour12: false,
-});
-
-/**
- * Classify the current ET time into a trading session.
- * @param {number} nowMs
- * @returns {'pre'|'rth'|'post'|'overnight'}
- */
-function classifySession(nowMs) {
-  const parts = {};
-  for (const p of ET_FMT.formatToParts(new Date(nowMs))) parts[p.type] = Number(p.value);
-  // formatToParts hour12:false: midnight = 0 or 24 depending on engine; normalise.
-  const h = parts.hour === 24 ? 0 : parts.hour;
-  const mins = h * 60 + parts.minute;
-
-  if (mins >= 4 * 60 && mins < 9 * 60 + 30) return "pre";
-  if (mins >= 9 * 60 + 30 && mins < 16 * 60) return "rth";
-  if (mins >= 16 * 60 && mins < 20 * 60) return "post";
-  return "overnight"; // 20:00–04:00 ET
-}
 
 // ── LRU map (insertion-ordered, Map iteration order is stable in V8) ──────────
 
@@ -421,6 +414,313 @@ class AlpacaFeed {
   }
 }
 
+// ── Webull keyless quote API ──────────────────────────────────────────────────
+//
+// Two endpoints, both keyless (User-Agent: Mozilla/5.0 required):
+//   search: /api/search/pc/tickers?keyword=<SYM>&pageIndex=1&pageSize=3
+//           → data[] rows { tickerId, disSymbol, regionCode, template, type }
+//   quote:  /api/stock/tickerRealTime/getQuote?tickerId=<ID>&includeSecu=1&more=1
+//           → { tradeTime, status, close, preClose, pPrice, pChange, pChRatio, ... }
+// Every numeric field arrives as a STRING — Number() everything.
+
+const WEBULL_SEARCH_URL = "https://quotes-gw.webullfintech.com/api/search/pc/tickers";
+const WEBULL_QUOTE_URL = "https://quotes-gw.webullfintech.com/api/stock/tickerRealTime/getQuote";
+const WEBULL_HEADERS = { "User-Agent": "Mozilla/5.0" };
+const WEBULL_LRU_CAP = 30;
+const WEBULL_POLL_INTERVAL_MS = 60 * 1000;
+const WEBULL_TIMEOUT_MS = 8 * 1000;
+const WEBULL_STAGGER_MS = 150;          // be polite: sequential fetches, small gap
+const WEBULL_IDLE_UNSUB_MS = 30 * 60 * 1000;
+const WEBULL_MAX_AGE_MS = 90 * 60 * 1000;
+const WEBULL_MISS_TTL_MS = 60 * 60 * 1000; // negative tickerId cache — don't hammer search
+
+// Candidate key names for an explicit overnight print. DISCOVERY TELEMETRY ONLY — never served.
+//
+// VERIFIED ABSENT 2026-07-27: a live VPS probe during an active Blue Ocean overnight session
+// (20:33–20:37 ET) found NONE of these keys in the getQuote payload (NVDA/SOFI/TSLA) — the
+// telemetry line below never fired. The payload DOES carry a literal `overnight` field, but it
+// is an integer FLAG (observed 0), not a price, and appending &overnight=1 to getQuote changes
+// nothing — worth re-probing if that flag ever reads non-zero. Every name here remains a guess.
+// Serving a guessed field in preference to the VERIFIED pPrice would mean the first time Webull
+// ships an unrelated key that happens to match one of these names, an unvalidated number
+// silently becomes the price on the tape. The names are logged once each so a real one can be
+// confirmed from the journal and promoted deliberately.
+const WEBULL_OVERNIGHT_PRICE_KEYS = ["ovnPrice", "overnightPrice", "ovPrice", "overnightPx"];
+
+// Key names already logged — one line per name per process, not one per poll.
+const _webullOvernightKeysLogged = new Set();
+
+// tradeTime MUST carry an explicit UTC offset or a trailing Z. `Date.parse` on an offset-less
+// "2026-07-27T09:31:39" applies the SERVER's local zone, so the same payload yields a different
+// instant on a UTC box than on an ET one — and the session/staleness gates below then compare
+// that shifted instant against the wrong window. Every observed payload uses "+0000"; anything
+// without an offset is rejected rather than guessed at.
+const WEBULL_TS_OFFSET_RE = /[+-]\d{2}:?\d{2}$|Z$/;
+
+/**
+ * Extract an acceptable extended-session print from a Webull getQuote payload.
+ *
+ * GATE (load-bearing honesty rule — a rejected print writes nothing to the cache):
+ *   1. The current session must not be RTH.
+ *   2. tradeTime must carry an explicit offset/Z and parse to a finite timestamp.
+ *   3. The print's OWN session (classifySession applied to its timestamp) must equal
+ *      the current session. Without this, a Friday 17:00 ET post-market print would
+ *      masquerade as Sunday-overnight data all weekend.
+ *   4. The print must be < 90 min old (and not in the future — clock-skew guard).
+ *
+ * The served price is ALWAYS pPrice — the only field verified against a live payload.
+ *
+ * @param {object} json    raw getQuote response
+ * @param {number} nowMs
+ * @returns {{price:number, ts:number, session:string, source:'webull', key:'pPrice'}|null}
+ */
+function webullExtractPrint(json, nowMs) {
+  if (!json || typeof json !== "object") return null;
+
+  const nowSession = classifySession(nowMs);
+  if (nowSession === "rth") return null;
+
+  // Telemetry only: note (once per key name) that Webull exposed a candidate overnight field,
+  // so a real one can be verified from the journal before anyone wires it to a price.
+  for (const k of WEBULL_OVERNIGHT_PRICE_KEYS) {
+    if (_webullOvernightKeysLogged.has(k)) continue;
+    const v = Number(json[k]);
+    if (json[k] != null && Number.isFinite(v) && v > 0) {
+      _webullOvernightKeysLogged.add(k);
+      log.info("webull overnight price key observed (telemetry only — not served)", k);
+    }
+  }
+
+  // pPrice is the extended-session print (pre/post confirmed live) and the ONLY field served.
+  const price = Number(json.pPrice);
+  if (json.pPrice == null || !Number.isFinite(price) || price <= 0) return null;
+
+  const tradeTime = typeof json.tradeTime === "string" ? json.tradeTime.trim() : "";
+  if (!WEBULL_TS_OFFSET_RE.test(tradeTime)) return null;
+  const tsMs = Date.parse(tradeTime);
+  if (!Number.isFinite(tsMs)) return null;
+
+  // Gate 3: the print's own session must match the session we are serving into.
+  if (classifySession(tsMs) !== nowSession) return null;
+
+  // Gate 4: freshness. A future-dated print is a clock/parse defect, not data.
+  const ageMs = nowMs - tsMs;
+  if (ageMs > WEBULL_MAX_AGE_MS) return null;
+  if (ageMs < -60 * 1000) return null;
+
+  return { price, ts: Math.floor(tsMs / 1000), session: nowSession, source: "webull", key: "pPrice" };
+}
+
+/**
+ * GET a URL and resolve parsed JSON, or null on any error / timeout / non-2xx.
+ * @param {string} url
+ * @returns {Promise<object|null>}
+ */
+function webullFetchJson(url) {
+  return new Promise((resolve) => {
+    let req;
+    try {
+      req = https.get(url, { timeout: WEBULL_TIMEOUT_MS, headers: WEBULL_HEADERS }, (res) => {
+        const status = res.statusCode || 0;
+        let body = "";
+        res.on("data", (c) => { body += c; });
+        res.on("end", () => {
+          if (status < 200 || status >= 300) { resolve(null); return; }
+          try { resolve(JSON.parse(body)); } catch { resolve(null); }
+        });
+        res.on("error", () => resolve(null));
+      });
+    } catch { resolve(null); return; }
+    req.on("error", () => resolve(null));
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+  });
+}
+
+class WebullFeed {
+  /**
+   * @param {object} [opts]
+   * @param {(url:string)=>Promise<object|null>} [opts.fetchJson] transport override (tests)
+   */
+  constructor(opts = {}) {
+    /** @type {Map<string,{lastReq:number}>} demanded symbols (insertion-ordered LRU) */
+    this.subs = new Map();
+    /** @type {Map<string,{price:number, ts:number, session:string, source:string}>} */
+    this.cache = new Map();
+    /** @type {Map<string,number>} sym → tickerId (resolved once, kept for the process life) */
+    this.tickerIds = new Map();
+    /** @type {Map<string,number>} sym → epoch ms of the last failed lookup (1 h negative TTL) */
+    this.misses = new Map();
+
+    this.timer = null;
+    this.stopped = false;
+    this.lastPollAt = 0;
+    this.consecutiveErrors = 0;
+
+    this._fetchJson = opts.fetchJson || webullFetchJson;
+  }
+
+  start() {
+    this.stopped = false;
+    this._schedule();
+  }
+
+  stop() {
+    this.stopped = true;
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+  }
+
+  /** LRU-track a demanded symbol. */
+  demand(sym) {
+    lruTouch(this.subs, sym, WEBULL_LRU_CAP, (old) => {
+      this.cache.delete(old);
+      log.info("webull LRU-evicted", old);
+    });
+  }
+
+  /** Cached ext print for a symbol, or null. */
+  get(sym) {
+    return this.cache.get(sym) || null;
+  }
+
+  health() {
+    return {
+      subs: this.subs.size,
+      cacheSize: this.cache.size,
+      tickerIds: this.tickerIds.size,
+      lastPollAt: this.lastPollAt ? new Date(this.lastPollAt).toISOString() : null,
+      consecutiveErrors: this.consecutiveErrors,
+      lruCap: WEBULL_LRU_CAP,
+    };
+  }
+
+  /**
+   * Resolve sym → Webull tickerId. Positive results are cached for the process
+   * lifetime; misses are cached for 1 h so an unlisted ticker cannot hammer search.
+   *
+   * @param {string} sym
+   * @returns {Promise<number|null>}
+   */
+  async resolveTickerId(sym) {
+    const hit = this.tickerIds.get(sym);
+    if (hit != null) return hit;
+
+    const missAt = this.misses.get(sym);
+    if (missAt != null && Date.now() - missAt < WEBULL_MISS_TTL_MS) return null;
+
+    const url =
+      `${WEBULL_SEARCH_URL}?keyword=${encodeURIComponent(sym)}&pageIndex=1&pageSize=3`;
+    const json = await this._fetchJson(url);
+    const rows = json && Array.isArray(json.data) ? json.data : [];
+    const want = String(sym).toUpperCase();
+    for (const row of rows) {
+      if (!row) continue;
+      if (String(row.disSymbol || "").toUpperCase() !== want) continue;
+      if (String(row.regionCode || "").toUpperCase() !== "US") continue;
+      if (String(row.template || "") !== "stock") continue;
+      const id = Number(row.tickerId);
+      if (!Number.isFinite(id)) continue;
+      this.tickerIds.set(sym, id);
+      this.misses.delete(sym);
+      return id;
+    }
+    this.misses.set(sym, Date.now());
+    return null;
+  }
+
+  /**
+   * One poll cycle: sequential per-symbol getQuote outside RTH only.
+   * Never throws; a failed symbol leaves its cache entry untouched.
+   */
+  async runPoll() {
+    try {
+      const nowMs = Date.now();
+      if (classifySession(nowMs) === "rth") return; // ext fields are suppressed in RTH anyway
+
+      this._sweepIdle(nowMs);
+      const syms = [...this.subs.keys()];
+      if (!syms.length) return;
+
+      let failed = 0;
+      for (const sym of syms) {
+        try {
+          const id = await this.resolveTickerId(sym);
+          if (id == null) continue;
+          const json = await this._fetchJson(
+            `${WEBULL_QUOTE_URL}?tickerId=${encodeURIComponent(String(id))}&includeSecu=1&more=1`
+          );
+          if (!json) { failed++; continue; }
+          const print = webullExtractPrint(json, Date.now());
+          // A rejected print writes NOTHING — we keep the previous (honest) entry.
+          if (print) {
+            this.cache.set(sym, {
+              price: print.price,
+              ts: print.ts,
+              session: print.session,
+              source: "webull",
+            });
+          }
+        } catch (e) {
+          failed++;
+          log.every("webull-sym-error", "WARN", "webull symbol poll failed", sym,
+            (e && e.message) || String(e));
+        }
+        if (WEBULL_STAGGER_MS > 0) await new Promise((r) => setTimeout(r, WEBULL_STAGGER_MS));
+      }
+
+      this.lastPollAt = Date.now();
+      if (failed) {
+        this.consecutiveErrors++;
+        log.every("webull-poll-error", "WARN", "webull poll had failures",
+          `failed=${failed}/${syms.length}`, `consecutive=${this.consecutiveErrors}`);
+      } else {
+        if (this.consecutiveErrors) log.resetEvery("webull-poll-error");
+        this.consecutiveErrors = 0;
+      }
+    } catch (e) {
+      this.consecutiveErrors++;
+      log.every("webull-poll-error", "WARN", "webull poll crashed",
+        (e && e.message) || String(e), `consecutive=${this.consecutiveErrors}`);
+    }
+  }
+
+  _sweepIdle(nowMs) {
+    const expired = [];
+    for (const [sym, meta] of this.subs) {
+      if (nowMs - meta.lastReq > WEBULL_IDLE_UNSUB_MS) expired.push(sym);
+    }
+    for (const sym of expired) {
+      this.subs.delete(sym);
+      this.cache.delete(sym);
+    }
+    if (expired.length) log.info("webull idle-swept", expired.length, "symbols (>30m idle)");
+  }
+
+  _schedule() {
+    if (this.stopped) return;
+    this.timer = setTimeout(async () => {
+      this.timer = null;
+      await this.runPoll();
+      this._schedule();
+    }, WEBULL_POLL_INTERVAL_MS);
+  }
+}
+
+/**
+ * Guard for cache entries consumed by getExt(). Every leg is expected to store
+ * { price, ts, session, source }; an entry missing a finite price or ts is a
+ * producer defect and must never be served as an ext quote (a missing extPrice
+ * with a populated extSource is worse than no ext block at all).
+ *
+ * @param {object|undefined} e
+ * @returns {object|null}
+ */
+function validExtEntry(e) {
+  if (!e) return null;
+  if (!Number.isFinite(Number(e.price))) return null;
+  if (!Number.isFinite(Number(e.ts))) return null;
+  return e;
+}
+
 // ── ExtFeed — main class ──────────────────────────────────────────────────────
 
 /**
@@ -439,13 +739,19 @@ class ExtFeed {
    * @param {object} opts
    * @param {string} [opts.alpacaKey]
    * @param {string} [opts.alpacaSecret]
+   * @param {()=>Promise<object|null>} [opts.fetchRelay]          transport override (tests)
+   * @param {(sym:string, nowMs:number)=>Promise<object|null>} [opts.fetchYahooExt]  ditto
    */
-  constructor({ alpacaKey, alpacaSecret } = {}) {
+  constructor({ alpacaKey, alpacaSecret, fetchRelay, fetchYahooExt } = {}) {
+    // Assigned before the disabled short-circuit so a test can inject transports on any instance.
+    this._fetchRelay = fetchRelay || r2FetchExtFile;
+    this._fetchYahooExt = fetchYahooExt || yahooFetchExtPrice;
     this.disabled = process.env.EXT_FEED_DISABLE === "1";
     if (this.disabled) {
       log.warn("EXT_FEED_DISABLE=1 — extended-hours feed off");
       this.mode = "disabled";
       this.alpaca = null;
+      this.webull = null;
       this._extMap = null;
       this._yahooCache = null;
       this._yahooSubs = null;
@@ -453,13 +759,26 @@ class ExtFeed {
       return;
     }
 
+    // Webull leg — keyless, covers pre/post only; true overnight verified absent
+    // 2026-07-27 (the session gate in webullExtractPrint rejects the stale post
+    // print it keeps serving). Independent kill-switch.
+    this.webullDisabled = process.env.WEBULL_DISABLE === "1";
+    this.webull = this.webullDisabled ? null : new WebullFeed();
+    if (this.webullDisabled) log.warn("WEBULL_DISABLE=1 — webull ext leg off");
+
     // ext quote store: sym → { price, ts, session, source }
     this._extMap = new Map();
 
     if (alpacaKey && alpacaSecret) {
       this.mode = "alpaca";
       this.alpaca = new AlpacaFeed(alpacaKey, alpacaSecret, (sym, { price, ts, session }) => {
-        this._extMap.set(sym, { price, ts, session, source: "alpaca_overnight" });
+        this.ingest(sym, {
+          price,
+          ts,
+          session,
+          source: "alpaca_overnight",
+          basis: "DELAYED_15M",
+        });
         log.every(`ext-${sym}`, "DEBUG", "ext trade", sym, price, session);
       });
       // Yahoo fallback structures are initialised unconditionally so that if Alpaca
@@ -493,11 +812,16 @@ class ExtFeed {
       // Start the Yahoo polling loop.
       this._scheduleYahooPoll();
     }
+    // Webull runs in both modes — but it does NOT carry true overnight prints
+    // (verified 2026-07-27), so without Alpaca keys the hub serves no ext data
+    // 20:00–04:00 ET.
+    if (this.webull) this.webull.start();
   }
 
   stop() {
     if (this.disabled) return;
     if (this.alpaca) this.alpaca.stop();
+    if (this.webull) this.webull.stop();
     if (this._yahooTimer) { clearTimeout(this._yahooTimer); this._yahooTimer = null; }
   }
 
@@ -522,6 +846,23 @@ class ExtFeed {
         log.info("yahoo ext LRU-evicted", old);
       });
     }
+    // Webull mirrors every demanded US symbol regardless of mode.
+    if (this.webull) this.webull.demand(sym);
+  }
+
+  /**
+   * Ingest an extended-session print from any hub feed. Newer timestamps win,
+   * which lets Alpaca and Polygon coexist without racing the displayed price.
+   *
+   * @param {string} sym
+   * @param {{price:number,ts:number,session:string,source:string,basis?:string}} entry
+   */
+  ingest(sym, entry) {
+    if (this.disabled || !this._extMap || !entry) return;
+    if (!Number.isFinite(entry.price) || !Number.isFinite(entry.ts)) return;
+    if (entry.session === "rth") return;
+    const previous = this._extMap.get(sym);
+    if (!previous || entry.ts >= previous.ts) this._extMap.set(sym, entry);
   }
 
   /**
@@ -538,33 +879,43 @@ class ExtFeed {
     const session = classifySession(nowMs);
     if (session === "rth") return null;
 
-    let entry = null;
-    if (this.mode === "alpaca" && this._extMap) {
-      // Primary: Alpaca websocket.
-      // Fallback: if Alpaca auth failed (plan not entitled), degrade to Yahoo cache
-      // for pre/post windows so ext fields are not silently absent.
-      const alpacaAuthFailed = this.alpaca && this.alpaca.authFailed;
-      if (!alpacaAuthFailed) {
-        entry = this._extMap.get(sym) || null;
-      }
-      if (!entry && alpacaAuthFailed && this._yahooCache) {
-        entry = this._yahooCache.get(sym) || null;
-        // Yahoo covers only pre/post, not overnight.
-        if (entry && entry.session === "overnight") entry = null;
-        if (entry) log.every("alpaca-yahoo-fallback", "WARN",
-          "alpaca authFailed — serving ext data from Yahoo fallback");
-      }
-    } else if (this.mode === "yahoo_fallback" && this._yahooCache) {
-      entry = this._yahooCache.get(sym) || null;
-      // Yahoo covers only pre/post, not overnight.
-      if (entry && entry.session === "overnight") entry = null;
-    }
+    // Preserve the documented provider priority. The shared map contains both
+    // Polygon and Alpaca prints, so an Alpaca entry is only eligible when the
+    // configured Alpaca leg has not failed authentication. A post-market print
+    // must not leak into the overnight lane merely because it is still young.
+    const streamEntry = this._extMap
+      ? validExtEntry(this._extMap.get(sym))
+      : null;
+    const streamSource = String(streamEntry?.source || "");
+    const streamEligible =
+      streamEntry &&
+      streamEntry.session === session &&
+      (
+        !streamSource.startsWith("alpaca") ||
+        (this.alpaca && !this.alpaca.authFailed)
+      );
+    const webullEntry = this.webull
+      ? validExtEntry(this.webull.get(sym))
+      : null;
+    const yahooEntry = this._yahooCache
+      ? validExtEntry(this._yahooCache.get(sym))
+      : null;
+    const entry =
+      (streamEligible ? streamEntry : null) ||
+      (webullEntry?.session === session ? webullEntry : null) ||
+      (
+        yahooEntry?.session === session &&
+        !(session === "overnight" && String(yahooEntry.source || "").startsWith("yahoo"))
+          ? yahooEntry
+          : null
+      );
 
     if (!entry) return null;
 
     // Stale guard: reject ext prints older than 90 minutes.
     const ageMs = nowMs - entry.ts * 1000;
     if (ageMs > 90 * 60 * 1000) return null;
+    if (ageMs < -60 * 1000) return null;
 
     const extPrice = entry.price;
     // chg vs the best available close reference:
@@ -583,6 +934,13 @@ class ExtFeed {
       extTs: entry.ts,
       extSession: entry.session,
       extSource: entry.source,
+      extBasis: entry.basis || (
+        entry.source === "webull" || String(entry.source || "").startsWith("yahoo")
+          ? "UNOFFICIAL"
+          : String(entry.source || "").includes("live")
+            ? "LIVE"
+            : "DELAYED_15M"
+      ),
     };
   }
 
@@ -612,7 +970,7 @@ class ExtFeed {
     // during ext windows; a fresh relay file serves the whole demanded set in
     // ONE fetch. Direct per-symbol Yahoo below remains only as the local-dev /
     // relay-outage fallback.
-    const relay = await r2FetchExtFile();
+    const relay = await this._fetchRelay();
     const relayAsof = relay && relay.asof_utc ? Date.parse(relay.asof_utc) : NaN;
     if (
       relay &&
@@ -624,10 +982,15 @@ class ExtFeed {
       for (const sym of syms) {
         const e = relay.quotes[sym];
         if (e && typeof e.extPrice === "number" && Number.isFinite(e.extPrice)) {
+          // The relay FILE speaks extPrice/extTs (it is shaped for the API response); the
+          // CACHE speaks price/ts, which is what getExt/validExtEntry read. Writing the file's
+          // own field names here made every relay hit invisible — validExtEntry rejected the
+          // entry for having no finite price — while the early `return` below simultaneously
+          // suppressed the direct-Yahoo calls that would otherwise have covered the gap. A
+          // FRESH relay file therefore produced strictly LESS ext data than a stale one.
           this._yahooCache.set(sym, {
-            extPrice: e.extPrice,
-            extTs: typeof e.extTs === "number" ? e.extTs : Math.floor(relayAsof / 1000),
-            close: typeof e.close === "number" ? e.close : undefined,
+            price: e.extPrice,
+            ts: typeof e.extTs === "number" ? e.extTs : Math.floor(relayAsof / 1000),
             session,
             source: "yahoo-relay",
           });
@@ -643,7 +1006,7 @@ class ExtFeed {
     // Fetch in parallel (each is a separate HTTP call; Yahoo has no batch chart endpoint).
     await Promise.all(
       syms.map(async (sym) => {
-        const result = await yahooFetchExtPrice(sym, nowMs);
+        const result = await this._fetchYahooExt(sym, nowMs);
         if (result) {
           this._yahooCache.set(sym, { ...result, source: "yahoo_unofficial" });
         }
@@ -659,8 +1022,20 @@ class ExtFeed {
       yahooSubsSize: this._yahooSubs ? this._yahooSubs.size : 0,
       yahooCacheSize: this._yahooCache ? this._yahooCache.size : 0,
       alpaca: this.alpaca ? this.alpaca.health() : null,
+      webull: this.webull ? this.webull.health() : { disabled: true },
     };
   }
 }
 
-module.exports = { ExtFeed, classifySession, yahooFetchExtPrice, AlpacaFeed, ALPACA_LRU_CAP };
+module.exports = {
+  ExtFeed,
+  classifySession,
+  yahooFetchExtPrice,
+  AlpacaFeed,
+  WebullFeed,
+  webullExtractPrint,
+  lruTouch,
+  ALPACA_LRU_CAP,
+  WEBULL_LRU_CAP,
+  WEBULL_MAX_AGE_MS,
+};
