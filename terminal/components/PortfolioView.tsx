@@ -5,6 +5,7 @@ import { useT, useLang } from "@/lib/i18n";
 import { displayName } from "@/lib/markets";
 import { getJSON } from "@/lib/dataCache";
 import { verdictIsStale } from "@/lib/signalVerdict";
+import PortfolioBriefPanel from "@/components/PortfolioBriefPanel";
 
 type Row = { name: string; zh?: string; col: string; last: number; chg: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
@@ -53,6 +54,7 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
 
   return (
     <main className="main2"><div className="pg">
+        <PortfolioBriefPanel />
         <div className="pg-head"><h2>{t("convictionBook")}</h2><span className="sub">{t("convictionSub")}</span></div>
         <div className="kpis">
           <div className="kpi"><small>{t("names")}</small><b>{rows.length}</b></div>

@@ -1,0 +1,58 @@
+{
+  "schema": "portfolio_brief.v1",
+  "asof": "2026-07-23",
+  "generated_at": "2026-07-23T14:05:00+00:00",
+  "stale": false,
+  "weighting": { "mode": "positions", "label_en": "by cost basis", "label_zh": "按成本权重" },
+  "book": { "n": 9, "covered": 8, "uncovered": ["FOO"] },
+  "headline": {
+    "en": "Your book leans hard into semiconductors, and today's desk read there is Cautious — a bounce, not a turn.",
+    "zh": "你的账本重仓半导体，而研究台今日对该板块的研判是「谨慎」—— 是反弹，不是反转。"
+  },
+  "sections": [
+    {
+      "key": "exposure",
+      "title_en": "Where your book is",
+      "title_zh": "你的账本在哪里",
+      "lines": [
+        {
+          "en": "41% of your book is Technology — today's desk read on Technology is Cautious (a bounce, not a turn), so your effective diversification is thinner than it looks.",
+          "zh": "你账本的 41% 在科技板块 —— 研究台今日对科技的研判是「谨慎」（是反弹，不是反转），所以你的有效分散度比看上去更薄。"
+        }
+      ]
+    },
+    {
+      "key": "earnings",
+      "title_en": "Earnings",
+      "title_zh": "财报",
+      "lines": [
+        {
+          "en": "3 of your 9 names report earnings inside 10 days — AVGO is first, on Jul 29.",
+          "zh": "你 9 只标的中有 3 只将在 10 天内发布财报 —— AVGO 最早，7 月 29 日。"
+        }
+      ]
+    },
+    {
+      "key": "signals",
+      "title_en": "Signal states",
+      "title_zh": "信号状态",
+      "lines": [
+        {
+          "en": "2 of your names sit in Buy now lanes; NVDA has its entry gate shut for now.",
+          "zh": "你有 2 只标的处于「现在买入」通道；NVDA 的入场闸门目前关闭。"
+        }
+      ]
+    },
+    {
+      "key": "filings",
+      "title_en": "Filings this week",
+      "title_zh": "本周备案",
+      "lines": [
+        {
+          "en": "The filings desks touched 2 of your names this week: a Congress buy in NVDA and a fund trim in AAPL.",
+          "zh": "本周备案台触及你 2 只标的：NVDA 出现一笔国会买入，AAPL 出现一笔基金减持。"
+        }
+      ]
+    }
+  ]
+}
