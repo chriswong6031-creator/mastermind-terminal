@@ -1216,12 +1216,26 @@ export interface MiniTableProps {
  * doc-icon) render via `row.cellAdorn`.
  */
 export function MiniTable({ periods, rows, fmt = fmtNum, showChange, pageSize = 6, zh, cornerLabel }: MiniTableProps) {
-  const [page, setPage] = useState(0);
+  // Paging is counted BACKWARD from the newest period (0 = newest page), not forward from
+  // index 0. `periods` is oldest→newest, so a forward counter opens on the OLDEST columns —
+  // invisible while yfinance supplied ~5 periods (one page), but the Massive backfill takes
+  // AAPL to 17 fiscal years / 69 quarters, and landing the reader on 2009 would be wrong.
+  // The page is stored WITH the period-set signature it was chosen for, so a different set
+  // (A/Q toggle, symbol switch) reads as "newest" in the very render that introduces it —
+  // no reset effect, and never a frame showing 2009 before correcting. Keyed on a VALUE
+  // signature, not array identity: parents rebuild these arrays on unrelated renders and
+  // identity-keying would yank the reader back mid-browse.
+  const [paging, setPaging] = useState<{ sig: string; back: number }>({ sig: "", back: 0 });
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [hover, setHover] = useState<string | null>(null);
+  const nPeriods = periods?.length ?? 0;
+  const setSig = `${nPeriods}:${periods?.[0] ?? ""}:${periods?.[nPeriods - 1] ?? ""}`;
   if (!periods || periods.length === 0 || !rows || rows.length === 0) return <Empty zh={zh} />;
   const pages = Math.ceil(periods.length / pageSize);
-  const start = Math.min(page, pages - 1) * pageSize;
+  // clamp: a shorter set (e.g. annual→quarterly on a thin name) must not strand the reader
+  // past the end.
+  const back = paging.sig === setSig ? Math.min(paging.back, pages - 1) : 0;
+  const start = (pages - 1 - back) * pageSize;
   const cols = periods.map((p, i) => ({ p, i })).slice(start, start + pageSize);
   const rowKey = (r: MiniRow, path: string) => `${path}/${r.label}`;
   const renderRow = (r: MiniRow, path: string, key: string): ReactNode[] => {
@@ -1257,9 +1271,9 @@ export function MiniTable({ periods, rows, fmt = fmtNum, showChange, pageSize = 
     <div className="fin-table-wrap">
       {pages > 1 && (
         <div className="fin-table-pager">
-          <button className="fin-pg-chev" disabled={page <= 0} onClick={() => setPage((p) => Math.max(0, p - 1))} aria-label={pick(!!zh, "Earlier periods", "较早期")}>‹</button>
+          <button className="fin-pg-chev" disabled={back >= pages - 1} onClick={() => setPaging({ sig: setSig, back: Math.min(pages - 1, back + 1) })} aria-label={pick(!!zh, "Earlier periods", "较早期")}>‹</button>
           <span className="fin-pg-info">{cols[0]?.p}–{cols[cols.length - 1]?.p}</span>
-          <button className="fin-pg-chev" disabled={page >= pages - 1} onClick={() => setPage((p) => Math.min(pages - 1, p + 1))} aria-label={pick(!!zh, "Later periods", "较近期")}>›</button>
+          <button className="fin-pg-chev" disabled={back <= 0} onClick={() => setPaging({ sig: setSig, back: Math.max(0, back - 1) })} aria-label={pick(!!zh, "Later periods", "较近期")}>›</button>
         </div>
       )}
       <div className="fin-table-scroll">

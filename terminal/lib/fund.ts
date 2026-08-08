@@ -79,6 +79,24 @@ export interface StatementPeriodSet {
   income: IncomeBlock;
   balance: BalanceBlock;
   cashflow: CashflowBlock;
+
+  // ── deep-history provenance (OPTIONAL — added by the Massive/polygon.io backfill,
+  // ingest/backfill_fund_statements_massive.py). Files emitted before that pass, and the
+  // CN/HK generators, carry neither key, so every consumer must treat them as absent-by-
+  // default rather than assuming the backfill ran. ──
+  /**
+   * Per-period source, index-aligned to `periods`: "yfinance" | "massive" |
+   * "yfinance+massive" (or the CN/HK base source). Drives the coverage disclosure — a
+   * "massive"-only period carries statement TOTALS but not the derived rows below.
+   */
+  src_by_period?: string[];
+  /**
+   * Contract fields the vendor payload cannot fill, by block — e.g.
+   * `{income: ["ebitda"], balance: ["cash","debt","net_debt"], cashflow: ["capex","fcf"]}`.
+   * These are null on vendor-only periods BY DESIGN; they are never zero-filled or
+   * estimated. See lib/finStatements.vendorGapNotice.
+   */
+  vendor_gaps?: Record<string, string[]>;
 }
 
 export interface FundStatements {

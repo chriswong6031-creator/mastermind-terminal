@@ -13,11 +13,17 @@
  * columns map to the fiscal-year-end quarter. Icon renders only when a tx exists
  * (absence IS the empty state — §7.5).
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLang } from "../../lib/i18n";
 import { pick, fmtNum, fmtDate } from "../../lib/finFormat";
 import type { Fund, StatementPeriodSet } from "../../lib/fund";
+import { historySpan, vendorGapNotice } from "../../lib/finStatements";
 import { Bars, MiniTable, type Series, type MiniRow } from "./FinCharts";
+
+/** Join row names with the locale's list separator (zh uses the enumeration comma 、). */
+function listJoin(items: string[], zh: boolean): string {
+  return items.join(zh ? "、" : ", ");
+}
 
 export interface StatementsPageProps {
   sym: string;
@@ -55,6 +61,17 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
     return m;
   }, [txQuarters]);
 
+  // The documents strip is a horizontally-scrolling row with one cell per period. At the
+  // ~5 periods yfinance supplied it always fit; the Massive backfill takes annual sets to 17
+  // and quarterly to ~69, so it now scrolls — and it would open on 2009, where no transcript
+  // has ever existed. Park it at the newest end (same "latest first" stance as the table
+  // pager) whenever the period set changes. Imperative scroll only; no state, no re-render.
+  const docStripRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = docStripRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [sym, aq, fund?.asof]);
+
   if (!fund) {
     return (
       <div className="fin-empty fin-empty-lg" role="status">
@@ -87,9 +104,11 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
   };
 
   // ── mini bar-chart strip: series swap with statement type ──
-  // Cap the chart to the last 12 periods so quarterly sets (which can carry 20+
-  // columns) don't crush the x-axis; the full-history MiniTable below stays paged.
-  const CHART_CAP = 12;
+  // Cap the plotted window so the x-axis stays readable; the full-history MiniTable below
+  // stays paged. Annual gets a deeper window than quarterly because the Massive backfill
+  // takes annual sets to ~17 fiscal years — a 12-bar cap would hide the deep history that
+  // is the whole point of the backfill, while 69 quarterly bars would crush the axis.
+  const CHART_CAP = aq === "annual" ? 20 : 16;
   const chartPeriods = periods.slice(-CHART_CAP);
   const chartSeries: Series[] = buildChartSeries(stmt, set, zh).map((s) => ({
     ...s,
@@ -98,6 +117,13 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
 
   // ── table rows: TV taxonomy per statement ──
   const rows: MiniRow[] = buildRows(stmt, set, aq, zh);
+
+  // Deep-history provenance. `span` evidences the depth on the section header; `gapNotice`
+  // names, in plain words, the rows the pre-2021 filings do not carry — so a dash in those
+  // columns reads as "the filing does not report this", never as zero or as lost data.
+  // Both are null on files that predate the Massive backfill (optional contract fields).
+  const span = historySpan(set);
+  const gapNotice = vendorGapNotice(set, stmt, zh);
 
   // Detect cumulative quarterly income for disclosure note
   const showCumNote = aq === "quarterly" && stmt === "income" && set != null && isCumulative(set.income.revenue);
@@ -162,7 +188,7 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
       {periods.length > 0 && (
         <div className="fin-doc-strip" role="group" aria-label={pick(zh, "Earnings call transcripts", "财报电话会记录")}>
           <span className="fin-doc-strip-lbl">{pick(zh, "Transcripts", "记录")}</span>
-          <div className="fin-doc-strip-cells">
+          <div className="fin-doc-strip-cells" ref={docStripRef}>
             {periods.map((p, i) => {
               const tx = txForPeriod(i);
               return (
@@ -196,7 +222,28 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
       <section className="fin-sec">
         <div className="fin-sec-h fin-rail fin-rule" style={{ "--rail": "var(--brand)" } as React.CSSProperties}>
           {pick(zh, "Full history", "完整历史")}
+          {span && (
+            <span className="fin-sec-sub">
+              {pick(
+                zh,
+                `${span.count} ${aq === "annual" ? "fiscal years" : "quarters"} · ${span.first}–${span.last}`,
+                `${span.count} 个${aq === "annual" ? "财年" : "季度"} · ${span.first}–${span.last}`,
+              )}
+            </span>
+          )}
         </div>
+        {gapNotice && (
+          <div className="fin-chart-note" style={{ marginBottom: 8, marginTop: 0 }}>
+            {/* Phrased as a colon-list, not "<rows> show a dash": the list is 1 item on the
+                income statement and 3 on the balance sheet, and a verb would have to agree
+                with both. */}
+            {pick(
+              zh,
+              `Deep history is taken from company filings. Filings before ${gapNotice.fullFrom ?? "that point"} report statement totals only. Not reported there: ${listJoin(gapNotice.rows, false)} — those cells show a dash rather than an estimate.`,
+              `深度历史取自公司备案文件。${gapNotice.fullFrom ?? "更早"}之前的备案仅披露报表总额，其中未披露：${listJoin(gapNotice.rows, true)}——这些单元格显示为短横线，而非估算值。`,
+            )}
+          </div>
+        )}
         {showCumNote && (
           <div className="fin-chart-note" style={{ marginBottom: 8, marginTop: 0 }}>
             {pick(zh,
@@ -362,7 +409,7 @@ function buildRows(stmt: Stmt, set: StatementPeriodSet | undefined, aq: AQ, zh: 
       mk(pick(zh, "Total revenue", "总营收"), d(inc.revenue), { bold: true }),
       mk(pick(zh, "Cost of goods sold", "营业成本"), d(inc.cogs)),
       mk(pick(zh, "Gross profit", "毛利"), d(inc.gross_profit), { bold: true }),
-      mk(pick(zh, "Operating expenses (excl. COGS)", "营业费用（不含成本）"), diff(d(inc.opex), d(inc.cogs))),
+      mk(pick(zh, "Operating expenses (excl. COGS)", "营业费用（不含成本）"), opexExclCogs(d(inc.gross_profit), d(inc.op_income), d(inc.opex))),
       mk(pick(zh, "Operating income", "营业利润"), d(inc.op_income), { bold: true }),
       mk(pick(zh, "Non-operating income (total)", "营业外收入（合计）"), d(inc.nonop_income)),
       mk(pick(zh, "Pretax income", "税前利润"), d(inc.pretax_income), { bold: true }),
@@ -408,10 +455,35 @@ function buildRows(stmt: Stmt, set: StatementPeriodSet | undefined, aq: AQ, zh: 
   ];
 }
 
-/** element-wise a-b, null-preserving. */
-function diff(a: (number | null)[], b: (number | null)[]): (number | null)[] {
-  return (a || []).map((v, i) => {
-    const w = b?.[i];
-    return v != null && w != null ? v - w : v ?? null;
-  });
+/**
+ * Operating expenses EXCLUDING cost of revenue, derived rather than trusted.
+ *
+ * This row used to render `opex − cogs`, which assumed the contract's `opex` was the
+ * COGS-INCLUSIVE total. It is not: gen_fund_us maps `opex` from yfinance's "Operating
+ * Expense" and the Massive backfill from the vendor's `operating_expenses` — BOTH already
+ * exclude cost of revenue. The subtraction therefore printed a fabricated negative on every
+ * US name (AAPL FY2025: −158.8B on the live tab before this fix).
+ *
+ * `gross_profit − op_income` is the source-agnostic identity for this line and holds for
+ * both feeds (AAPL FY2025: 195.2B − 133.1B = 62.1B = the reported figure). We fall back to
+ * the raw `opex` field when either input is missing, and to null when nothing is derivable —
+ * an unknown operating-expense figure shows a dash, never a guess.
+ *
+ * NOTE gen_fund_us's SECONDARY yfinance label for `opex` is "Total Expenses", which IS
+ * COGS-inclusive. The derivation is correct for those rows too; the raw-field fallback is
+ * not, which is why it is only the fallback.
+ */
+function opexExclCogs(
+  grossProfit: (number | null)[],
+  opIncome: (number | null)[],
+  opex: (number | null)[],
+): (number | null)[] {
+  const n = Math.max(grossProfit?.length ?? 0, opIncome?.length ?? 0, opex?.length ?? 0);
+  const out: (number | null)[] = [];
+  for (let i = 0; i < n; i++) {
+    const gp = grossProfit?.[i];
+    const oi = opIncome?.[i];
+    out.push(gp != null && oi != null ? gp - oi : (opex?.[i] ?? null));
+  }
+  return out;
 }
