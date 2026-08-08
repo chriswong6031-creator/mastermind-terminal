@@ -827,6 +827,28 @@ test("Golden Oracle shows the session a 3D signal became knowable", async ({ pag
 
   await expect(signalButton.locator(".sig-btn-go .sig-btn-vd")).toHaveText(zh ? "买入" : "Buy");
   await expect(signalButton.locator(".sig-btn-go .sig-btn-sub")).toHaveText(expectedDate);
+  const gradientSkin = await signalButton.evaluate((button) => {
+    const read = (selector: string) => {
+      const half = button.querySelector<HTMLElement>(selector)!;
+      const halfStyle = getComputedStyle(half);
+      const railStyle = getComputedStyle(half, "::before");
+      return {
+        background: halfStyle.backgroundImage,
+        rail: railStyle.backgroundImage,
+        railShadow: railStyle.boxShadow,
+      };
+    };
+    return { oracle: read(".sig-btn-go"), research: read(".sig-btn-rd") };
+  });
+  for (const half of [gradientSkin.oracle, gradientSkin.research]) {
+    expect(half.background).toContain("radial-gradient");
+    expect(half.background).toContain("linear-gradient");
+    expect(half.rail).toContain("linear-gradient");
+    expect(half.railShadow).not.toBe("none");
+  }
+  await signalButton.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-oracle-research-gradient-card.png`),
+  });
   await signalButton.click();
 
   const dialog = page.locator(".sd-scrim");
