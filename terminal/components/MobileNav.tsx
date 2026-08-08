@@ -3,6 +3,7 @@ import { useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { BrandLockup, BrandMark } from "@/components/BrandMark";
+import DashboardBackButton from "@/components/DashboardBackButton";
 import { TOP, Glyph as NavGlyph } from "@/components/AppNav";
 import SettingsButton from "@/components/settings/SettingsButton";
 import { useT } from "@/lib/i18n";
@@ -74,12 +75,7 @@ export default function MobileNav({
       {/* ── mobile top bar ── */}
       <div className={`mobilebar${fromMacro ? " from-macro" : ""}`}>
         {fromMacro
-          ? (
-            <button className="m-back-prom breathe" onClick={onBack} aria-label={t("backToDashboard")}>
-              <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg>
-              <span>{t("dashboard")}</span>
-            </button>
-          )
+          ? <DashboardBackButton onClick={onBack} variant="mobile" />
           : (
             <button className="m-ic" onClick={() => setDrawer(true)} aria-label="Menu">
               <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" /></svg>

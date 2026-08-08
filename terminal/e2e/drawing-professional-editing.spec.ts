@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { chooseToolbarSplit, runToolbarDetector, toggleToolbarReplay } from "./terminalToolbar";
 
 type SavePayload = { drawings?: Array<{ id?: string; kind?: string; locked?: boolean; color?: string; meta?: Record<string, unknown> }> };
 
@@ -204,8 +205,7 @@ test("Replay hard-locks drawings and the quick bar keeps current plus recent col
   await expect.poll(() => saves.some((payload) => payload.drawings?.some((item) => item.id === "replay-lock" && item.color === "#26c281"))).toBe(true);
   const saveCountBeforeReplay = saves.length;
 
-  const replay = page.getByRole("button", { name: "Replay", exact: true });
-  await replay.click();
+  await toggleToolbarReplay(page);
   await expect(drawing).toHaveAttribute("data-replay-locked", "true");
   await expect(drawing).toHaveAttribute("pointer-events", "none");
   await expect(inspector).toBeHidden();
@@ -241,7 +241,7 @@ test("Replay hard-locks drawings and the quick bar keeps current plus recent col
   await page.keyboard.up("Shift");
   await expect(layer.locator('g[data-drawing-kind="measure"]')).toHaveCount(0);
 
-  await replay.click();
+  await toggleToolbarReplay(page);
   await expect(drawing).toHaveAttribute("data-replay-locked", "false");
   await expect(drawing).toHaveAttribute("pointer-events", "all");
   await select(703);
@@ -251,8 +251,7 @@ test("Replay hard-locks drawings and the quick bar keeps current plus recent col
   await expect.poll(async () => (await lineGeometry(visibleLine)).y1).not.toBe(afterReplay.y1);
 
   await page.keyboard.press("Escape");
-  const splitLayout = page.locator('.seg.tool-adv[title="Split layout"]');
-  await splitLayout.getByRole("button", { name: "2", exact: true }).click();
+  await chooseToolbarSplit(page, 2);
   await expect(page.getByTestId("drawing-toolbar")).toHaveAttribute("data-creation-disabled", "multi-chart");
   const activeLayer = page.locator(".pane.on .drawing-layer");
   const gridBox = await activeLayer.boundingBox();
@@ -335,14 +334,12 @@ test("detector commands remain scoped to the pane that dispatched them", async (
   test.skip((page.viewportSize()?.width ?? 1440) <= 860, "Pane command routing runs once on desktop.");
   await openTerminal(page);
 
-  const splitLayout = page.locator('.seg.tool-adv[title="Split layout"]');
-  await splitLayout.getByRole("button", { name: "2", exact: true }).click();
+  await chooseToolbarSplit(page, 2);
   const panes = page.locator(".pane-grid > .pane");
   await expect(panes).toHaveCount(2);
 
   const detectFib = async () => {
-    await page.getByRole("button", { name: /^Detect/ }).click();
-    await page.locator(".pop.show .menu-row").filter({ hasText: "Auto Fibonacci" }).click();
+    await runToolbarDetector(page, "Auto Fibonacci");
   };
   const paneFib = (index: number) => panes.nth(index).locator('g[data-drawing-kind="fib"]');
 

@@ -157,7 +157,7 @@ svg{display:block}
 
 /* the brand lockup becomes a prominent, breathing "back to the Macro Dashboard" button — but ONLY when the
    user actually arrived from the dashboard (see useFromMacro); direct visitors get the plain logo. */
-.brand-back{display:flex;align-items:center;gap:9px;height:40px;padding:0 15px 0 8px;border-radius:var(--r-pill);cursor:pointer;position:relative;
+.brand-back{display:flex;align-items:center;gap:9px;height:40px;padding:0 15px 0 8px;border-radius:var(--r-pill);cursor:pointer;position:relative;flex:none;min-width:0;overflow:hidden;white-space:nowrap;
   background:linear-gradient(180deg,rgba(41,98,255,.17),rgba(41,98,255,.05));border:1px solid rgba(77,130,255,.42);color:var(--text);
   transition:background var(--t),border-color var(--t);animation:brandBreath 3.4s var(--ease) infinite}
 .brand-back:hover{background:linear-gradient(180deg,rgba(41,98,255,.28),rgba(41,98,255,.1));border-color:var(--brand-2)}
@@ -166,6 +166,7 @@ svg{display:block}
 .brand-back .wm{display:flex;flex-direction:column;line-height:1;text-align:left}
 .brand-back .wm b{font:700 13px/1 var(--font-ui);letter-spacing:.05em}
 .brand-back .wm small{font:600 7.5px/1.4 var(--font-ui);letter-spacing:.16em;color:var(--brand-2);margin-top:3px}
+.brand-back>svg,.brand-back .wm{flex:none}
 @keyframes brandBreath{0%,100%{box-shadow:0 0 0 0 rgba(41,98,255,0)}50%{box-shadow:0 0 0 4px rgba(41,98,255,.11),0 0 22px -2px rgba(41,98,255,.45)}}
 @keyframes chevNudge{0%,100%{transform:translateX(0)}50%{transform:translateX(-2.5px)}}
 
@@ -180,9 +181,9 @@ svg{display:block}
 
 /* ===== terminal shell ===== */
 .app{display:grid;grid-template-columns:60px minmax(0,1fr) var(--rail-w,360px);grid-template-rows:54px 1fr 28px;height:100vh}
-.topbar{grid-column:1/4;display:flex;align-items:center;padding:0 14px 0 12px;border-bottom:1px solid var(--line)}
+.topbar{grid-column:1/4;display:flex;align-items:center;min-width:0;padding:0 14px 0 12px;border-bottom:1px solid var(--line)}
 .tdiv{width:1px;height:28px;background:var(--line);margin:0 12px}
-.pair{display:flex;align-items:center;gap:9px;height:34px;padding:0 12px;border-radius:var(--r-md);background:var(--panel-2);border:1px solid var(--line);cursor:pointer}
+.pair{display:flex;align-items:center;gap:9px;height:34px;padding:0 12px;border-radius:var(--r-md);background:var(--panel-2);border:1px solid var(--line);cursor:pointer;flex:none;white-space:nowrap}
 .pair .dual{position:relative;width:26px;height:18px}
 .pair .dual i{position:absolute;width:18px;height:18px;border-radius:50%;top:0;display:grid;place-items:center;font:800 9px/1 var(--font-ui);border:1.5px solid var(--bg)}
 .pair .dual i:first-child{left:0;background:#76b900;color:#04130a;z-index:2}.pair .dual i:last-child{left:8px;background:var(--brand);color:#fff}
@@ -192,10 +193,12 @@ svg{display:block}
 .cmp-btn:hover{background:var(--panel-3);color:var(--text);border-color:var(--line-3)}
 .cmp-btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.9}
 .cmp-btn .cmp-badge{display:inline-grid;place-items:center;min-width:16px;height:16px;padding:0 4px;border-radius:9px;background:var(--brand);color:#fff;font:700 9.5px/1 var(--font-num);font-style:normal;font-variant-numeric:tabular-nums}
-.stats{display:flex;align-items:center;gap:24px;margin-left:20px}
-.stat{display:flex;flex-direction:column;gap:4px}
+.stats{display:flex;align-items:center;gap:24px;margin-left:20px;flex:none;min-width:0}
+.stat{display:flex;flex-direction:column;gap:4px;flex:none;min-width:0}
 .stat .l{font:600 9.5px/1 var(--font-ui);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
 .stat .v{font:600 13px/1 var(--font-ui);font-variant-numeric:tabular-nums}.stat .v.big{font-size:15px;font-weight:650}
+.stat .l,.stat .v{white-space:nowrap}
+.topbar-livebadge{margin-left:16px;flex:none;white-space:nowrap}
 .spacer{flex:1}
 .icbtn{width:32px;height:32px;border-radius:var(--r-md);display:grid;place-items:center;color:var(--muted);transition:background var(--t),color var(--t)}
 .icbtn:hover{background:var(--panel-2);color:var(--text)}.icbtn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8}
@@ -214,17 +217,47 @@ svg{display:block}
 .appnav .gap{flex:1}
 
 .workspace{grid-column:2;grid-row:2;display:flex;flex-direction:column;min-width:0;overflow:hidden;border-right:1px solid var(--line)}
-.chart-tabs{display:flex;align-items:center;height:44px;padding:0 12px;border-bottom:1px solid var(--line);gap:2px}
-.chart-tabs .ct{height:44px;display:flex;align-items:center;padding:0 4px;margin-right:18px;font:600 13px/1 var(--font-ui);color:var(--muted);border-bottom:2px solid transparent;cursor:pointer}
+.chart-tabs{display:flex;align-items:center;min-width:0;height:44px;padding:0 12px;border-bottom:1px solid var(--line);gap:2px}
+.chart-tabs .ct{height:44px;display:flex;align-items:center;padding:0 4px;margin-right:18px;font:600 13px/1 var(--font-ui);color:var(--muted);border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap;word-break:keep-all;flex:none}
 .chart-tabs .ct.on{color:var(--text);border-bottom-color:var(--brand)}
-.chart-tabs .tools{margin-left:auto;display:flex;align-items:center;gap:6px}
+.chart-tabs .tools{margin-left:auto;display:flex;align-items:center;min-width:0;gap:6px;position:relative}
+.chart-tabs .tools>*{flex:none}
 .seg{display:inline-flex;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden;height:28px}
 .seg button{padding:0 9px;color:var(--muted);font:600 12px/1 var(--font-num);font-variant-numeric:tabular-nums}.seg button+button{border-left:1px solid var(--line-2)}
 .seg button.on{color:var(--brand-2);background:rgba(41,98,255,.13)}
-.tbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 9px;border-radius:var(--r);color:var(--text-2);font:600 12px/1 var(--font-ui)}
+.tbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 9px;border-radius:var(--r);color:var(--text-2);font:600 12px/1 var(--font-ui);white-space:nowrap;word-break:keep-all;flex:none}
 .tbtn:hover{background:var(--panel-2);color:var(--text)}.tbtn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8}
 .tbtn.on{background:rgba(41,98,255,.13);color:var(--brand-2)}
 .tbtn.dtm.on{background:rgba(232,179,57,.16);color:var(--signal);border:1px solid rgba(232,179,57,.35)}
+/* Width-aware chart-toolbar overflow. The full control set is measured before paint, then lower
+   priority actions move behind one anchored More menu. No label is ever compressed or vertical. */
+.chart-tabs[data-toolbar-mode="overflow"] .ct,.chart-tabs[data-toolbar-mode="compact"] .ct{display:none}
+.chart-tabs[data-toolbar-mode="overflow"] .tools,.chart-tabs[data-toolbar-mode="compact"] .tools{margin-left:0;width:100%}
+.chart-tabs[data-toolbar-mode="overflow"] .toolbar-overflow-item,.chart-tabs[data-toolbar-mode="compact"] .toolbar-overflow-item{display:none}
+.chart-tabs[data-toolbar-mode="compact"] .tftray .tfbtn:not(.on):not(.tfbtn-edit){display:none}
+.tfbtn-current{display:none}
+.chart-tabs[data-toolbar-mode="compact"] .tfbtn-current{display:inline-flex}
+.chart-tabs[data-toolbar-mode="full"] .toolbar-more{position:absolute;visibility:hidden;pointer-events:none}
+.chart-tabs[data-toolbar-measuring="true"] .ct{display:flex!important}
+.chart-tabs[data-toolbar-measuring="true"] .toolbar-overflow-item{display:inline-flex!important}
+.chart-tabs[data-toolbar-measuring="true"] .tftray .tfbtn{display:inline-flex!important}
+.toolbar-more{display:inline-flex;position:relative;margin-left:auto}
+.toolbar-more-glyph{fill:currentColor!important;stroke:none!important}
+.toolbar-overflow-pop{top:34px;right:0;left:auto;width:280px;max-width:calc(100vw - 20px);max-height:min(70dvh,620px);overflow-y:auto;padding:5px}
+.toolbar-overflow-head{display:flex;align-items:center;gap:7px;min-height:34px;padding:3px 7px 7px;border-bottom:1px solid var(--line);margin-bottom:3px}
+.toolbar-overflow-head b{font:650 12.5px/1 var(--font-ui);white-space:nowrap}
+.toolbar-overflow-back{width:28px;height:28px;display:grid;place-items:center;border-radius:var(--r);color:var(--text-2);flex:none}
+.toolbar-overflow-back:hover{background:var(--panel-2);color:var(--text)}
+.toolbar-overflow-back svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2.2}
+.toolbar-overflow-pop .menu-row{width:100%;border:0;background:none;text-align:left}
+.toolbar-overflow-pop .menu-row.on{color:var(--brand-2);background:rgba(41,98,255,.1)}
+.toolbar-overflow-pop .menu-row:disabled{opacity:.42;cursor:not-allowed}
+.toolbar-overflow-pop .menu-row.drill>span{margin-left:auto;color:var(--text-dim);font-size:18px}
+.toolbar-overflow-pop .menu-row.empty{color:var(--text-dim);cursor:default}
+.toolbar-overflow-pop .menu-row.empty:hover{background:none}
+.toolbar-overflow-group{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:5px 11px 7px;color:var(--text-2);font:600 12px/1 var(--font-ui)}
+.toolbar-overflow-group>span{white-space:nowrap}
+.toolbar-overflow-group .seg{margin-left:auto;flex:none}
 .chart-body{flex:1;display:flex;min-height:0;background:var(--chart-bg);position:relative}
 .tooldock{width:42px;border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding-top:8px;gap:1px;background:var(--bg)}
 .tooldock button{width:32px;height:32px;border-radius:var(--r);display:grid;place-items:center;color:var(--muted)}
@@ -927,6 +960,25 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .tfgrid .g{font:600 9px/1 var(--font-ui);letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);padding:8px 9px 4px}
 .tfgrid .it{display:flex;align-items:center;justify-content:space-between;padding:6px 9px;border-radius:var(--r);font-size:12.5px;color:var(--text-2);cursor:pointer}.tfgrid .it:hover{background:var(--panel-2);color:var(--text)}.tfgrid .it.on{color:var(--brand-2)}.tfgrid .it.dis{opacity:.4}
 .tfgrid .it .fav{color:var(--text-dim)}.tfgrid .it .fav.on{color:var(--signal)}.tfgrid .it .fav svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.7}.tfgrid .it .fav.on svg{fill:var(--signal);stroke:var(--signal)}
+
+/* The desktop header has a real intermediate state. It stays one 54px row while progressively
+   collapsing decoration; at 860px MobileNav takes over, so there is no squeezed half-desktop state. */
+@media (max-width:1200px){
+  .brand-back{width:70px;padding:0 7px;gap:7px;justify-content:center}
+  .brand-back .wm{display:none}
+  .tdiv{margin:0 8px}
+  .stats{gap:14px;margin-left:14px}
+  .topbar-livebadge{margin-left:12px}
+}
+@media (max-width:1100px){
+  .stat-volume{display:none}
+  .topbar .ai{width:32px;padding:0;margin-left:6px;justify-content:center;gap:0;font-size:0}
+}
+@media (max-width:950px){
+  .cmp-btn{width:32px;padding:0;justify-content:center}
+  .cmp-btn>span{display:none}
+  .topbar-livebadge{width:24px;height:24px;padding:0;justify-content:center;gap:0;font-size:0}
+}
 .wl-row .rm{opacity:0;color:var(--text-dim);width:18px;height:18px;display:grid;place-items:center}.wl-row:hover .rm{opacity:1}.wl-row .rm:hover{color:var(--sell)}.wl-row .rm svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
 
 /* ─── F1 watchlist flags ──────────────────────────────────────────────────── */
@@ -2019,17 +2071,15 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
   /* drawer safe-area bottom */
   .m-drawer{padding-bottom:env(safe-area-inset-bottom,0px)}
   .workspace{grid-column:auto;grid-row:auto;border-right:0;flex:none}
-  .chart-tabs{height:48px;padding:0 6px;gap:4px;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;touch-action:pan-x;-webkit-overflow-scrolling:touch;scrollbar-width:none}
-  .chart-tabs::-webkit-scrollbar{display:none}
+  .chart-tabs{height:48px;width:100%;padding:0 6px;gap:4px;overflow:visible}
   .chart-tabs .ct{height:48px;margin-right:10px;font-size:12.5px;flex:none}
-  /* make all toolbar children non-shrinking so the row scrolls horizontally */
+  /* every child remains intrinsic; AdaptiveToolbar moves overflow into More instead of scrolling */
   .chart-tabs>*,.chart-tabs .tools,.chart-tabs .tools>*,.chart-tabs .pophost{flex:none}
   .tbtn{height:34px;padding:0 11px}
   .tfbtn{height:34px;padding:0 9px;font-size:12.5px}
   .tools{gap:8px}
   /* hide desktop popovers — sheets render instead */
-  .chart-tabs .pop,.chart-tabs .tfgrid{display:none!important}
-  .tool-adv{display:none!important}
+  .chart-tabs .pop:not(.toolbar-overflow-pop),.chart-tabs .tfgrid{display:none!important}
   .chart-fs-btn{display:none}
   .chart-fs-float{display:grid}
   .tooldock{display:none}.ds-dock{display:none}
@@ -2149,7 +2199,7 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
    Day-range illustration (topbar `dr-bar` + detail-rail `dr-panel`)
    Compact but breathable: smaller overall footprint, proper internal padding/gap.
    ============================================================ */
-.dayrange{display:flex;flex-direction:column;gap:3px;min-width:130px;padding:3px 6px}
+.dayrange{display:flex;flex:0 0 auto;flex-direction:column;gap:3px;width:max-content;min-width:142px;max-width:176px;overflow:hidden;padding:3px 6px}
 .dr-cap{display:flex;align-items:center;justify-content:space-between;gap:8px;line-height:1}
 .dr-lab{font:600 9px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .dr-cur{font:700 11px/1 var(--font-num);font-variant-numeric:tabular-nums}
@@ -2157,18 +2207,18 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .dr-fill{position:absolute;left:0;top:0;bottom:0;border-radius:5px 0 0 5px;opacity:.45}
 .dr-open{position:absolute;top:-2px;width:2px;height:9px;margin-left:-1px;background:var(--muted);border-radius:2px;opacity:.65}
 .dr-dot{position:absolute;top:50%;width:8px;height:8px;border-radius:50%;background:var(--bg);border:2px solid var(--up);transform:translate(-50%,-50%);z-index:2}
-.dr-ends{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+.dr-ends{display:grid;grid-template-columns:max-content max-content;align-items:baseline;justify-content:space-between;gap:6px}
 .dr-end{display:inline-flex;align-items:baseline;gap:3px;font:600 10px/1 var(--font-num);color:var(--text-2);font-variant-numeric:tabular-nums}
 .dr-end em{font-style:normal;font:700 8px/1 var(--font-ui);letter-spacing:.05em;color:var(--muted)}
+.dr-lab,.dr-cur,.dr-end,.dr-end b,.dr-end em{white-space:nowrap;word-break:keep-all;flex:none}
 .dr-empty{opacity:.45}
 .dr-empty .dr-dot{display:none}
 /* richer in the detail rail */
-.dr-panel{margin:0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--panel-2)}
-.dr-panel .dayrange{padding:0;min-width:0}
-.dr-panel .dr-track{height:7px;margin:6px 0 4px}
-.dr-panel .dr-dot{width:10px;height:10px}
-.dr-panel .dr-cur{font-size:12.5px}
-.dr-panel .dr-end{font-size:11px}
+.dayrange.dr-panel{width:auto;max-width:none;min-width:0;margin:0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--panel-2)}
+.dayrange.dr-panel .dr-track{height:7px;margin:6px 0 4px}
+.dayrange.dr-panel .dr-dot{width:10px;height:10px}
+.dayrange.dr-panel .dr-cur{font-size:12.5px}
+.dayrange.dr-panel .dr-end{font-size:11px}
 /* === FE3 rail-mini hooks (TV-parity StockAnalysis widgets) === */
 .sa-more-btn{width:100%;margin-top:8px;padding:6px 0;border:1px solid var(--line);border-radius:var(--r);background:var(--panel-2,var(--panel));color:var(--text-2);font:600 11px/1 var(--font-ui);cursor:pointer}
 .sa-more-btn:hover{color:var(--text);border-color:var(--brand-2)}

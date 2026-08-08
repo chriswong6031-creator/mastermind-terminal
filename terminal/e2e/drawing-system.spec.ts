@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { DRAWING_TOOL_REGISTRY } from "../lib/drawingTools";
 import { PHONE_MAX } from "./phoneChrome";
+import { chooseToolbarSplit, runToolbarDetector, toggleToolbarReplay } from "./terminalToolbar";
 
 // R2.1 retired the floating drawing dock on the PHONE (≤640px): the roller strip's pencil raises
 // the Drawings sheet instead. Dock contracts therefore run at the tablet and desktop projects,
@@ -907,25 +908,23 @@ test("drawing lifecycle supports one-shot, sticky, history, visibility, and scop
   // Replay and multi-chart grids preserve existing objects but retire creation
   // until the single live chart context is restored.
   const drawingToolbar = page.getByTestId("drawing-toolbar");
-  const replay = page.getByRole("button", { name: "Replay", exact: true });
   await lineTool.click();
-  await replay.click();
+  await toggleToolbarReplay(page);
   await expect(drawingToolbar).toHaveAttribute("data-creation-disabled", "replay");
   await expect(lineTool).toBeDisabled();
   await expect(cursor).toHaveAttribute("aria-pressed", "true");
   await expect(trendlines).toHaveCount(1);
-  await replay.click();
+  await toggleToolbarReplay(page);
   await expect(drawingToolbar).toHaveAttribute("data-creation-disabled", "false");
   await expect(lineTool).toBeEnabled();
 
   await lineTool.click();
-  const splitLayout = page.locator('.seg.tool-adv[title="Split layout"]');
-  await splitLayout.getByRole("button", { name: "2", exact: true }).click();
+  await chooseToolbarSplit(page, 2);
   await expect(page.locator('.pane-grid[data-n="2"]')).toBeVisible();
   await expect(drawingToolbar).toHaveAttribute("data-creation-disabled", "multi-chart");
   await expect(lineTool).toBeDisabled();
   await expect(cursor).toHaveAttribute("aria-pressed", "true");
-  await splitLayout.getByRole("button", { name: "1", exact: true }).click();
+  await chooseToolbarSplit(page, 1);
   await expect(drawingToolbar).toHaveAttribute("data-creation-disabled", "false");
   await expect(lineTool).toBeEnabled();
 
@@ -975,9 +974,7 @@ test("drawing lifecycle supports one-shot, sticky, history, visibility, and scop
   await expect(committedTriangles).toHaveCount(0);
   await cursor.click();
 
-  const detect = page.getByRole("button", { name: /^Detect/ });
-  await detect.click();
-  await page.locator(".pop.show .menu-row").filter({ hasText: "Auto Fibonacci" }).click();
+  await runToolbarDetector(page, "Auto Fibonacci");
   const detectedFib = layer.locator('g[data-drawing-kind="fib"]');
   await expect(detectedFib).toHaveCount(1);
 

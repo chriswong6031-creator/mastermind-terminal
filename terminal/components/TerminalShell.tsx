@@ -10,7 +10,8 @@ import dynamic from "next/dynamic";
 import { flushSync } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BrandLockup, BrandMark } from "@/components/BrandMark";
+import { BrandLockup } from "@/components/BrandMark";
+import DashboardBackButton from "@/components/DashboardBackButton";
 import { AppNav } from "@/components/AppNav";
 import { initShellBridge, postToShell } from "@/lib/platform/shellBridge";
 import MobileNav from "@/components/MobileNav";
@@ -124,6 +125,7 @@ import {
   type WatchlistSettings,
 } from "@/lib/watchlistSettings";
 import { resolveRegularSessionDisplay } from "@/lib/quoteDisplay";
+import { useAdaptiveToolbar } from "@/lib/useAdaptiveToolbar";
 
 type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -472,6 +474,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const [searchOpen, setSearchOpen] = useState(false); const [seed, setSeed] = useState("");
   const [indOpen, setIndOpen] = useState(false);
   const [wlSetOpen, setWlSetOpen] = useState(false); const [tfOpen, setTfOpen] = useState(false); const [ctOpen, setCtOpen] = useState(false); const [snapOpen, setSnapOpen] = useState(false);
+  const [toolbarMoreOpen, setToolbarMoreOpen] = useState(false);
+  const [toolbarMoreView, setToolbarMoreView] = useState<"main" | "detect" | "layouts" | "snapshot">("main");
   const [replayOn, setReplayOn] = useState(false); const [replayIdx, setReplayIdx] = useState<number | null>(null); const [total, setTotal] = useState(0); const [playing, setPlaying] = useState(false); const [speed, setSpeed] = useState(1);
   const playRef = useRef<any>(null);
   // §7 state
@@ -628,6 +632,27 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const wsMounted = useRef(false);
   const t = useT();
   const { lang } = useLang();
+  const { ref: chartToolbarRef, mode: chartToolbarMode } = useAdaptiveToolbar(
+    `${lang}|${favTfOrder.join(",")}|${panes.length}|${tf}`,
+  );
+  useEffect(() => {
+    if (chartToolbarMode !== "full") return;
+    const frame = window.requestAnimationFrame(() => {
+      setToolbarMoreOpen(false);
+      setToolbarMoreView("main");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [chartToolbarMode]);
+  useEffect(() => {
+    if (!toolbarMoreOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setToolbarMoreOpen(false);
+      setToolbarMoreView("main");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [toolbarMoreOpen]);
   const isMobile = useIsMobile();
   // Narrower than isMobile on purpose — the tablet contract viewport keeps the desktop-era chrome.
   const isPhone = useIsPhone();
@@ -1553,6 +1578,14 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     if (isMtf) { setSplit(1); setPanes([active]); setPaneTfs([tf]); setActivePane(0); return; }
     const sym = active; setSplit(4); setPanes([sym, sym, sym, sym]); setPaneTfs(["D", "3D", "W", "1M"]); setActivePane(0);
   }
+  function toggleReplay() {
+    setReplayOn((on) => {
+      const next = !on;
+      if (next) setReplayIdx(Math.max(20, total - 80));
+      setPlaying(false);
+      return next;
+    });
+  }
   const onTick = useCallback((p: number) => setLivePx(p), []);
   const liveStatus = useLive(active, onTick);
 
@@ -1593,7 +1626,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     return () => clearInterval(playRef.current);
   }, [replayOn, playing, total, speed]);
 
-  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setWlMenuOpen(false); setSnapOpen(false); };
+  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setWlMenuOpen(false); setSnapOpen(false); setToolbarMoreOpen(false); setToolbarMoreView("main"); };
   useEffect(() => { const h = () => closeAll(); window.addEventListener("click", h); return () => window.removeEventListener("click", h); }, []);
 
   // ── Sections ────────────────────────────────────────────────────────────────────────────
@@ -2664,13 +2697,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     <div className={`app${fullChart ? " fs" : ""}${shellMode ? " shell-app" : ""}`} data-shell={shellMode ? "app" : undefined} data-tray={shellMode && shellTray ? "1" : undefined} data-dossier={dossierMode ? "1" : undefined} style={{ ["--rail-w" as any]: `${railW}px` }}>
       {!shellMode && (
       <header className="topbar">
-        {fromMacro
-          ? <button className="brand-back" onClick={onBack} title={t("backToDashboard")} aria-label={t("backToDashboard")}>
-              <span className="bb-chev"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></span>
-              <BrandMark />
-              <span className="wm"><b>MASTERMIND</b><small>← {t("dashboard")}</small></span>
-            </button>
-          : <BrandLockup />}
+        {fromMacro ? <DashboardBackButton onClick={onBack} /> : <BrandLockup />}
         <div className="tdiv" />
         <div className="pair" onClick={() => { setSeed(""); setSearchMode("go"); setSearchOpen(true); }}><span className="dual"><i>{active[0]}</i><i>$</i></span><b>{active}</b>
           <svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></div>
@@ -2680,19 +2707,19 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           {compare.filter((c) => c !== active).length > 0 && <i className="cmp-badge">{compare.filter((c) => c !== active).length}</i>}
         </button>
         <div className="stats">
-          <div className="stat"><span className="l">{t("lastPrice")}</span><span className="v big num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</span></div>
-          <div className="stat"><span className="l">{t("change24h")}</span><span className={`v num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></div>
+          <div className="stat stat-last"><span className="l">{t("lastPrice")}</span><span className="v big num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</span></div>
+          <div className="stat stat-change"><span className="l">{t("change24h")}</span><span className={`v num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></div>
           {/* Live-first, exactly like DayRange below. Reading the manifest row alone put
               TODAY's price beside YESTERDAY's volume in the same strip — the manifest is a
               nightly artifact, so its vol is a full session behind whenever a live quote exists. */}
-          <div className="stat"><span className="l">{t("volume")}</span><span className="v num">{vol(liveQuote?.vol ?? m?.vol)}</span></div>
+          <div className="stat stat-volume"><span className="l">{t("volume")}</span><span className="v num">{vol(liveQuote?.vol ?? m?.vol)}</span></div>
           <DayRange low={liveQuote?.low ?? m?.low} high={liveQuote?.high ?? m?.high} last={lastPx} open={liveQuote?.open ?? m?.open} variant="bar" />
         </div>
         {(() => {
           const basis = liveQuote?.basis ?? (liveStatus === "live" ? "LIVE" : "EOD");
           const badgeCls = basis === "LIVE" ? "livebadge live" : basis === "DELAYED_15M" ? "livebadge delayed" : "livebadge";
           const badgeLbl = basis === "LIVE" ? t("live") : basis === "DELAYED_15M" ? t("delayed15m") : t("historical");
-          return <span className={badgeCls} style={{ marginLeft: 16 }} title={t("liveTip")}><i />{badgeLbl}</span>;
+          return <span className={`${badgeCls} topbar-livebadge`} title={t("liveTip")}><i />{badgeLbl}</span>;
         })()}
         <div className="spacer" />
         <button className="ai" onClick={() => (window as any).MMBrain?.toggle()}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
@@ -2741,14 +2768,15 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
             : <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5" /></svg>}
         </button>
         )}
-        <div className="chart-tabs">
+        <div className="chart-tabs" ref={chartToolbarRef} data-toolbar-mode={chartToolbarMode}>
           <div className="ct on">{t("priceChart")}</div>
           <div className="tools">
-            <div className="pophost">
+            <div className="pophost" data-toolbar-item data-toolbar-timeframes>
               <div className="tftray">
                 {[...favTF].sort((a, b) => tfSortKey(a) - tfSortKey(b)).map((tfi) => (
                   <button key={tfi} className={`tfbtn${tf === tfi ? " on" : ""}${!FUNCTIONAL.has(tfi) ? " dis" : ""}`} disabled={!FUNCTIONAL.has(tfi)} onClick={() => FUNCTIONAL.has(tfi) && setTf(tfi)}>{tfi}</button>
                 ))}
+                {!favTF.includes(tf) && <button className="tfbtn tfbtn-current on" aria-label={tf}>{tf}</button>}
                 <button className="tfbtn tfbtn-edit" onClick={(e) => { e.stopPropagation(); const willOpen = !tfOpen; closeAll(); setTfOpen(willOpen); }} title={t("tfCustomize")}>
                   <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2 10.5V12h1.5l5-5-1.5-1.5-5 5zM11.3 3.7a.9.9 0 0 0 0-1.3l-.7-.7a.9.9 0 0 0-1.3 0L8 3l2 2 1.3-1.3z" /></svg>
                 </button>
@@ -2782,7 +2810,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                 </MobileSheet>
               )}
             </div>
-            <div className="pophost">
+            <div className="pophost" data-toolbar-item data-toolbar-core="true">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !ctOpen; closeAll(); setCtOpen(willOpen); }}><ChartTypeIcon kind={chartType} />{t(CT_TKEY[chartType])}<span style={{ color: "var(--muted)" }}>▾</span></button>
               {/* desktop popover (hidden on mobile via CSS) */}
               <div className={`pop chart-type-pop${ctOpen ? " show" : ""}`} style={{ top: 32, left: 0 }} onClick={(e) => e.stopPropagation()}>
@@ -2802,6 +2830,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
             </div>
             <button
               className="tbtn indicator-library-trigger"
+              data-toolbar-item
+              data-toolbar-core="true"
               aria-haspopup="dialog"
               aria-expanded={indOpen}
               aria-controls={indOpen ? "indicator-library-dialog" : undefined}
@@ -2810,30 +2840,25 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
               <svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>
               {t("indicators")}
             </button>
-            <div className="seg tool-adv" title={t("splitLayout")}>{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
-            <button className={`tbtn tool-adv${isMtf ? " on" : ""}`} title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
-            <button className={`tbtn dtm${dtm ? " on" : ""}`} title={t("dtmTip")} onClick={toggleDtm}><svg viewBox="0 0 24 24" style={{ width: 13, height: 13 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>{t("dtmBtn")}</button>
-            {panes.length > 1 && <button className={`tbtn tool-adv${sync && !mixedTfs ? " on" : ""}`} disabled={mixedTfs} title={mixedTfs ? t("syncMixedTip") : t("syncTip")} onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
+            <div className="seg tool-adv toolbar-overflow-item" data-toolbar-item data-toolbar-action="split" title={t("splitLayout")}>{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
+            <button className={`tbtn tool-adv toolbar-overflow-item${isMtf ? " on" : ""}`} data-toolbar-item title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
+            <button className={`tbtn dtm toolbar-overflow-item${dtm ? " on" : ""}`} data-toolbar-item title={t("dtmTip")} onClick={toggleDtm}><svg viewBox="0 0 24 24" style={{ width: 13, height: 13 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>{t("dtmBtn")}</button>
+            {panes.length > 1 && <button className={`tbtn tool-adv toolbar-overflow-item${sync && !mixedTfs ? " on" : ""}`} data-toolbar-item disabled={mixedTfs} title={mixedTfs ? t("syncMixedTip") : t("syncTip")} onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
             <button
-              className={`tbtn tool-adv${replayOn ? " on" : ""}`}
+              className={`tbtn tool-adv toolbar-overflow-item${replayOn ? " on" : ""}`}
+              data-toolbar-item
+              data-toolbar-action="replay"
               title={mixedTfs && !replayOn ? t("replayMixedTip") : (replayOn ? t("replayExitTip") : t("replayTip"))}
               disabled={mixedTfs && !replayOn}
-              onClick={() => {
-                setReplayOn((on) => {
-                  const next = !on;
-                  if (next) setReplayIdx(Math.max(20, total - 80)); // seed like the reset control
-                  setPlaying(false);
-                  return next;
-                });
-              }}
+              onClick={toggleReplay}
             ><svg viewBox="0 0 24 24"><path d="M3 3v18M8 6l10 6-10 6V6z" /></svg>{t("replayBtn")}</button>
-            <div className="pophost tool-adv">
+            <div className="pophost tool-adv toolbar-overflow-item" data-toolbar-item data-toolbar-action="detect">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !detectOpen; closeAll(); setDetectOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t("detect")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${detectOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
                 {DETECTORS.map(([k]) => <div key={k} className="menu-row" onClick={() => detect(k)}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t(DET_TKEY[k])}</div>)}
               </div>
             </div>
-            <div className="pophost tool-adv">
+            <div className="pophost tool-adv toolbar-overflow-item" data-toolbar-item>
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !layoutOpen; closeAll(); setLayoutOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M9 9v10" /></svg>{t("layouts")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${layoutOpen ? " show" : ""}`} style={{ top: 32, right: 0, minWidth: 230 }} onClick={(e) => e.stopPropagation()}>
                 <div className="menu-save"><input placeholder={t("saveCurrentAs")} value={layoutName} onChange={(e) => setLayoutName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLayout(); }} /><button onClick={saveLayout}>{t("save")}</button></div>
@@ -2841,7 +2866,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                 {layouts.map((l) => <div key={l.id} className="menu-row" onClick={() => loadLayout(l)}>{l.name}<span className="rm" onClick={(e) => { e.stopPropagation(); delLayout(l.id); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span></div>)}
               </div>
             </div>
-            <div className="pophost tool-adv">
+            <div className="pophost tool-adv toolbar-overflow-item" data-toolbar-item>
               <button className="icbtn" title={t("snapshot")} onClick={(e) => { e.stopPropagation(); const willOpen = !snapOpen; closeAll(); setSnapOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg></button>
               <div className={`pop snap-pop${snapOpen ? " show" : ""}`} style={{ top: 36, right: 0, minWidth: 220 }} onClick={(e) => e.stopPropagation()}>
                 <div className="menu-hd" style={{ padding: "7px 12px 5px", fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "var(--text-dim)", borderBottom: "1px solid var(--line)", marginBottom: 2 }}>{t("snapMenuTitle")}</div>
@@ -2863,11 +2888,99 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                 </div>
               </div>
             </div>
-            <button className={`icbtn chart-fs-btn${fullChart ? " on" : ""}`} title={fullChart ? t("exitFullscreen") : t("fullscreenChart")} onClick={() => setFullChart((f) => !f)}>
+            <button className={`icbtn chart-fs-btn toolbar-overflow-item${fullChart ? " on" : ""}`} data-toolbar-item title={fullChart ? t("exitFullscreen") : t("fullscreenChart")} onClick={() => setFullChart((f) => !f)}>
               {fullChart
                 ? <svg viewBox="0 0 24 24"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" /></svg>
                 : <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5" /></svg>}
             </button>
+            <div className="pophost toolbar-more" data-toolbar-more>
+              <button
+                className={`tbtn${toolbarMoreOpen ? " on" : ""}`}
+                data-testid="toolbar-more"
+                title={t("stripMore")}
+                aria-label={t("stripMore")}
+                aria-haspopup="menu"
+                aria-expanded={toolbarMoreOpen}
+                aria-controls={toolbarMoreOpen ? "chart-toolbar-overflow" : undefined}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const willOpen = !toolbarMoreOpen;
+                  closeAll();
+                  setToolbarMoreView("main");
+                  setToolbarMoreOpen(willOpen);
+                }}
+              >
+                <svg className="toolbar-more-glyph" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" /></svg>
+                <span>{t("stripMore")}</span>
+              </button>
+              <div
+                id="chart-toolbar-overflow"
+                role="menu"
+                className={`pop toolbar-overflow-pop${toolbarMoreOpen ? " show" : ""}`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="toolbar-overflow-head">
+                  {toolbarMoreView !== "main" && (
+                    <button type="button" className="toolbar-overflow-back" aria-label={t("stripMore")} onClick={() => setToolbarMoreView("main")}>
+                      <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg>
+                    </button>
+                  )}
+                  <b>{toolbarMoreView === "detect" ? t("detect") : toolbarMoreView === "layouts" ? t("layouts") : toolbarMoreView === "snapshot" ? t("snapMenuTitle") : t("stripMore")}</b>
+                </div>
+
+                {toolbarMoreView === "main" && (<>
+                  <div className="toolbar-overflow-group">
+                    <span>{t("splitLayout")}</span>
+                    <div className="seg" role="group" aria-label={t("splitLayout")}>
+                      {[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => { setGrid(n); setToolbarMoreOpen(false); }}>{n}</button>)}
+                    </div>
+                  </div>
+                  <button type="button" role="menuitem" className={`menu-row${isMtf ? " on" : ""}`} data-toolbar-menu-action="mtf" onClick={() => { mtfLayout(); setToolbarMoreOpen(false); }}>
+                    <svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}
+                  </button>
+                  <button type="button" role="menuitem" className={`menu-row${dtm ? " on" : ""}`} data-toolbar-menu-action="day" onClick={() => { toggleDtm(); setToolbarMoreOpen(false); }}>
+                    <svg viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>{t("dtmBtn")}
+                  </button>
+                  {panes.length > 1 && <button type="button" role="menuitem" className={`menu-row${sync && !mixedTfs ? " on" : ""}`} data-toolbar-menu-action="sync" disabled={mixedTfs} onClick={() => { setSync((s) => !s); setToolbarMoreOpen(false); }}>
+                    <svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}
+                  </button>}
+                  <button type="button" role="menuitem" className={`menu-row${replayOn ? " on" : ""}`} data-toolbar-menu-action="replay" disabled={mixedTfs && !replayOn} onClick={() => { toggleReplay(); setToolbarMoreOpen(false); }}>
+                    <svg viewBox="0 0 24 24"><path d="M3 3v18M8 6l10 6-10 6V6z" /></svg>{t("replayBtn")}
+                  </button>
+                  <button type="button" role="menuitem" className="menu-row drill" data-toolbar-menu-action="detect" onClick={() => setToolbarMoreView("detect")}>
+                    <svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t("detect")}<span>›</span>
+                  </button>
+                  <button type="button" role="menuitem" className="menu-row drill" data-toolbar-menu-action="layouts" onClick={() => setToolbarMoreView("layouts")}>
+                    <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M9 9v10" /></svg>{t("layouts")}<span>›</span>
+                  </button>
+                  <button type="button" role="menuitem" className="menu-row drill" data-toolbar-menu-action="snapshot" onClick={() => setToolbarMoreView("snapshot")}>
+                    <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg>{t("snapshot")}<span>›</span>
+                  </button>
+                  <button type="button" role="menuitem" className="menu-row" data-toolbar-menu-action="fullscreen" onClick={() => { setFullChart((f) => !f); setToolbarMoreOpen(false); }}>
+                    <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5" /></svg>{fullChart ? t("exitFullscreen") : t("fullscreenChart")}
+                  </button>
+                </>)}
+
+                {toolbarMoreView === "detect" && DETECTORS.map(([k]) => (
+                  <button type="button" role="menuitem" key={k} className="menu-row" data-toolbar-menu-action={`detect-${k}`} onClick={() => { detect(k); setToolbarMoreOpen(false); }}>
+                    <svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t(DET_TKEY[k])}
+                  </button>
+                ))}
+
+                {toolbarMoreView === "layouts" && (<>
+                  <div className="menu-save"><input placeholder={t("saveCurrentAs")} value={layoutName} onChange={(e) => setLayoutName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLayout(); }} /><button onClick={saveLayout}>{t("save")}</button></div>
+                  {layouts.length === 0 && <div className="menu-row empty">{t("noSavedLayouts")}</div>}
+                  {layouts.map((l) => <button type="button" role="menuitem" key={l.id} className="menu-row" onClick={() => { loadLayout(l); setToolbarMoreOpen(false); }}>{l.name}<span className="rm" onClick={(e) => { e.stopPropagation(); delLayout(l.id); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span></button>)}
+                </>)}
+
+                {toolbarMoreView === "snapshot" && (<>
+                  <button type="button" role="menuitem" className="menu-row" data-toolbar-menu-action="snapshot-download" onClick={() => { setToolbarMoreOpen(false); window.dispatchEvent(new CustomEvent("mm:snapshot", { detail: { action: "download" } })); }}><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg>{t("snapDownload")}</button>
+                  <button type="button" role="menuitem" className="menu-row" data-toolbar-menu-action="snapshot-copy" onClick={() => { setToolbarMoreOpen(false); window.dispatchEvent(new CustomEvent("mm:snapshot", { detail: { action: "copy" } })); }}><svg viewBox="0 0 24 24"><path d="M8 17H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v3M11 21h8a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-8a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2z" /></svg>{t("snapCopy")}</button>
+                  <button type="button" role="menuitem" className="menu-row" data-toolbar-menu-action="snapshot-share" onClick={() => { setToolbarMoreOpen(false); window.dispatchEvent(new CustomEvent("mm:snapshot", { detail: { action: "share" } })); }}><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>{t("snapCopyLink")}</button>
+                  <button type="button" role="menuitem" className="menu-row" data-toolbar-menu-action="snapshot-tab" onClick={() => { setToolbarMoreOpen(false); window.dispatchEvent(new CustomEvent("mm:snapshot", { detail: { action: "tab" } })); }}><svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3" /></svg>{t("snapTab")}</button>
+                </>)}
+              </div>
+            </div>
           </div>
         </div>
 
