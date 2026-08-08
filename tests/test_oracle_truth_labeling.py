@@ -259,3 +259,56 @@ def test_additive_only_no_field_removed_or_re_valued():
     assert {"schema", "indicator", "symbol", "timeframe", "as_of", "bar_quality",
             "bars", "series", "gates", "signals", "state", "early_dots", "warnings",
             "meta"} <= set(doc)
+
+
+# ── the one place a blocked marker reached a user as an instruction ─────────────
+class _StubData:
+    """The minimal ``alerts_engine.Data`` surface the signal branch touches."""
+
+    def __init__(self, signals):
+        self._signals = signals
+
+    def signals(self, sym):            # noqa: D102 - stub
+        return self._signals
+
+
+def _signal_alert(target="BUY"):
+    return {"symbol": "9988.HK", "created_at": "2026-07-01T00:00:00Z",
+            "condition": {"type": "signal", "target": target}}
+
+
+def test_blocked_entry_never_fires_a_buy_alert():
+    """A regime-vetoed setup still types BUY for back-compat, and the alert engine matched on
+    type alone — so the engine pushed a live "BUY" for an entry it had explicitly refused."""
+    import ingest.alerts_engine as ae
+
+    fired, _value, _note, _extra = ae.evaluate(
+        _signal_alert("BUY"),
+        _StubData([{"ts": "2026-07-09", "type": "BUY", "price": 110.70, "strength": 0.7,
+                    "quality": "regime_blocked", "blocked": True}]),
+    )
+    assert fired is False
+
+
+def test_a_taken_entry_still_fires_a_buy_alert():
+    import ingest.alerts_engine as ae
+
+    fired, value, _note, _extra = ae.evaluate(
+        _signal_alert("BUY"),
+        _StubData([{"ts": "2026-07-09", "type": "BUY", "price": 110.70, "strength": 0.7,
+                    "quality": "take"}]),
+    )
+    assert fired is True and value == 110.70
+
+
+def test_sell_alert_note_names_the_structure_stop():
+    """The note is stored verbatim and rendered to the user — it must not say a bare SELL."""
+    import ingest.alerts_engine as ae
+
+    fired, _value, note, _extra = ae.evaluate(
+        _signal_alert("SELL"),
+        _StubData([{"ts": "2026-07-22", "type": "SELL", "price": 440.60, "strength": 0.6,
+                    "basis": "structure_stop"}]),
+    )
+    assert fired is True
+    assert note.startswith("STRUCTURE STOP signal on 2026-07-22")

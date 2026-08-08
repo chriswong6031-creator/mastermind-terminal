@@ -70,7 +70,12 @@ interface OracleSlice {
       last_scored_ts?: string | null;
       position_hint?: string | null;
       bars_since_signal?: number | null;
-      /** deprecated misnomer: carries strong_bull (weekly+monthly bull & above 200d) */
+      /** basis of the signal that set position_hint — "structure_stop" on a stopped-out flat */
+      last_scored_basis?: string | null;
+      /** DEPRECATED MISNOMER: carries strong_bull (weekly+monthly bull & above 200d).
+       *  NOT overbought, and NOT the cycles pipeline's "Extended — don't chase" caution
+       *  (that one rides `overbought`). Read strong_bull/overbought by name; this alias
+       *  exists only so pre-2026-07-15 slices keep parsing. Do not add new readers. */
       extended?: boolean | null;
       strong_bull?: boolean | null;
       /** the true Pine extendedNow (RSI>=70 or %K>=80) — absent on pre-2026-07-15 slices */
@@ -81,6 +86,12 @@ interface OracleSlice {
     signals?: Array<{
       ts: string; known_ts?: string | null; type?: string; price?: number | null;
       quality?: string | null; quality_reason?: string | null; scored?: boolean | null;
+      /** what machine produced the event — "structure_stop" on every SELL */
+      basis?: string | null;
+      /** the v2 regime gate REFUSED this entry; type still reads BUY/REBUY for back-compat */
+      blocked?: boolean | null;
+      /** SELL only: the confirmed swing low the daily close broke */
+      stop_level?: number | null;
     }> | null;
   } | null;
 }
@@ -96,6 +107,48 @@ const SELLISH = ["SELL", "CUT", "TRIM"];
 // engine quality string lands on both surfaces at once (add it here, nowhere else).
 export const SOFT_Q: ReadonlySet<string> = new Set(["pending", "block", "regime_blocked"]);
 
+/** HK-O1: the v2 regime gate REFUSED this entry. The emitter keeps `type` at BUY/REBUY so
+ *  every pre-existing reader still parses, so THIS — never the type — is the render and
+ *  scoring key. Reads the explicit flag first and falls back to the legacy quality string
+ *  (slices emitted before 2026-08-08 carry only the string).
+ *  Contract: a blocked setup is never drawn with buy geometry, never enters a Buy panel
+ *  state or the latest-signal card, and never anchors a verdict. */
+export function isBlockedSignal(
+  s?: { blocked?: unknown; quality?: unknown } | null,
+): boolean {
+  if (!s) return false;
+  return s.blocked === true || String(s.quality ?? "").toLowerCase() === "regime_blocked";
+}
+
+/** HK-O1: every SELL the SLICE emits is the ARM→CONFIRM structure break — a TRAILING STOP on
+ *  a swing-low break, not a momentum/oracle exit (the MACD-RSI cross-down has not been emitted
+ *  to this stream since the GC v2 unification). Surfaces must say so.
+ *
+ *  STRICT on `basis` by design. Slices emitted before 2026-08-08 carry no basis, and a bare
+ *  slice SELL is the same machine — but the CLIENT-PINE FALLBACK (ChartPanel.oracleSignals,
+ *  used when a name ships no signal history) emits a genuinely momentum-sourced SELL with no
+ *  basis either. So the legacy default is applied at the slice boundary, where provenance is
+ *  known (sliceSignalBasis), never by guessing from a bare marker here. */
+export function isStructureStop(
+  s?: { type?: unknown; basis?: unknown } | null,
+): boolean {
+  if (!s) return false;
+  return String(s.type ?? "").toUpperCase() === "SELL"
+    && String(s.basis ?? "").toLowerCase() === "structure_stop";
+}
+
+/** Normalize a signal read off `slice.indicator.signals` — and ONLY off there. Every SELL in
+ *  that stream comes from v2 sell_confirms, so a pre-2026-08-08 slice's bare SELL gets the
+ *  basis it always had in fact. Returns undefined for every other event kind (basis is
+ *  SELL-only; a default on entries would be a claim nobody made). */
+export function sliceSignalBasis(
+  s?: { type?: unknown; basis?: unknown } | null,
+): string | undefined {
+  const b = s?.basis;
+  if (typeof b === "string" && b) return b.toLowerCase();
+  return String(s?.type ?? "").toUpperCase() === "SELL" ? "structure_stop" : undefined;
+}
+
 /** THE scored-lane anchor rule — the newest signal the engine did NOT refuse
  *  (quality !== 'regime_blocked'; contracts.py: a vetoed entry must never anchor a verdict).
  *  Shared by the rail card (oracleVerdict), the chart chip (ChartPanel.paintStatus) and the
@@ -103,7 +156,7 @@ export const SOFT_Q: ReadonlySet<string> = new Set(["pending", "block", "regime_
  *  `maxTs` (ISO date) bounds the scan — the replay / stale-cache guard: signals dated after
  *  the last visible bar never anchor. Also returns the newest refused signal NEWER than the
  *  anchor (`blockedTail`) — the rail card's "blocked — not an entry" note. */
-export function anchorSignal<S extends { ts?: unknown; type?: unknown; quality?: unknown }>(
+export function anchorSignal<S extends { ts?: unknown; type?: unknown; quality?: unknown; blocked?: unknown }>(
   signals: readonly (S | null | undefined)[] | null | undefined,
   maxTs?: string | null,
 ): { anchor: S | null; blockedTail: S | null } {
@@ -113,7 +166,9 @@ export function anchorSignal<S extends { ts?: unknown; type?: unknown; quality?:
       const s = signals[i];
       if (!s || !s.type || typeof s.ts !== "string" || !s.ts) continue;
       if (maxTs != null && s.ts > maxTs) continue;
-      if (String(s.quality || "").toLowerCase() === "regime_blocked") {
+      // gate on the explicit HK-O1 flag OR the legacy quality string — either alone is enough
+      // to refuse the anchor, so neither can be the single point that re-opens the hole.
+      if (isBlockedSignal(s)) {
         if (!blockedTail) blockedTail = s;
         continue;
       }
@@ -145,7 +200,12 @@ function eventColor(u: string): string {
       : "var(--signal)";
 }
 
-function eventLabel(u: string, zh: boolean): string {
+/** HK-O1 — the structure stop's own name, everywhere a SELL is spelled out.
+ *  Glance tier stays inside the word budget; the swing-low mechanic lives in the note. */
+export const STRUCTURE_STOP_LABEL: [string, string] = ["Structure stop", "结构止损"];
+
+function eventLabel(u: string, zh: boolean, basis?: string | null): string {
+  if (isStructureStop({ type: u, basis })) return zh ? STRUCTURE_STOP_LABEL[1] : STRUCTURE_STOP_LABEL[0];
   if (u === "RECLAIM") return zh ? "重新入场" : "Re-entry";
   if (zh) {
     const labels: Record<string, string> = {
@@ -225,6 +285,14 @@ export function oracleVerdict(
   const age = ageDays(effKnownTs, now);
   const effU = eff ? String(eff.type).toUpperCase() : null;
   const stale = age == null || age > ORACLE_STALE_DAYS;
+  // HK-O1: what machine produced the anchor. `eff` came off the slice stream, so the legacy
+  // default is sound here; a stale/absent anchor falls back to the state block's own record.
+  const effBasis = eff ? (sliceSignalBasis(eff) ?? null) : (st?.last_scored_basis ?? null);
+  const stopped = isStructureStop({ type: effU, basis: effBasis });
+  // the mechanic, in plain words — the glance label stays two words, this rides the tooltip
+  const stopNote = (lvl?: number | null) => (zh
+    ? `跟踪止损 — 日线收盘跌破前低${lvl != null ? ` ${lvl}` : ""}，非动量离场`
+    : `trailing stop — the daily close broke the prior swing low${lvl != null ? ` at ${lvl}` : ""}, not a momentum exit`);
 
   // ── fresh effective event: it IS the verdict (today's full-authority path) ──
   if (eff && effU && !stale) {
@@ -234,6 +302,8 @@ export function oracleVerdict(
     const soft = effU === "RECLAIM";
     const notes: string[] = [horizon];
     if (eff.price != null) notes.push(`@ ${eff.price}`);
+    // a stop-out must never be readable as an oracle-momentum call (forensic §1)
+    if (stopped) notes.push(stopNote(eff.stop_level));
     const q = String(eff.quality || "").toLowerCase();
     if (soft) {
       notes.push(eff.scored === false
@@ -261,7 +331,7 @@ export function oracleVerdict(
       );
     }
     return {
-      label: eventLabel(effU, zh),
+      label: eventLabel(effU, zh, effBasis),
       color: eventColor(effU),
       raw: effU,
       sub: fmtDate(effKnownTs!, zh) + (freshBlock
@@ -299,7 +369,7 @@ export function oracleVerdict(
     const btEcho = effU ?? scored ?? mv;
     if (btEcho) {
       notes.push(
-        `${zh ? "上次信号" : "last signal"}: ${eventLabel(btEcho, zh)}` +
+        `${zh ? "上次信号" : "last signal"}: ${eventLabel(btEcho, zh, effBasis)}` +
         (effKnownTs ? ` · ${fmtDate(effKnownTs, zh)}` : "") +
         (eff?.price != null ? ` @ ${eff.price}` : ""),
       );
@@ -335,7 +405,7 @@ export function oracleVerdict(
       // the dated history is one tap away in Signal history.)
       if (echoU) {
         notes.push(
-          `${zh ? "上次信号" : "last signal"}: ${eventLabel(echoU, zh)}` +
+          `${zh ? "上次信号" : "last signal"}: ${eventLabel(echoU, zh, effBasis)}` +
           (effKnownTs ? ` · ${fmtDate(effKnownTs, zh)}` : "") +
           (eff?.price != null ? ` @ ${eff.price}` : ""),
         );
@@ -358,7 +428,7 @@ export function oracleVerdict(
   if (eff?.price != null) notes.push(`@ ${eff.price}`);
   if (mv && mv !== u) notes.push(zh ? `数据通道不一致（清单通道：${mv}）` : `data lanes disagree (screener lane: ${mv})`);
   return {
-    label: eventLabel(u, zh),
+    label: eventLabel(u, zh, effBasis),
     color: eventColor(u),
     raw: u,
     sub: effKnownTs ? fmtDate(effKnownTs, zh) : zh ? "无日期" : "undated",

@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { pick, fmtPct, fmtDate } from "../../lib/finFormat"
 import { LineSeries } from "./FinCharts"
 import { getJSON } from "../../lib/dataCache"
-import { oracleVerdict, deskVerdict, signalKnownTs } from "../../lib/signalVerdict"
+import { oracleVerdict, deskVerdict, signalKnownTs, isBlockedSignal, isStructureStop, sliceSignalBasis } from "../../lib/signalVerdict"
 import { computeTrendState } from "../../lib/trend"
 import { computeRatings, verdictFromScore } from "../../lib/techRating"
 import type { Bar } from "../../lib/fund"
@@ -79,6 +79,13 @@ interface Signal {
   score_basis?: "full" | "partial" | string | null
   // CUT: scored:false — a caution, not a scored exit
   scored?: boolean | null
+  // HK-O1 truth-in-labeling. `basis` names the machine: every SELL here is the ARM→CONFIRM
+  // structure break (a trailing stop on a swing-low break), never a momentum/oracle exit.
+  // `blocked` marks an entry the regime gate REFUSED — type still reads BUY/REBUY for
+  // back-compat, so this flag is what the render must key on.
+  basis?: "structure_stop" | string | null
+  blocked?: boolean | null
+  stop_level?: number | null
 }
 
 /** GC v2 structure-break warning side channel: {ts, kind:"arm"|"confirm"}. */
@@ -204,7 +211,10 @@ function qualityLabel(q: string | null | undefined, zh: boolean): string {
   if (v === "take") return pick(zh, "Take", "采纳")
   if (v === "block") return pick(zh, "Blocked", "拦截")
   if (v === "pending") return pick(zh, "Pending", "待定")
-  if (v === "regime_blocked") return pick(zh, "Regime-blocked", "结构破位")
+  // HK-O1: the zh label used to read 结构破位 — literally "structure break" — the SAME words as
+  // the structure-stop SELL and the ⛔ structure-break warning below. A 200d/regime veto is a
+  // different machine entirely, so it takes the regime gate's own name (matching signalVerdict).
+  if (v === "regime_blocked") return pick(zh, "Regime-blocked", "趋势闸拦截")
   return ""
 }
 function qualityColor(q: string | null | undefined): string {
@@ -708,8 +718,10 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
               </div>
               {/* conviction/band/size intentionally NOT repeated here — they are the Research
                   Desk card's read (left/top); this card is the signal engine's scorecard */}
-              {/* GC v2: latest signal's keeper quality + recipe tier (BUY|REBUY only) */}
-              {latestSig && (latestSig.type === "BUY" || latestSig.type === "REBUY") && latestSig.quality && (
+              {/* GC v2: latest signal's keeper quality + recipe tier (BUY|REBUY only).
+                  HK-O1: a REFUSED entry is excluded — it has no tier and no score, and this
+                  card is the entry scorecard. Its own disclosure line renders below instead. */}
+              {latestSig && (latestSig.type === "BUY" || latestSig.type === "REBUY") && latestSig.quality && !isBlockedSignal(latestSig) && (
                 <div className="sig-dims">
                   <div className="sig-dim">
                     <span className="sig-dim-k">{pick(zh, "Latest quality", "最新质量")}</span>
@@ -729,6 +741,16 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                       <span className="sig-dim-v">{Math.round(latestSig.score)}<i>/100{latestSig.score_basis === "partial" ? "*" : ""}</i></span>
                     </div>
                   )}
+                </div>
+              )}
+              {/* HK-O1: the newest marker is an entry the regime gate refused. It never enters the
+                  scorecard above (no tier, no score, never traded), but it is a real dated fact and
+                  is the one thing this panel must not bury — say it plainly instead. */}
+              {latestSig && isBlockedSignal(latestSig) && (
+                <div className="sig-conflict" style={{ color: "var(--muted)" }}>
+                  {pick(zh, "⃠ Entry blocked by the regime gate — not an entry",
+                    "⃠ 入场被趋势闸拦截 — 非入场信号")}
+                  <span style={{ opacity: 0.7, marginLeft: 6 }}>{fmtDate(signalKnownTs(latestSig) ?? latestSig.ts)}</span>
                 </div>
               )}
               {/* GC v2: fresh structure-break warning (only when it post-dates the latest signal) */}
@@ -765,9 +787,22 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
               ) : (
                 <div className="sd-siglist">
                   {sigs.map((sig, i) => {
-                    const isEntry = sig.type === "BUY" || sig.type === "REBUY"
+                    // HK-O1: `blocked` (not `type`) decides whether this row is an entry — a
+                    // regime-vetoed setup still types BUY/REBUY for back-compat, and it must
+                    // never wear the buy pill or count as one in the list.
+                    const isBlocked = isBlockedSignal(sig)
+                    const isEntry = !isBlocked && (sig.type === "BUY" || sig.type === "REBUY")
                     const isReclaim = sig.type === "RECLAIM"
-                    const q = isEntry ? qualityLabel(sig.quality, zh) : ""
+                    const isStop = isStructureStop({ type: sig.type, basis: sliceSignalBasis(sig) })
+                    // badge text stays inside the 58px pill and matches the on-chart glyph, so the
+                    // list and the chart read as one system; the mechanic rides the qualifier + hover.
+                    const badgeText = isBlocked ? pick(zh, "BLOCKED", "已拦截")
+                      : isStop ? pick(zh, "STOP", "止损")
+                        : isReclaim ? pick(zh, "RE-ENTRY", "再入场") : sig.type
+                    const qualifier = isBlocked ? pick(zh, "not an entry", "非入场信号")
+                      : isStop ? pick(zh, "swing-low break", "跌破前低")
+                        : isEntry ? qualityLabel(sig.quality, zh) : ""
+                    const q = qualifier
                     const knownTs = signalKnownTs(sig) ?? sig.ts
                     const knownDate = signalHistoryDate(knownTs, zh)
                     const chartDate = signalHistoryDate(sig.ts, zh)
@@ -779,14 +814,30 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                         )
                       : pick(zh, "Jump to chart", "跳转到图表")
                     return (
-                      <button key={i} className="sd-sigrow" onClick={() => handleJump(sig.ts)} title={isReclaim ? (sig.quality_reason || dateTitle) : dateTitle}>
+                      <button
+                        key={i}
+                        className="sd-sigrow"
+                        onClick={() => handleJump(sig.ts)}
+                        title={
+                          isBlocked
+                            ? pick(zh,
+                              `Entry refused by the regime gate — not an entry${sig.quality_reason ? ` (${sig.quality_reason})` : ""}`,
+                              `入场被趋势闸拒绝 — 非入场信号${sig.quality_reason ? `（${sig.quality_reason}）` : ""}`)
+                            : isStop
+                              ? pick(zh,
+                                `Structure stop — the daily close broke the prior swing low${sig.stop_level != null ? ` at ${sig.stop_level}` : ""}, not a momentum exit`,
+                                `结构止损 — 日线收盘跌破前低${sig.stop_level != null ? ` ${sig.stop_level}` : ""}，非动量离场`)
+                              : isReclaim ? (sig.quality_reason || dateTitle) : dateTitle
+                        }
+                      >
                         {/* tinted (not solid) pills — the signal color rides --sc; RECLAIM keeps the
-                            hollow treatment (glyph law — never the solid entry pill) */}
+                            hollow treatment (glyph law — never the solid entry pill), and HK-O1 gives
+                            a REFUSED entry the same hollow/muted treatment so it can never read green */}
                         <span
-                          className={"sd-sig-badge" + (isReclaim ? " hollow" : "")}
-                          style={{ ["--sc" as any]: isReclaim ? "var(--buy)" : signalColor(sig.type) }}
+                          className={"sd-sig-badge" + (isReclaim || isBlocked ? " hollow" : "")}
+                          style={{ ["--sc" as any]: isBlocked ? "var(--muted)" : isReclaim ? "var(--buy)" : signalColor(sig.type) }}
                         >
-                          {isReclaim ? pick(zh, "RE-ENTRY", "再入场") : sig.type}
+                          {badgeText}
                         </span>
                         {/* pre-promotion display-tier markers (scored:false) carry the unscored tag;
                             scored reclaim-lane events are normal position events and need none */}

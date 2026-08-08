@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs, SOFT_Q } from "../signalVerdict";
+import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs, SOFT_Q,
+  isBlockedSignal, isStructureStop, sliceSignalBasis } from "../signalVerdict";
 
 // Frozen "today" so ages are deterministic: 2026-07-14 (the NVDA/GOOGL stale-Sell incident date).
 const NOW = Date.parse("2026-07-14T21:00:00Z");
 
-type Sig = { ts: string; known_ts?: string | null; type?: string; price?: number | null; quality?: string | null; quality_reason?: string | null; scored?: boolean | null };
+type Sig = { ts: string; known_ts?: string | null; type?: string; price?: number | null; quality?: string | null; quality_reason?: string | null; scored?: boolean | null; basis?: string | null; blocked?: boolean | null; stop_level?: number | null };
 
 function sliceOf(lastSignal: string, signals: Sig[]) {
   return { indicator: { signals, state: { last_signal: lastSignal } } };
@@ -17,7 +18,10 @@ describe("oracleVerdict — age, dimming, provenance", () => {
   it("dates and dims a stale slice verdict (NVDA incident shape: SELL 41d old)", () => {
     const v = oracleVerdict("SELL", slice("SELL", "2026-06-03", 205.1), false, NOW);
     expect(v.raw).toBe("SELL");
-    expect(v.label).toBe("Sell");
+    // HK-O1: a slice SELL is the ARM->CONFIRM structure break — a trailing stop on a swing-low
+    // break, not the momentum cross-down. `raw` stays "SELL" (the scored lane is unchanged);
+    // only the human label stopped wearing the oracle costume.
+    expect(v.label).toBe("Structure stop");
     expect(v.sub).toBe("Jun 3");
     expect(v.dim).toBe(true);
     expect(v.note).toContain("@ 205.1");
@@ -123,7 +127,7 @@ describe("oracleVerdict — age, dimming, provenance", () => {
     expect(v.note).toContain("not an entry");
     expect(v.note).toContain("bear_block: monthly-bear & below-200 & 2W-not-bull");
     expect(v.note).toContain("@ 603.12");
-    expect(v.note).toContain("last signal: Sell · May 4 @ 612.31");
+    expect(v.note).toContain("last signal: Structure stop · May 4 @ 612.31");
   });
 
   it("a STALE regime_blocked tail keeps the old contract: never anchors, dated render from the unrefused marker", () => {
@@ -138,7 +142,7 @@ describe("oracleVerdict — age, dimming, provenance", () => {
     );
     expect(v.raw).toBe("SELL");
     expect(v.sub).toContain("Feb 4");
-    expect(v.label).toBe("Sell");
+    expect(v.label).toBe("Structure stop");   // HK-O1 — the stale anchor is relabelled too
   });
 
   it("a fresh scored RECLAIM renders as a hollow Re-entry verdict (reclaim lane)", () => {
@@ -201,7 +205,7 @@ describe("oracleVerdict — age, dimming, provenance", () => {
 
   it("zh variant localizes the sub-line", () => {
     const v = oracleVerdict("SELL", slice("SELL", "2026-06-03"), true, NOW);
-    expect(v.label).toBe("卖出");
+    expect(v.label).toBe("结构止损");        // HK-O1 — bilingual parity on the stop label
     expect(v.sub).toContain("6月");
   });
 });
@@ -224,7 +228,7 @@ describe("oracleVerdict — stance-first render when the event is history", () =
     expect(v.color).toBe("var(--up)");
     expect(v.dim).toBe(false);
     expect(v.sub).toBeNull();                              // no rendered echo — the stance IS the read
-    expect(v.note).toContain("last signal: Sell · Jun 8"); // the event survives as tooltip context
+    expect(v.note).toContain("last signal: Structure stop · Jun 8"); // survives as tooltip context
     expect(v.note).toContain("not a trade signal");
   });
 
@@ -284,7 +288,7 @@ describe("oracleVerdict — stance-first render when the event is history", () =
     expect(v.sub).toBe("Jul 3");                       // availability date, not the chart date
     expect(v.note).toContain("bear_block");
     expect(v.note).toContain("current stance: Downtrend — stand aside");
-    expect(v.note).toContain("last signal: Sell · Feb 5 @ 45.55");
+    expect(v.note).toContain("last signal: Structure stop · Feb 5 @ 45.55");
   });
 
   it("zh blocked-entry strings ship", () => {
@@ -337,7 +341,8 @@ describe("oracleVerdict — stance-first render when the event is history", () =
     const v = oracleVerdict("SELL", slice("SELL", "2026-06-03", 205.1), false, NOW);
     expect(v.stance).toBeUndefined();
     expect(v.dim).toBe(true);
-    expect(v.label).toBe("Sell");
+    expect(v.label).toBe("Structure stop");   // HK-O1 — legacy slices carry no basis; the
+    // slice boundary supplies it, because every SELL in that stream came from sell_confirms.
   });
 
   it("zh stance strings ship", () => {
@@ -505,7 +510,7 @@ describe("oracleVerdict — a live blocked entry is disclosed under a fresh anch
       blocked,
     ]), false, NOW);
     expect(v.raw).toBe("SELL");                 // the scored truth still anchors the card
-    expect(v.label).toBe("Sell");
+    expect(v.label).toBe("Structure stop");     // …and names the machine that produced it
     expect(v.blocked).toBe(true);
     expect(v.sub).toContain("Jul 6");           // anchor date kept
     expect(v.sub).toContain("entry blocked");   // …and the refusal rides with it
@@ -552,5 +557,112 @@ describe("oracleVerdict — a live blocked entry is disclosed under a fresh anch
     expect(v.blocked).toBe(true);
     expect(v.sub).toContain("入场被拦截");
     expect(v.note).toContain("被趋势闸拦截");
+  });
+});
+
+// ── HK-O1: truth in labeling ────────────────────────────────────────────────────
+// Receipt: Macro Dashboard research/prophet_us_audit/HK_ORACLE_FORENSIC_2026-08-08.md.
+// The emitter says WHAT a marker is (basis / blocked); these readers are what stops the
+// three surfaces (chart glyph, rail card, signal history) from labelling it three ways.
+describe("HK-O1 — a structure stop is labelled as one", () => {
+  it("isStructureStop is STRICT on basis so the client-Pine fallback keeps its momentum SELL", () => {
+    expect(isStructureStop({ type: "SELL", basis: "structure_stop" })).toBe(true);
+    // ChartPanel.oracleSignals emits a genuinely momentum-sourced SELL with no basis —
+    // guessing "stop" from a bare marker would relabel a real momentum cross.
+    expect(isStructureStop({ type: "SELL" })).toBe(false);
+    expect(isStructureStop({ type: "BUY", basis: "structure_stop" })).toBe(false);
+    expect(isStructureStop(null)).toBe(false);
+  });
+
+  it("sliceSignalBasis supplies the legacy default only at the slice boundary, SELL-only", () => {
+    expect(sliceSignalBasis({ type: "SELL", basis: "structure_stop" })).toBe("structure_stop");
+    // pre-2026-08-08 slices carry no basis; every SELL there came from v2 sell_confirms too
+    expect(sliceSignalBasis({ type: "SELL" })).toBe("structure_stop");
+    // basis is SELL-only — a default on an entry would be a claim nobody made
+    expect(sliceSignalBasis({ type: "BUY" })).toBeUndefined();
+    expect(sliceSignalBasis({ type: "RECLAIM" })).toBeUndefined();
+  });
+
+  it("names the swing-low mechanic (and the level) in the note, EN and zh", () => {
+    const sig: Sig = { ts: "2026-07-22", type: "SELL", price: 440.6, basis: "structure_stop", stop_level: 456.2 };
+    const en = oracleVerdict("SELL", sliceOf("SELL", [sig]), false, Date.parse("2026-07-24T00:00:00Z"));
+    expect(en.label).toBe("Structure stop");
+    expect(en.raw).toBe("SELL");                       // the scored lane is untouched
+    expect(en.note).toContain("trailing stop");
+    expect(en.note).toContain("swing low at 456.2");
+    expect(en.note).toContain("not a momentum exit");
+    const zh = oracleVerdict("SELL", sliceOf("SELL", [sig]), true, Date.parse("2026-07-24T00:00:00Z"));
+    expect(zh.label).toBe("结构止损");
+    expect(zh.note).toContain("跟踪止损");
+    expect(zh.note).toContain("前低 456.2");
+    expect(zh.note).toContain("非动量离场");
+  });
+
+  it("0700.HK 2026-07-24 shape: the pill no longer reads as an oracle-momentum call", () => {
+    // The operator's complaint: a red "GOLDEN ORACLE · SELL" while the 3D RSI-MACD read bull.
+    const v = oracleVerdict("SELL", sliceOf("SELL", [
+      { ts: "2026-07-22", type: "SELL", price: 440.6, basis: "structure_stop", stop_level: 456.2 },
+    ]), false, Date.parse("2026-07-24T00:00:00Z"));
+    expect(v.label).not.toBe("Sell");
+    expect(v.label).toBe("Structure stop");
+  });
+
+  it("carries the basis from state.last_scored_basis when the anchor is gone", () => {
+    // manifest-only / signal-less slice: the state block still records WHY the lane is flat
+    const v = oracleVerdict("SELL", {
+      indicator: { signals: [], state: { last_signal: "SELL", last_scored_signal: "SELL", last_scored_basis: "structure_stop" } },
+    }, false, NOW);
+    expect(v.label).toBe("Structure stop");
+  });
+});
+
+describe("HK-O1 — a refused entry never wears buy geometry", () => {
+  const blockedFlagOnly: Sig = { ts: "2026-07-09", type: "BUY", price: 110.7, blocked: true };
+  const blockedLegacy: Sig = { ts: "2026-07-09", type: "BUY", price: 110.7, quality: "regime_blocked" };
+
+  it("isBlockedSignal reads the flag OR the legacy quality string", () => {
+    expect(isBlockedSignal(blockedFlagOnly)).toBe(true);   // 2026-08-08+ slices
+    expect(isBlockedSignal(blockedLegacy)).toBe(true);     // pre-2026-08-08 slices
+    expect(isBlockedSignal({ ts: "x", type: "BUY", quality: "take" })).toBe(false);
+    expect(isBlockedSignal({ ts: "x", type: "BUY" })).toBe(false);
+    expect(isBlockedSignal(null)).toBe(false);
+  });
+
+  it("the type field is UNCHANGED — the flag, not the type, is the render key", () => {
+    // additive-only: every pre-existing reader still sees a BUY here
+    expect(blockedFlagOnly.type).toBe("BUY");
+  });
+
+  it("anchorSignal refuses a blocked marker on the FLAG alone (no quality string present)", () => {
+    // 9988.HK: the Jul-9 entry the operator chased was regime-vetoed. It must never anchor.
+    const { anchor, blockedTail } = anchorSignal([
+      { ts: "2026-05-27", type: "SELL", quality: null },
+      blockedFlagOnly,
+    ]);
+    expect(anchor?.type).toBe("SELL");
+    expect(blockedTail?.ts).toBe("2026-07-09");
+  });
+
+  it("a blocked BUY never renders a Buy verdict — it renders the refusal", () => {
+    const v = oracleVerdict("BUY", sliceOf("BUY", [blockedFlagOnly]), false, Date.parse("2026-07-13T00:00:00Z"));
+    expect(v.raw).toBe("BLOCKED_ENTRY");
+    expect(v.blocked).toBe(true);
+    expect(v.label).toBe("Entry trigger — regime-blocked");
+    expect(v.color).not.toBe("var(--buy)");
+  });
+});
+
+describe("HK-O1 — the two `extended`s stay apart", () => {
+  it("the 'Extended — don't chase' caution rides overbought, never the strong_bull alias", () => {
+    const st = (o: Record<string, unknown>) => ({ indicator: { signals: [], state: { last_signal: "SELL", ...o } } });
+    // strong_bull true (so `extended` is true) but NOT overbought → must NOT read "don't chase"
+    const strong = oracleVerdict("SELL", st({ position_hint: "flat", strong_bull: true, extended: true, overbought: false, above200: true, weeklyBull: true }), false, NOW);
+    expect(strong.stance).toBe(true);
+    expect(strong.label).not.toContain("don't chase");
+    // overbought true → the caution fires, on its own field
+    const hot = oracleVerdict("SELL", st({ position_hint: "flat", strong_bull: false, extended: false, overbought: true, above200: true, weeklyBull: true }), false, NOW);
+    expect(hot.label).toBe("Extended — don't chase");
+    expect(oracleVerdict("SELL", st({ position_hint: "flat", strong_bull: false, extended: false, overbought: true, above200: true, weeklyBull: true }), true, NOW).label)
+      .toBe("过热 — 勿追高");
   });
 });

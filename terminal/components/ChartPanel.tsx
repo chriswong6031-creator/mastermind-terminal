@@ -57,7 +57,7 @@ import {
 import type { SuiteRenderBundle, SuiteTier, SuiteColors, CoordMapper, TableSpec } from "@/lib/indicator-canvas/types";
 import ChartTables from "@/components/ChartTables";
 import { crossUps, crossDowns, crossUpsBelow, crossDownsAbove } from "@/lib/crossSignals";
-import { SOFT_Q, anchorSignal } from "@/lib/signalVerdict";
+import { SOFT_Q, anchorSignal, isBlockedSignal, isStructureStop, sliceSignalBasis } from "@/lib/signalVerdict";
 import { makeNearestBarIndex } from "@/lib/barSnap";
 import { ichimoku, supertrend, avwap as computeAvwap, rollingVwap, weekAnchoredVwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
@@ -532,7 +532,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // hollow style + the A+/Q badge) and the engine's quality_reason for the soft-mark tooltip. CUT is
   // discriminated by `type` (the schema guarantees CUT ⟺ scored:false), so `score`/`scored` aren't
   // needed on the chart. All optional — the client-Pine fallback path omits them.
-  type SigMark = { t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null; reason?: string };
+  // HK-O1: `basis` and `blocked` are the render keys the glyph law reads — `type` alone is not
+  // enough to know what a marker MEANS (every slice SELL is a trailing structure stop; a
+  // regime_blocked BUY is a refused setup that must never wear buy geometry). Both are stamped
+  // only on the slice path, where provenance is known — the client-Pine fallback leaves them
+  // undefined so its genuinely momentum-sourced SELL is not relabelled a stop.
+  type SigMark = { t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null; reason?: string; basis?: string; blocked?: boolean; stopLevel?: number | null };
   const sigMarksRef = useRef<SigMark[]>([]);
   // Client-Pine FALLBACK: when a symbol ships no slice signal history, marks come from ORACLE_V1_PINE
   // run client-side on the daily bars, memoized per (symbol · daily length · last daily date) so the
@@ -2242,6 +2247,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (typeof s?.ts !== "string" || typeof s?.type !== "string" || s.ts > (lastDate as string)) continue;
         const m = snap(s.ts, s.type); if (!m) continue;
         m.quality = s.quality; m.tier = s.tier; m.reason = s.quality_reason;
+        m.basis = sliceSignalBasis(s); m.blocked = isBlockedSignal(s); m.stopLevel = s.stop_level ?? null;
         marks.push(m);
       }
       // slice signals are chronological; snapping preserves order (the chip's fallback relies on it)
@@ -2338,12 +2344,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const lastT = rows[rows.length - 1]?.time;
       const lastDate = typeof lastT === "string" ? lastT : lastT != null ? new Date((lastT as number) * 1000).toISOString().slice(0, 10) : null;
       let v = "—";
+      let vBasis: string | undefined;
       if (Array.isArray(sigs) && sigs.length) {
         const { anchor } = anchorSignal(sigs, lastDate);
-        if (anchor) v = String(anchor.type).toUpperCase();
-      } else { const sm = sigMarksRef.current; if (sm.length) v = sm[sm.length - 1].type; }
+        if (anchor) { v = String(anchor.type).toUpperCase(); vBasis = sliceSignalBasis(anchor); }
+      } else {
+        const sm = sigMarksRef.current;
+        if (sm.length) { v = sm[sm.length - 1].type; vBasis = sm[sm.length - 1].basis; }
+      }
       const buy = v === "BUY" || v === "REBUY" || v === "RECLAIM";
-      verdictRef.current.textContent = `GOLDEN ORACLE · ${v === "RECLAIM" ? "RE-ENTRY" : v}`;
+      // HK-O1: a structure stop says STOP, not SELL. The chip is the glance tier — four
+      // characters, inside the existing pill geometry at every breakpoint — and the full
+      // "Structure stop — swing-low break" read lives on the rail card and the marker hover.
+      const vLabel = isStructureStop({ type: v, basis: vBasis }) ? "STOP" : v === "RECLAIM" ? "RE-ENTRY" : v;
+      verdictRef.current.textContent = `GOLDEN ORACLE · ${vLabel}`;
       verdictRef.current.style.color = buy ? t.buy : t.sell;
       const w = verdictRef.current.parentElement as HTMLElement;
       // Token-derived so the chip tracks the shell palette (byte-identical output on web, where
@@ -3069,7 +3083,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // ── signal badges: BUY/SELL (★) + RE-BUY pill; GC v2 keeper quality/tier styling + CUT caution ──
     const renderSignals = () => {
       const layer = sigRef.current; if (!layer) return; const t2 = tokensRef.current;
-      const SIGCFG: Record<string, { dir: "up" | "down"; fill: string; tc: string; txt: string; star?: boolean; hollow?: boolean }> = {
+      type SigCfg = { dir: "up" | "down"; fill: string; tc: string; txt: string; star?: boolean; hollow?: boolean };
+      const SIGCFG: Record<string, SigCfg> = {
         BUY:   { dir: "up",   fill: t2.buy,    tc: "#fff",     txt: "★",      star: true },
         SELL:  { dir: "down", fill: t2.sell,   tc: "#fff",     txt: "★",      star: true },
         REBUY: { dir: "up",   fill: "#b6e94a", tc: "#16310a",  txt: "RE-BUY" },
@@ -3078,6 +3093,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // solid star for the classic confluence entries even now that the lane is scored.
         RECLAIM: { dir: "up", fill: t2.buy,    tc: t2.buy,     txt: "RE-ENTRY", hollow: true },
       };
+      // HK-O1: a slice SELL is a TRAILING STRUCTURE STOP (armed distribution + a daily close
+      // below the last confirmed swing low), never the MACD-RSI cross-down. It gets its own
+      // pill — the solid ★ stays reserved for a momentum sell, which this stream has not
+      // emitted since the GC v2 unification (0700.HK printed ★ SELL on 2026-07-24 with its
+      // own 3D RSI-MACD reading bull). The client-Pine fallback keeps the ★: its SELL really
+      // is the momentum cross.
+      const STOPCFG: SigCfg = { dir: "down", fill: t2.sell, tc: "#fff", txt: "STOP" };
       // GC v2 tier → marker badge glyph (aplus="A+", quality="Q", base/none → no badge).
       const tierBadge = (tier?: string | null) => (tier === "aplus" ? "A+" : tier === "quality" ? "Q" : "");
       const SLATE = "#7c8aa0";   // regime_blocked dim slate (no matching CSS token — inline hex)
@@ -3214,17 +3236,38 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           layer.appendChild(g);
           continue;
         }
-        const cfg = SIGCFG[m.type]; if (!cfg) continue;
+        // ── HK-O1: a REFUSED entry is an annotation, never buy geometry ──
+        // The emitter still types it BUY/REBUY so old readers parse, but 9988.HK's
+        // 2026-07-09 regime-vetoed entry drew a solid up-pointing star on the price series
+        // and the operator chased it. A blocked setup now renders as a hollow slate ring
+        // with a slash — no pill, no pointer, no star — below the bar, with the block
+        // reason on hover. It cannot be mistaken for an entry at a glance.
+        if (m.blocked || m.quality === "regime_blocked") {
+          const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
+          const cy = y + 15, r = 5.4, k = r * 0.707;
+          const g = mk("g", { opacity: 0.62 });
+          g.appendChild(mk("circle", { cx: x, cy, r, fill: "none", stroke: SLATE, "stroke-width": 1.3 }));
+          g.appendChild(mk("line", { x1: x - k, y1: cy + k, x2: x + k, y2: cy - k, stroke: SLATE, "stroke-width": 1.3 }));
+          const title = mk("title", {});
+          title.textContent = `${m.t} · ${m.type} blocked by the regime gate — not an entry${m.reason ? ` — ${m.reason}` : ""}`;
+          g.appendChild(title);
+          layer.appendChild(g);
+          continue;
+        }
+        const stop = isStructureStop(m);
+        const cfg = stop ? STOPCFG : SIGCFG[m.type]; if (!cfg) continue;
         const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
         const star = !!cfg.star;
-        // GC v2 quality: take=solid, block=hollow outline, pending=dim gray, regime_blocked=dim slate.
+        // GC v2 quality: take=solid, block=hollow outline, pending=dim gray.
         // Softness gates on signalVerdict's SOFT_Q set (not the type) so an engine-refused mark of ANY
         // type renders subordinate; RECLAIM's own lane qualities (reclaim/block_repair) are NOT soft and
         // keep the dashed-hollow re-entry law. A soft mark must never wear the scored style.
+        // (regime_blocked no longer reaches here at all — HK-O1 gives it its own annotation glyph
+        // above, because dimming a BUY star still leaves a BUY star.)
         const q = m.quality != null && SOFT_Q.has(m.quality) ? m.quality : undefined;
         const hollow = q === "block" || !!cfg.hollow;
-        const dim = q === "pending" || q === "regime_blocked";
-        const fill = q === "regime_blocked" ? SLATE : (q === "pending" ? t2.mut : cfg.fill);
+        const dim = q === "pending";
+        const fill = q === "pending" ? t2.mut : cfg.fill;
         const groupOp = dim ? 0.5 : 0.97;
         // tier badge ("A+"/"Q") shown only for TAKEN entries (quality take/undefined); suppressed on soft.
         const badge = (m.type === "BUY" || m.type === "REBUY") && q == null ? tierBadge(m.tier) : "";
@@ -3248,7 +3291,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         tEl.textContent = cfg.txt;
         g.appendChild(tEl);
         // native tooltip for re-entry pills: date + kind (the marker text alone can't carry it)
-        if (m.type === "RECLAIM") {
+        if (stop) {
+          // the pill says STOP; the hover says WHY it is a stop and what it broke
+          const title = mk("title", {});
+          title.textContent = `${m.t} · structure stop — the daily close broke the prior swing low`
+            + `${m.stopLevel != null ? ` at ${m.stopLevel}` : ""}, not a momentum exit`;
+          g.appendChild(title);
+        } else if (m.type === "RECLAIM") {
           const title = mk("title", {});
           title.textContent = `${m.t} · re-entry (${m.quality === "block_repair" ? "bear-block repaired" : "trend reclaim"}) — scored reclaim lane`;
           g.appendChild(title);
