@@ -71,9 +71,15 @@ const macroFeed = new MacroFeed();
 // anything outside the flagship 37; without this leg those symbols fall back to the
 // NIGHTLY manifest and display the previous session's close. Kill-switch:
 // HUB_DISABLE_SNAPSHOT=1 (reverts to exactly the pre-2026-08-07 behaviour).
+//
+// HUB_REALTIME_QUOTES=1 additionally puts the leg in real-time mode: an 8s poll and a
+// last-trade parse. It does NOT make the output claim to be real-time — snapshot.verdict()
+// measures print age against the wall clock and the store stamps the basis from that. With the
+// flag off, this file behaves exactly as it did before 2026-08-08.
 const snapshotFeed = new SnapshotFeed({
   apiKey: process.env.POLYGON_API_KEY || process.env.MASSIVE_API_KEY || "",
   disabled: process.env.HUB_DISABLE_SNAPSHOT === "1",
+  realtime: process.env.HUB_REALTIME_QUOTES === "1",
 });
 
 const MAX_SYMS_PER_REQUEST = 200;

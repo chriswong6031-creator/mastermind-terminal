@@ -11,13 +11,38 @@ export type Bar6 = [number, number, number, number, number, number];
 
 export const INTRADAY_TFS = ["1m", "2m", "3m", "5m", "10m", "15m", "30m", "45m", "1h", "2h", "3h", "4h"] as const;
 const INTRADAY_SET: ReadonlySet<string> = new Set(INTRADAY_TFS);
-export const isIntradayTf = (tf: string) => INTRADAY_SET.has(tf);
 
-export function tfMinutes(tf: string): number {
-  const m = /^(\d+)(m|h)$/.exec(tf);
+// ── Second-resolution band (US equities only) ────────────────────────────────
+// Served by Polygon/Massive `…/range/<n>/second/…`, which the Stocks Advanced plan entitles.
+// Kept as its OWN list rather than folded into INTRADAY_TFS so a consumer that walks the
+// minute/hour band (deep-history store bases, resample targets) keeps its existing meaning —
+// there is no second-resolution deep history anywhere in this app, only a live-window fetch.
+// `isIntradayTf` DOES accept them, because every "is this an intraday chart" branch
+// (session filtering, live splice, chart axis) must treat a second bar as intraday.
+export const SECOND_TFS = ["1s", "5s", "15s", "30s"] as const;
+const SECOND_SET: ReadonlySet<string> = new Set(SECOND_TFS);
+export const isSecondTf = (tf: string) => SECOND_SET.has(tf);
+export const isIntradayTf = (tf: string) => INTRADAY_SET.has(tf) || SECOND_SET.has(tf);
+
+/** Bar width in SECONDS. The only unit that expresses every band losslessly. */
+export function tfSeconds(tf: string): number {
+  const m = /^(\d+)(s|m|h)$/.exec(tf);
   if (!m) return 0;
   const n = parseInt(m[1], 10) || 1;
-  return m[2] === "h" ? n * 60 : n;
+  return m[2] === "h" ? n * 3600 : m[2] === "m" ? n * 60 : n;
+}
+
+/**
+ * Bar width in MINUTES — fractional below a minute (1s → 1/60).
+ *
+ * Fractional rather than 0 so the arithmetic consumers stay correct by construction:
+ * `resample(bars, tfMinutes(tf))` computes `minutes * 60` seconds per bucket, and
+ * ChartPanel's `tfMinutes(tf) * 60` interval is likewise a second count. Returning 0 for
+ * "1s" would have made both a divide-by-zero / degenerate bucket instead.
+ */
+export function tfMinutes(tf: string): number {
+  const s = tfSeconds(tf);
+  return s === 0 ? 0 : s / 60;
 }
 
 export type Market = "cn" | "hk" | "crypto" | "us" | "ca";

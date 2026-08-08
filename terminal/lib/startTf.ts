@@ -14,7 +14,10 @@ export const DEFAULT_START_TF = "3D";
 
 // Canonical chronological order for every timeframe the Terminal offers. Also the
 // sort order for the top-bar favourites tray (TerminalShell.tfSortKey).
-export const TF_CANONICAL_ORDER = ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "D", "2D", "3D", "W", "2W", "1M", "3M"];
+// Second band leads the order — it is the finest resolution, and the favourites tray sorts on
+// this array's index. US equities only (Massive "Stocks Advanced" entitlement); the picker
+// renders them disabled elsewhere, which is why they are canonical but not universally functional.
+export const TF_CANONICAL_ORDER = ["1s", "5s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "4h", "D", "2D", "3D", "W", "2W", "1M", "3M"];
 
 // The saved value, sanitized. An unknown/absent/corrupt value reads as the 3D default.
 // NOTE: this does NOT check whether the timeframe is functional for a given symbol —

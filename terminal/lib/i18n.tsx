@@ -13,7 +13,9 @@ export type Lang = "en" | "zh";
 // macro's own SD_L table kept `tierInsider` for the same reason. Read a key name as an id, never
 // as copy. The SEC sense of the word is a different domain and stays "Insider"/"内部人" — the
 // Form-4 desks in obFreeMiss3 / obInsider4 are that sense, not the tier.
-const LEX: Record<string, [string, string]> = {
+// Exported for tests that hold a feature's new strings to EN+ZH parity by key (see
+// lib/__tests__/feedFreshness.test.ts). Runtime call sites use `useT`/`tPlain`, never LEX directly.
+export const LEX: Record<string, [string, string]> = {
   // settings
   settings: ["Settings", "设置"],
   updownColors: ["Up / Down colors", "涨跌颜色"],
@@ -404,6 +406,20 @@ const LEX: Record<string, [string, string]> = {
   delayed15m: ["15-min delayed", "延迟15分钟"],
   delayed15mShort: ["15-min", "延迟15分"],
   liveTip: ["Live feed activates with a real-time Polygon key (NEXT_PUBLIC_LIVE=1)", "配置实时 Polygon 密钥后启用实时行情 (NEXT_PUBLIC_LIVE=1)"],
+  // Measured-freshness lane. Every one of these is written to be TRUE ONLY WHEN MEASURED —
+  // the badge picks between them from a runtime lag measurement, never from a config flag.
+  realtimeTip: ["Real-time US stocks — last trade measured", "美股实时行情 — 最新成交距今"],
+  delayedTip: ["Delayed feed — last trade measured", "延迟行情 — 最新成交距今"],
+  freshnessUnknown: ["Freshness not measured yet", "尚未测量行情延迟"],
+  marketClosedFeed: ["Market closed — last session", "休市 — 上一交易日"],
+  usOnlyFeed: ["US stocks only", "仅限美股"],
+  unitSecShort: ["s", "秒"],
+  unitMinShort: ["m", "分钟"],
+  unitHrShort: ["h", "小时"],
+  // Second-resolution band
+  tfSecondsGroup: ["Seconds", "秒"],
+  secondsUsOnlyTip: ["Second-by-second bars cover US stocks only", "秒级K线仅覆盖美股"],
+  secondBarsSession: ["session", "交易日"],
   movers: ["Movers", "异动"],
   dashboard: ["Dashboard", "仪表盘"],
   backToDashboard: ["Back to the Macro Dashboard", "返回宏观仪表盘"],

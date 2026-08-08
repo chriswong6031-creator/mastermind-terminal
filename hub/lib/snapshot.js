@@ -36,11 +36,32 @@
 
 const https = require("node:https");
 const log = require("./log");
-const { etDate } = require("./usSession");
+const { etDate, classifySession } = require("./usSession");
+
+// ── REAL-TIME TIER (2026-08-08, Massive "Stocks Advanced") ───────────────────────────────────
+// The plan now entitles real-time US STOCKS over REST. This file gains a faster poll and a
+// last-trade parse, but the important part is what it does NOT do: it never LABELS the output
+// real-time from configuration. `HUB_REALTIME_QUOTES=1` only enables the leg; the basis stamped
+// on a quote comes from `verdict()`, which measures print age against the wall clock.
+//
+// HOW THE VERDICT IS MEASURED. Per-symbol age is the wrong discriminator: an illiquid name can
+// legitimately go ten minutes without a print during premarket on a genuinely real-time feed, and
+// labelling that "delayed" would be a lie in the other direction. Freshness is a property of the
+// FEED, so we measure the FLOOR — the youngest print seen across every symbol snapshotted in the
+// last FLOOR_WINDOW_MS. A 15-minute-delayed feed cannot produce a print younger than 15 minutes
+// for ANY symbol, so the floor separates the two regimes with a wide margin and is immune to a
+// quiet ticker. Evaluated only inside a live US session; outside one every print is honestly old
+// and no freshness claim is made at all.
+const REALTIME_MAX_LAG_MS = 2 * 60 * 1000;      // floor at/below this ⇒ real-time
+const DELAYED_MAX_LAG_MS = 20 * 60 * 1000;      // …else at/below this ⇒ the familiar 15-min delay
+const FLOOR_WINDOW_MS = 5 * 60 * 1000;          // rolling window the floor is measured over
 
 // Per-symbol refresh interval. The delayed plan is 15 minutes behind, so polling faster
 // buys nothing; 60s keeps a watchlist current without hammering the API.
 const TTL_MS = 60 * 1000;
+// Real-time refresh interval. The brief's sanctioned band for an active symbol is 5–15s; 8s
+// sits inside it and keeps a 40-name watchlist at ONE batched upstream call per interval.
+const REALTIME_TTL_MS = 8 * 1000;
 // Hard ceiling on serving a cached snapshot. If the REST leg dies, stop serving its data
 // rather than pinning a stale session on every quote.
 const MAX_AGE_MS = 30 * 60 * 1000;
@@ -63,11 +84,15 @@ class SnapshotFeed {
    * @param {number}  [opts.ttlMs]
    * @param {typeof httpGetJson} [opts.fetchJson] — injectable transport (tests)
    */
-  constructor({ apiKey, disabled, ttlMs, fetchJson } = {}) {
+  constructor({ apiKey, disabled, ttlMs, fetchJson, realtime } = {}) {
     this.apiKey = apiKey || "";
     this.disabled = !!disabled || !this.apiKey;
-    this.ttlMs = ttlMs != null ? ttlMs : TTL_MS;
+    this.realtime = !!realtime;
+    this.ttlMs = ttlMs != null ? ttlMs : this.realtime ? REALTIME_TTL_MS : TTL_MS;
     this._fetchJson = fetchJson || httpGetJson;
+    // Rolling freshness floor: [measuredAtMs, lagMs] of the youngest print seen recently.
+    this._floorLagMs = null;
+    this._floorAt = 0;
 
     /** @type {Map<string, {snap: object|null, ts: number}>} */
     this._cache = new Map();
@@ -116,23 +141,65 @@ class SnapshotFeed {
     if (now - hit.ts > MAX_AGE_MS) return null;
     // A snapshot from a previous session must never be served as the current one.
     if (hit.snap.date !== etDate(now)) return null;
-    return hit.snap;
+    // Age is MEASURED at read time, not baked at fetch time — a cached snapshot served 8s later
+    // is 8s older, and the label has to say so.
+    const lagMs = hit.snap.printMs != null ? now - hit.snap.printMs : null;
+    return { ...hit.snap, lagMs };
   }
 
-  stats() {
+  /**
+   * The measured freshness verdict for the FEED (see the header for why it is not per-symbol).
+   *
+   * @returns {{tier:"realtime"|"delayed"|"unknown"|"closed"|"off", floorLagMs:number|null,
+   *            measuredAt:string|null, session:string}}
+   */
+  verdict(nowMs) {
+    const now = nowMs != null ? nowMs : Date.now();
+    const session = classifySession(now);
+    if (this.disabled || !this.realtime) {
+      return { tier: "off", floorLagMs: null, measuredAt: null, session };
+    }
+    // Outside a live session the tape is not printing, so an old print proves nothing about the
+    // feed. Refusing to grade here is what stops a weekend from reading as "delayed".
+    if (session === "overnight") {
+      return { tier: "closed", floorLagMs: null, measuredAt: null, session };
+    }
+    const fresh = this._floorAt > 0 && now - this._floorAt <= FLOOR_WINDOW_MS;
+    if (!fresh || this._floorLagMs == null) {
+      return { tier: "unknown", floorLagMs: null, measuredAt: null, session };
+    }
+    const tier =
+      this._floorLagMs <= REALTIME_MAX_LAG_MS ? "realtime"
+        : this._floorLagMs <= DELAYED_MAX_LAG_MS ? "delayed"
+          : "unknown";
+    return {
+      tier,
+      floorLagMs: this._floorLagMs,
+      measuredAt: new Date(this._floorAt).toISOString(),
+      session,
+    };
+  }
+
+  stats(nowMs) {
     return {
       disabled: this.disabled,
+      realtime: this.realtime,
+      ttlMs: this.ttlMs,
       cacheSize: this._cache.size,
       pending: this._pending.size,
       inflight: this._inflight,
       errors: this._errors,
       lastOkAt: this._lastOkAt ? new Date(this._lastOkAt).toISOString() : null,
+      verdict: this.verdict(nowMs),
     };
   }
 
   // ── internal ──
 
-  async _flush() {
+  // nowMs is injectable so a test can grade the freshness rule against a fixed clock instead of
+  // against whatever the wall clock says while the suite runs — otherwise the real-time
+  // assertions silently become "closed" every weekend and stop testing anything.
+  async _flush(nowMs) {
     if (this.disabled || this._pending.size === 0) return;
     const syms = [...this._pending];
     this._pending.clear();
@@ -146,14 +213,27 @@ class SnapshotFeed {
           `?tickers=${chunk.map(encodeURIComponent).join(",")}&apiKey=${this.apiKey}`;
         const body = await this._fetchJson(url);
         const rows = (body && body.tickers) || [];
-        const now = Date.now();
+        const now = nowMs != null ? nowMs : Date.now();
         const seen = new Set();
+        // Youngest print in THIS response — the feed's freshness floor for this cycle.
+        let floor = null;
         for (const row of rows) {
           const sym = row && row.ticker;
           if (!sym) continue;
           seen.add(sym);
-          this._cache.set(sym, { snap: parseSnapshot(row), ts: now });
+          const snap = parseSnapshot(row);
+          this._cache.set(sym, { snap, ts: now });
+          // Only a print stamped TODAY can date the feed. A stale row left over from a previous
+          // session would otherwise contribute a multi-hour "floor" and mask a real measurement.
+          if (snap && snap.printMs != null && snap.printDate === etDate(now)) {
+            const lag = now - snap.printMs;
+            // A negative lag means the vendor clock ran ahead of ours; clamp to 0 rather than
+            // let it manufacture an impossibly good verdict.
+            const clamped = lag < 0 ? 0 : lag;
+            if (floor == null || clamped < floor) floor = clamped;
+          }
         }
+        if (floor != null) { this._floorLagMs = floor; this._floorAt = now; }
         // Cache the MISS too, so an unknown/unsupported ticker is not re-requested on
         // every 6s poll. get() returns null for a null snap exactly as for an absent one.
         for (const sym of chunk) {
@@ -200,6 +280,31 @@ function parseSnapshot(row) {
   const low = num(day.l);
   const vol = num(day.v);
 
+  // ── The freshest datable print on the row ──
+  // `lastTrade.t` is NANOseconds; the `min` block's `t` is MILLIseconds. Getting those two units
+  // the wrong way round would report a print 10^6 times too old or too new — i.e. it would drive
+  // the freshness verdict straight to a confident wrong answer, so each is converted at its own
+  // source and never through a shared helper.
+  const lt = row.lastTrade || null;
+  const ltPrice = lt ? num(lt.p) : null;
+  const ltNs = lt ? num(lt.t) : null;
+  const ltMs = ltNs != null && ltNs > 0 ? ltNs / 1e6 : null;
+
+  const min = row.min || null;
+  const minClose = min ? num(min.c) : null;
+  const minMsRaw = min ? num(min.t) : null;
+  const minMs = minMsRaw != null && minMsRaw > 0 ? minMsRaw : null;
+
+  // Prefer the trade print; fall back to the minute bar; last resort the row's own `updated`.
+  let printMs = null, printPrice = null, printFrom = null;
+  if (ltMs != null && ltPrice != null && ltPrice > 0) {
+    printMs = ltMs; printPrice = ltPrice; printFrom = "lastTrade";
+  } else if (minMs != null && minClose != null && minClose > 0) {
+    printMs = minMs; printPrice = minClose; printFrom = "min";
+  } else {
+    printMs = updatedMs; printPrice = close; printFrom = "updated";
+  }
+
   return {
     date: etDate(updatedMs),
     open: open != null && open > 0 ? open : null,
@@ -210,6 +315,12 @@ function parseSnapshot(row) {
     prevClose: prevClose != null && prevClose > 0 ? prevClose : null,
     chg,
     ts: Math.floor(updatedMs / 1000),
+    // Real-time tier fields. Always parsed (cheap, and it makes the delayed plan's own lag
+    // measurable too); only CONSUMED when the feed is in real-time mode.
+    printMs,
+    printPrice,
+    printFrom,
+    printDate: etDate(printMs),
   };
 }
 
@@ -227,4 +338,8 @@ function httpGetJson(url) {
   });
 }
 
-module.exports = { SnapshotFeed, parseSnapshot, TTL_MS, MAX_AGE_MS };
+module.exports = {
+  SnapshotFeed, parseSnapshot,
+  TTL_MS, REALTIME_TTL_MS, MAX_AGE_MS,
+  REALTIME_MAX_LAG_MS, DELAYED_MAX_LAG_MS, FLOOR_WINDOW_MS,
+};

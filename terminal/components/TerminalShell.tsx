@@ -19,8 +19,9 @@ import { type DetectCmd } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
 import ChartConductor from "@/components/ChartConductor";
 import { intradayCapable } from "@/components/ChartPanel";
-import { classify } from "@/lib/intradaySources";
+import { classify, SECOND_TFS, isSecondTf } from "@/lib/intradaySources";
 import { isMacroSymbol } from "@/lib/macroSymbols";
+import { freshnessLabel } from "@/lib/feedFreshness";
 import { flowGet } from "@/lib/flowClientCache";
 // R3.2 glance layer: the rail block's per-root gexstate read. Entitlement-gated at
 // /api/flow — a 403 nulls out and the rail renders exactly as before (free UX unchanged).
@@ -267,17 +268,23 @@ function ChartTypeIcon({ kind }: { kind: string }) {
   if (kind === "area" || kind === "baseline") return <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 12l6-5 5 3 6-7 7 3v8H2z" className="ct-fill" /><path d="M2 12l6-5 5 3 6-7 7 3" />{kind === "baseline" && <path d="M2 9h24" className="ct-base" />}</svg>;
   return <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 12l6-5 5 3 6-7 7 3" />{kind === "line-markers" && <><circle cx="8" cy="7" r="1.4" /><circle cx="19" cy="3" r="1.4" /><circle cx="26" cy="6" r="1.4" /></>}</svg>;
 }
-const TF_GROUPS: [string, string[]][] = [["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "2D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
+const TF_GROUPS: [string, string[]][] = [["Seconds", ["1s", "5s", "15s", "30s"]], ["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "2D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
 // Daily-derived TFs are always functional. Intraday TFs (R12) go live for intraday-capable markets
 // (us/crypto/cn/hk); .TO (ca) stays daily-only — its picker entries render disabled.
 const DAILY_FUNCTIONAL = new Set(["D", "2D", "3D", "W", "2W", "1M", "3M"]);
 const INTRADAY_FUNCTIONAL = ["1m", "5m", "15m", "30m", "1h", "2h", "4h"];
+// Second-resolution aggregates are a US-STOCKS-ONLY entitlement on the current Massive plan —
+// no crypto, no index/futures/FX. Rendering them disabled for every other market is how the
+// boundary reaches the user: the band is visible and honestly unavailable, rather than silently
+// missing on some symbols and present on others.
+const SECOND_FUNCTIONAL = [...SECOND_TFS];
 // Sorts the top-bar favourites tray into chronological order. TF_CANONICAL_ORDER lives in
 // lib/startTf, which also feeds the Settings → Terminal startup-timeframe picker.
 const tfSortKey = (tf: string) => { const i = TF_CANONICAL_ORDER.indexOf(tf); return i < 0 ? 999 : i; };
 function functionalSet(sym: string): Set<string> {
   const s = new Set(DAILY_FUNCTIONAL);
   if (intradayCapable(classify(sym))) for (const t of INTRADAY_FUNCTIONAL) s.add(t);
+  if (classify(sym) === "us" && !isMacroSymbol(sym)) for (const t of SECOND_FUNCTIONAL) s.add(t);
   return s;
 }
 // valid ?pane= deep-link targets (the MegaPane pages; "analyst" is an alias for forecast).
@@ -306,7 +313,7 @@ const DETECTORS: [NonNullable<DetectCmd>["kind"], string][] = [
 ];
 // translation key maps for the (otherwise hard-coded) toolbar/tool labels
 const CT_TKEY: Record<string, string> = { candles: "ctCandles", hollow: "ctHollow", heikin: "ctHeikin", bars: "ctBars", line: "ctLine", "line-markers": "ctLineMarkers", step: "ctStepLine", area: "ctArea", baseline: "ctBaseline" };
-const TFG_TKEY: Record<string, string> = { Minutes: "tfMinutes", Hours: "tfHours", Days: "tfDays", Weeks: "tfWeeks", Months: "tfMonths" };
+const TFG_TKEY: Record<string, string> = { Seconds: "tfSecondsGroup", Minutes: "tfMinutes", Hours: "tfHours", Days: "tfDays", Weeks: "tfWeeks", Months: "tfMonths" };
 const DET_TKEY: Record<string, string> = { trendlines: "autoTrendlines", fib: "autoFib", sr: "srHeatmap", mtfa: "mtfSR", clear: "clearDetected" };
 
 // watchlist column widths (px). The symbol column + every visible data column is user-resizable.
@@ -2716,10 +2723,14 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           <DayRange low={liveQuote?.low ?? m?.low} high={liveQuote?.high ?? m?.high} last={lastPx} open={liveQuote?.open ?? m?.open} variant="bar" />
         </div>
         {(() => {
+          // The verdict lives in lib/feedFreshness so the rule is unit-testable and so a
+          // "real-time" label can only ever come from the hub's MEASURED lag (see that file).
           const basis = liveQuote?.basis ?? (liveStatus === "live" ? "LIVE" : "EOD");
-          const badgeCls = basis === "LIVE" ? "livebadge live" : basis === "DELAYED_15M" ? "livebadge delayed" : "livebadge";
-          const badgeLbl = basis === "LIVE" ? t("live") : basis === "DELAYED_15M" ? t("delayed15m") : t("historical");
-          return <span className={`${badgeCls} topbar-livebadge`} title={t("liveTip")}><i />{badgeLbl}</span>;
+          const { cls, label, tip } = freshnessLabel(
+            { basis, lagMs: liveQuote?.lagMs, marketSession: liveQuote?.marketSession }, t);
+          // `topbar-livebadge` (not an inline margin) so #367's width-aware dense
+          // chrome still owns the spacing and the narrow-viewport icon-only collapse.
+          return <span className={`${cls} topbar-livebadge`} title={tip}><i />{label}</span>;
         })()}
         <div className="spacer" />
         <button className="ai" onClick={() => (window as any).MMBrain?.toggle()}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
@@ -2785,7 +2796,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
               <div className={`tfgrid${tfOpen ? " show" : ""}`} onClick={(e) => e.stopPropagation()}>
                 {TF_GROUPS.map(([g, items]) => (<div key={g}><div className="g">{t(TFG_TKEY[g])}</div>{items.map((tfi) => { const fn = FUNCTIONAL.has(tfi); const fav = favTF.includes(tfi);
                   return <div key={tfi} className={`it${tf === tfi ? " on" : ""}${fn ? "" : " dis"}`} onClick={() => { if (fn) { setTf(tfi); setTfOpen(false); } }}>
-                    <span>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 10 }}>{t("liveFeed")}</span>}</span>
+                    {/* A disabled entry must say WHY. For the second band the reason is the
+                        plan's entitlement boundary (US stocks only), not a missing live feed —
+                        labelling it "live feed" would send a user hunting for a setting that
+                        cannot exist for their symbol. */}
+                    <span>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 10 }}>{isSecondTf(tfi) ? t("usOnlyFeed") : t("liveFeed")}</span>}</span>
                     <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(tfi) ? f.filter((x) => x !== tfi) : [...f, tfi]); }}><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
                   </div>; })}</div>))}
               </div>
@@ -2800,7 +2815,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                         const fav = favTF.includes(tfi);
                         return (
                           <div key={tfi} className={`msheet-row${tf === tfi ? " on" : ""}${fn ? "" : ""}`} style={fn ? {} : { opacity: 0.45 }} onClick={() => { if (fn) { setTf(tfi); setTfOpen(false); } }}>
-                            <span style={{ flex: 1 }}>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 8, fontSize: 11 }}>{t("liveFeed")}</span>}</span>
+                            <span style={{ flex: 1 }}>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 8, fontSize: 11 }}>{isSecondTf(tfi) ? t("usOnlyFeed") : t("liveFeed")}</span>}</span>
                             <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(tfi) ? f.filter((x) => x !== tfi) : [...f, tfi]); }} style={{ padding: "0 4px" }}><svg viewBox="0 0 24 24" width={16} height={16}><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
                           </div>
                         );

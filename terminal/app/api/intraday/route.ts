@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { fetchIntraday, isIntradayTf, classify } from "@/lib/intradaySources";
+import { fetchIntraday, isIntradayTf, isSecondTf, classify } from "@/lib/intradaySources";
 import { isMacroSymbol } from "@/lib/macroSymbols";
 import { withStoredHistory } from "@/lib/intradayStore";
 import { filterBarsToSessionDate, type Bar6 } from "@/lib/intradayShared";
@@ -28,6 +28,10 @@ type IntradayResponse = {
 type Entry = { at: number; data: IntradayResponse };
 const CACHE = new Map<string, Entry>();
 const TTL = 45_000; // delayed data doesn't move faster than this; also bounds upstream call volume
+// The second band is the live-zoom lane: a 45s cache would make a 1s chart visibly stale while
+// still claiming second resolution. 10s keeps it honest and still collapses a burst of zooms
+// (and every other viewer of the same symbol) into one upstream call.
+const SECOND_TTL = 10_000;
 const SESSION_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function isValidSessionDate(date: string): boolean {
@@ -93,10 +97,16 @@ export async function GET(req: Request) {
     ? "yahoo-macro"
     : market === "ca" ? "none" : (market === "us" || market === "crypto") ? "polygon" : "tencent";
   const basis = "display"; // all current providers emit the display-epoch convention; UTC feeds bump this
+  const seconds = isSecondTf(tf);
+  // `date` joins the key for the SECOND band only. Minute-band entries are deliberately
+  // date-agnostic — one deep-history read serves the full chart and any single-session study —
+  // but a second-band fetch is itself scoped to one session, so two dates are two entries.
   // serve a warm cache without re-auth (it's public market data); only a fresh upstream fetch is gated
-  const ckey = `${sym}|${tf}|${ext ? 1 : 0}|${source}|${basis}`;
+  const ckey = `${sym}|${tf}|${ext ? 1 : 0}|${source}|${basis}${seconds ? `|${date || "latest"}` : ""}`;
   const hit = CACHE.get(ckey);
-  if (hit && Date.now() - hit.at < TTL) return NextResponse.json(responseForSession(hit.data, date));
+  if (hit && Date.now() - hit.at < (seconds ? SECOND_TTL : TTL)) {
+    return NextResponse.json(seconds ? hit.data : responseForSession(hit.data, date));
+  }
 
   // a fresh fetch spends our paid Polygon key. Open while login is disabled (the 45s cache above
   // already bounds upstream call volume); re-gated with the rest of the app via TERMINAL_REQUIRE_AUTH=1.
@@ -104,6 +114,39 @@ export async function GET(req: Request) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+
+  // ── Second band: single-session live window, no store ────────────────────────────────────
+  // There is no second-resolution deep history anywhere in this app — `withStoredHistory` reads
+  // 1h/5m base files and would resample them into a fake second series. The fetcher owns the
+  // window bound (one ET session, most recent SECOND_MAX_BARS bars) and reports which session it
+  // actually served, which is the only honest answer when the market is closed: on a Saturday
+  // `session_date` comes back as Friday's date, and the client labels it as such rather than
+  // presenting a stale window as "now".
+  if (seconds) {
+    let secBars: Bar6[];
+    try {
+      secBars = await fetchIntraday(sym, tf, ext, date);
+    } catch (error: unknown) {
+      const message = errorMessage(error, "fetch failed");
+      if (hit) return NextResponse.json(hit.data);
+      return NextResponse.json({ t: sym, tf, bars: [], error: message });
+    }
+    const served: IntradayResponse = { t: sym, tf, bars: secBars, source: "polygon-second" };
+    // Session identity comes from the bars themselves (display epoch → ET calendar day), so it
+    // is right whether the caller named a date, got the most recent session, or got nothing.
+    if (secBars.length) {
+      served.session_date = new Date(secBars[0][0] * 1000).toISOString().slice(0, 10);
+    } else if (date) {
+      served.session_date = date;
+    }
+    if (!secBars.length) {
+      served.note = classify(sym) === "us"
+        ? "no second-resolution bars for this window"
+        : "second resolution is entitled for US equities only";
+    }
+    CACHE.set(ckey, { at: Date.now(), data: served });
+    return NextResponse.json(served, { headers: { "Cache-Control": "no-store" } });
   }
 
   // Always consult the on-disk store even when the live leg fails (missing key, 429, network).
