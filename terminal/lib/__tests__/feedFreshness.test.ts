@@ -14,6 +14,10 @@ const NEW_KEYS = [
   "realtimeTip", "delayedTip", "freshnessUnknown", "marketClosedFeed", "usOnlyFeed",
   "unitSecShort", "unitMinShort", "unitHrShort",
   "tfSecondsGroup", "secondsUsOnlyTip", "secondBarsSession",
+  // The kill-switch lane: shown on the disabled Seconds entries when HUB_REALTIME_QUOTES is off.
+  // A distinct string from usOnlyFeed on purpose — "not enabled" and "US stocks only" are
+  // different facts, and this guard is what keeps the second one bilingual too.
+  "secondsOffFeed",
 ] as const;
 
 const en = (k: string) => LEX[k]?.[0] ?? k;
