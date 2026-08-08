@@ -12,9 +12,14 @@
 
 export const GEX_QUICK_ROOTS = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "META", "AAPL"];
 
+// SPCX carries history only from its 2026-06-12 relisting: the same root served a
+// SPAC ETF until that ETF delisted in 2026-04, and the ingest lane floors the root
+// at the relisting date so the two eras never merge. Its session history is short
+// by design, not by omission.
 export const GEX_AUTOCOMPLETE_ROOTS = [
   "SPY", "QQQ", "IWM", "DIA", "SPX", "NDX", "RUT",
   "NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL", "GOOG", "AMD", "NFLX",
   "AVGO", "MU", "PLTR", "COIN", "SMCI", "MSTR", "BABA", "INTC", "CRM", "ORCL",
-  "QCOM", "ARM", "MARA", "SOFI", "UBER", "DIS", "BA", "JPM", "XLF", "XLE", "GLD",
+  "QCOM", "ARM", "MARA", "SOFI", "UBER", "SPCX", "DIS", "BA", "JPM", "XLF", "XLE",
+  "GLD",
 ];
