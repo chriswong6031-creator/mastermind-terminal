@@ -524,7 +524,14 @@ test.describe("TV chart-surface parity (shell)", () => {
     // The toolbar row survives on the web at every width the web still ships it — R2.2 retired it
     // on the PHONE (≤640px) in favour of the roller strip, which is not a shell-parity rule.
     const web = (page.viewportSize()?.width ?? 1440) > 640;
-    if (web) await expect(page.locator(".chart-tabs .ct")).toBeVisible();
+    if (web) {
+      const toolbarMode = await page.locator(".chart-tabs").getAttribute("data-toolbar-mode");
+      if (toolbarMode === "full") await expect(page.locator(".chart-tabs .ct")).toBeVisible();
+      else {
+        await expect(page.locator(".chart-tabs .ct")).toBeHidden();
+        await expect(page.getByTestId("toolbar-more")).toBeVisible();
+      }
+    }
     await expect(page.locator(".status-last")).toBeHidden();
     // R2c retired the range row on the PHONE too — also not a shell-parity rule, so the row's
     // web presence is only assertable where the web still ships it.

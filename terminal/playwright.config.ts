@@ -6,6 +6,7 @@ import { defineConfig } from "@playwright/test";
 const port = Number(process.env.TERMINAL_E2E_PORT || 3108);
 const baseURL = `http://127.0.0.1:${port}`;
 const companyIntelligenceSpec = /company-intelligence\.spec\.ts/;
+const terminalChromeIntermediateSpec = /terminal-chrome-responsive\.spec\.ts/;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -23,9 +24,9 @@ export default defineConfig({
     // workspace has a cold Next route plus source fixtures and is intentionally
     // isolated below: twelve simultaneous cold starts have timed out locally
     // and in CI, while one viewport at a time is deterministic.
-    { name: "desktop", testIgnore: companyIntelligenceSpec, use: { viewport: { width: 1440, height: 900 } } },
-    { name: "tablet", testIgnore: companyIntelligenceSpec, use: { viewport: { width: 820, height: 1180 }, hasTouch: true } },
-    { name: "mobile", testIgnore: companyIntelligenceSpec, use: { viewport: { width: 390, height: 844 }, hasTouch: true } },
+    { name: "desktop", testIgnore: [companyIntelligenceSpec, terminalChromeIntermediateSpec], use: { viewport: { width: 1440, height: 900 } } },
+    { name: "tablet", testIgnore: [companyIntelligenceSpec, terminalChromeIntermediateSpec], use: { viewport: { width: 820, height: 1180 }, hasTouch: true } },
+    { name: "mobile", testIgnore: [companyIntelligenceSpec, terminalChromeIntermediateSpec], use: { viewport: { width: 390, height: 844 }, hasTouch: true } },
     {
       name: "company-intelligence-desktop",
       testMatch: companyIntelligenceSpec,
@@ -45,6 +46,12 @@ export default defineConfig({
       dependencies: ["company-intelligence-tablet"],
       workers: 1,
       use: { viewport: { width: 390, height: 844 }, hasTouch: true },
+    },
+    {
+      name: "terminal-chrome-intermediate",
+      testMatch: terminalChromeIntermediateSpec,
+      workers: 1,
+      use: { viewport: { width: 1180, height: 820 } },
     },
   ],
   webServer: {

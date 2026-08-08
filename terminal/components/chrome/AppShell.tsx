@@ -1,7 +1,8 @@
 "use client";
 import { createContext, useCallback, useContext } from "react";
 import { usePathname } from "next/navigation";
-import { BrandLockup, BrandMark } from "@/components/BrandMark";
+import { BrandLockup } from "@/components/BrandMark";
+import DashboardBackButton from "@/components/DashboardBackButton";
 import { AppNav } from "@/components/AppNav";
 import MobileNav from "@/components/MobileNav";
 import SettingsButton from "@/components/settings/SettingsButton";
@@ -73,13 +74,7 @@ export default function AppShell({
       <div className="app2 obs obs-ambient">
         <MobileNav email={email} fromMacro={fromMacro} onBack={onBack} />
         <header className="topbar">
-          {fromMacro
-            ? <button className="brand-back" onClick={onBack} title={t("backToDashboard")} aria-label={t("backToDashboard")}>
-                <span className="bb-chev"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></span>
-                <BrandMark />
-                <span className="wm"><b>MASTERMIND</b><small>← {t("dashboard")}</small></span>
-              </button>
-            : <BrandLockup />}
+          {fromMacro ? <DashboardBackButton onClick={onBack} /> : <BrandLockup />}
           <div className="tdiv" />
           <span className="page-title">{title}</span>
           <div className="spacer" />
