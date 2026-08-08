@@ -137,7 +137,8 @@
             "type": [
               "number",
               "null"
-            ]
+            ],
+            "description": "Point-in-time marker price. SELL = the DAILY close of the confirm session itself (the close that broke stop_level); BUY/REBUY/RECLAIM = their 3D row close. Never a bar that closes after the event's own date."
           },
           "reasons": {
             "type": "array",
@@ -147,6 +148,56 @@
           },
           "regime": {
             "type": "object"
+          },
+          "basis": {
+            "enum": [
+              "structure_stop"
+            ],
+            "description": "What machine produced the event. Present on SELL only: every user-facing SELL is a TRAILING STRUCTURE STOP (armed distribution + a daily close below the last confirmed radius-3 swing low), not a momentum/oracle exit. Absent = no basis published for that event kind. Readers must not infer a momentum exit from a bare type:'SELL'."
+          },
+          "stop_level": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "SELL only: the confirmed swing low whose break triggered the stop."
+          },
+          "blocked": {
+            "const": true,
+            "description": "Present (and true) ONLY on an entry the v2 regime gate REFUSED (bear_block). The type field still reads BUY/REBUY for back-compat, so this flag \u2014 not type \u2014 is the render and scoring key: a blocked setup must never be drawn with buy geometry, never enter a Buy panel state or latest-signal card, and never walk position_hint."
+          },
+          "quality": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "keeper verdict: take | block | pending | regime_blocked (see blocked)."
+          },
+          "quality_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "recipe tier: aplus | quality | base; null on a blocked entry."
+          },
+          "score": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scored": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "RECLAIM only: false = pre-promotion display-tier marker."
           }
         }
       }
@@ -187,6 +238,29 @@
           ]
         },
         "extended": {
+          "type": "boolean",
+          "deprecated": true,
+          "description": "DEPRECATED MISNOMER \u2014 carries strong_bull, NOT overbought, and is unrelated to the Macro Dashboard cycles 'Extended - don't chase' caution. Read strong_bull or overbought by name instead. Retained only for pre-2026-07-15 consumers."
+        },
+        "last_scored_basis": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "basis of the signal that set position_hint. 'structure_stop' on a flat means the position was stopped out on a swing-low break, not exited on momentum."
+        },
+        "strong_bull": {
+          "type": "boolean",
+          "description": "weekly + monthly bull and above the 200d - a trend-STRENGTH read."
+        },
+        "overbought": {
+          "type": "boolean",
+          "description": "the true Pine extendedNow on the last 3D row: RSI>=70 or %K>=80."
+        },
+        "weeklyBull": {
+          "type": "boolean"
+        },
+        "above200": {
           "type": "boolean"
         }
       }
