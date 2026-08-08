@@ -23,6 +23,18 @@ MERGE CONTRACT (deliberately conservative — a backfill must never degrade a li
   4. Per-period provenance is recorded in `statements.<tf>.src_by_period[]` and the
      uncovered-field set in `statements.<tf>.vendor_gaps`, so the UI discloses in plain
      words which rows the deep-history filings do not carry instead of showing bare dashes.
+  5. When two vendor rows carry the SAME fiscal label — an original filing and the amendment
+     that restates it — the LATER FILING WINS, by `row_filing_date`, under a total order
+     (see `vendor_rows_newest_filing_first`). The chosen filing date lands in
+     `statements.<tf>.filed_by_period[]` and a period we hold more than one filing for is
+     flagged in `statements.<tf>.restated_by_period[]`, so a restatement is disclosable
+     rather than silent.
+
+     ⚠ THIS IS NOT FULL POINT-IN-TIME. A restatement still REWRITES the published column; we
+     make the rewrite deterministic and visible, we do not preserve what was published before
+     it. Latching each column to the figures as first published (and serving the restatement
+     as a second, versioned read) is follow-up work — it needs a per-period version store this
+     file deliberately does not introduce.
 
 ⚠ OPERATIONAL COROLLARY of rule 2: because the merge never overwrites, changing the vendor
   field mapping does NOT heal already-written files on a re-run — the old value is non-null
@@ -51,6 +63,7 @@ from massive_financials import (  # noqa: E402
     fetch_financials,
     map_row,
     row_end_date,
+    row_filing_date,
     statement_coverage,
     vendor_label,
 )
@@ -115,6 +128,40 @@ def vendor_row_label(raw: dict, end_iso: str, fy_end_m: int, timeframe: str) -> 
     return vendor_label(raw, timeframe) or label_for(end_iso, fy_end_m, timeframe)
 
 
+def vendor_rows_newest_filing_first(vendor_rows: list[dict]) -> list[dict]:
+    """Vendor rows in a documented, restatement-aware order: NEWEST FILING FIRST.
+
+    WHY THIS ORDER IS LOAD-BEARING. Two vendor rows can carry the SAME fiscal label — an
+    original 10-Q and the 10-Q/A that restates it. The merge below is first-writer-wins by
+    design (rule 2: never overwrite a non-null value), so whichever of the two the loop reaches
+    first becomes published history. The API is asked for `sort=period_of_report_date&order=asc`
+    but that column comes back NULL on live payloads, so the server order is arbitrary: the same
+    fetch could publish the original one night and the restatement the next, with no version
+    marker and no tell. Sorting here makes the winner a property of the DATA, not of the wire.
+
+    Key: (filing date, period end, source index), descending. Filing date is the restatement
+    anchor — the later filing supersedes. Period end and the original index are pure tiebreaks
+    so the order is total: a row with no filing date sorts below every dated row (we only
+    promote a row over another on evidence), and two rows identical on all three keys are
+    impossible because the index is unique.
+
+    Consequence for gap-filling: the newest filing creates the column, and OLDER filings can
+    still contribute fields the restatement omitted — filling a null is not overwriting.
+    """
+    return [
+        raw
+        for _, raw in sorted(
+            enumerate(vendor_rows),
+            key=lambda pair: (
+                row_filing_date(pair[1]) or "",
+                row_end_date(pair[1]) or "",
+                pair[0],
+            ),
+            reverse=True,
+        )
+    ]
+
+
 def merge_period_set(
     existing: dict | None,
     vendor_rows: list[dict],
@@ -150,11 +197,16 @@ def merge_period_set(
             "end": ex_ends[i] if i < len(ex_ends) else None,
             "values": {b: existing_at(b, i) for b in BLOCKS},
             "src": [base_src],
+            # Filing provenance (rule 5). `filed` is the filing whose values this column
+            # actually took; `filings` is every distinct vendor filing seen for the label, so
+            # ">1" is the restatement tell. Both stay empty for a column no vendor row touched.
+            "filed": None,
+            "filings": set(),
         }
         order.append(label)
 
     added, filled = 0, 0
-    for raw in vendor_rows:
+    for raw in vendor_rows_newest_filing_first(vendor_rows):
         end = row_end_date(raw)
         if not end:
             continue
@@ -162,16 +214,21 @@ def merge_period_set(
         if not label:
             continue
         mapped = map_row(raw)
+        filed = row_filing_date(raw)
         slot = merged.get(label)
         if slot is None:
             merged[label] = {
                 "end": end,
                 "values": {b: dict(mapped[b]) for b in BLOCKS},
                 "src": [SOURCE_LABEL],
+                "filed": filed,
+                "filings": {filed} if filed else set(),
             }
             order.append(label)
             added += 1
             continue
+        if filed:
+            slot["filings"].add(filed)
         # existing label → fill null holes only; never overwrite, never move period_end
         touched = False
         for b in BLOCKS:
@@ -186,6 +243,10 @@ def merge_period_set(
             filled += 1
             if SOURCE_LABEL not in slot["src"]:
                 slot["src"].append(SOURCE_LABEL)
+            # Rows arrive newest-filing-first, so the first one to supply a value is the newest
+            # filing that supplied one. A row that contributed nothing never claims the column.
+            if slot["filed"] is None:
+                slot["filed"] = filed
 
     # oldest→newest by period-end (the contract's array order), label as a stable tiebreak
     order = sorted(set(order), key=lambda lab: (merged[lab]["end"] or "", lab))
@@ -200,6 +261,8 @@ def merge_period_set(
             f: [merged[lab]["values"].get(b, {}).get(f) for lab in order] for f in fields[b]
         }
     out["src_by_period"] = ["+".join(merged[lab]["src"]) for lab in order]
+    out["filed_by_period"] = [merged[lab].get("filed") for lab in order]
+    out["restated_by_period"] = [len(merged[lab].get("filings") or ()) > 1 for lab in order]
     out["vendor_gaps"] = statement_coverage()
 
     return out, {"added": added, "filled": filled, "total": len(order), "before": len(ex_periods)}

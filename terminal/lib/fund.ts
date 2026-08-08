@@ -97,6 +97,20 @@ export interface StatementPeriodSet {
    * estimated. See lib/finStatements.vendorGapNotice.
    */
   vendor_gaps?: Record<string, string[]>;
+  /**
+   * Filing provenance, index-aligned to `periods`: the ISO date of the vendor filing whose
+   * figures this column took, or null where no vendor row supplied a value (a yfinance-only
+   * column, or a file that predates the backfill). Written by
+   * `backfill_fund_statements_massive.merge_period_set` — when two filings report the same
+   * fiscal label, the LATER one wins and its date lands here.
+   */
+  filed_by_period?: (string | null)[];
+  /**
+   * True where more than one distinct vendor filing was seen for that fiscal label — i.e. the
+   * period has been restated. The column shows the LATEST filing's figures; this flag is what
+   * lets a surface say so. Not full point-in-time: the superseded figures are not retained.
+   */
+  restated_by_period?: boolean[];
 }
 
 export interface FundStatements {

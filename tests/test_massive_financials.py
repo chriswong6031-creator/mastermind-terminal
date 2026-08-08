@@ -13,6 +13,13 @@ Two defects these pin, both found against live payloads on 2026-08-08:
      yfinance's "Operating Expense". Summing the two would have written a COGS-inclusive
      total into a field every consumer reads as excl-COGS.
 
+  3. RESTATEMENT ORDER. Two vendor rows can share a fiscal label — an original filing and the
+     amendment that restates it. The merge is first-writer-wins, and the API's `sort` column
+     (`period_of_report_date`) is null on live payloads, so which one became published history
+     was a property of the wire, not of the data: the same fetch could publish the original one
+     night and the restatement the next, silently. Rows are now ordered newest-filing-first and
+     the chosen filing is stamped into the payload.
+
 Plus the merge contract itself: backfill-only, never overwrite, arrays stay aligned.
 """
 from __future__ import annotations
@@ -22,8 +29,9 @@ from ingest.backfill_fund_statements_massive import (
     is_vendor_market,
     merge_period_set,
     vendor_row_label,
+    vendor_rows_newest_filing_first,
 )
-from ingest.massive_financials import map_row, statement_coverage, vendor_label
+from ingest.massive_financials import map_row, row_filing_date, statement_coverage, vendor_label
 
 
 # ── fixtures shaped exactly like the live payload ────────────────────────────
@@ -235,3 +243,99 @@ def test_bare_sweep_targets_us_listings_only():
         assert is_vendor_market(sym), sym
     for sym in ("000001.SZ", "0700.HK", "600519.SS", "005930.KS", "7203.T"):
         assert not is_vendor_market(sym), sym
+
+
+# ── 5. restatement determinism + filing provenance (PIT floor) ───────────────
+def filed(fy: str, revenue: float, when: str | None, **over):
+    """A vendor row for fiscal year `fy` with a stated revenue, filed on `when`."""
+    row = vrow(fy, "FY", f"{fy}-09-30", **over)
+    row["financials"]["income_statement"]["revenues"] = cell(revenue)
+    if when:
+        row["filing_date"] = when
+    return row
+
+
+def test_row_filing_date_prefers_the_acceptance_timestamp_over_the_calendar_date():
+    assert row_filing_date({"acceptance_datetime": "2024-08-02T21:03:11Z",
+                            "filing_date": "2024-08-05"}) == "2024-08-02"
+    assert row_filing_date({"filing_date": "2024-08-05"}) == "2024-08-05"
+    assert row_filing_date({}) is None
+
+
+def test_the_period_date_is_never_mistaken_for_a_filing_date():
+    """`period_of_report_date` is what the filing is ABOUT — an original and its restatement
+    share it by definition, so ordering on it cannot separate them."""
+    assert row_filing_date({"period_of_report_date": "2023-09-30"}) is None
+
+
+def test_vendor_rows_are_ordered_newest_filing_first_regardless_of_wire_order():
+    old = filed("2021", 1.0, "2021-11-01")
+    new = filed("2022", 2.0, "2022-11-01")
+    for wire in ([old, new], [new, old]):
+        assert [r["filing_date"] for r in vendor_rows_newest_filing_first(list(wire))] == [
+            "2022-11-01",
+            "2021-11-01",
+        ]
+
+
+def test_a_restatement_wins_and_the_wire_order_cannot_change_what_is_published():
+    """THE defect: with first-writer-wins and an arbitrary server order, the same fetch could
+    publish the original one night and the amendment the next, with no version and no tell."""
+    original = filed("2023", 383_285_000_000.0, "2023-11-03")
+    restated = filed("2023", 383_100_000_000.0, "2024-08-02")
+    for wire in ([original, restated], [restated, original]):
+        out, _ = merge_period_set(None, list(wire), 9, "annual", "yfinance")
+        assert out["periods"] == ["2023"]
+        assert out["income"]["revenue"] == [383_100_000_000.0]  # the LATER filing, both ways
+        assert out["filed_by_period"] == ["2024-08-02"]
+        assert out["restated_by_period"] == [True]
+
+
+def test_an_older_filing_still_fills_a_field_the_restatement_omitted():
+    """Filling a null is not overwriting — the amendment owns the column, the original may
+    still supply a line item the amendment left out."""
+    original = filed("2023", 383_285_000_000.0, "2023-11-03")
+    restated = filed("2023", 383_100_000_000.0, "2024-08-02")
+    restated["financials"]["income_statement"].pop("net_income_loss")
+    out, _ = merge_period_set(None, [original, restated], 9, "annual", "yfinance")
+    assert out["income"]["revenue"] == [383_100_000_000.0]      # amendment
+    assert out["income"]["net_income"] == [112_010_000_000.0]   # original
+    assert out["filed_by_period"] == ["2024-08-02"]             # the column's own filing
+
+
+def test_an_undated_row_never_outranks_one_carrying_a_filing_date():
+    """We promote a row over another on evidence only. An undated row is also no evidence of a
+    restatement — one known filing date is not two."""
+    undated = filed("2023", 1.0, None)
+    dated = filed("2023", 2.0, "2020-01-01")
+    for wire in ([undated, dated], [dated, undated]):
+        out, _ = merge_period_set(None, list(wire), 9, "annual", "yfinance")
+        assert out["income"]["revenue"] == [2.0]
+        assert out["filed_by_period"] == ["2020-01-01"]
+        assert out["restated_by_period"] == [False]
+
+
+def test_a_single_filing_period_is_stamped_but_not_flagged_as_restated():
+    out, _ = merge_period_set(None, [filed("2023", 5.0, "2023-11-03")], 9, "annual", "yfinance")
+    assert out["filed_by_period"] == ["2023-11-03"]
+    assert out["restated_by_period"] == [False]
+
+
+def test_a_column_no_vendor_row_touched_claims_no_filing():
+    out, _ = merge_period_set(existing_set(), [], 9, "annual", "yfinance")
+    assert out["filed_by_period"] == [None, None]
+    assert out["restated_by_period"] == [False, False]
+
+
+def test_provenance_arrays_stay_aligned_to_periods():
+    out, _ = merge_period_set(
+        existing_set(),
+        [filed(str(y), float(y), f"{y}-11-01") for y in range(2015, 2024)],
+        9,
+        "annual",
+        "yfinance",
+    )
+    n = len(out["periods"])
+    assert len(out["filed_by_period"]) == n
+    assert len(out["restated_by_period"]) == n
+    assert len(out["src_by_period"]) == n

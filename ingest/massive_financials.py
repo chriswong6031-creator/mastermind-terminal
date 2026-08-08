@@ -171,6 +171,25 @@ def row_end_date(raw: dict) -> str | None:
     return None
 
 
+def row_filing_date(raw: dict) -> str | None:
+    """When the filing this row came from reached the SEC, as an ISO date. None if unstated.
+
+    This is the only point-in-time anchor a vendor row carries. `acceptance_datetime` is the
+    exact wire timestamp and is preferred; `filing_date` is the calendar fallback. Both are
+    truncated to a date so a restatement filed the same day as its original does not order on
+    a timestamp the vendor may or may not populate.
+
+    ⚠ NOT `period_of_report_date` — that is the period the filing is ABOUT, it comes back null
+    on live payloads (tests/test_massive_financials.py), and a restatement shares it with the
+    original by definition. Ordering on it cannot separate the two.
+    """
+    for field in ("acceptance_datetime", "filing_date"):
+        v = raw.get(field)
+        if isinstance(v, str) and len(v) >= 10:
+            return v[:10]
+    return None
+
+
 def vendor_label(raw: dict, timeframe: str) -> str | None:
     """Fiscal label straight from the vendor's own `fiscal_year` / `fiscal_period`.
 

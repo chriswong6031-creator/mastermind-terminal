@@ -20,6 +20,7 @@
  * whose fund.json predates this pass simply reports no gaps and a shorter history.
  */
 import type { Fund, StatementPeriodSet } from "./fund";
+import { incomeView } from "./finStatementMath";
 
 /** Contract field keys the vendor payload cannot fill, by statement block. */
 export type VendorGaps = Record<string, string[]>;
@@ -110,6 +111,12 @@ export interface RevenuePoint {
  * both — a quarterly series compared to the prior QUARTER would be seasonality, not growth.
  * Periods whose revenue is null keep their slot (the axis must not silently close a gap)
  * and yield a null YoY on both sides of the hole.
+ *
+ * NORMALIZATION: revenue comes from `finStatementMath.incomeView`, the same call the
+ * Statements tab makes, NOT from `set.income.revenue` raw. Reading it raw was a live
+ * cross-tab contradiction — a cumulative-YTD (CN) name showed 1314.42 here and 307.74 on
+ * Statements for the same quarter, because only one of the two tabs differenced. One
+ * normalization policy, both consumers.
  */
 export function revenueHistory(
   fund: Fund | null,
@@ -117,7 +124,7 @@ export function revenueHistory(
 ): RevenuePoint[] {
   const set = timeframe === "annual" ? fund?.statements?.annual : fund?.statements?.quarterly;
   const periods = set?.periods ?? [];
-  const revenue = set?.income?.revenue ?? [];
+  const revenue = incomeView(fund?.ticker, set, timeframe).income.revenue;
   if (periods.length === 0) return [];
   const lag = timeframe === "quarterly" ? 4 : 1;
   return periods.map((period, i) => {
