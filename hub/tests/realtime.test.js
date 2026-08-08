@@ -225,3 +225,98 @@ describe("store overlay — freshest print wins, but only on a measured real-tim
     assert.equal(out.AAPL.last, LAST_TRADE);
   });
 });
+
+describe("per-NAME freshness — the verdict grades the feed, but the badge is per symbol", () => {
+  // 2026-08-07 (Friday) 15:30 ET = 19:30 UTC — late in the session.
+  const LATE = Date.UTC(2026, 7, 7, 19, 30);
+  // 09:35 ET the SAME day: a real print, from this session, but 5h55m stale by LATE.
+  const QUIET_PRINT = Date.UTC(2026, 7, 7, 13, 35);
+  const anchor = { prevClose: 11.0, close: null, anchor_source: "daily_file" };
+
+  /** A name that DID trade today (day.c > 0, so the 0=MISSING rule admits the row) and has not
+   *  printed since `printMs`. `updated` is now, which is what dates the snapshot as today's. */
+  const quietRow = (printMs) => ({
+    ticker: "SGML",
+    day: { o: 9.5, h: 9.6, l: 9.4, c: 9.5, v: 1200 },
+    prevDay: { c: 11.0 },
+    lastTrade: { p: 9.5, s: 100, t: printMs * 1e6 }, // NANOseconds
+    updated: LATE * 1e6,
+  });
+
+  /** Store in the SKY shape: the stream is not carrying SGML today at all. */
+  function storeWithoutTodaysPrint() {
+    const store = new Store("/dev/null/manifest.json", { get: () => anchor });
+    store.quotes.set("SGML", {
+      sym: "SGML", last: 11.0, market: "us", live: false, source: "manifest",
+      basis: "EOD", regularSession: "rth", regularSessionDate: "2026-08-06",
+      ts: Math.floor(Date.UTC(2026, 7, 7, 0, 0) / 1000),
+    });
+    return store;
+  }
+
+  /** Liquid sibling printing 3s ago — this is what holds the FEED's floor at real-time. */
+  const liquidRow = () => row("AAPL", LATE, 3_000);
+
+  it("does NOT adopt a name's hours-old print as real-time, however fresh its siblings are", async () => {
+    // The measured failure this bounds: floorLagMs=3000 from AAPL let SGML's 5h55m-old print
+    // publish basis:"REALTIME", live:true — a green "Live" chip on a six-hour-old price, with
+    // the true age reachable only on hover.
+    const feed = feedOf([liquidRow(), quietRow(QUIET_PRINT)]);
+    feed.demand("AAPL", LATE); feed.demand("SGML", LATE);
+    await feed._flush(LATE);
+
+    assert.equal(feed.verdict(LATE).tier, "realtime", "the FEED is genuinely real-time");
+
+    const out = storeWithoutTodaysPrint().getQuotes(["SGML"], LATE, null, feed);
+    assert.equal(out.SGML.basis, "DELAYED_15M", "a stale print cannot ride a fresh floor");
+    assert.equal(out.SGML.live, false);
+    assert.notEqual(out.SGML.source, "polygon-snapshot-rt");
+    // The measurement still rides along — the row is honest about its age either way.
+    assert.ok(out.SGML.lagMs > 5 * 3600_000, `lagMs=${out.SGML.lagMs}`);
+  });
+
+  it("still adopts the SAME name once its own print is fresh — the bound is not a blanket refusal", async () => {
+    // Guards against over-correcting: an ordinarily quiet name that has just printed must still
+    // read live, or the fix trades one wrong label for the opposite wrong label.
+    const feed = feedOf([liquidRow(), quietRow(LATE - 40_000)]);
+    feed.demand("AAPL", LATE); feed.demand("SGML", LATE);
+    await feed._flush(LATE);
+
+    const out = storeWithoutTodaysPrint().getQuotes(["SGML"], LATE, null, feed);
+    assert.equal(out.SGML.basis, "REALTIME");
+    assert.equal(out.SGML.live, true);
+    assert.equal(out.SGML.last, 9.5);
+  });
+});
+
+describe("the freshness floor spans the whole flush, not the last chunk", () => {
+  const LATE = Date.UTC(2026, 7, 7, 19, 30);
+
+  it("takes the MINIMUM across chunks, so a trailing quiet chunk cannot demote a live feed", async () => {
+    // CHUNK is 50, so 60 symbols are two upstream calls. The youngest print in the batch sits in
+    // the FIRST chunk; the second chunk is entirely 10-minute-old prints. A per-chunk write made
+    // the last chunk win and graded this feed "delayed" — flapping basis/live/source on every
+    // symbol between polls.
+    const fresh = row("AAPL", LATE, 3_000);
+    const stale = (i) => row(`Q${i}`, LATE, 10 * 60_000);
+    const rows = [fresh, ...Array.from({ length: 59 }, (_, i) => stale(i))];
+    const bySym = new Map(rows.map((r) => [r.ticker, r]));
+
+    const feed = new SnapshotFeed({
+      apiKey: "test-key", realtime: true,
+      // Honour the chunking: return only the rows this request actually asked for. A stub that
+      // returns every row for every call would put the fresh print in both chunks and the test
+      // would pass against the defect.
+      fetchJson: async (url) => {
+        const asked = decodeURIComponent(new URL(url).searchParams.get("tickers") || "").split(",");
+        return { tickers: asked.map((s) => bySym.get(s)).filter(Boolean) };
+      },
+    });
+    for (const r of rows) feed.demand(r.ticker, LATE);
+    await feed._flush(LATE);
+
+    const v = feed.verdict(LATE);
+    assert.equal(v.floorLagMs, 3_000, "the floor is the youngest print in the whole flush");
+    assert.equal(v.tier, "realtime");
+  });
+});

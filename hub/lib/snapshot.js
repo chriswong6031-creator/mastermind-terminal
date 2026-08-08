@@ -55,6 +55,16 @@ const { etDate, classifySession } = require("./usSession");
 const REALTIME_MAX_LAG_MS = 2 * 60 * 1000;      // floor at/below this ⇒ real-time
 const DELAYED_MAX_LAG_MS = 20 * 60 * 1000;      // …else at/below this ⇒ the familiar 15-min delay
 const FLOOR_WINDOW_MS = 5 * 60 * 1000;          // rolling window the floor is measured over
+// PER-NAME adoption bound — a different question from the floor above, and the one the BADGE
+// answers. `verdict()` grades the FEED; a badge is per SYMBOL. Measured on this branch: a floor
+// of 3s set by one liquid sibling let a quiet name whose own last print was 5h55m old publish
+// `basis:"REALTIME", live:true` — a green "Live" chip on a six-hour-old price, with the true age
+// reachable only on hover. A print older than the delayed plan's own lag is indistinguishable
+// from what that plan would have served, so it cannot be adopted as real-time however fresh its
+// siblings are. Deliberately generous (15m, not the 2m floor threshold) so an ordinarily quiet
+// name on a genuinely real-time feed still reads live — the failure this bounds is the six-hour
+// one, not the six-minute one.
+const NAME_REALTIME_MAX_LAG_MS = 15 * 60 * 1000;
 
 // Per-symbol refresh interval. The delayed plan is 15 minutes behind, so polling faster
 // buys nothing; 60s keeps a watchlist current without hammering the API.
@@ -204,6 +214,13 @@ class SnapshotFeed {
     const syms = [...this._pending];
     this._pending.clear();
 
+    // The floor spans the WHOLE flush, not one response. It is documented as "the youngest print
+    // across every symbol snapshotted", and a per-chunk write made the LAST chunk win instead:
+    // a trailing chunk of quiet names could demote a genuinely real-time feed for a cycle and
+    // flap basis/live/source across every symbol. Accumulated here, committed once below.
+    let floor = null;
+    let floorAt = 0;
+
     for (let i = 0; i < syms.length; i += CHUNK) {
       const chunk = syms.slice(i, i + CHUNK);
       this._inflight++;
@@ -215,8 +232,6 @@ class SnapshotFeed {
         const rows = (body && body.tickers) || [];
         const now = nowMs != null ? nowMs : Date.now();
         const seen = new Set();
-        // Youngest print in THIS response — the feed's freshness floor for this cycle.
-        let floor = null;
         for (const row of rows) {
           const sym = row && row.ticker;
           if (!sym) continue;
@@ -230,10 +245,9 @@ class SnapshotFeed {
             // A negative lag means the vendor clock ran ahead of ours; clamp to 0 rather than
             // let it manufacture an impossibly good verdict.
             const clamped = lag < 0 ? 0 : lag;
-            if (floor == null || clamped < floor) floor = clamped;
+            if (floor == null || clamped < floor) { floor = clamped; floorAt = now; }
           }
         }
-        if (floor != null) { this._floorLagMs = floor; this._floorAt = now; }
         // Cache the MISS too, so an unknown/unsupported ticker is not re-requested on
         // every 6s poll. get() returns null for a null snap exactly as for an absent one.
         for (const sym of chunk) {
@@ -247,6 +261,9 @@ class SnapshotFeed {
         this._inflight--;
       }
     }
+    // Committed once, after every chunk has answered, so the published floor is the minimum
+    // across the whole flush. A chunk that threw simply contributes nothing to it.
+    if (floor != null) { this._floorLagMs = floor; this._floorAt = floorAt; }
   }
 }
 
@@ -342,4 +359,5 @@ module.exports = {
   SnapshotFeed, parseSnapshot,
   TTL_MS, REALTIME_TTL_MS, MAX_AGE_MS,
   REALTIME_MAX_LAG_MS, DELAYED_MAX_LAG_MS, FLOOR_WINDOW_MS,
+  NAME_REALTIME_MAX_LAG_MS,
 };

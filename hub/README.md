@@ -41,7 +41,7 @@ Env vars come from `/opt/terminal/.env` (EnvironmentFile in the unit):
 | `WEBULL_DISABLE` | optional | set to `1` to disable **only** the Webull ext leg (Alpaca + Yahoo legs unaffected) |
 | `MACRO_FEED_DISABLE` | optional | set to `1` to disable the macro feed — futures/indices/FX drop out of `/quotes` entirely |
 | `HUB_DISABLE_SNAPSHOT` | optional | set to `1` to disable the REST snapshot leg (reverts to exactly the pre-2026-08-07 behaviour — symbols the stream is not carrying fall back to the nightly manifest) |
-| `HUB_REALTIME_QUOTES` | optional | set to `1` to put the snapshot leg in **real-time mode**: 8s poll (vs 60s) and a `lastTrade` parse. Requires the Massive "Stocks Advanced" plan; **US STOCKS ONLY** — no index/futures/FX/crypto entitlement. See below |
+| `HUB_REALTIME_QUOTES` | optional | set to `1` to put the snapshot leg in **real-time mode**: 8s poll (vs 60s) and a `lastTrade` parse. Requires the Massive "Stocks Advanced" plan; **US STOCKS ONLY** — no index/futures/FX/crypto entitlement. **Also gates the Terminal's second-resolution bar band** (`/api/intraday` refuses `1s/5s/15s/30s` unless this is set, and the timeframe picker renders the Seconds group disabled to match) — one lever for everything real-time-derived, so the pending anonymous-vs-sign-in ruling has a single switch to land on. See below |
 
 Both new feeds are **keyless**: no credentials are required for the Sina, Yahoo-spark or
 Webull legs.
@@ -52,6 +52,14 @@ Webull legs.
 times the youngest print seen against the wall clock, and `store.getQuotes` stamps
 `basis: "REALTIME"` only on that verdict — so a plan downgrade, an entitlement change, or a
 vendor outage degrades the label automatically instead of leaving a stale promise in the UI.
+
+**Two measurements, because they answer different questions.** `verdict()` grades the FEED and
+is deliberately a FLOOR across symbols — a per-symbol rule would call a legitimately quiet name
+"delayed" on a genuinely real-time feed. But a badge is per SYMBOL, so `store.getQuotes` applies a
+second, per-name bound (`NAME_REALTIME_MAX_LAG_MS`, 15 min) before adopting a row as real-time.
+Without it a floor of 3s set by one liquid name let a quiet name's 5h55m-old print publish
+`basis: "REALTIME", live: true` — a green "Live" chip on a six-hour-old price, with the real age
+reachable only on hover. A row failing that bound keeps the delayed basis and labels.
 
 The verdict measures a **floor across symbols**, not a per-symbol age: an illiquid name can go
 ten minutes without printing on a genuinely live feed, while a 15-minute-delayed plan cannot

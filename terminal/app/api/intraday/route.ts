@@ -98,22 +98,37 @@ export async function GET(req: Request) {
     : market === "ca" ? "none" : (market === "us" || market === "crypto") ? "polygon" : "tencent";
   const basis = "display"; // all current providers emit the display-epoch convention; UTC feeds bump this
   const seconds = isSecondTf(tf);
-  // `date` joins the key for the SECOND band only. Minute-band entries are deliberately
-  // date-agnostic — one deep-history read serves the full chart and any single-session study —
-  // but a second-band fetch is itself scoped to one session, so two dates are two entries.
-  // serve a warm cache without re-auth (it's public market data); only a fresh upstream fetch is gated
-  const ckey = `${sym}|${tf}|${ext ? 1 : 0}|${source}|${basis}${seconds ? `|${date || "latest"}` : ""}`;
-  const hit = CACHE.get(ckey);
-  if (hit && Date.now() - hit.at < (seconds ? SECOND_TTL : TTL)) {
-    return NextResponse.json(seconds ? hit.data : responseForSession(hit.data, date));
+
+  // ── Real-time kill switch: ONE operator lever for the whole real-time question ────────────
+  // The second band is a real-time-DERIVED product — at 1s its window runs to the current
+  // second of a live session — so it rides the SAME lever as the real-time quote leg
+  // (`HUB_REALTIME_QUOTES`, read in hub/hub.js) rather than a second switch of its own.
+  // Default OFF: the operator's anonymous-vs-sign-in ruling is pending, and until it lands
+  // nothing real-time-derived may serve. Refused in the route's ENTITLEMENT shape (200 +
+  // empty bars + a note), never a 5xx — the chart draws its honest "no data" with a reason
+  // instead of an error toast. Placed AHEAD of the cache read so flipping the lever off takes
+  // effect on the next request rather than after a warm entry expires.
+  if (seconds && process.env.HUB_REALTIME_QUOTES !== "1") {
+    return NextResponse.json({ t: sym, tf, bars: [], note: "second-resolution bars are not enabled" });
   }
 
-  // a fresh fetch spends our paid Polygon key. Open while login is disabled (the 45s cache above
-  // already bounds upstream call volume); re-gated with the rest of the app via TERMINAL_REQUIRE_AUTH=1.
+  // AUTH BEFORE THE CACHE. A warm entry is still a served payload: returning one ahead of the
+  // gate let an unauthenticated caller read whatever a signed-in caller had just warmed, which
+  // for the second band is paid, real-time-derived data. The cache keeps doing its real job
+  // (bounding upstream call volume) — it just no longer decides who is allowed to read it.
   if (process.env.TERMINAL_REQUIRE_AUTH === "1") {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+
+  // `date` joins the key for the SECOND band only. Minute-band entries are deliberately
+  // date-agnostic — one deep-history read serves the full chart and any single-session study —
+  // but a second-band fetch is itself scoped to one session, so two dates are two entries.
+  const ckey = `${sym}|${tf}|${ext ? 1 : 0}|${source}|${basis}${seconds ? `|${date || "latest"}` : ""}`;
+  const hit = CACHE.get(ckey);
+  if (hit && Date.now() - hit.at < (seconds ? SECOND_TTL : TTL)) {
+    return NextResponse.json(seconds ? hit.data : responseForSession(hit.data, date));
   }
 
   // ── Second band: single-session live window, no store ────────────────────────────────────

@@ -21,6 +21,7 @@
 const fs = require("fs");
 const log = require("./log");
 const { classifySession, etDate } = require("./usSession");
+const { NAME_REALTIME_MAX_LAG_MS } = require("./snapshot");
 
 const STALE_EVICT_MS = 45 * 60 * 1000; // 45 min
 const MANIFEST_CHECK_MIN_INTERVAL = 30 * 1000; // ≤1 stat/reparse per 30 s
@@ -255,9 +256,26 @@ class Store {
         if (!snap) continue;
 
         const hasTodayPrint = q.regularSessionDate != null && q.regularSessionDate === etDate(now);
+        // ── PER-NAME freshness, checked before adopting anything as real-time ──
+        // The verdict above grades the FEED — the floor across every symbol — which is the right
+        // shape for a feed-level claim but the wrong one for THIS row's badge. Two guards, and
+        // the second is the one that bites:
+        //   • printDate: the print must belong to today's ET session, the same rule _flush
+        //     applies to the floor. Defence in depth — get() already refuses a snapshot whose
+        //     own date is not today, so this rarely fires on its own.
+        //   • age: the print must be younger than NAME_REALTIME_MAX_LAG_MS. This is the one that
+        //     catches the measured failure — a same-session print can be hours old while a
+        //     liquid sibling holds the floor at 3s, and nothing downstream capped it.
+        // A row failing either keeps the delayed basis and labels; only its price is stale, and
+        // saying "15-min delayed" about a stale price is far closer to true than "Live".
+        const printFresh =
+          snap.printMs != null &&
+          snap.printDate === etDate(now) &&
+          now - snap.printMs <= NAME_REALTIME_MAX_LAG_MS;
         // Real-time price for this row: the last TRADE, which is fresher than day.c.
         const rtPrice =
-          realtimeTier && snap.printPrice != null && snap.printPrice > 0 ? snap.printPrice : null;
+          realtimeTier && printFresh && snap.printPrice != null && snap.printPrice > 0
+            ? snap.printPrice : null;
         const printTs = snap.printMs != null ? Math.floor(snap.printMs / 1000) : snap.ts;
         if (hasTodayPrint) {
           // The tape is carrying this symbol today. Override ONLY when measured real-time AND

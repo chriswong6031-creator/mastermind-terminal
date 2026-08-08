@@ -413,6 +413,10 @@ export const LEX: Record<string, [string, string]> = {
   freshnessUnknown: ["Freshness not measured yet", "尚未测量行情延迟"],
   marketClosedFeed: ["Market closed — last session", "休市 — 上一交易日"],
   usOnlyFeed: ["US stocks only", "仅限美股"],
+  // Shown on the disabled Seconds entries when the real-time lever is off. Deliberately states
+  // the STATE ("not enabled") rather than a reason the user could act on — there is no setting
+  // they can flip, so pointing at one would send them hunting.
+  secondsOffFeed: ["not enabled", "未启用"],
   unitSecShort: ["s", "秒"],
   unitMinShort: ["m", "分钟"],
   unitHrShort: ["h", "小时"],

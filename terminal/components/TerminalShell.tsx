@@ -287,10 +287,14 @@ const SECOND_FUNCTIONAL = [...SECOND_TFS];
 // Sorts the top-bar favourites tray into chronological order. TF_CANONICAL_ORDER lives in
 // lib/startTf, which also feeds the Settings → Terminal startup-timeframe picker.
 const tfSortKey = (tf: string) => { const i = TF_CANONICAL_ORDER.indexOf(tf); return i < 0 ? 999 : i; };
-function functionalSet(sym: string): Set<string> {
+// `secondsEnabled` mirrors the server's HUB_REALTIME_QUOTES lever (threaded as a prop — the
+// flag is server-side and must not become a NEXT_PUBLIC_ twin). With the lever off the route
+// refuses the second band, so offering it here would hand the user a timeframe that renders
+// empty; the picker shows the group disabled with the honest reason instead.
+function functionalSet(sym: string, secondsEnabled: boolean): Set<string> {
   const s = new Set(DAILY_FUNCTIONAL);
   if (intradayCapable(classify(sym))) for (const t of INTRADAY_FUNCTIONAL) s.add(t);
-  if (classify(sym) === "us" && !isMacroSymbol(sym)) for (const t of SECOND_FUNCTIONAL) s.add(t);
+  if (secondsEnabled && classify(sym) === "us" && !isMacroSymbol(sym)) for (const t of SECOND_FUNCTIONAL) s.add(t);
   return s;
 }
 // valid ?pane= deep-link targets (the MegaPane pages; "analyst" is an alias for forecast).
@@ -342,7 +346,7 @@ function btMark(name: string) {
   console.log(`[boottrace] ${name} +${(now - _btStart).toFixed(1)}ms`);
 }
 
-export default function TerminalShell({ symbols, email, initialSymbol, shellMode = false, shellTray = false, shellDossier = false }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string; shellMode?: boolean; shellTray?: boolean; shellDossier?: boolean }) {
+export default function TerminalShell({ symbols, email, initialSymbol, shellMode = false, shellTray = false, shellDossier = false, secondBarsEnabled = false }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string; shellMode?: boolean; shellTray?: boolean; shellDossier?: boolean; secondBarsEnabled?: boolean }) {
   const [man, setMan] = useState<Manifest | null>(null);
   // named watchlists — client-side + localStorage-backed so switching / creating lists works for guests
   // (no auth needed). The server-provided `symbols` seed becomes the "Default" list.
@@ -447,7 +451,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const tf = paneTfs[activePane] ?? paneTfs[0] ?? "D";        // the active pane's timeframe drives the toolbar
   const setTf = (t: string) => setPaneTfs((a) => { const n = [...a]; n[activePane] = t; return n; });
   // per-market functional TF set: daily-derived always; intraday TFs only for intraday-capable markets (R12)
-  const FUNCTIONAL = useMemo(() => functionalSet(active), [active]);
+  const FUNCTIONAL = useMemo(() => functionalSet(active, secondBarsEnabled), [active, secondBarsEnabled]);
   const [chartType, setChartType] = useState("candles");
   // Default-on indicators for new users: Moving Averages + Volume + MACD-RSI (TH_RSIMACD+) + Stochastic (CM_Stochastic_MTF).
   // item-28: Golden Oracle is OFF by default. A user's explicit saved indicator set (mm.inds)
@@ -644,6 +648,12 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const nonce = useRef(0);
   const wsMounted = useRef(false);
   const t = useT();
+  // Why a disabled timeframe is disabled. Three distinct reasons, and naming the wrong one sends
+  // the user hunting for a setting: the second band is off for the whole deployment ("not
+  // enabled"), or on but unentitled for this symbol ("US stocks only"); everything else in the
+  // intraday band is a market without a live feed.
+  const tfDisabledReason = (tfi: string) =>
+    isSecondTf(tfi) ? (secondBarsEnabled ? t("usOnlyFeed") : t("secondsOffFeed")) : t("liveFeed");
   const { lang } = useLang();
   const { ref: chartToolbarRef, mode: chartToolbarMode } = useAdaptiveToolbar(
     `${lang}|${favTfOrder.join(",")}|${panes.length}|${tf}`,
@@ -893,7 +903,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     // Settings → Terminal → Default timeframe (3D unless changed). Resolved against the landing
     // symbol's functional set, since the workspace restore below can land on a symbol other than seed0.
     const savedStartTf = readStartTf();
-    const startTf = resolveStartTf(savedStartTf, functionalSet(seed0));
+    const startTf = resolveStartTf(savedStartTf, functionalSet(seed0, secondBarsEnabled));
     { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); for (const k of Object.keys(savedP)) if (isSuiteKey(k)) base[k] = { ...suiteDefaults(k), ...savedP[k] }; setIndParams(base); } setPaneTfs([startTf]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); {
       const savedSet = load(WATCHLIST_SETTINGS_KEY, {});
       const savedVersion = Number(localStorage.getItem(WATCHLIST_SETTINGS_VERSION_KEY) || 0);
@@ -913,7 +923,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           const pairs = ws.panes.map((s: string, i: number) => [s, ws.paneTfs?.[i] ?? startTf]).filter(([s]: any) => symbols.some((x) => x.symbol === s));
           if (pairs.length) {
             // a single chart always opens on the startup default; genuine multi-pane layouts (e.g. MTF) keep their saved per-pane timeframes
-            setPanes(pairs.map((p: any) => p[0])); setPaneTfs(pairs.length === 1 ? [resolveStartTf(savedStartTf, functionalSet(pairs[0][0]))] : pairs.map((p: any) => p[1]));
+            setPanes(pairs.map((p: any) => p[0])); setPaneTfs(pairs.length === 1 ? [resolveStartTf(savedStartTf, functionalSet(pairs[0][0], secondBarsEnabled))] : pairs.map((p: any) => p[1]));
             setSplit([1, 2, 4].includes(ws.split) ? ws.split : (pairs.length >= 4 ? 4 : pairs.length >= 2 ? 2 : 1));
             setActivePane(Math.min(ws.activePane || 0, pairs.length - 1));
             if (typeof ws.sync === "boolean") setSync(ws.sync);
@@ -2806,7 +2816,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                         plan's entitlement boundary (US stocks only), not a missing live feed —
                         labelling it "live feed" would send a user hunting for a setting that
                         cannot exist for their symbol. */}
-                    <span>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 10 }}>{isSecondTf(tfi) ? t("usOnlyFeed") : t("liveFeed")}</span>}</span>
+                    <span>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 10 }}>{tfDisabledReason(tfi)}</span>}</span>
                     <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(tfi) ? f.filter((x) => x !== tfi) : [...f, tfi]); }}><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
                   </div>; })}</div>))}
               </div>
@@ -2821,7 +2831,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                         const fav = favTF.includes(tfi);
                         return (
                           <div key={tfi} className={`msheet-row${tf === tfi ? " on" : ""}${fn ? "" : ""}`} style={fn ? {} : { opacity: 0.45 }} onClick={() => { if (fn) { setTf(tfi); setTfOpen(false); } }}>
-                            <span style={{ flex: 1 }}>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 8, fontSize: 11 }}>{isSecondTf(tfi) ? t("usOnlyFeed") : t("liveFeed")}</span>}</span>
+                            <span style={{ flex: 1 }}>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 8, fontSize: 11 }}>{tfDisabledReason(tfi)}</span>}</span>
                             <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(tfi) ? f.filter((x) => x !== tfi) : [...f, tfi]); }} style={{ padding: "0 4px" }}><svg viewBox="0 0 24 24" width={16} height={16}><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
                           </div>
                         );
