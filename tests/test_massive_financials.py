@@ -339,3 +339,35 @@ def test_provenance_arrays_stay_aligned_to_periods():
     assert len(out["filed_by_period"]) == n
     assert len(out["restated_by_period"]) == n
     assert len(out["src_by_period"]) == n
+
+
+def test_provenance_survives_a_re_run_that_has_nothing_left_to_fill():
+    """The pass runs nightly. By rule 2 a fully-filled column accepts nothing new, so the
+    restatement that supplied it last night contributes nothing tonight — the stamps must be
+    carried forward rather than blanked on the second run."""
+    original = filed("2023", 383_285_000_000.0, "2023-11-03")
+    restated = filed("2023", 383_100_000_000.0, "2024-08-02")
+    night1, _ = merge_period_set(None, [original, restated], 9, "annual", "yfinance")
+    assert night1["filed_by_period"] == ["2024-08-02"] and night1["restated_by_period"] == [True]
+
+    night2, stats = merge_period_set(night1, [original, restated], 9, "annual", "yfinance")
+    assert stats["filled"] == 0  # nothing left to fill
+    assert night2["filed_by_period"] == ["2024-08-02"]
+    assert night2["restated_by_period"] == [True]
+
+
+def test_a_later_filing_that_contributes_advances_the_stamp():
+    """A restatement filed AFTER the column was written still claims it, provided it supplies
+    a value — an amendment that only repeats what is on file changes nothing."""
+    first = filed("2023", 383_285_000_000.0, "2023-11-03")
+    first["financials"]["income_statement"].pop("net_income_loss")
+    night1, _ = merge_period_set(None, [first], 9, "annual", "yfinance")
+    assert night1["filed_by_period"] == ["2023-11-03"]
+    assert night1["income"]["net_income"] == [None]
+
+    later = filed("2023", 999.0, "2024-08-02")
+    night2, _ = merge_period_set(night1, [first, later], 9, "annual", "yfinance")
+    assert night2["income"]["revenue"] == [383_285_000_000.0]   # rule 2: never overwritten
+    assert night2["income"]["net_income"] == [112_010_000_000.0]  # the hole it DID fill
+    assert night2["filed_by_period"] == ["2024-08-02"]
+    assert night2["restated_by_period"] == [True]

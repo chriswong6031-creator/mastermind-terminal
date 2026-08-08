@@ -176,6 +176,12 @@ def merge_period_set(
     existing = existing or {}
     ex_periods: list[str] = list(existing.get("periods") or [])
     ex_ends: list[str] = list(existing.get("period_end") or [])
+    # Provenance already on file. This pass is re-run nightly, and by rule 2 a column whose
+    # values are all filled accepts nothing new — so a restatement that supplied this column
+    # LAST night contributes nothing tonight. Without carrying the stamps forward, the filing
+    # date and the restated flag would silently blank on the second run.
+    ex_filed: list = list(existing.get("filed_by_period") or [])
+    ex_restated: list = list(existing.get("restated_by_period") or [])
 
     # label → {end, values:{block:{field:v}}, src}
     merged: dict[str, dict] = {}
@@ -198,10 +204,11 @@ def merge_period_set(
             "values": {b: existing_at(b, i) for b in BLOCKS},
             "src": [base_src],
             # Filing provenance (rule 5). `filed` is the filing whose values this column
-            # actually took; `filings` is every distinct vendor filing seen for the label, so
-            # ">1" is the restatement tell. Both stay empty for a column no vendor row touched.
-            "filed": None,
+            # actually took; `filings` is every distinct vendor filing seen THIS run, so ">1"
+            # is the restatement tell; `restated` carries a tell an earlier run established.
+            "filed": ex_filed[i] if i < len(ex_filed) else None,
             "filings": set(),
+            "restated": bool(ex_restated[i]) if i < len(ex_restated) else False,
         }
         order.append(label)
 
@@ -223,6 +230,7 @@ def merge_period_set(
                 "src": [SOURCE_LABEL],
                 "filed": filed,
                 "filings": {filed} if filed else set(),
+                "restated": False,
             }
             order.append(label)
             added += 1
@@ -244,8 +252,10 @@ def merge_period_set(
             if SOURCE_LABEL not in slot["src"]:
                 slot["src"].append(SOURCE_LABEL)
             # Rows arrive newest-filing-first, so the first one to supply a value is the newest
-            # filing that supplied one. A row that contributed nothing never claims the column.
-            if slot["filed"] is None:
+            # filing that supplied one. A row that contributed nothing never claims the column,
+            # and an older filing never displaces a later one already stamped (this run or a
+            # previous one) — ISO dates compare lexicographically.
+            if filed and (slot["filed"] is None or filed > slot["filed"]):
                 slot["filed"] = filed
 
     # oldest→newest by period-end (the contract's array order), label as a stable tiebreak
@@ -262,7 +272,10 @@ def merge_period_set(
         }
     out["src_by_period"] = ["+".join(merged[lab]["src"]) for lab in order]
     out["filed_by_period"] = [merged[lab].get("filed") for lab in order]
-    out["restated_by_period"] = [len(merged[lab].get("filings") or ()) > 1 for lab in order]
+    out["restated_by_period"] = [
+        bool(merged[lab].get("restated")) or len(merged[lab].get("filings") or ()) > 1
+        for lab in order
+    ]
     out["vendor_gaps"] = statement_coverage()
 
     return out, {"added": added, "filled": filled, "total": len(order), "before": len(ex_periods)}
