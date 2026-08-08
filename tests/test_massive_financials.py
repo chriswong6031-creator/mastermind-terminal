@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from ingest.backfill_fund_statements_massive import (
     fy_end_month_from,
+    is_vendor_market,
     merge_period_set,
     vendor_row_label,
 )
@@ -224,3 +225,13 @@ def test_merging_into_an_absent_set_builds_one_from_the_vendor_alone():
 def test_vendor_gaps_are_recorded_for_the_ui_disclosure():
     out, _ = merge_period_set(existing_set(), [vrow("2020", "FY", "2020-09-26")], 9, "annual", "yfinance")
     assert out["vendor_gaps"] == statement_coverage()
+
+
+# ── 4. market filter (vendor quota) ──────────────────────────────────────────
+def test_bare_sweep_targets_us_listings_only():
+    """The data dir is ~1,500 files, nearly all CN/HK — an unfiltered sweep would spend
+    ~3,000 round trips per night being told "no results"."""
+    for sym in ("AAPL", "BRK.B", "NIO", "BF.A"):
+        assert is_vendor_market(sym), sym
+    for sym in ("000001.SZ", "0700.HK", "600519.SS", "005930.KS", "7203.T"):
+        assert not is_vendor_market(sym), sym

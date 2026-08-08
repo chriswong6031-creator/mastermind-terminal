@@ -60,6 +60,27 @@ OUT = CA_ROOT / "terminal" / "public" / "data"
 
 BLOCKS = ("income", "balance", "cashflow")
 
+# Exchange suffixes the vendor's US filings API does not cover. The data dir is ~1,500
+# files and all but a handful are CN/HK/KR listings fed by tushare/akshare, so an
+# unfiltered sweep would spend ~3,000 round trips to be told "no results" — real quota on
+# the shared key, every night. ADRs carry no suffix and are covered, so they still run.
+NON_US_SUFFIXES = {
+    "SZ", "SS", "SH", "BJ",   # mainland China
+    "HK",                      # Hong Kong
+    "KS", "KQ",               # Korea
+    "T", "TW", "TWO",         # Japan / Taiwan
+    "L", "PA", "DE", "AS", "SW", "MI", "MC", "ST", "OL", "HE", "CO",  # Europe
+    "AX", "NZ", "SI", "BK", "NS", "BO", "SA", "MX", "TO", "V",        # rest of world
+}
+
+
+def is_vendor_market(sym: str) -> bool:
+    """True when the symbol is a US listing (or ADR) the vendor can serve."""
+    _, dot, suffix = sym.rpartition(".")
+    if not dot:
+        return True
+    return suffix.upper() not in NON_US_SUFFIXES
+
 
 def fy_end_month_from(dates: list[str]) -> int:
     """Fiscal-year-end month from the NEWEST annual period-end; December if unknown.
@@ -244,7 +265,13 @@ def main(argv: list[str]) -> int:
             print(f"no fund.json for: {', '.join(missing)} — run gen_fund_us.py first", file=sys.stderr)
         paths = [(s, p) for s, p in paths if p.exists()]
     else:
-        paths = sorted((p.name.removesuffix(".fund.json"), p) for p in OUT.glob("*.fund.json"))
+        # A bare sweep is US-only: see NON_US_SUFFIXES. An explicit --only is honoured as
+        # given, so a one-off probe of a suffixed ticker is still possible.
+        paths = sorted(
+            (p.name.removesuffix(".fund.json"), p)
+            for p in OUT.glob("*.fund.json")
+            if is_vendor_market(p.name.removesuffix(".fund.json"))
+        )
     if args.limit:
         paths = paths[: args.limit]
 
