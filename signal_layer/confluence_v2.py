@@ -506,7 +506,13 @@ def warn_events(close: pd.Series) -> list[dict]:
 
     Strictly forward-walked, point-in-time (a pivot at position p is knowable only at
     p+radius; the ARMED window disarms after ARMED_WINDOW sessions with no re-arm).
-    Close-only. Returns ``[{ts, kind}]`` chronological, kind in {"arm","confirm"}."""
+    Close-only. Returns ``[{ts, kind, px}]`` chronological, kind in {"arm","confirm"}.
+
+    ``px`` is the DAILY close on the event's OWN session — the price the rule actually
+    tested (the confirm fires because THIS close broke the swing low). It exists so the
+    contracts layer can stamp a point-in-time marker price: mapping a confirm onto its
+    nearest-preceding 3D row and reading that row's close reads a bar that OPENED before
+    the event and CLOSES up to 2 sessions after it (HK-O1 / forensic B2, 9988.HK 05-27)."""
     dclose = close.dropna()
     di = dclose.index
     dv = dclose.to_numpy(dtype="float64")
@@ -533,12 +539,15 @@ def warn_events(close: pd.Series) -> list[dict]:
     for t in range(len(di)):
         if arm[t]:
             if t > armed_until:                       # fresh ARM (was disarmed) -> ⚠ event
-                events.append({"ts": di[t].strftime("%Y-%m-%d"), "kind": "arm"})
+                events.append({"ts": di[t].strftime("%Y-%m-%d"), "kind": "arm",
+                               "px": float(dv[t])})
             armed_until = t + ARMED_WINDOW            # (re-)arm
         if t <= armed_until:
             lvl = confirmed_low[t]
             if not np.isnan(lvl) and dv[t] < lvl:     # ⛔ structure break while armed
-                events.append({"ts": di[t].strftime("%Y-%m-%d"), "kind": "confirm"})
+                events.append({"ts": di[t].strftime("%Y-%m-%d"), "kind": "confirm",
+                               "px": float(dv[t]),    # the daily close that broke the low
+                               "level": float(lvl)})  # the swing low it broke
                 armed_until = -1                      # consume the arm on confirm
     return events
 

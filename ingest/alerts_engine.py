@@ -723,8 +723,18 @@ def evaluate(alert: dict, data: Data, flow: "Flow | None" = None):
             ts = str(sig.get("ts") or "")[:10]
             if ts < created:
                 break  # signals are chronological; older than the alert → stop
+            # HK-O1: an entry the v2 regime gate REFUSED still types BUY/REBUY (back-compat
+            # for every existing reader), so a bare type check fired a live "BUY" push on a
+            # setup the engine explicitly vetoed — the one place a blocked marker reached a
+            # user as an instruction. Gate on the flag (and the legacy quality string).
+            if sig.get("blocked") is True or str(sig.get("quality") or "") == "regime_blocked":
+                continue
             if str(sig.get("type") or "").upper() in want:
-                return True, sig.get("price"), f"{sig.get('type')} signal on {ts} (strength {sig.get('strength')})", None
+                # a SELL here is the trailing structure stop, and the note says so — this text
+                # is stored verbatim and rendered to the user (AlertsView renders it lang="en").
+                kind = ("STRUCTURE STOP" if sig.get("basis") == "structure_stop"
+                        else str(sig.get("type")))
+                return True, sig.get("price"), f"{kind} signal on {ts} (strength {sig.get('strength')})", None
         return False, None, "", None
 
     if ctype == "regime":

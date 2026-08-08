@@ -50,6 +50,26 @@ FLAGSHIP_PARAMS = {
 }
 
 
+# ── HK-O1 truth-in-labeling: the emitted ``basis`` vocabulary ────────────────────
+# ``basis`` names the MACHINE that produced an event, so no consumer can read a
+# trailing structure stop as an oracle-momentum exit. Forensic receipt:
+# Macro Dashboard research/prophet_us_audit/HK_ORACLE_FORENSIC_2026-08-08.md §1.
+#
+# Every user-facing SELL comes from ``v2["sell_confirms"]`` — the ARM→CONFIRM
+# structure break (confluence_v2.warn_events): the daily close prints below the last
+# CONFIRMED radius-3 swing low while armed. That is a TRAILING STOP on price
+# structure. It is NOT the MACD-RSI cross-down (``CS``), which has not been emitted
+# to the user stream since the GC v2 unification — 0700.HK printed a red
+# "GOLDEN ORACLE · SELL" on 2026-07-24 while its own 3D RSI-MACD read bull
+# (CS=False every bar 05-21→08-05, macd>sig rising at the fire).
+BASIS_STRUCTURE_STOP = "structure_stop"
+
+# Set on a marker the v2 entry logic REFUSED (bear_block regime veto). Kept alongside
+# the legacy ``quality='regime_blocked'`` string — the flag is the render key, the
+# string stays for every existing reader (HK-O1 item 2 is additive-only).
+BLOCKED_QUALITY = "regime_blocked"
+
+
 def source_hash(source_text: str, params: dict) -> str:
     """Hash the script source AND the full params block (so a param change is a new
     identity). Matches the loop's spec_hash discipline."""
@@ -149,7 +169,10 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
       * BUY   — from CB, exactly as before (keeper ``quality``/``tier``/``score`` stamped).
       * REBUY — from revBuy, exactly as before.
       * SELL  — from the v2 warn stream's CONFIRM events (``v2["sell_confirms"]``, the
-                armed-momentum + structure-break event). This REPLACES the old CS-based SELL.
+                armed-momentum + structure-break event). This REPLACES the old CS-based SELL,
+                so it is a TRAILING STRUCTURE STOP and says so: every SELL carries
+                ``basis="structure_stop"`` + ``stop_level`` (the swing low its daily close
+                broke). Nothing in this stream is a momentum exit — do not label one as one.
 
     NOT in this stream anymore (display priority = tops/bottoms readability, not sim purity):
       * CS-based SELL entries — dropped; CS stays internal to the no-cut sim only.
@@ -210,17 +233,33 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
             # A raw CB/revBuy the v2 entry logic does NOT take: bear_block regime veto
             # (keeper only grades ``(CB|revBuy) & ~bear_block``). Keep the display marker
             # but flag it so the model/chart never treats it as an entry. tier=None.
-            ev["quality"] = "regime_blocked"
+            #
+            # ``blocked`` is the HK-O1 render key: ``type`` stays "BUY"/"REBUY" verbatim so
+            # every existing reader keeps working, but a blocked setup must never be DRAWN
+            # with buy geometry (9988.HK's 2026-07-09 entry was regime-vetoed and still
+            # printed a solid BUY star on the price series — forensic §2). Consumers gate
+            # on ``blocked``/``quality``, never on ``type`` alone.
+            ev["quality"] = BLOCKED_QUALITY
             ev["quality_reason"] = "bear_block: monthly-bear & below-200 & 2W-not-bull"
             ev["tier"] = None
             ev["score"] = None
+            ev["blocked"] = True
         out.append(ev)
 
     # ── SELL from the v2 CONFIRM events (distribution armed + structure break) ──
     # Each confirm event is a DAILY-grid date; map it onto the containing / nearest-preceding
-    # 3D row (open_date <= confirm_ts) so it renders on the 3D chart grid. price/strength/
-    # regime all come from that 3D row. Multiple confirms can fall in one 3D bar's 3-session
-    # window — each stays a distinct SELL at its own confirm date.
+    # 3D row (open_date <= confirm_ts) so it renders on the 3D chart grid. strength/regime
+    # come from that 3D row (its OPEN precedes the confirm, so both are point-in-time safe).
+    # Multiple confirms can fall in one 3D bar's 3-session window — each stays a distinct
+    # SELL at its own confirm date.
+    #
+    # PRICE IS THE EXCEPTION (HK-O1 item 3 / forensic B2). The 3D row's ``close`` is the
+    # close of a bar that OPENED on/before the confirm and CLOSES up to 2 sessions AFTER it,
+    # so stamping it on the marker published a price the market had not printed yet —
+    # 9988.HK's 2026-05-27 SELL carried the close of the bar that opened 05-26. The honest
+    # stamp is the confirm session's own DAILY close (``px``), which is also the exact number
+    # the rule tested when it broke ``level``. ``price`` falls back to the 3D close only for
+    # a legacy v2 payload emitted before ``px`` existed.
     sell_confirms = v2.get("sell_confirms") or []
     if sell_confirms and len(sig):
         sidx = sig.index                                   # 3D open dates, ascending
@@ -230,13 +269,17 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
             if j < 0:                                       # confirm before the first 3D bar
                 continue
             row = sig.iloc[j]
+            px = _num(w.get("px"))
             out.append({
                 "ts": w["ts"],                              # the confirm event's date
                 "known_ts": _iso_date(w.get("known_ts"), w["ts"]),
                 "bar_index": j,                             # nearest-preceding 3D row
                 "type": "SELL",
+                # A trailing stop on price STRUCTURE — never a momentum/oracle exit.
+                "basis": BASIS_STRUCTURE_STOP,
                 "strength": _strength(row),                 # of the nearest 3D row
-                "price": _num(row.get("close")),            # that 3D row's close
+                "price": px if px is not None else _num(row.get("close")),
+                "stop_level": _num(w.get("level")),         # the swing low the close broke
                 "reasons": ["distribution_confirmed", "structure_break"],
                 "regime": {"weeklyBull": bool(row.get("w_bull")),
                            "above200": bool(row.get("above200")),
@@ -304,7 +347,12 @@ def _state(sig: pd.DataFrame, signals: list[dict]) -> dict:
     BUY after a SELL leaves the hint flat and the scored verdict SELL. ``last_scored_ts``
     is the signal's availability date (``known_ts``), with a legacy fallback to its chart
     coordinate (``ts``). The scored fields diverge from ``last_signal`` exactly when the
-    stream tail is a blocked marker."""
+    stream tail is a blocked marker.
+
+    ``last_scored_basis`` mirrors the anchoring signal's ``basis`` so the demotion to flat
+    is READABLE (HK-O1 item 1): a SELL here flips ``position_hint`` to flat off a trailing
+    structure stop, never off an oracle-momentum exit, and a consumer that reads only the
+    state block can now tell which. None on every non-SELL anchor (basis is SELL-only)."""
     last = sig.iloc[-1] if len(sig) else None
     last_sig = signals[-1] if signals else None
     bars_since = (len(sig) - 1 - last_sig["bar_index"]) if last_sig else None
@@ -317,7 +365,11 @@ def _state(sig: pd.DataFrame, signals: list[dict]) -> dict:
     for s in reversed(signals):
         if s["type"] == "RECLAIM" and not s.get("scored"):
             continue
-        if s["type"] in ("BUY", "REBUY", "SELL", "RECLAIM") and s.get("quality") != "regime_blocked":
+        # a refused entry never walks the position — gate on the explicit ``blocked`` flag
+        # AND the legacy quality string, so neither alone can re-open the 2026-07-15 hole.
+        if s.get("blocked") is True or s.get("quality") == BLOCKED_QUALITY:
+            continue
+        if s["type"] in ("BUY", "REBUY", "SELL", "RECLAIM"):
             last_scored = s
             pos = "long" if s["type"] in ("BUY", "REBUY", "RECLAIM") else "flat"
             break
@@ -330,9 +382,17 @@ def _state(sig: pd.DataFrame, signals: list[dict]) -> dict:
             last_scored.get("known_ts") or last_scored["ts"]
             if last_scored else None
         ),
+        # why the scored lane sits where it sits — "structure_stop" on a stopped-out flat.
+        "last_scored_basis": (last_scored.get("basis") if last_scored else None),
         "bars_since_signal": bars_since,
-        # DEPRECATED misnomer: carries strong_bull (weekly+monthly bull & above 200d), NOT the
-        # Pine "extended" (overbought). Kept verbatim for old readers; use the honest names.
+        # ── the two ``extended``s (HK-O1 item 4 / forensic §2) ──────────────────────────
+        # DEPRECATED ALIAS. This field carries ``strong_bull`` (weekly+monthly bull & above
+        # 200d) — a STRENGTH read. It does NOT mean the Pine ``extended`` (overbought), and
+        # it is NOT the Macro Dashboard cycles pipeline's "Extended — don't chase", which is
+        # an entirely different engine (engine/cycles.py) whose caution rides ``overbought``
+        # on this contract. Two meanings of one word landed on one stock card. Every reader
+        # should take ``strong_bull`` or ``overbought`` by name; the alias survives only so
+        # pre-2026-07-15 consumers keep parsing. Do not add new readers of ``extended``.
         "extended": strong_bull,
         "strong_bull": strong_bull,
         # the true Pine extendedNow — overbought on the last 3D row (RSI>=70 or %K>=80)

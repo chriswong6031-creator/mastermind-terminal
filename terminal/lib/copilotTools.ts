@@ -18,7 +18,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { computeRatings, type Row as RatingRow } from "@/lib/techRating";
 import { ema, atr, supertrend, bollingerBands, type Bar } from "@/lib/indicatorMath";
-import { verdictIsStale, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs } from "@/lib/signalVerdict";
+import { verdictIsStale, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs, isBlockedSignal, sliceSignalBasis } from "@/lib/signalVerdict";
 import { isStalePlane, type MarketPlane } from "@/lib/nwPlane";
 // Same upstream topology as app/api/flow/route.ts (Python hub first, R2 mirror second) and
 // app/api/nw/route.ts — the shared endpoint constants live in lib/upstreams (the routes
@@ -369,6 +369,15 @@ export function curateTechnicals(ohlc: unknown): Record<string, unknown> {
   };
 }
 
+/** Drop the deprecated `extended` alias from the model-facing state when the honest name is
+ *  present. Never removes information: `strong_bull` carries the same boolean. On a legacy
+ *  slice that has only `extended`, it is kept — losing the field would be worse than the name. */
+function omitDeprecatedExtended(state: Record<string, unknown>): Record<string, unknown> {
+  if (!("extended" in state) || !("strong_bull" in state)) return state;
+  const { extended: _deprecated, ...rest } = state;
+  return rest;
+}
+
 export function curateSignals(slice: unknown, nowMs: number = Date.now()): Record<string, unknown> {
   const ind = (slice as { indicator?: Record<string, unknown> })?.indicator;
   if (!ind || typeof ind !== "object") return { no_data: true, reason: "no Golden-Oracle slice for symbol" };
@@ -379,6 +388,11 @@ export function curateSignals(slice: unknown, nowMs: number = Date.now()): Recor
     known_ts: s?.known_ts ?? null,
     type: s?.type ?? null,
     price: rnd(s?.price, 4),
+    // HK-O1: the model must not infer a momentum call from a bare type:"SELL" (every SELL in
+    // this stream is a trailing structure stop) nor an entry from a refused BUY. Both facts
+    // ride along explicitly rather than living only in the label.
+    basis: sliceSignalBasis(s) ?? null,
+    blocked: isBlockedSignal(s) || undefined,
     quality: s?.quality ?? rnd(s?.strength, 3),
     reason:
       trimStr(s?.quality_reason, 160) ??
@@ -398,7 +412,13 @@ export function curateSignals(slice: unknown, nowMs: number = Date.now()): Recor
   const ageDays = lastTs && Number.isFinite(Date.parse(lastTs)) ? Math.floor((nowMs - Date.parse(lastTs)) / 86_400_000) : null;
 
   return {
-    state, // verbatim per spec — small object, capJson trims if a pipeline ever bloats it
+    // Verbatim per spec (small object; capJson trims if a pipeline ever bloats it) MINUS the
+    // one field whose NAME contradicts its value: HK-O1 — `state.extended` carries strong_bull,
+    // not overbought, and the stock card beside this shows the cycles pipeline's unrelated
+    // "Extended — don't chase". Handing a model a key that means the opposite of what it reads
+    // is a labeling bug, not a payload saving; `strong_bull` ships the identical value by its
+    // own name, and `overbought` is the field the caution actually rides.
+    state: state ? omitDeprecatedExtended(state) : state,
     last_signals,
     backtest: {
       n_trades: num(met.n_trades) ?? num(bt.n_trades),

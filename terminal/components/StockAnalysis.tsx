@@ -18,6 +18,9 @@ import EventEdgePop from "@/components/fin/EventEdgePop";
 // desk's gexStrings), staleness via the shared weekday counter. The parent parses the
 // payload (root-match guard needs the authoritative active symbol) and passes the row.
 import { REGIME_COLORS, type GlanceRow } from "@/lib/mscGlance";
+// HK-O1: the marker stream's meaning lives in `blocked`/`basis`, not in `type` — one shared
+// reader so this list, the rail card and the chart glyphs cannot label the same event three ways.
+import { isBlockedSignal, isStructureStop, sliceSignalBasis } from "@/lib/signalVerdict";
 import { makeGexT } from "@/components/gexdesk/gexStrings";
 import { sessionsOldEt } from "@/lib/optionsLevels";
 
@@ -843,8 +846,20 @@ export default function StockAnalysis({
         <Section title={pick("Signal history", "信号历史")} sub={`${sigs.length} ${pick("events", "次")}`}>
           <div className="sa-siglog">
             {sigs.slice(-12).reverse().map((s: any, i: number) => {
-              const b = s.type === "BUY" || s.type === "REBUY";
-              return <div key={i} className="sa-sigrow"><span className={`sa-sigt ${b ? "buy" : "sell"}`}>{s.type}</span><span className="sd">{s.ts}</span><span className="spx num">{typeof s.price === "number" ? fnum(s.price) : "—"}</span></div>;
+              // HK-O1: `blocked` decides the side, not `type` — a regime-vetoed setup still
+              // types BUY/REBUY for back-compat and must not render as a taken entry. A slice
+              // SELL is a trailing structure stop and is labelled as one.
+              const blocked = isBlockedSignal(s);
+              const stop = isStructureStop({ type: s.type, basis: sliceSignalBasis(s) });
+              const b = !blocked && (s.type === "BUY" || s.type === "REBUY");
+              const label = blocked ? pick("BLOCKED", "已拦截") : stop ? pick("STOP", "止损") : s.type;
+              const why = blocked
+                ? pick("Entry refused by the regime gate — not an entry", "入场被趋势闸拒绝 — 非入场信号")
+                : stop
+                  ? pick("Structure stop — the daily close broke the prior swing low, not a momentum exit",
+                    "结构止损 — 日线收盘跌破前低，非动量离场")
+                  : "";
+              return <div key={i} className="sa-sigrow" title={why || undefined}><span className={`sa-sigt ${blocked ? "blocked" : b ? "buy" : "sell"}`}>{label}</span><span className="sd">{s.ts}</span><span className="spx num">{typeof s.price === "number" ? fnum(s.price) : "—"}</span></div>;
             })}
           </div>
         </Section>
