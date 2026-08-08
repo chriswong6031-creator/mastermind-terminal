@@ -303,6 +303,12 @@ class Store {
           fresh.source = "polygon-snapshot";
           fresh.basis = "DELAYED_15M";
         }
+        // `asOfMs` is the STATE (the instant of the print); `lagMs` is a stopwatch reading of it.
+        // Both are published because they answer different questions — but only asOfMs is stable
+        // between polls, which is what lets the client bail out of a re-render on a quiet symbol
+        // and still render a correct age (see terminal/lib/feedFreshness.ts).
+        if (snap.printMs != null) fresh.asOfMs = snap.printMs;
+        else delete fresh.asOfMs;
         if (snap.lagMs != null) fresh.lagMs = snap.lagMs;
         else delete fresh.lagMs;
         fresh.anchor_source = "snapshot";

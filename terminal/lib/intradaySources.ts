@@ -500,6 +500,8 @@ export type Quote = {
   basis: "REALTIME" | "LIVE" | "DELAYED_15M" | "EOD";
   /** Measured age of the underlying print at serve time, in ms. Present only when measured. */
   lagMs?: number | null;
+  /** Epoch-ms of the print itself — the stable half of the pair (see lib/feedFreshness). */
+  asOfMs?: number | null;
   // Extended/overnight fields (item-25/26). Populated by the ext-quote route.
   // extPrice: the most recent ext print; extChg: % vs close; extTs: epoch-sec of that print.
   // Absent (undefined) when no ext data is available (keyless or no print).

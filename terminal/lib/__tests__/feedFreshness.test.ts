@@ -102,6 +102,23 @@ describe("freshnessLabel", () => {
     }
   });
 
+  it("derives the age from asOfMs at RENDER time, not from the serve-time lagMs", () => {
+    // TerminalShell's quoteEq bail-out deliberately retains a quote object across polls that
+    // changed nothing. If the badge read the stopwatch value baked into that object, a quiet
+    // symbol would keep advertising the age it had when it was first received — a measurement
+    // that silently stops being true. Deriving from the print instant fixes that by construction.
+    const printedAt = 1_786_000_000_000;
+    const r = freshnessLabel(
+      { basis: "REALTIME", lagMs: 2_000, asOfMs: printedAt }, en, printedAt + 47_000);
+    expect(r.tip).toContain("47s");
+    expect(r.tip).not.toContain("2s");
+  });
+
+  it("falls back to lagMs when the print instant is absent", () => {
+    const r = freshnessLabel({ basis: "REALTIME", lagMs: 9_000 }, en, 1_786_000_000_000);
+    expect(r.tip).toContain("9s");
+  });
+
   it("never leaks a raw lexicon key into any lane", () => {
     for (const basis of ["REALTIME", "LIVE", "DELAYED_15M", "EOD"]) {
       for (const t of [en, zh]) {

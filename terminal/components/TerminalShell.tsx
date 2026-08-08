@@ -142,12 +142,18 @@ const chgStr = (c: number | null | undefined) => (c == null || !isFinite(c) ? "�
 // shape varies by asset class — last/chg/basis/vol/ts/prevClose/…). Returns true only when every
 // field is identical, so setQuotes can keep the prior object reference and let React bail out
 // on a no-op 6s poll. `null`/`undefined` are treated as "no quote".
+// `lagMs` is excluded on purpose. It is a STOPWATCH READING of `asOfMs` taken when the response
+// was assembled, so it advances on every 6s poll even when the tape has not moved — comparing it
+// would defeat this bail-out entirely for any snapshot-served symbol during a quiet session.
+// `asOfMs` (the print instant) IS compared, so a genuinely new print still re-renders, and the
+// badge derives its displayed age from asOfMs at render time rather than from the retained lagMs.
+const QUOTE_EQ_IGNORE = new Set(["lagMs"]);
 function quoteEq(a: any, b: any): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
   const ka = Object.keys(a), kb = Object.keys(b);
   if (ka.length !== kb.length) return false;
-  for (const k of ka) if (a[k] !== b[k]) return false;
+  for (const k of ka) if (!QUOTE_EQ_IGNORE.has(k) && a[k] !== b[k]) return false;
   return true;
 }
 
@@ -2727,7 +2733,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           // "real-time" label can only ever come from the hub's MEASURED lag (see that file).
           const basis = liveQuote?.basis ?? (liveStatus === "live" ? "LIVE" : "EOD");
           const { cls, label, tip } = freshnessLabel(
-            { basis, lagMs: liveQuote?.lagMs, marketSession: liveQuote?.marketSession }, t);
+            { basis, lagMs: liveQuote?.lagMs, asOfMs: liveQuote?.asOfMs, marketSession: liveQuote?.marketSession }, t);
           // `topbar-livebadge` (not an inline margin) so #367's width-aware dense
           // chrome still owns the spacing and the narrow-viewport icon-only collapse.
           return <span className={`${cls} topbar-livebadge`} title={tip}><i />{label}</span>;

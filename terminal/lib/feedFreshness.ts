@@ -15,7 +15,16 @@ export type FeedBasis = "REALTIME" | "LIVE" | "DELAYED_15M" | "EOD";
 
 export type FreshnessInput = {
   basis?: FeedBasis | string | null;
+  /** Measured age of the print at SERVE time, in ms. Present only when measured. */
   lagMs?: number | null;
+  /**
+   * Epoch-ms of the print itself. Preferred over `lagMs` when present: it is the state, whereas
+   * `lagMs` is one stopwatch reading of it taken when the response was assembled. Deriving the
+   * age from this at RENDER time is what keeps the number honest across a poll the client
+   * deliberately did not re-render for (TerminalShell's `quoteEq` bail-out) — a retained quote
+   * object would otherwise keep displaying the age it had when it was first received.
+   */
+  asOfMs?: number | null;
   /** Market of the quoted symbol; only "us" can carry a real-time claim on this plan. */
   market?: string | null;
   /** US session state from the hub. "overnight" means the tape is shut, not lagging. */
@@ -59,9 +68,13 @@ export function formatLag(ms: number | null | undefined, t: T): string | null {
  *             the actual number rather than an adjective the app chose for them.
  * EOD/other → historical. No freshness claim of any kind.
  */
-export function freshnessLabel(q: FreshnessInput | null | undefined, t: T): FreshnessLabel {
+export function freshnessLabel(
+  q: FreshnessInput | null | undefined, t: T, nowMs: number = Date.now(),
+): FreshnessLabel {
   const basis = q?.basis ?? "EOD";
-  const lag = formatLag(q?.lagMs, t);
+  // Age at RENDER time when the print instant is known; the serve-time reading otherwise.
+  const ageMs = q?.asOfMs != null ? nowMs - q.asOfMs : q?.lagMs;
+  const lag = formatLag(ageMs, t);
 
   // ── Closed market: "delayed" is the wrong word, not a conservative one ──
   // Outside a US session there is no live tape to be behind. Carrying "15-min delayed" through a

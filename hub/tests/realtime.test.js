@@ -173,6 +173,9 @@ describe("store overlay — freshest print wins, but only on a measured real-tim
     assert.equal(out.AAPL.last, LAST_TRADE, "the delayed 311.00 must not survive");
     assert.equal(out.AAPL.live, true);
     assert.ok(out.AAPL.lagMs != null, "the number the verdict was made on rides along");
+    // asOfMs is the STABLE half of the pair — it moves only when a new print lands, which is
+    // what lets the client skip a re-render on a quiet symbol without freezing the shown age.
+    assert.equal(out.AAPL.asOfMs, RTH - 3_000);
     // ONE chg formula, recomputed against the price actually published.
     const want = ((LAST_TRADE - PREV_CLOSE) / PREV_CLOSE) * 100;
     assert.ok(Math.abs(out.AAPL.chg - want) < 1e-9, `chg=${out.AAPL.chg}`);
