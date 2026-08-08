@@ -40,9 +40,35 @@ Env vars come from `/opt/terminal/.env` (EnvironmentFile in the unit):
 | `EXT_FEED_DISABLE` | optional | set to `1` to disable the entire ext-hours feed |
 | `WEBULL_DISABLE` | optional | set to `1` to disable **only** the Webull ext leg (Alpaca + Yahoo legs unaffected) |
 | `MACRO_FEED_DISABLE` | optional | set to `1` to disable the macro feed — futures/indices/FX drop out of `/quotes` entirely |
+| `HUB_DISABLE_SNAPSHOT` | optional | set to `1` to disable the REST snapshot leg (reverts to exactly the pre-2026-08-07 behaviour — symbols the stream is not carrying fall back to the nightly manifest) |
+| `HUB_REALTIME_QUOTES` | optional | set to `1` to put the snapshot leg in **real-time mode**: 8s poll (vs 60s) and a `lastTrade` parse. Requires the Massive "Stocks Advanced" plan; **US STOCKS ONLY** — no index/futures/FX/crypto entitlement. See below |
 
 Both new feeds are **keyless**: no credentials are required for the Sina, Yahoo-spark or
 Webull legs.
+
+### Real-time tier — the flag enables, the MEASUREMENT labels
+
+`HUB_REALTIME_QUOTES=1` does **not** make anything claim to be real-time. `SnapshotFeed.verdict()`
+times the youngest print seen against the wall clock, and `store.getQuotes` stamps
+`basis: "REALTIME"` only on that verdict — so a plan downgrade, an entitlement change, or a
+vendor outage degrades the label automatically instead of leaving a stale promise in the UI.
+
+The verdict measures a **floor across symbols**, not a per-symbol age: an illiquid name can go
+ten minutes without printing on a genuinely live feed, while a 15-minute-delayed plan cannot
+produce a print younger than 15 minutes for *any* symbol. `/health` reports
+`snapshotFeed.verdict` as `{tier, floorLagMs, measuredAt, session}`, where `tier` is
+`realtime | delayed | unknown | closed | off`. Outside a US session it refuses to grade at all
+(`closed`) — an old print proves nothing when nothing is printing.
+
+With the real-time tier measured, `getQuotes` switches from "the stream is authoritative" to
+**freshest-print-wins**, because the WebSocket cluster stays `delayed` unless
+`HUB_POLYGON_CLUSTER=live`; a tie keeps the stream so a quiet symbol cannot flap between legs.
+
+Re-measure any time (never prints the key):
+
+```sh
+POLYGON_API_KEY=… HUB_PORT=3100 node hub/tools/measure-freshness.js --rounds 10 --every 10 --hub
+```
 
 ## systemd unit
 
