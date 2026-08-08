@@ -867,6 +867,124 @@ test("Golden Oracle shows the session a 3D signal became knowable", async ({ pag
   ).toBe("2026-07-24");
 });
 
+test("HK-O1: a structure stop and a refused entry are labelled for what they are", async ({ page }, testInfo) => {
+  // Forensic receipt: Macro Dashboard research/prophet_us_audit/HK_ORACLE_FORENSIC_2026-08-08.md.
+  // Two lies on one card, reproduced at 9988.HK's own shape: a SELL from the ARM->CONFIRM
+  // structure break wearing the oracle costume, and a regime-vetoed entry drawn with BUY
+  // geometry (the Jul-9 marker the operator chased). Both must now say what they are.
+  const zh = testInfo.project.name === "tablet";
+  // Dates are relative to run time: the rail card only grants full authority inside the
+  // 21-day staleness window, so a hardcoded date would turn this into a scheduled failure.
+  const iso = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+  const shortDate = (isoTs: string) =>
+    new Date(Date.parse(isoTs)).toLocaleDateString(zh ? "zh-CN" : "en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  const stopTs = iso(6);
+  const blockedTs = iso(2);
+
+  const slice = {
+    indicator: {
+      state: {
+        position_hint: "flat",
+        last_signal: "BUY",
+        last_scored_signal: "SELL",
+        last_scored_ts: stopTs,
+        last_scored_basis: "structure_stop",
+        strong_bull: false,
+        overbought: false,
+        weeklyBull: false,
+        above200: false,
+      },
+      signals: [
+        {
+          ts: stopTs, known_ts: stopTs, bar_index: 420, type: "SELL", price: 440.6,
+          basis: "structure_stop", stop_level: 456.2,
+          reasons: ["distribution_confirmed", "structure_break"],
+        },
+        {
+          // still typed BUY on purpose — additive contract; `blocked` is the render key
+          ts: blockedTs, known_ts: blockedTs, bar_index: 424, type: "BUY", price: 110.7,
+          quality: "regime_blocked", blocked: true, tier: null, score: null,
+          quality_reason: "bear_block: monthly-bear & below-200 & 2W-not-bull",
+        },
+      ],
+      early_dots: [],
+      warnings: [],
+    },
+    backtest: { metrics: { n_trades: 10, win_rate: 0.3, profit_factor: 1.4, cagr: 0.05 } },
+  };
+  await page.route(/\/data\/COST\.slice\.json(?:\?.*)?$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(slice) });
+  });
+  await armTerminalVisualReady(page);
+  await page.goto("/terminal?symbol=COST");
+  await expect(page.locator(".workspace")).toBeVisible();
+  await waitForTerminalVisualReady(page);
+
+  // NOT asserted here: the on-chart "GOLDEN ORACLE · STOP" chip. The Golden Oracle is an
+  // opt-in study, and its chip text repaints on the next data render rather than on the
+  // indicator toggle, so driving it from this test would be timing-dependent in the shared
+  // CI lane. Its label derives from the same isStructureStop() helper asserted here and unit-
+  // tested in lib/__tests__/signalVerdict.test.ts.
+
+  const signalButton = page.locator(".sig-btn");
+  await signalButton.scrollIntoViewIfNeeded();
+  if (zh) {
+    await page.locator(".mobilebar button.avatar").click();
+    const settings = page.locator(".acs-card");
+    await settings.getByRole("tab", { name: "Preferences" }).click();
+    const zhButton = settings.getByRole("button", { name: "中文" });
+    await zhButton.click();
+    await expect(zhButton).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape");
+    await expect(settings).toBeHidden();
+    await signalButton.scrollIntoViewIfNeeded();
+  }
+
+  // ── the rail card: the stop names itself, and the refusal rides with it ──
+  await expect(signalButton.locator(".sig-btn-go .sig-btn-vd")).toHaveText(zh ? "结构止损" : "Structure stop");
+  await expect(signalButton.locator(".sig-btn-go .sig-btn-sub")).toContainText(shortDate(stopTs));
+  await expect(signalButton.locator(".sig-btn-go .sig-btn-sub")).toContainText(zh ? "入场被拦截" : "entry blocked");
+  await signalButton.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-hko1-rail-card.png`),
+  });
+
+  await signalButton.click();
+  const dialog = page.locator(".sd-scrim");
+  await expect(dialog).toBeVisible();
+
+  // ── the refused entry gets its own disclosure, never the entry scorecard ──
+  await expect(dialog.locator(".sd-go .sig-conflict").filter({ hasText: zh ? "非入场信号" : "not an entry" }))
+    .toBeVisible();
+  // no tier/score row for a marker the engine refused
+  await expect(dialog.locator(".sd-go .sig-dims")).toHaveCount(0);
+
+  // ── signal history: BLOCKED (newest) above STOP, neither wearing a buy pill ──
+  const rows = dialog.locator(".sd-go .sd-sigrow");
+  const blockedRow = rows.first();
+  await blockedRow.scrollIntoViewIfNeeded();
+  await expect(blockedRow.locator(".sd-sig-badge")).toHaveText(zh ? "已拦截" : "BLOCKED");
+  await expect(blockedRow.locator(".sd-sig-badge")).toHaveClass(/hollow/);
+  await expect(blockedRow.locator(".sd-sig-q")).toHaveText(zh ? "非入场信号" : "not an entry");
+  await expect(blockedRow).toHaveAttribute("title", zh ? /入场被趋势闸拒绝/ : /Entry refused by the regime gate/);
+
+  const stopRow = rows.nth(1);
+  await expect(stopRow.locator(".sd-sig-badge")).toHaveText(zh ? "止损" : "STOP");
+  await expect(stopRow.locator(".sd-sig-q")).toHaveText(zh ? "跌破前低" : "swing-low break");
+  await expect(stopRow).toHaveAttribute("title", zh ? /结构止损 — 日线收盘跌破前低 456.2/ : /Structure stop — the daily close broke the prior swing low at 456.2/);
+  // PIT price: the confirm session's own daily close, as emitted
+  await expect(stopRow.locator(".sd-sig-price")).toHaveText("440.60");
+
+  await dialog.locator(".sd-go").screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-hko1-signal-history.png`),
+  });
+
+  const overflow = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    document: document.documentElement.scrollWidth,
+  }));
+  expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
+});
+
 test("Exposure desk replays an archived session's full ladder at every supported width", async ({ page }, testInfo) => {
   await page.goto("/options?tab=gex");
 

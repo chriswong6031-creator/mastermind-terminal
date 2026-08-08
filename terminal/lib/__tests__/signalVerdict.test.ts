@@ -623,8 +623,8 @@ describe("HK-O1 — a refused entry never wears buy geometry", () => {
   it("isBlockedSignal reads the flag OR the legacy quality string", () => {
     expect(isBlockedSignal(blockedFlagOnly)).toBe(true);   // 2026-08-08+ slices
     expect(isBlockedSignal(blockedLegacy)).toBe(true);     // pre-2026-08-08 slices
-    expect(isBlockedSignal({ ts: "x", type: "BUY", quality: "take" })).toBe(false);
-    expect(isBlockedSignal({ ts: "x", type: "BUY" })).toBe(false);
+    expect(isBlockedSignal({ quality: "take" })).toBe(false);
+    expect(isBlockedSignal({})).toBe(false);   // an ordinary entry carries neither key
     expect(isBlockedSignal(null)).toBe(false);
   });
 
