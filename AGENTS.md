@@ -76,6 +76,29 @@ If a later step is blocked, first commit and push the completed work to a
 recoverable remote branch, then report the exact blocker. Never leave completed
 work only as uncommitted changes in a session.
 
+## Merge-on-green controller
+
+- After opening a non-draft pull request that is ready to ship, add the
+  `merge-on-green` label and arm GitHub native auto-merge with
+  `gh pr merge --auto --squash --delete-branch`. `master` protects the exact three
+  CI checks, so this is a real server-side wait. Use `hold` or `do-not-merge` as
+  an explicit veto and never combine either with auto-merge.
+- `.github/workflows/merge-on-green.yml` is the repository fallback for sessions
+  interrupted while CI runs. It requires the latest instance of all three CI jobs
+  to succeed, refreshes stale heads onto current `master` and waits for fresh CI,
+  refuses forks/drafts/conflicts, SHA-pins the squash merge, and deletes the remote
+  branch. It is the orphaned-PR fallback and defense-in-depth behind native
+  auto-merge, not a second definition of green.
+- `merge-blocked` means the latest required CI is red or the branch has a real
+  conflict. Fix the head; do not use an admin bypass. The controller removes the
+  label automatically after the new head is green.
+- The controller moves only the merge wait off the interactive session. The
+  initiating session still owns the git-gated production deployment and live
+  verification required above; an armed PR is not a completed delivery.
+- If branch protection or any required-check context is changed, update this
+  section, `.github/workflows/merge-on-green.yml`, and the controller tests in the
+  same PR. Disabling protection makes native auto-merge unsafe again.
+
 When an operating standard changes, update the repository's `AGENTS.md`,
 `CLAUDE.md`, and any nested agent guide together so Codex and every Claude account
 inherit the same rule.
