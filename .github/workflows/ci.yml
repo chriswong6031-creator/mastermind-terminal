@@ -2,6 +2,17 @@ name: CI
 
 on:
   pull_request:
+  # merge-on-green refreshes stale branches with GITHUB_TOKEN. Those writes do
+  # not recursively emit pull_request workflows, so the controller dispatches
+  # this same proof explicitly on the refreshed branch.
+  workflow_dispatch:
+
+# A newer head makes every queued/running proof for the older head unusable. Drop
+# it immediately instead of spending the account-wide hosted-runner quota on a
+# SHA that can no longer merge.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   hub:

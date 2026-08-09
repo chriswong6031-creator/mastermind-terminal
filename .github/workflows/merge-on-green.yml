@@ -1,0 +1,49 @@
+name: merge-on-green
+
+# master is protected by the same three checks, so native auto-merge is the fast
+# server-side path. This workflow is the fallback reconciler for a ready pull
+# request carrying merge-on-green that was not natively armed or became stale.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  pull_request_target:
+    types: [labeled, reopened, ready_for_review]
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  checks: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+# A sweep may merge one PR and refresh the next onto the new master. Serializing
+# those mutations prevents two runs from proving different heads against the same
+# base snapshot. In-progress work is never cancelled; the schedule is the recovery
+# net if several wake-ups collapse into one pending run.
+concurrency:
+  group: merge-on-green
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # pull_request_target always executes the workflow from the trusted default
+    # branch. Never check out or execute the pull request head in this privileged job.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          sparse-checkout: scripts/merge_on_green.py
+          sparse-checkout-cone-mode: false
+      - name: reconcile armed pull requests
+        env:
+          GH_REPO: ${{ github.repository }}
+          MERGE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIGGER_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python3 scripts/merge_on_green.py
