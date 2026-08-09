@@ -4,6 +4,10 @@ import { useLang } from "@/lib/i18n";
 import { daysUntil, pick as pickI18n, fmtPct } from "@/lib/finFormat";
 import type { Fund, Opts, Bar } from "@/lib/fund";
 import { buildKeyStatRows, formatCompactStat } from "@/lib/keyStats";
+// Income series are normalized ONCE, in the shared statement math — never read off `set.income`
+// (see lib/finStatementMath's header); the margin line rides the same normalized pair.
+import { incomeChartValues, incomeView } from "@/lib/finStatementMath";
+import { netMarginPct } from "@/lib/finSeries";
 import { computeRatings } from "@/lib/techRating";
 import { realizedVolCone } from "@/lib/realizedVol";
 import { Dumbbell, ComboChart, LineSeries, type Series } from "@/components/fin/FinCharts";
@@ -185,12 +189,21 @@ function FinancialsMini({ fund, pick, onOpen }: { fund: Fund | null; pick: Pick;
   let barsSeries: Series[] = [];
   let line: Series = { name: "", values: [] };
   if (stmt === "income") {
-    const rev = ps.income.revenue, ni = ps.income.net_income;
+    // ONE normalization, the same one the Statements tab prints (lib/finStatementMath): raw for a
+    // discrete-quarter market, differenced for a cumulative year-to-date one. Reading `ps.income`
+    // here plotted a CN/HK name's year-to-date totals in this rail while the Statements tab showed
+    // the discrete quarter — same quarter, two numbers, two tabs. `fund.ticker` is the symbol this
+    // widget has (same source lib/finStatements.revenueHistory uses); the timeframe follows the A/Q
+    // toggle, so the annual set is never differenced.
+    const view = incomeView(fund?.ticker, ps, annual ? "annual" : "quarterly");
+    const { revenue: rev, net_income: ni } = incomeChartValues(view);
     barsSeries = [
       { name: pick("Revenue", "营收"), values: rev, color: "var(--brand-2)" },
       { name: pick("Income", "净利润"), values: ni, color: "var(--signal)" },
     ];
-    line = { name: pick("Margin %", "净利率%"), values: rev.map((r, i) => (r && ni[i] != null ? (ni[i]! / r) * 100 : null)), color: "var(--warn)" };
+    // The margin rides the SAME normalized pair (lib/finSeries) — never a differenced net income
+    // over a cumulative revenue, which is a margin no period ever had.
+    line = { name: pick("Margin %", "净利率%"), values: netMarginPct(rev, ni), color: "var(--warn)" };
   } else if (stmt === "balance") {
     barsSeries = [
       { name: pick("Total assets", "总资产"), values: ps.balance.assets, color: "#9d86ff" },

@@ -31,7 +31,13 @@ from ingest.backfill_fund_statements_massive import (
     vendor_row_label,
     vendor_rows_newest_filing_first,
 )
-from ingest.massive_financials import map_row, row_filing_date, statement_coverage, vendor_label
+from ingest.massive_financials import (
+    fetch_financials,
+    map_row,
+    row_filing_date,
+    statement_coverage,
+    vendor_label,
+)
 
 
 # ── fixtures shaped exactly like the live payload ────────────────────────────
@@ -371,3 +377,72 @@ def test_a_later_filing_that_contributes_advances_the_stamp():
     assert night2["income"]["net_income"] == [112_010_000_000.0]  # the hole it DID fill
     assert night2["filed_by_period"] == ["2024-08-02"]
     assert night2["restated_by_period"] == [True]
+
+
+# ── 7. the request itself: never sort a cursor on an all-null column ─────────
+def _captured_urls(monkeypatch, pages: list[dict]) -> list[str]:
+    """Run fetch_financials against a scripted vendor and return the URLs it asked for."""
+    seen: list[str] = []
+    it = iter(pages)
+
+    def fake_get(url, key, timeout=60):
+        seen.append(url)
+        return next(it, {"results": []})
+
+    monkeypatch.setattr("ingest.massive_financials._get", fake_get)
+    fetch_financials("AAPL", "quarterly", key="k")
+    return seen
+
+
+def test_the_cursor_is_never_sorted_on_the_column_that_comes_back_null(monkeypatch):
+    """`period_of_report_date` is null on every live row (0/69 on AAPL — the same fact the
+    `vrow` fixture above encodes). Asking the vendor to sort a paginated cursor by it requests
+    an ordering the data cannot supply, which leaves the row SET the cursor walks up to the
+    vendor rather than to us. Probed live 2026-08-08 across AAPL/MSFT/BRK.B/F × annual+quarterly
+    × 3 runs at limit=10 (~7 cursor hops each): every run was set-equal AND order-equal, so
+    nothing observable was broken — but the request is still indefensible, and this pins that we
+    do not make it."""
+    url = _captured_urls(monkeypatch, [{"results": [], "next_url": None}])[0]
+    assert "sort=period_of_report_date" not in url
+
+
+def test_the_cursor_sorts_on_a_column_the_vendor_actually_accepts(monkeypatch):
+    """`filing_date` is the only usable sort key: probed live 2026-08-08, `sort=filing_date`
+    returns HTTP 200 and a genuinely ascending response, while BOTH `sort=acceptance_datetime`
+    and `sort=end_date` are rejected 400 — so the merge's own preferred anchor
+    (`row_filing_date`, acceptance-then-filing) is not available to the wire. The switch was
+    verified to return the identical row set as the old request, so no published figure moves."""
+    url = _captured_urls(monkeypatch, [{"results": [], "next_url": None}])[0]
+    assert "sort=filing_date" in url
+    assert "order=asc" in url
+
+
+def test_pagination_still_follows_the_cursor_and_bounds_a_runaway(monkeypatch):
+    """The sort change must not disturb cursor-following: every page's `next_url` is fetched
+    verbatim (it carries the vendor's own cursor state, including its sort), and `max_pages`
+    still stops a cursor that never terminates."""
+    pages = [
+        {"results": [{"fiscal_year": "2025"}], "next_url": "https://api.polygon.io/next/1"},
+        {"results": [{"fiscal_year": "2024"}], "next_url": "https://api.polygon.io/next/2"},
+        {"results": [{"fiscal_year": "2023"}], "next_url": None},
+    ]
+    seen: list[str] = []
+    it = iter(pages)
+
+    def fake_get(url, key, timeout=60):
+        seen.append(url)
+        return next(it, {"results": []})
+
+    monkeypatch.setattr("ingest.massive_financials._get", fake_get)
+    rows = fetch_financials("AAPL", "quarterly", key="k")
+    assert len(rows) == 3
+    assert seen[1:] == ["https://api.polygon.io/next/1", "https://api.polygon.io/next/2"]
+
+
+def test_a_cursor_that_never_ends_stops_at_max_pages(monkeypatch):
+    def fake_get(url, key, timeout=60):
+        return {"results": [{"fiscal_year": "2025"}], "next_url": "https://api.polygon.io/loop"}
+
+    monkeypatch.setattr("ingest.massive_financials._get", fake_get)
+    rows = fetch_financials("AAPL", "quarterly", key="k", max_pages=4)
+    assert len(rows) == 4
