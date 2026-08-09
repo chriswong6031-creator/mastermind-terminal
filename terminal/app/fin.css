@@ -50,6 +50,10 @@
 .fin-sec-h .chev{color:var(--brand);cursor:pointer}
 .fin-sec-h.link{cursor:pointer}
 .fin-sec-h.link:hover .chev{color:var(--brand-2)}
+/* span/depth caption trailing a section title, e.g. "17 fiscal years · 2009–2025".
+   margin-left:auto parks it at the far end of the flex header. Tabular figures on the UI
+   face (never the mono FACE — that is for figures, not words). */
+.fin-sec-sub{margin-left:auto;font:500 10.5px/1.4 var(--font-ui);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .fin-sec-cap{font:500 11.5px/1.45 var(--font-ui);color:var(--text-2);margin-bottom:13px}
 /* muted one-liner under a chart clarifying a basis/caveat (e.g. constant-mktcap P/S) */
 .fin-chart-note{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-top:7px;padding-bottom:6px}

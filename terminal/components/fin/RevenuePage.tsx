@@ -12,9 +12,11 @@
  *
  * Props: {fund, zh}
  */
+import { useState } from "react"
 import type { Fund, SegmentSeries } from "../../lib/fund"
 import { fmtNum, fmtPct, fmtDate, pick } from "../../lib/finFormat"
-import { StackedBars, type Series } from "./FinCharts"
+import { historySpan, revenueCoverage, revenueHistory } from "../../lib/finStatements"
+import { Bars, MiniTable, StackedBars, type MiniRow, type Series } from "./FinCharts"
 
 export interface RevenuePageProps {
   fund: Fund | null
@@ -123,6 +125,109 @@ function SegmentModule({
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  )
+}
+
+// ── Total-revenue history ─────────────────────────────────────────────────────
+
+/**
+ * RevenueHistory — the reported total-revenue series with year-over-year growth.
+ *
+ * The Revenue tab previously had no revenue series on it: for any listing without a segment
+ * breakdown (every US name — the v1 segment collectors emit null) it showed only an
+ * empty-state card plus sell-side estimates, so "Revenue" answered nothing about actual
+ * revenue. The Massive backfill takes `statements.*.income.revenue` back to 2009, which
+ * makes a real history worth rendering here.
+ *
+ * Built entirely from existing primitives (Bars + MiniTable + the fin- classes) so it
+ * carries no new visual language. YoY rides MiniTable's change sub-values — the same
+ * treatment the Statements tab uses — rather than a second row.
+ */
+function RevenueHistory({ fund, zh }: { fund: Fund; zh?: boolean }) {
+  const [aq, setAQ] = useState<"annual" | "quarterly">("annual")
+  const points = revenueHistory(fund, aq)
+  // Two real figures is the floor for a series; below that the Statements tab is the
+  // honest place to read one number, and this module stays out of the way.
+  if (revenueCoverage(points) < 2) return null
+
+  const periods = points.map((p) => p.period)
+  const values = points.map((p) => p.value)
+  const span = historySpan(aq === "annual" ? fund.statements?.annual : fund.statements?.quarterly)
+  const ccy = fund.stmt_currency ?? "USD"
+
+  // Same windowing rationale as StatementsPage: annual sets run ~17 periods and deserve to
+  // be seen whole; 60+ quarterly bars would crush the axis.
+  const cap = aq === "annual" ? 20 : 16
+  const chartLabels = periods.slice(-cap)
+  const chartSeries: Series[] = [
+    {
+      name: pick(!!zh, "Total revenue", "总营收"),
+      values: values.slice(-cap),
+      color: "var(--brand)",
+    },
+  ]
+
+  const rows: MiniRow[] = [
+    {
+      label: pick(!!zh, "Total revenue", "总营收"),
+      values,
+      change: points.map((p) => p.yoy),
+      bold: true,
+    },
+  ]
+
+  return (
+    <div className="fin-sec">
+      <div className="fin-eyebrow">{pick(!!zh, "REVENUE HISTORY", "营收历史")}</div>
+      <div
+        className="fin-sec-h fin-rail fin-rule"
+        style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+      >
+        {pick(!!zh, "Total revenue", "总营收")}
+        {span && (
+          <span className="fin-sec-sub">
+            {pick(
+              !!zh,
+              `${span.count} ${aq === "annual" ? "fiscal years" : "quarters"} · ${span.first}–${span.last}`,
+              `${span.count} 个${aq === "annual" ? "财年" : "季度"} · ${span.first}–${span.last}`,
+            )}
+          </span>
+        )}
+      </div>
+
+      <div className="fin-card">
+        <Bars labels={chartLabels} series={chartSeries} fmtY={fmtNum} zh={zh} height={170} />
+      </div>
+
+      <div className="fin-stmt-ctrl">
+        <div className="fin-toggle fin-aq">
+          <button className={aq === "annual" ? "on" : ""} onClick={() => setAQ("annual")}>
+            {pick(!!zh, "Annual", "年度")}
+          </button>
+          <button className={aq === "quarterly" ? "on" : ""} onClick={() => setAQ("quarterly")}>
+            {pick(!!zh, "Quarterly", "季度")}
+          </button>
+        </div>
+      </div>
+
+      <MiniTable
+        periods={periods}
+        rows={rows}
+        fmt={fmtNum}
+        showChange
+        pageSize={6}
+        zh={zh}
+        cornerLabel={pick(!!zh, "Currency: " + ccy, "货币: " + ccy)}
+      />
+
+      <div className="fin-asof">
+        {pick(
+          !!zh,
+          `Reported figures from company filings${fund.asof ? ` · as of ${fmtDate(fund.asof)}` : ""}`,
+          `取自公司备案文件的申报数据${fund.asof ? ` · 截至 ${fmtDate(fund.asof)}` : ""}`,
+        )}
       </div>
     </div>
   )
@@ -265,6 +370,7 @@ export default function RevenuePage({ fund, zh, sym }: RevenuePageProps) {
   if (segs && (segs.by_source || segs.by_country)) {
     return (
       <div className="fin-body">
+        <RevenueHistory fund={fund} zh={zh} />
         {segs.by_source && (
           <SegmentModule
             eyebrow={pick(!!zh, "REVENUE MIX", "营收构成")}
@@ -298,6 +404,7 @@ export default function RevenuePage({ fund, zh, sym }: RevenuePageProps) {
   // ── No segments (v1 deferred, R6) → graceful empty-state + estimates fallback ──
   return (
     <div className="fin-body">
+      <RevenueHistory fund={fund} zh={zh} />
       <div className="fin-sec">
         <div className="fin-eyebrow">{pick(!!zh, "REVENUE MIX", "营收构成")}</div>
         <div

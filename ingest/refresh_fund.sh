@@ -185,6 +185,20 @@ if [ "$CN_HK_ONLY" = "0" ]; then
   # shellcheck disable=SC2086
   run "$PY" "$INGEST/gen_fund_us.py" $LIMIT_ARG \
     || { echo "[$(ts)] ERROR: gen_fund_us failed"; exit 1; }
+
+  # Deep statement history from Massive/polygon.io (SEC XBRL, back to the 2009 mandate).
+  # MUST run AFTER gen_fund_us: it merges INTO the files that emitter just wrote, and the
+  # merge never overwrites, so a re-emit is what lets a mapping change take effect.
+  # Non-fatal by design — a vendor outage or a missing key must not fail the whole
+  # fundamentals refresh and leave the US files unpublished; yfinance depth still ships.
+  if [ -n "${POLYGON_API_KEY:-}${MASSIVE_API_KEY:-}" ]; then
+    echo "[$(ts)] === backfill statements (massive) ==="
+    # shellcheck disable=SC2086
+    run "$PY" "$INGEST/backfill_fund_statements_massive.py" $LIMIT_ARG \
+      || echo "[$(ts)] WARN: massive statements backfill failed — US files keep yfinance depth"
+  else
+    echo "[$(ts)] WARN: POLYGON_API_KEY/MASSIVE_API_KEY unset — skipping statements backfill"
+  fi
 fi
 if [ "$US_ONLY" = "0" ]; then
   echo "[$(ts)] === gen_fund_cn ==="

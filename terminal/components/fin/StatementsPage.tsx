@@ -13,11 +13,23 @@
  * columns map to the fiscal-year-end quarter. Icon renders only when a tx exists
  * (absence IS the empty state — §7.5).
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLang } from "../../lib/i18n";
 import { pick, fmtNum, fmtDate } from "../../lib/finFormat";
 import type { Fund, StatementPeriodSet } from "../../lib/fund";
+import { historySpan, vendorGapNotice } from "../../lib/finStatements";
+import {
+  cumulativeQuarterNote,
+  incomeChartValues,
+  incomeView,
+  type IncomeView,
+} from "../../lib/finStatementMath";
 import { Bars, MiniTable, type Series, type MiniRow } from "./FinCharts";
+
+/** Join row names with the locale's list separator (zh uses the enumeration comma 、). */
+function listJoin(items: string[], zh: boolean): string {
+  return items.join(zh ? "、" : ", ");
+}
 
 export interface StatementsPageProps {
   sym: string;
@@ -55,6 +67,17 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
     return m;
   }, [txQuarters]);
 
+  // The documents strip is a horizontally-scrolling row with one cell per period. At the
+  // ~5 periods yfinance supplied it always fit; the Massive backfill takes annual sets to 17
+  // and quarterly to ~69, so it now scrolls — and it would open on 2009, where no transcript
+  // has ever existed. Park it at the newest end (same "latest first" stance as the table
+  // pager) whenever the period set changes. Imperative scroll only; no state, no re-render.
+  const docStripRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = docStripRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [sym, aq, fund?.asof]);
+
   if (!fund) {
     return (
       <div className="fin-empty fin-empty-lg" role="status">
@@ -87,20 +110,37 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
   };
 
   // ── mini bar-chart strip: series swap with statement type ──
-  // Cap the chart to the last 12 periods so quarterly sets (which can carry 20+
-  // columns) don't crush the x-axis; the full-history MiniTable below stays paged.
-  const CHART_CAP = 12;
+  // Cap the plotted window so the x-axis stays readable; the full-history MiniTable below
+  // stays paged. Annual gets a deeper window than quarterly because the Massive backfill
+  // takes annual sets to ~17 fiscal years — a 12-bar cap would hide the deep history that
+  // is the whole point of the backfill, while 69 quarterly bars would crush the axis.
+  const CHART_CAP = aq === "annual" ? 20 : 16;
   const chartPeriods = periods.slice(-CHART_CAP);
-  const chartSeries: Series[] = buildChartSeries(stmt, set, zh).map((s) => ({
+
+  // ONE normalization for the whole tab. The chart used to read `set.income.*` raw while the
+  // table read a differenced copy, so a cumulative-YTD name plotted 82.9B in the strip and
+  // printed 1.6B in the row beneath it. Both now read this object — see
+  // lib/finStatementMath.incomeChartValues, whose arrays ARE the table's arrays.
+  const view: IncomeView = incomeView(sym, set, aq);
+  const chartSeries: Series[] = buildChartSeries(stmt, set, view, zh).map((s) => ({
     ...s,
     values: s.values.slice(-CHART_CAP),
   }));
 
   // ── table rows: TV taxonomy per statement ──
-  const rows: MiniRow[] = buildRows(stmt, set, aq, zh);
+  const rows: MiniRow[] = buildRows(stmt, set, view, aq, zh);
 
-  // Detect cumulative quarterly income for disclosure note
-  const showCumNote = aq === "quarterly" && stmt === "income" && set != null && isCumulative(set.income.revenue);
+  // Deep-history provenance. `span` evidences the depth on the section header; `gapNotice`
+  // names, in plain words, the rows the pre-2021 filings do not carry — so a dash in those
+  // columns reads as "the filing does not report this", never as zero or as lost data.
+  // Both are null on files that predate the Massive backfill (optional contract fields).
+  const span = historySpan(set);
+  const gapNotice = vendorGapNotice(set, stmt, zh);
+
+  // Disclosure for a differenced quarterly income statement. Null unless this issuer's market
+  // actually files cumulative year-to-date interims, so the sentence can never describe a US
+  // filer's numbers with somebody else's reporting convention.
+  const cumNote = stmt === "income" ? cumulativeQuarterNote(view, zh) : null;
 
   const curLabel = `${pick(zh, "Currency:", "货币:")} ${fund.stmt_currency || "USD"}`;
   const isEps = (label: string) => label.toLowerCase().includes("eps") || label.includes("每股");
@@ -162,7 +202,7 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
       {periods.length > 0 && (
         <div className="fin-doc-strip" role="group" aria-label={pick(zh, "Earnings call transcripts", "财报电话会记录")}>
           <span className="fin-doc-strip-lbl">{pick(zh, "Transcripts", "记录")}</span>
-          <div className="fin-doc-strip-cells">
+          <div className="fin-doc-strip-cells" ref={docStripRef}>
             {periods.map((p, i) => {
               const tx = txForPeriod(i);
               return (
@@ -196,13 +236,31 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
       <section className="fin-sec">
         <div className="fin-sec-h fin-rail fin-rule" style={{ "--rail": "var(--brand)" } as React.CSSProperties}>
           {pick(zh, "Full history", "完整历史")}
+          {span && (
+            <span className="fin-sec-sub">
+              {pick(
+                zh,
+                `${span.count} ${aq === "annual" ? "fiscal years" : "quarters"} · ${span.first}–${span.last}`,
+                `${span.count} 个${aq === "annual" ? "财年" : "季度"} · ${span.first}–${span.last}`,
+              )}
+            </span>
+          )}
         </div>
-        {showCumNote && (
+        {gapNotice && (
           <div className="fin-chart-note" style={{ marginBottom: 8, marginTop: 0 }}>
-            {pick(zh,
-              "Quarterly figures derived by differencing cumulative year-to-date values (CN/HK reporting style).",
-              "季度数据由累计年初至今数据差分得出（中国/香港报表惯例）。"
+            {/* Phrased as a colon-list, not "<rows> show a dash": the list is 1 item on the
+                income statement and 3 on the balance sheet, and a verb would have to agree
+                with both. */}
+            {pick(
+              zh,
+              `Deep history is taken from company filings. Filings before ${gapNotice.fullFrom ?? "that point"} report statement totals only. Not reported there: ${listJoin(gapNotice.rows, false)} — those cells show a dash rather than an estimate.`,
+              `深度历史取自公司备案文件。${gapNotice.fullFrom ?? "更早"}之前的备案仅披露报表总额，其中未披露：${listJoin(gapNotice.rows, true)}——这些单元格显示为短横线，而非估算值。`,
             )}
+          </div>
+        )}
+        {cumNote && (
+          <div className="fin-chart-note" style={{ marginBottom: 8, marginTop: 0 }}>
+            {cumNote}
           </div>
         )}
         <MiniTable
@@ -224,12 +282,19 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
 }
 
 /* ── mini-chart series per statement type (§1.2) ── */
-function buildChartSeries(stmt: Stmt, set: StatementPeriodSet | undefined, zh: boolean): Series[] {
+function buildChartSeries(
+  stmt: Stmt,
+  set: StatementPeriodSet | undefined,
+  view: IncomeView,
+  zh: boolean,
+): Series[] {
   if (!set) return [];
-  const inc = set.income,
-    bal = set.balance,
+  const bal = set.balance,
     cf = set.cashflow;
-  if (stmt === "income")
+  if (stmt === "income") {
+    // The NORMALIZED block — never `set.income`. These arrays are the same objects
+    // buildRows prints, so the strip and the table cannot show different numbers.
+    const inc = incomeChartValues(view);
     return [
       { name: pick(zh, "Total revenue", "总营收"), values: inc.revenue, color: "var(--brand)" },
       { name: pick(zh, "Gross profit", "毛利"), values: inc.gross_profit, color: "var(--up)" },
@@ -237,6 +302,7 @@ function buildChartSeries(stmt: Stmt, set: StatementPeriodSet | undefined, zh: b
       { name: pick(zh, "Pretax income", "税前利润"), values: inc.pretax_income, color: "var(--brand-2)" },
       { name: pick(zh, "Net income", "净利润"), values: inc.net_income, color: "var(--code-fn)" },
     ];
+  }
   if (stmt === "balance")
     return [
       { name: pick(zh, "Total assets", "总资产"), values: bal.assets, color: "var(--brand)" },
@@ -259,96 +325,24 @@ function changeSeries(vals: (number | null)[], aq: AQ): (number | null)[] {
   });
 }
 
-/**
- * Detect whether a quarterly income array is cumulative year-to-date (CN/HK style).
- * Heuristic: within each fiscal year (4-quarter groups from the end), check if
- * consecutive same-year values are non-decreasing (monotonic). If at least 2 of
- * 3 possible Q1→Q2, Q2→Q3, Q3→Q4 transitions are non-decreasing for 2+ years,
- * we treat it as cumulative. This avoids incorrectly flagging US data where
- * revenues happen to be seasonal-monotonic.
- *
- * Only applied to income statement rows (revenue, gross profit, etc.) — balance
- * sheet rows are period-end snapshots and should never be differenced.
- */
-function isCumulative(vals: (number | null)[]): boolean {
-  if (!vals || vals.length < 8) return false;
-  let cumulativeYears = 0;
-  // Walk backward in groups of 4 (Q4→Q1 newest-first in the slice window)
-  // We work oldest-first since the array is usually oldest→newest
-  const n = vals.length;
-  // Try up to 3 years worth of data from the end
-  for (let yr = 0; yr < 3; yr++) {
-    const base = n - (yr + 1) * 4;
-    if (base < 0) break;
-    // Q1=base, Q2=base+1, Q3=base+2, Q4=base+3
-    const q = [vals[base], vals[base + 1], vals[base + 2], vals[base + 3]];
-    if (q.some((v) => v == null)) continue;
-    let risingCount = 0;
-    for (let i = 1; i < 4; i++) {
-      if ((q[i] as number) >= (q[i - 1] as number)) risingCount++;
-    }
-    if (risingCount >= 2) cumulativeYears++;
-  }
-  return cumulativeYears >= 2;
-}
-
-/**
- * Convert a cumulative YTD quarterly array to discrete quarters.
- * Resets the cumulative base at each period whose label starts with 'Q1'
- * (the true fiscal-year boundary), not at array-index % 4.
- *
- * Algorithm: for each position i —
- *   - if periods[i] starts with 'Q1': discrete = raw (new fiscal year starts fresh)
- *   - otherwise: discrete = raw[i] − raw[i−1]  (difference from prior cumulative)
- *   - if no 'Q1' has been seen yet (leading partial-year): keep raw as-is
- *
- * Guard: a difference that would produce a clearly erroneous result (e.g. the
- * raw current value is less than the raw prior value by more than 50% — which
- * should not happen within a fiscal year for revenue/income) falls back to the
- * raw value rather than emitting a large negative.
- */
-function discreteQuarters(vals: (number | null)[], periods: string[]): (number | null)[] {
-  const out: (number | null)[] = [...vals];
-  let sawQ1 = false;
-  for (let i = 0; i < vals.length; i++) {
-    const label = periods[i] ?? "";
-    if (label.startsWith("Q1")) {
-      // Q1 is always as-is (it IS the first quarter of the fiscal year)
-      sawQ1 = true;
-      out[i] = vals[i];
-    } else if (sawQ1) {
-      // Q2/Q3/Q4: difference from prior cumulative period
-      const cur = vals[i];
-      const prev = vals[i - 1];
-      if (cur != null && prev != null) {
-        const d = cur - prev;
-        // If the difference is negative (data quality issue or fiscal anomaly),
-        // keep the raw value rather than emitting a broken negative.
-        out[i] = d >= 0 ? d : cur;
-      }
-    }
-    // else: leading periods before first Q1 — keep raw as-is (can't difference)
-  }
-  return out;
-}
-
 /* ── TV row taxonomy per statement (§4–6) ── */
-function buildRows(stmt: Stmt, set: StatementPeriodSet | undefined, aq: AQ, zh: boolean): MiniRow[] {
+function buildRows(
+  stmt: Stmt,
+  set: StatementPeriodSet | undefined,
+  view: IncomeView,
+  aq: AQ,
+  zh: boolean,
+): MiniRow[] {
   if (!set) return [];
-  const inc = set.income,
-    bal = set.balance,
+  const bal = set.balance,
     cf = set.cashflow;
   const epsFmt = (v: number) => fmtNum(v, { decimals: 2 });
-  const periods = set.periods ?? [];
 
-  // Detect and fix cumulative YTD quarterly income data (CN/HK reporting style).
-  // Only applied in quarterly mode to income-statement series.
-  // EPS rows must also be differenced when cumulative to stay internally consistent
-  // with the revenue/net_income rows (Defect 2 fix).
-  const cumDetected = aq === "quarterly" && stmt === "income" && isCumulative(inc.revenue);
-  const d = cumDetected
-    ? (v: (number | null)[]) => discreteQuarters(v, periods)
-    : (v: (number | null)[]) => v;
+  // Income rows read the NORMALIZED block (lib/finStatementMath.incomeView): the raw contract
+  // arrays for a discrete-quarter market, the differenced ones for a cumulative-YTD market.
+  // Balance-sheet rows are period-end snapshots and are never differenced; cash-flow rows keep
+  // the vendor's own basis.
+  const inc = view.income;
 
   const mk = (label: string, values: (number | null)[], opts?: Partial<MiniRow>): MiniRow => ({
     label,
@@ -359,20 +353,20 @@ function buildRows(stmt: Stmt, set: StatementPeriodSet | undefined, aq: AQ, zh: 
 
   if (stmt === "income") {
     const rows: MiniRow[] = [
-      mk(pick(zh, "Total revenue", "总营收"), d(inc.revenue), { bold: true }),
-      mk(pick(zh, "Cost of goods sold", "营业成本"), d(inc.cogs)),
-      mk(pick(zh, "Gross profit", "毛利"), d(inc.gross_profit), { bold: true }),
-      mk(pick(zh, "Operating expenses (excl. COGS)", "营业费用（不含成本）"), diff(d(inc.opex), d(inc.cogs))),
-      mk(pick(zh, "Operating income", "营业利润"), d(inc.op_income), { bold: true }),
-      mk(pick(zh, "Non-operating income (total)", "营业外收入（合计）"), d(inc.nonop_income)),
-      mk(pick(zh, "Pretax income", "税前利润"), d(inc.pretax_income), { bold: true }),
-      mk(pick(zh, "Taxes", "税项"), d(inc.taxes)),
-      mk(pick(zh, "Net income", "净利润"), d(inc.net_income), { bold: true }),
-      mk(pick(zh, "EBITDA", "EBITDA"), d(inc.ebitda)),
-      // EPS rows must also be differenced (same d() wrapper) so they are internally
-      // consistent with revenue / net income in cumulative CN/HK quarterly statements.
-      { label: pick(zh, "Basic EPS", "基本每股收益"), values: d(inc.eps_basic), fmt: epsFmt },
-      { label: pick(zh, "Diluted EPS", "稀释每股收益"), values: d(inc.eps_diluted), fmt: epsFmt },
+      mk(pick(zh, "Total revenue", "总营收"), inc.revenue, { bold: true }),
+      mk(pick(zh, "Cost of goods sold", "营业成本"), inc.cogs),
+      mk(pick(zh, "Gross profit", "毛利"), inc.gross_profit, { bold: true }),
+      mk(pick(zh, "Operating expenses (excl. COGS)", "营业费用（不含成本）"), view.opexExclCogs),
+      mk(pick(zh, "Operating income", "营业利润"), inc.op_income, { bold: true }),
+      mk(pick(zh, "Non-operating income (total)", "营业外收入（合计）"), inc.nonop_income),
+      mk(pick(zh, "Pretax income", "税前利润"), inc.pretax_income, { bold: true }),
+      mk(pick(zh, "Taxes", "税项"), inc.taxes),
+      mk(pick(zh, "Net income", "净利润"), inc.net_income, { bold: true }),
+      mk(pick(zh, "EBITDA", "EBITDA"), inc.ebitda),
+      // EPS rows ride the same normalized block, so they stay internally consistent with
+      // revenue / net income on a differenced cumulative-YTD statement.
+      { label: pick(zh, "Basic EPS", "基本每股收益"), values: inc.eps_basic, fmt: epsFmt },
+      { label: pick(zh, "Diluted EPS", "稀释每股收益"), values: inc.eps_diluted, fmt: epsFmt },
     ];
     return rows;
   }
@@ -406,12 +400,4 @@ function buildRows(stmt: Stmt, set: StatementPeriodSet | undefined, aq: AQ, zh: 
     { label: pick(zh, "Capital expenditure", "资本支出"), values: cf.capex },
     { label: pick(zh, "Free cash flow", "自由现金流"), values: cf.fcf },
   ];
-}
-
-/** element-wise a-b, null-preserving. */
-function diff(a: (number | null)[], b: (number | null)[]): (number | null)[] {
-  return (a || []).map((v, i) => {
-    const w = b?.[i];
-    return v != null && w != null ? v - w : v ?? null;
-  });
 }

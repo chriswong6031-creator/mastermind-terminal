@@ -79,6 +79,38 @@ export interface StatementPeriodSet {
   income: IncomeBlock;
   balance: BalanceBlock;
   cashflow: CashflowBlock;
+
+  // ── deep-history provenance (OPTIONAL — added by the Massive/polygon.io backfill,
+  // ingest/backfill_fund_statements_massive.py). Files emitted before that pass, and the
+  // CN/HK generators, carry neither key, so every consumer must treat them as absent-by-
+  // default rather than assuming the backfill ran. ──
+  /**
+   * Per-period source, index-aligned to `periods`: "yfinance" | "massive" |
+   * "yfinance+massive" (or the CN/HK base source). Drives the coverage disclosure — a
+   * "massive"-only period carries statement TOTALS but not the derived rows below.
+   */
+  src_by_period?: string[];
+  /**
+   * Contract fields the vendor payload cannot fill, by block — e.g.
+   * `{income: ["ebitda"], balance: ["cash","debt","net_debt"], cashflow: ["capex","fcf"]}`.
+   * These are null on vendor-only periods BY DESIGN; they are never zero-filled or
+   * estimated. See lib/finStatements.vendorGapNotice.
+   */
+  vendor_gaps?: Record<string, string[]>;
+  /**
+   * Filing provenance, index-aligned to `periods`: the ISO date of the vendor filing whose
+   * figures this column took, or null where no vendor row supplied a value (a yfinance-only
+   * column, or a file that predates the backfill). Written by
+   * `backfill_fund_statements_massive.merge_period_set` — when two filings report the same
+   * fiscal label, the LATER one wins and its date lands here.
+   */
+  filed_by_period?: (string | null)[];
+  /**
+   * True where more than one distinct vendor filing was seen for that fiscal label — i.e. the
+   * period has been restated. The column shows the LATEST filing's figures; this flag is what
+   * lets a surface say so. Not full point-in-time: the superseded figures are not retained.
+   */
+  restated_by_period?: boolean[];
 }
 
 export interface FundStatements {
