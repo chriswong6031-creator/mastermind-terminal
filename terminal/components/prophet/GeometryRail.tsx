@@ -3,7 +3,7 @@
  * GeometryRail — positional price rail showing STOP / ENTRY / LAST / T1 / T2.
  *
  * Bull layout (bottom→top):  STOP < ENTRY < LAST < T1 < T2
- * Bear layout (top→bottom):  STOP > ENTRY > LAST > T1 (inverted for BEAR)
+ * Bear layout (top→bottom):  STOP > ENTRY > LAST > T1
  *
  * Distances are expressed in R-units (multiples of ENTRY→STOP distance).
  * When geometry.dist_to_stop_r and dist_to_t1_r are present they are used;
@@ -37,12 +37,48 @@ interface GeometryRailProps {
 
 export const WIDE_R_PCT = 0.12;
 export const WIDE_T2_STRETCH = 0.35;
+export const RAIL_HEIGHT = 140;
+export const LABEL_HEIGHT = 14;
+export const LABEL_MIN_GAP = 20;
 
 export interface GeometryStretch {
   rAbs: number | null;
   rPct: number | null;
   t2Stretch: number | null;
   wide: boolean;
+}
+
+/** Map a price onto one real vertical price axis: low=bottom, high=top. */
+export function geometryPricePositionPct(
+  price: number,
+  minPrice: number,
+  maxPrice: number,
+): number {
+  const range = maxPrice - minPrice;
+  if (!Number.isFinite(price) || !Number.isFinite(range) || range <= 0) return 0;
+  return Math.max(0, Math.min(1, (price - minPrice) / range));
+}
+
+export interface GeometryProgressSegment {
+  startPct: number;
+  filledPct: number;
+}
+
+/** Fill only favorable movement from entry; adverse movement is not progress. */
+export function geometryProgressSegment(
+  direction: "BULL" | "BEAR",
+  entryPct: number,
+  lastPct: number,
+): GeometryProgressSegment {
+  const clamp = (value: number) => Math.max(0, Math.min(100, value));
+  const entry = clamp(entryPct);
+  const last = clamp(lastPct);
+  const delta = direction === "BEAR" ? entry - last : last - entry;
+  if (delta <= 0) return { startPct: entry, filledPct: 0 };
+  return {
+    startPct: direction === "BEAR" ? last : entry,
+    filledPct: clamp(delta),
+  };
 }
 
 /**
@@ -62,6 +98,64 @@ export function geometryStretch(
     (rPct != null && rPct > WIDE_R_PCT) ||
     (t2Stretch != null && t2Stretch > WIDE_T2_STRETCH);
   return { rAbs, rPct, t2Stretch, wide };
+}
+
+/**
+ * Resolve crowded label centers without changing the price-axis marker itself.
+ * Input/output are top-origin pixel centers and output order matches input order.
+ *
+ * The pass is deterministic: stable price order, minimum separation, then a
+ * group recenter and edge clamp. Five labels fit inside the 140px rail without
+ * depending on measured fonts, so SSR and every responsive viewport agree.
+ */
+export function layoutGeometryLabelCenters(
+  desiredCenters: number[],
+  railHeight = RAIL_HEIGHT,
+  minGap = LABEL_MIN_GAP,
+  edgePadding = LABEL_HEIGHT / 2,
+): number[] {
+  if (desiredCenters.length === 0) return [];
+  const lower = Math.max(0, edgePadding);
+  const upper = Math.max(lower, railHeight - edgePadding);
+  const effectiveGap = desiredCenters.length > 1
+    ? Math.min(Math.max(0, minGap), (upper - lower) / (desiredCenters.length - 1))
+    : 0;
+  const clamp = (value: number) => Math.max(lower, Math.min(upper, Number.isFinite(value) ? value : lower));
+  const points = desiredCenters
+    .map((desired, index) => ({ desired: clamp(desired), index }))
+    .sort((a, b) => a.desired - b.desired || a.index - b.index);
+
+  const placed = points.map((point) => point.desired);
+  for (let index = 1; index < placed.length; index++) {
+    placed[index] = Math.max(placed[index], placed[index - 1] + effectiveGap);
+  }
+
+  // Recenter a crowded group around its original positions. Without this, two
+  // identical ENTRY/LAST levels always drift in only one direction.
+  const drift = placed.reduce((sum, value, index) => sum + value - points[index].desired, 0) / placed.length;
+  for (let index = 0; index < placed.length; index++) placed[index] -= drift;
+
+  if (placed[0] < lower) {
+    const shift = lower - placed[0];
+    for (let index = 0; index < placed.length; index++) placed[index] += shift;
+  }
+  if (placed[placed.length - 1] > upper) {
+    const shift = placed[placed.length - 1] - upper;
+    for (let index = 0; index < placed.length; index++) placed[index] -= shift;
+  }
+
+  // Numerical guard after recentering; capacity was bounded above so both
+  // passes can satisfy the gap and edge constraints simultaneously.
+  for (let index = 1; index < placed.length; index++) {
+    placed[index] = Math.max(placed[index], placed[index - 1] + effectiveGap);
+  }
+  for (let index = placed.length - 2; index >= 0; index--) {
+    placed[index] = Math.min(placed[index], placed[index + 1] - effectiveGap);
+  }
+
+  const result = new Array<number>(desiredCenters.length);
+  points.forEach((point, index) => { result[point.index] = clamp(placed[index]); });
+  return result;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -106,17 +200,17 @@ export function GeometryRail({
   const prices = levels.map((l) => l.price);
   const minP = Math.min(...prices);
   const maxP = Math.max(...prices);
-  const range = maxP - minP || 1;
 
-  // For BEAR, top of rail = highest price (STOP), bottom = T1
-  // For BULL, bottom of rail = STOP, top = T1/T2
-  const positionPct = (price: number): number => {
-    const raw = (price - minP) / range; // 0=bottom, 1=top
-    return isBear ? 1 - raw : raw;      // invert for bear
-  };
+  // This is one real price axis for both directions: the highest price is at
+  // the top and the lowest is at the bottom. Bearish profit therefore moves
+  // downward; color communicates direction without reversing price geometry.
+  const positionPct = (price: number): number => geometryPricePositionPct(price, minP, maxP);
 
   // Sort levels by vertical position (lowest pct = bottom)
   const sorted = [...levels].sort((a, b) => positionPct(a.price) - positionPct(b.price));
+  const labelCenters = layoutGeometryLabelCenters(
+    sorted.map((level) => (1 - positionPct(level.price)) * RAIL_HEIGHT),
+  );
 
   const hasGeom = geometry != null;
   const distStop = hasGeom ? geometry!.dist_to_stop_r : null;
@@ -127,7 +221,7 @@ export function GeometryRail({
     .replace("{pct}", stretch.rPct != null ? (stretch.rPct * 100).toFixed(0) : "—");
 
   return (
-    <div className="obs-card obs-prophet-geometry" style={WRAPPER}>
+    <div className="obs-card obs-prophet-geometry" style={WRAPPER} data-testid="geometry-rail">
       <div style={TITLE_ROW}>
         <span style={SECTION_LABEL}>{t("geometryTitle")}</span>
         {/* R/R summary */}
@@ -166,8 +260,11 @@ export function GeometryRail({
           {entry != null && last != null && t1 != null && (() => {
             const entryPct = positionPct(entry) * 100;
             const lastPct  = positionPct(last)  * 100;
-            const filled   = Math.max(0, Math.min(100, lastPct - entryPct));
-            const start    = Math.min(entryPct, lastPct);
+            const { filledPct: filled, startPct: start } = geometryProgressSegment(
+              direction,
+              entryPct,
+              lastPct,
+            );
             return (
               <div
                 style={{
@@ -189,20 +286,24 @@ export function GeometryRail({
 
         {/* Labels column */}
         <div style={{ flex: 1, position: "relative", minHeight: RAIL_HEIGHT }}>
-          {sorted.map((lv) => {
-            const pct = positionPct(lv.price) * 100;
+          {sorted.map((lv, index) => {
+            const center = labelCenters[index];
             return (
               <div
                 key={lv.label}
+                data-testid="geometry-label"
+                data-level={lv.label}
                 style={{
                   position: "absolute",
-                  bottom: `${pct}%`,
+                  top: center - LABEL_HEIGHT / 2,
                   left: 0,
-                  transform: "translateY(50%)",
+                  right: 0,
+                  height: LABEL_HEIGHT,
                   display: "flex",
                   alignItems: "center",
                   gap: 6,
                   opacity: stretch.wide && lv.isTarget ? 0.55 : 1,
+                  whiteSpace: "nowrap",
                 }}
               >
                 <span style={{ font: "600 9.5px/1 var(--font-ui)", color: lv.color, minWidth: 38 }}>
@@ -270,8 +371,6 @@ function StatRow({ label, value, valueColor }: { label: string; value: string; v
 }
 
 // ── Style constants ───────────────────────────────────────────────────────────
-
-const RAIL_HEIGHT = 140;
 
 // obs-card provides glass background/border/radius
 const WRAPPER: React.CSSProperties = {

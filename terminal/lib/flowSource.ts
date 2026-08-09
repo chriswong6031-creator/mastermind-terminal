@@ -3,7 +3,8 @@
  *
  * Extracted from app/api/flow/route.ts so BOTH the polling GET endpoint and the
  * SSE streaming endpoint (app/api/flow/stream) resolve a payload through one code
- * path: fixture in dev (FLOW_FIXTURE=1), else Python backend → R2 CDN fallback, with
+ * path: fixture in dev (FLOW_FIXTURE=1), else Python backend → R2 CDN fallback (the
+ * Options Prophet published index is R2-first), with
  * the proprietary server-side flowScore attached to the main feed.
  *
  * SERVER-ONLY. Imports fs + the server-only flowScore model — never import from a
@@ -39,6 +40,7 @@ const MATRIX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "matrix_f
 const MANIFEST_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "manifest.json");
 const PROPHET_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_fixture.json");
 const PROPHET_MARKS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_marks_fixture.json");
+const OPTIONS_PROPHET_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "options_prophet_fixture.json");
 const ENRICH_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "enrich_fixture.json");
 const FLOW_IDX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_idx_fixture.json");
 const SURFACE_IDX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "surface_idx_fixture.json");
@@ -155,6 +157,7 @@ export function isValidF(f: string): boolean {
   if (f === "flow_idx") return true;
   if (f === "prophet_idx") return true;
   if (f === "prophet_marks") return true;
+  if (f === "options_prophet_idx") return true;
   if (f === "enrich") return true;
   if (f === "leaders") return true;
   if (f === "radar") return true;
@@ -224,6 +227,7 @@ export function backendPath(f: string): string {
   if (f === "flow_idx") return "/api/flow/flow_idx";
   if (f === "prophet_idx") return "/api/hub/prophet";
   if (f === "prophet_marks") return "/api/hub/prophet_marks";
+  if (f === "options_prophet_idx") return "/api/hub/options_prophet";
   if (f === "enrich") return "/api/flow/enrich";
   if (f === "leaders") return "/api/flow/leaders";
   if (f === "radar") return "/api/flow/radar";
@@ -293,6 +297,7 @@ export function r2Key(f: string): string {
   if (f === "flow_idx") return "live_flow/flow_idx.json";
   if (f === "prophet_idx") return "prophet/index.json";
   if (f === "prophet_marks") return "live_flow/prophet_marks.json";
+  if (f === "options_prophet_idx") return "options_prophet/index.json";
   if (f === "enrich") return "live_flow/enrich_current.json";
   if (f === "leaders") return "flowleaders/leaders.json";
   if (f === "radar") return "leaderradar/radar.json";
@@ -764,6 +769,21 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       return JSON.parse(raw) as Record<string, unknown>;
     } catch { return { schema: "prophet.live_marks/v1", asof_utc: "", session_date: "", marks: {} }; }
   }
+  if (f === "options_prophet_idx") {
+    try {
+      const raw = await fs.readFile(OPTIONS_PROPHET_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return {
+        schema: "options.prophet_shadow/v1",
+        as_of: "",
+        authority: "display_only",
+        mode: "shadow",
+        opportunities: [],
+        watchlist: [],
+      };
+    }
+  }
   if (f === "radar") {
     try {
       const raw = await fs.readFile(LEADER_RADAR_FIXTURE_FILE, "utf8");
@@ -885,9 +905,18 @@ export async function intradayFixture(sym: string, tf: string): Promise<Bar6[] |
 
 /**
  * Fetch a payload from the live upstream: Python backend first, R2 CDN fallback.
+ * Options Prophet is an artifact-native feed, so it deliberately probes its
+ * published R2 index before the backend route. This avoids paying the backend's
+ * timeout on every first load when that optional route is absent or deploying.
  * `manifest` is a local static file on this box; `flow_idx` has a final GitHub-Pages
  * origin. Returns null when every source fails. (No scoring, no cache — callers own that.)
  */
+export type FlowUpstreamSource = "backend" | "r2";
+
+export function upstreamSourceOrder(f: string): FlowUpstreamSource[] {
+  return f === "options_prophet_idx" ? ["r2", "backend"] : ["backend", "r2"];
+}
+
 export async function tryFetchUpstream(f: string): Promise<Record<string, unknown> | null> {
   if (f === "manifest") {
     try {
@@ -897,26 +926,26 @@ export async function tryFetchUpstream(f: string): Promise<Record<string, unknow
       return null;
     }
   }
-  const bUrl = `${BACKEND}${backendPath(f)}`;
-  try {
-    return await fetchWithUA(bUrl);
-  } catch {
+  for (const source of upstreamSourceOrder(f)) {
     try {
-      const r2Url = `${R2_BASE}/${r2Key(f)}`;
-      return await fetchWithUA(r2Url);
+      const url = source === "r2"
+        ? `${R2_BASE}/${r2Key(f)}`
+        : `${BACKEND}${backendPath(f)}`;
+      return await fetchWithUA(url);
     } catch {
-      if (f === "flow_idx") {
-        try {
-          return await fetchWithUA(
-            "https://chriswong6031-creator.github.io/macro/flow/index.json"
-          );
-        } catch {
-          return null;
-        }
-      }
+      // Continue to the next configured source.
+    }
+  }
+  if (f === "flow_idx") {
+    try {
+      return await fetchWithUA(
+        "https://chriswong6031-creator.github.io/macro/flow/index.json"
+      );
+    } catch {
       return null;
     }
   }
+  return null;
 }
 
 /**

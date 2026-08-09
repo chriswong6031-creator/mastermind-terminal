@@ -61,7 +61,7 @@ const PositioningView = dynamic(
   { ssr: false, loading: () => <TabSkeleton /> },
 );
 const ProphetView = dynamic(
-  () => import("@/components/prophet/ProphetView").then((m) => ({ default: m.ProphetView })),
+  () => import("@/components/prophet/ProphetLanesView").then((m) => ({ default: m.ProphetLanesView })),
   { ssr: false, loading: () => <TabSkeleton /> },
 );
 const LevelsView = dynamic(
@@ -1681,12 +1681,16 @@ export default function OptionsHubView({
   }, [activeTab, fetchDte]);
 
   // Warm a tab's OWN payloads at the moment that tab activates — never on hub mount.
-  //   · manifest (~1.9 MB) and prophet_idx (~136 KB) are ProphetView's.
+  //   · manifest, Macro Prophet, and Options Alpha shadow are Prophet's.
   //   · tide via flowGet (~183 KB) is FlowDeskView's — the Tide tab itself rides SSE.
   // flowClientCache dedupes in-flight keys, so racing the sub-view's own fetch
   // collapses onto one request rather than doubling it.
   useEffect(() => {
-    if (activeTab === "prophet") { flowPrefetch("prophet_idx"); flowPrefetch("manifest"); }
+    if (activeTab === "prophet") {
+      flowPrefetch("prophet_idx");
+      flowPrefetch("options_prophet_idx");
+      flowPrefetch("manifest");
+    }
     if (activeTab === "desk") flowPrefetch("tide");
   }, [activeTab]);
 
