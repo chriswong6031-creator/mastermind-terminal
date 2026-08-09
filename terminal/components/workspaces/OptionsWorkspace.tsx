@@ -20,7 +20,7 @@ import { useLang } from "@/lib/i18n";
  *
  * Tab registry order per spec:
  *   tape · desk · tide · tickers · vol (Options Screener) · gex · surface ·
- *   structure · volatility · prophet.
+ *   structure · volatility · positioning · levels · prophet.
  * (PRISM was retired in masterplan §5.3 — merged into the Exposure desk's matrix view.
  * `?tab=prism` is now an alias onto `gex`; see HUB_KEY.)
  * NOTE the two distinct keys: `vol` is a load-bearing legacy alias for the Options
@@ -56,11 +56,12 @@ const HUB_KEY: Record<string, TabKey> = {
   structure: "structure",
   volatility: "volatility",
   positioning: "positioning",
+  levels: "levels",
   prophet: "prophet",
 };
 
 // The tabs the hub is allowed to render under Research (canonical hub keys).
-const RESEARCH_ALLOWED: TabKey[] = ["tape", "desk", "tide", "tickers", "screener", "gex", "surface", "structure", "volatility", "positioning", "prophet"];
+const RESEARCH_ALLOWED: TabKey[] = ["tape", "desk", "tide", "tickers", "screener", "gex", "surface", "structure", "volatility", "positioning", "levels", "prophet"];
 
 const DEFAULT_TAB: TabKey = "tape";
 
@@ -77,6 +78,7 @@ const TABS: WorkspaceTab[] = [
   { key: "structure", labelKey: "wtStructure" },
   { key: "volatility", labelKey: "wtVolatility" },
   { key: "positioning", labelKey: "wtPositioning" },
+  { key: "levels", labelKey: "wtLevels" },
   { key: "prophet", labelKey: "wtProphet" },
 ];
 
@@ -91,6 +93,7 @@ const PAGE_KEY: Record<TabKey, string> = {
   tape: "tape", desk: "desk", tide: "tide", tickers: "tickers",
   screener: "vol", gex: "gex", surface: "surface",
   structure: "structure", volatility: "volatility", positioning: "positioning", prophet: "prophet",
+  levels: "levels",
   leaders: "tape", radar: "tape", // never shown here (redirected to Discover)
 };
 

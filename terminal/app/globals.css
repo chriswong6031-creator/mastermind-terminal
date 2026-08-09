@@ -4093,3 +4093,61 @@ html[data-shell="app"] .mm-brandbug{
 @media (prefers-reduced-motion:reduce){
   .mrs-wheel-track,.mhub,.mhub-scrim,.msheet-scrim.is-detent,.msheet.is-detent,.msheet.mdraw-sheet{transition:none!important;animation:none!important}
 }
+/* Levels board: the desktop map is a two-column instrument, but on narrow shells
+   both columns must remain reachable. Inline geometry owns the desktop density;
+   this one breakpoint turns the constrained body into a document-like vertical
+   flow and keeps the quick-root row locally scrollable rather than widening the app. */
+@media (max-width: 700px) {
+  .levels-board {
+    overflow-y: auto !important;
+  }
+
+  .levels-controls,
+  .levels-ticker-group {
+    align-items: flex-start !important;
+  }
+
+  .levels-ticker-group {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .levels-quick-roots {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .levels-quick-roots::-webkit-scrollbar {
+    display: none;
+  }
+
+  .levels-body {
+    display: block !important;
+    flex: none !important;
+    min-height: auto !important;
+    overflow: visible !important;
+  }
+
+  .levels-column {
+    width: 100%;
+    height: 480px;
+    min-width: 0 !important;
+    min-height: 480px !important;
+    padding: 16px 14px 18px !important;
+  }
+
+  .levels-rail {
+    width: 100%;
+    min-width: 0 !important;
+    overflow: visible !important;
+    border-left: 0 !important;
+    border-top: 1px solid var(--line);
+  }
+
+  .levels-rail-scroll {
+    overflow: visible !important;
+  }
+}

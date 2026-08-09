@@ -1,5 +1,5 @@
 "use client";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useT, useLang } from "@/lib/i18n";
 
 /**
@@ -47,7 +47,25 @@ export default function WorkspaceTabs({
 }: WorkspaceTabsProps) {
   const t = useT();
   const { lang } = useLang();
+  const navRef = useRef<HTMLElement | null>(null);
   const btnRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  // A deep-linked tab near the end of a phone-width rail must not be selected
+  // off-screen. Keep this horizontal-only so activating a tab never moves the
+  // surrounding document vertically.
+  useEffect(() => {
+    const nav = navRef.current;
+    const index = tabs.findIndex((tab) => tab.key === active);
+    const button = index >= 0 ? btnRefs.current[index] : null;
+    if (!nav || !button) return;
+    const left = button.offsetLeft;
+    const right = left + button.offsetWidth;
+    if (left < nav.scrollLeft) {
+      nav.scrollTo({ left, behavior: "auto" });
+    } else if (right > nav.scrollLeft + nav.clientWidth) {
+      nav.scrollTo({ left: right - nav.clientWidth, behavior: "auto" });
+    }
+  }, [active, tabs]);
 
   // t(key) resolves the dict for the active lang and echoes `key` back when there's no
   // entry. So a zhLabel override applies ONLY when in zh AND the dict has no entry
@@ -91,6 +109,7 @@ export default function WorkspaceTabs({
 
   return (
     <nav
+      ref={navRef}
       className={`obs-pillnav wtabs${className ? " " + className : ""}`}
       role="tablist"
       aria-label={ariaLabel}

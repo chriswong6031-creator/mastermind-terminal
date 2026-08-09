@@ -20,6 +20,7 @@ import { test, expect } from "@playwright/test";
 // (GexDeskView reads it to open on the matrix view).
 const CASES = [
   { query: "volatility", pill: "volatility" },
+  { query: "levels", pill: "levels" },
   { query: "prism", pill: "gex" },
 ] as const;
 

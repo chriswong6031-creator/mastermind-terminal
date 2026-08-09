@@ -1009,6 +1009,7 @@ const LEX: Record<string, [string, string]> = {
   tabGex: ["Exposure", "敞口"],
   tabSurface: ["Surface", "曲面"],
   tabProphet: ["Prophet", "Prophet"],
+  tabLevels: ["Levels", "价位图"],
   // ─── Wave-2 workspace sub-tab labels (WorkspaceTabs registries) ───────────────
   // Disambiguated screeners: Discover › Stock Screener vs Research › Options Screener.
   // Options Tape spells out the ex-"Tape" label. Others reuse the tab* keys above.
@@ -1025,6 +1026,7 @@ const LEX: Record<string, [string, string]> = {
   wtVolatility: ["Volatility", "波动率"],
   wtPositioning: ["Positioning", "持仓结构"],
   wtStructure: ["Structure", "未平仓分布"],
+  wtLevels: ["Levels", "价位图"],
   wtProphet: ["Prophet", "Prophet"],
   wtFundamentals: ["Fundamentals", "基本面"],
   wtAlerts: ["Alerts", "提醒"],

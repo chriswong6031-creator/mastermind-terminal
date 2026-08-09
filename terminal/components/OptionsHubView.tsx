@@ -64,6 +64,10 @@ const ProphetView = dynamic(
   () => import("@/components/prophet/ProphetView").then((m) => ({ default: m.ProphetView })),
   { ssr: false, loading: () => <TabSkeleton /> },
 );
+const LevelsView = dynamic(
+  () => import("@/components/levels/LevelsView").then((m) => ({ default: m.LevelsView })),
+  { ssr: false, loading: () => <TabSkeleton /> },
+);
 /** Tide tab's LWC chart — the hub's ONLY `lightweight-charts` consumer, so it is
  *  code-split like the desks. Keeping it inline put the whole chart engine on the
  *  Tape's first download for a surface the Tape never renders. The loading box
@@ -86,10 +90,11 @@ const TideChart = dynamic(
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-export type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "gex" | "surface" | "structure" | "volatility" | "positioning" | "leaders" | "radar";
+export type TabKey = "prophet" | "levels" | "desk" | "tape" | "tide" | "tickers" | "screener" | "gex" | "surface" | "structure" | "volatility" | "positioning" | "leaders" | "radar";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "prophet",  enKey: "tabProphet",  zhKey: "tabProphet" },
+  { key: "levels",   enKey: "tabLevels",   zhKey: "tabLevels" },
   { key: "desk",     enKey: "tabDesk",     zhKey: "tabDesk" },
   { key: "tape",     enKey: "tabTape",     zhKey: "tabTape" },
   { key: "tide",     enKey: "tabTide",     zhKey: "tabTide" },
@@ -3821,6 +3826,13 @@ export default function OptionsHubView({
           {(activeTab === "positioning" || visitedTabs.has("positioning")) && (
             <div style={{ flex: 1, overflow: "hidden", display: activeTab === "positioning" ? "flex" : "none", minHeight: 0 }}>
               <PositioningView />
+            </div>
+          )}
+
+          {/* ═══ LEVELS TAB (named gamma-level weather map) ═══════════════ */}
+          {(activeTab === "levels" || visitedTabs.has("levels")) && (
+            <div style={{ flex: 1, overflow: "hidden", display: activeTab === "levels" ? "flex" : "none", minHeight: 0 }}>
+              <LevelsView />
             </div>
           )}
 

@@ -1,0 +1,118 @@
+{
+  "SPY": {
+    "schema": "levels.v1",
+    "root": "SPY",
+    "asof": "2026-08-06T20:00:00-04:00",
+    "spot": 768.56,
+    "regime": {
+      "net_gamma": 5.6618,
+      "net_gamma_unit": "bn",
+      "label": "sticky",
+      "ribbon": "Net dealer gamma is positive (sticky): a range/pin lean where hedging leans against moves. Positioning, not prophecy."
+    },
+    "nodes": [
+      {
+        "role": "anchor",
+        "strike": 775,
+        "weight": 1,
+        "sticky": true,
+        "brightness": 1,
+        "note": "The largest gamma concentration on the board and the primary pinning zone."
+      },
+      {
+        "role": "call_wall",
+        "strike": 780,
+        "weight": 0.84,
+        "sticky": true,
+        "brightness": 0.84,
+        "note": "A heavy call-side concentration above spot where upside can slow."
+      },
+      {
+        "role": "put_wall",
+        "strike": 755,
+        "weight": 0.71,
+        "sticky": false,
+        "brightness": 0.71,
+        "note": "A heavy put-side concentration below spot where the terrain can become slippery."
+      },
+      {
+        "role": "flip",
+        "strike": 760,
+        "weight": null,
+        "sticky": null,
+        "brightness": null,
+        "note": "The estimated boundary between sticky and slippery dealer-gamma terrain."
+      },
+      {
+        "role": "cluster",
+        "strike": 770,
+        "weight": 0.63,
+        "sticky": true,
+        "brightness": 0.63,
+        "note": "A secondary concentration where several nearby strikes reinforce one another."
+      },
+      {
+        "role": "cluster",
+        "strike": 765,
+        "weight": 0.51,
+        "sticky": true,
+        "brightness": 0.51,
+        "note": "A smaller sticky cluster immediately below spot."
+      },
+      {
+        "role": "counter",
+        "strike": 750,
+        "weight": 0.46,
+        "sticky": false,
+        "brightness": 0.46,
+        "note": "A secondary downside concentration that can matter after the primary floor gives way."
+      },
+      {
+        "role": "trapdoor",
+        "strike": 745,
+        "weight": 0.4,
+        "sticky": false,
+        "brightness": 0.4,
+        "note": "A negative-gamma pocket where a downside move can accelerate."
+      },
+      {
+        "role": "launchpad",
+        "strike": 785,
+        "weight": 0.37,
+        "sticky": true,
+        "brightness": 0.37,
+        "note": "An upper concentration that can become a new anchor if price accepts above it."
+      },
+      {
+        "role": "void",
+        "strike": null,
+        "strike_lo": 735,
+        "strike_hi": 742.5,
+        "n_strikes": 4,
+        "weight": null,
+        "sticky": null,
+        "brightness": null,
+        "note": "A thin stretch with little gamma friction, where price may travel more freely."
+      }
+    ],
+    "stacks": [
+      {
+        "strike": 775,
+        "roles": ["anchor", "cluster"],
+        "note": "Multiple named structures overlap at this strike, increasing its relevance."
+      }
+    ],
+    "palette_hint": {
+      "colorblind": false,
+      "sticky": "green",
+      "slippery": "red",
+      "law": "Sticky means hedging leans against moves; slippery means hedging can chase them."
+    },
+    "source": {
+      "source_schema": "options_hub.gex/v1",
+      "source_asof": "2026-08-06",
+      "source_convention": "dealer-sign per engine/gex_model (long-call/short-put)",
+      "note": "Fixture derived from the public levels.v1 contract for display-path testing."
+    }
+  }
+}
