@@ -409,30 +409,47 @@ svg{display:block}
 .mm-conflict{margin-top:10px;border-radius:var(--r);border:1px solid rgba(232,179,57,.32);background:rgba(232,179,57,.08);padding:8px 10px}
 .mm-conflict-h{display:block;font:700 9px/1 var(--font-ui);letter-spacing:.05em;text-transform:uppercase;color:var(--signal);margin-bottom:4px}
 .mm-conflict-b{display:block;font-size:11px;line-height:1.5;color:var(--text-2)}
-/* combined two-color signal button (rail top) — opens both signal containers */
-.sig-btn{position:relative;display:flex;flex-direction:column;width:100%;border:1px solid var(--line);border-radius:var(--r-md);background:var(--panel-2);overflow:hidden;cursor:pointer;text-align:left;transition:border-color var(--t)}
-.sig-btn:hover{border-color:var(--line-3)}
+/* combined two-color signal button (rail top) — opens both signal containers.
+   Each half builds its atmosphere from --vc, the verdict's existing semantic token. That keeps
+   Buy/Sell, Bullish/Bearish, caution and east-mode direction colors on one source of truth. */
+.sig-btn{position:relative;isolation:isolate;display:flex;flex-direction:column;width:100%;border:1px solid var(--line);border-radius:var(--r-md);background:linear-gradient(180deg,var(--panel-2),var(--panel));overflow:hidden;cursor:pointer;text-align:left;box-shadow:0 12px 28px -22px rgba(0,0,0,.9),inset 0 1px rgba(255,255,255,.025);transition:border-color var(--t),box-shadow var(--t)}
+.sig-btn:hover{border-color:var(--line-3);box-shadow:0 16px 32px -22px rgba(0,0,0,.95),inset 0 1px rgba(255,255,255,.04)}
 /* the two halves sit flush against each other; the seam is a zero-height in-flow anchor
    BETWEEN them, so the View pill centers on the true shared edge even when one half wraps
    taller (multi-line stance verdicts). the 16px boundary paddings keep text clear of the
    pill (half-pill protrusion ≈ 10px < 16px). */
-.sig-btn-half{display:flex;align-items:center;gap:8px;padding:9px 11px;border-left:3px solid var(--vc);background:color-mix(in srgb, var(--vc) 8%, transparent)}
+.sig-btn-half{position:relative;isolation:isolate;display:flex;align-items:center;gap:8px;padding:9px 11px 9px 14px;border-left:0;overflow:hidden;transition:background var(--t),filter var(--t)}
+.sig-btn-go{background:
+  radial-gradient(125% 210% at 4% 48%,color-mix(in srgb,var(--vc) 25%,transparent) 0%,transparent 56%),
+  radial-gradient(72% 150% at 94% -45%,color-mix(in srgb,var(--vc) 12%,transparent) 0%,transparent 65%),
+  linear-gradient(106deg,color-mix(in srgb,var(--vc) 10%,var(--panel-2)) 0%,color-mix(in srgb,var(--vc) 15%,var(--panel)) 55%,var(--panel) 100%)}
+.sig-btn-rd{background:
+  radial-gradient(120% 205% at 6% 52%,color-mix(in srgb,var(--vc) 21%,transparent) 0%,transparent 58%),
+  radial-gradient(70% 150% at 92% 140%,color-mix(in srgb,var(--vc) 11%,transparent) 0%,transparent 66%),
+  linear-gradient(106deg,color-mix(in srgb,var(--vc) 8%,var(--panel-2)) 0%,color-mix(in srgb,var(--vc) 13%,var(--panel)) 55%,var(--panel) 100%)}
+.sig-btn-half::before{content:"";position:absolute;z-index:1;inset:0 auto 0 0;width:3px;background:linear-gradient(180deg,color-mix(in srgb,var(--vc) 66%,white),var(--vc) 54%,color-mix(in srgb,var(--vc) 72%,black));box-shadow:0 0 14px color-mix(in srgb,var(--vc) 48%,transparent);pointer-events:none}
+.sig-btn-half::after{content:"";position:absolute;z-index:-1;inset:0;opacity:.48;background:linear-gradient(112deg,transparent 0 37%,rgba(255,255,255,.042) 48%,transparent 60%);transform:translateX(-34%);transition:transform 420ms var(--ease-out),opacity 420ms var(--ease-out);pointer-events:none}
+.sig-btn:hover .sig-btn-half::after{opacity:.68;transform:translateX(12%)}
 .sig-btn-go{padding-bottom:16px}
 .sig-btn-rd{padding-top:16px}
 .sig-btn-half>svg{width:14px;height:14px;flex:none}
-.sig-btn-lbl{font:600 10px/1.2 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--text-2)}
-.sig-btn-vd{margin-left:auto;font:700 12.5px/1 var(--font-ui);color:var(--vc);flex:none}
+.sig-btn-lbl{font:650 10px/1.2 var(--font-ui);letter-spacing:.075em;text-transform:uppercase;color:var(--text-2)}
+.sig-btn-vd{margin-left:auto;font:700 12.5px/1 var(--font-ui);color:var(--vc);flex:none;text-shadow:0 0 16px color-mix(in srgb,var(--vc) 52%,transparent)}
 .sig-btn-vwrap{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex:none}
 .sig-btn-vwrap .sig-btn-vd{margin-left:0}
 .sig-btn-sub{font:500 9.5px/1 var(--font-ui);color:var(--muted);font-variant-numeric:tabular-nums}
 /* stale verdict — signal too old (or undated) to be a live opinion: visible, but stripped of authority */
-.sig-btn-half.sig-btn-stale{background:transparent;border-left-color:color-mix(in srgb, var(--vc) 35%, transparent)}
+.sig-btn-half.sig-btn-stale{background:linear-gradient(106deg,color-mix(in srgb,var(--vc) 3%,var(--panel-2)),var(--panel))}
+.sig-btn-half.sig-btn-stale::before{background:color-mix(in srgb,var(--vc) 35%,transparent);box-shadow:none}
+.sig-btn-half.sig-btn-stale::after{opacity:.12}
 .sig-btn-half.sig-btn-stale .sig-btn-vd{color:var(--text-2);font-weight:600}
 .sig-btn-half.sig-btn-stale>svg{opacity:.45}
 
 /* STANCE: a posture read from current state, not a signal event — no tint, hollow star,
    600-weight (vs the event's 700). The color is the stance's own (--up/--warn/…). */
-.sig-btn-half.sig-btn-stance{background:transparent;border-left-color:color-mix(in srgb, var(--vc) 45%, transparent)}
+.sig-btn-half.sig-btn-stance{background:linear-gradient(106deg,color-mix(in srgb,var(--vc) 4%,var(--panel-2)),var(--panel))}
+.sig-btn-half.sig-btn-stance::before{background:color-mix(in srgb,var(--vc) 45%,transparent);box-shadow:none}
+.sig-btn-half.sig-btn-stance::after{opacity:.14}
 .sig-btn-half.sig-btn-stance .sig-btn-vd{font:600 11px/1.2 var(--font-ui);letter-spacing:0;text-align:right;max-width:170px;white-space:normal}
 .sig-btn-half.sig-btn-stance>svg path{fill:transparent;stroke:var(--vc);stroke-width:1.6;opacity:.7}
 /* SOFT: a real dated engine event outside the scored lane (RECLAIM re-entry) — colored and
@@ -446,8 +463,9 @@ svg{display:block}
 /* View: the seam sits between the halves in the flex column — its top edge IS their shared
    boundary; the pill is centered on that edge, straddling both rectangles symmetrically */
 .sig-btn-seam{position:relative;display:block;height:0;z-index:2;pointer-events:none}
-.sig-btn-view{position:absolute;left:50%;top:0;transform:translate(-50%,-50%);white-space:nowrap;display:inline-flex;align-items:center;font:600 10.5px/1 var(--font-ui);color:var(--text);background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-pill);padding:4px 14px;box-shadow:0 2px 10px -3px rgba(0,0,0,.6)}
+.sig-btn-view{position:absolute;left:50%;top:0;transform:translate(-50%,-50%);white-space:nowrap;display:inline-flex;align-items:center;font:650 10.5px/1 var(--font-ui);letter-spacing:.025em;color:var(--text);background:linear-gradient(180deg,color-mix(in srgb,var(--panel-3) 86%,white),var(--panel-3));border:1px solid var(--line-3);border-radius:var(--r-pill);padding:4px 14px;box-shadow:0 6px 15px -5px rgba(0,0,0,.82),inset 0 1px rgba(255,255,255,.07)}
 .sig-btn:hover .sig-btn-view{border-color:var(--brand-2)}
+@media (prefers-reduced-motion:reduce){.sig-btn-half::after{transition:none}.sig-btn:hover .sig-btn-half::after{transform:translateX(-34%)}}
 /* ── TREND lane: descriptive MA-structure state, one static row ── */
 .trend-box{border:1px solid var(--line);border-radius:var(--r-md);background:var(--panel);margin-top:8px;overflow:hidden}
 .trend-row{display:flex;align-items:center;gap:12px;padding:9px 12px}
