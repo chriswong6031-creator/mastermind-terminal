@@ -134,10 +134,13 @@ def vendor_rows_newest_filing_first(vendor_rows: list[dict]) -> list[dict]:
     WHY THIS ORDER IS LOAD-BEARING. Two vendor rows can carry the SAME fiscal label — an
     original 10-Q and the 10-Q/A that restates it. The merge below is first-writer-wins by
     design (rule 2: never overwrite a non-null value), so whichever of the two the loop reaches
-    first becomes published history. The API is asked for `sort=period_of_report_date&order=asc`
-    but that column comes back NULL on live payloads, so the server order is arbitrary: the same
-    fetch could publish the original one night and the restatement the next, with no version
-    marker and no tell. Sorting here makes the winner a property of the DATA, not of the wire.
+    first becomes published history. Wire order cannot be trusted to decide that: the request
+    used to ask for `sort=period_of_report_date&order=asc`, a column that comes back NULL on
+    every live row, and even now that `fetch_financials` sorts on `filing_date` (the only
+    non-null column the vendor will sort by — `acceptance_datetime` and `end_date` are both
+    rejected 400) that column is itself only 52/69 populated on AAPL, and an original and its
+    amendment can share a filing date. Sorting here makes the winner a property of the DATA,
+    not of the wire — which is why this function stays even though the request improved.
 
     Key: (filing date, period end, source index), descending. Filing date is the restatement
     anchor — the later filing supersedes. Period end and the original index are pure tiebreaks

@@ -14,8 +14,11 @@
  * Props: {fund, zh}
  */
 import { useState } from "react"
-import type { Fund, EarningsQuarter, EarningsFY, StatementPeriodSet } from "../../lib/fund"
+import type { Fund, EarningsQuarter, EarningsFY } from "../../lib/fund"
 import { fmtNum, fmtDate, daysUntil, periodLabel, pick } from "../../lib/finFormat"
+// The statements EPS fallback reads the SAME normalized block the Statements tab prints — see
+// lib/finStatementMath's header for the two defects the page-private copy of this math carried.
+import { cumulativeQuarterNote, incomeView, type IncomeView } from "../../lib/finStatementMath"
 import { Dumbbell, type DumbbellPoint } from "./FinCharts"
 
 // DumbbellPoint carries pre-computed surp_pct + report date so table rows and
@@ -279,69 +282,29 @@ function RevenueModule({
   )
 }
 
-/**
- * Apply fiscal-year-keyed differencing to a cumulative YTD quarterly EPS array.
- * Resets the running base at each period label starting with 'Q1'.
- * Periods before the first Q1 are kept as-is (no prior base to subtract).
- * If a difference would be negative (data anomaly), keeps the raw value.
- */
-function discreteEps(vals: (number | null)[], periods: string[]): (number | null)[] {
-  const out: (number | null)[] = [...vals]
-  let sawQ1 = false
-  for (let i = 0; i < vals.length; i++) {
-    const label = periods[i] ?? ""
-    if (label.startsWith("Q1")) {
-      sawQ1 = true
-      out[i] = vals[i]
-    } else if (sawQ1) {
-      const cur = vals[i]
-      const prev = vals[i - 1]
-      if (cur != null && prev != null) {
-        const d = cur - prev
-        out[i] = d >= 0 ? d : cur
-      }
-    }
-    // else: leading pre-Q1 period, keep raw
-  }
-  return out
-}
-
-/** Detect cumulative YTD quarterly series: same heuristic as StatementsPage.
- *  Returns true if at least 2 out of 3 recent fiscal years show a monotone-
- *  increasing pattern within the year (3 of 3 Q→Q transitions non-decreasing). */
-function isCumulativeEps(vals: (number | null)[]): boolean {
-  if (!vals || vals.length < 8) return false
-  let cumulativeYears = 0
-  const n = vals.length
-  for (let yr = 0; yr < 3; yr++) {
-    const base = n - (yr + 1) * 4
-    if (base < 0) break
-    const q = [vals[base], vals[base + 1], vals[base + 2], vals[base + 3]]
-    if (q.some((v) => v == null)) continue
-    let risingCount = 0
-    for (let i = 1; i < 4; i++) {
-      if ((q[i] as number) >= (q[i - 1] as number)) risingCount++
-    }
-    if (risingCount >= 2) cumulativeYears++
-  }
-  return cumulativeYears >= 2
-}
-
 /** Build EPS history from quarterly statements when earnings.q is empty.
  *  CN + many HK names report EPS in statements but not in the earnings table.
- *  If the EPS array is cumulative YTD (detected via same heuristic as
- *  StatementsPage), applies fiscal-Q1-reset differencing before plotting so
- *  the Dumbbell shows discrete quarterly EPS, not YTD cumulative figures.
+ *
+ *  The EPS array arrives ALREADY NORMALIZED, off the same `incomeView` the Statements tab's
+ *  Basic-EPS row prints — so a quarter cannot read one way here and another way there. This
+ *  used to be a private reimplementation of the differencing (`discreteEps` + `isCumulativeEps`)
+ *  and it had drifted out of date on both halves: the detector was the shape-only heuristic with
+ *  NO market gate, which ordinary secular growth satisfies once the Massive backfill takes a US
+ *  name to ~69 quarters, and the differencer kept the RAW cumulative value whenever the
+ *  difference came out negative — putting a year-to-date total in a row of discrete quarters and
+ *  hiding the loss quarter that produced it. Both defects are described in
+ *  lib/finStatementMath's header, which is now the only copy of this math.
+ *
  *  Returns DumbbellPointWithSurp[] with actual=EPS, estimate=null (history-only). */
-function buildEpsFromStatements(qtr: StatementPeriodSet | undefined): DumbbellPointWithSurp[] {
-  const eps = qtr?.income?.eps_basic
-  const periods = qtr?.periods
-  if (!eps || !periods || eps.every((v) => v == null)) return []
-  // Apply differencing when the array looks cumulative (CN/HK reporting style).
-  const epsDiscrete = isCumulativeEps(eps) ? discreteEps(eps, periods) : eps
+function buildEpsFromStatements(
+  view: IncomeView,
+  periods: readonly string[] | undefined,
+): DumbbellPointWithSurp[] {
+  const eps = view.income.eps_basic
+  if (!periods || eps.every((v) => v == null)) return []
   return periods.map((p, i) => ({
     label: p,
-    actual: epsDiscrete[i] ?? null,
+    actual: eps[i] ?? null,
     estimate: null,
     surp_pct: null,
   })).filter((pt) => pt.actual != null).slice(-12)
@@ -381,12 +344,19 @@ export default function EarningsPage({ fund, zh, sym }: EarningsPageProps) {
 
   // ── EPS dumbbell ──
   const epsPtsRaw = buildEpsDumbbell(qs, fys, epsMode, estimates)
-  // Fallback: when no earnings.q data in quarterly mode but statements have EPS, use those
+  // Fallback: when no earnings.q data in quarterly mode but statements have EPS, use those.
+  // This path is ALWAYS the quarterly set, so the timeframe is quarterly by construction.
+  const stmtQtr = fund.statements?.quarterly
+  const stmtEpsView = incomeView(sym, stmtQtr, "quarterly")
   const stmtEpsFallback = epsMode === "quarterly" && epsPtsRaw.length === 0
-    ? buildEpsFromStatements(fund.statements?.quarterly)
+    ? buildEpsFromStatements(stmtEpsView, stmtQtr?.periods)
     : []
   const epsPts = epsPtsRaw.length > 0 ? epsPtsRaw : stmtEpsFallback
   const usingStmtFallback = epsPtsRaw.length === 0 && stmtEpsFallback.length > 0
+  // Null unless this issuer's market actually files cumulative year-to-date interims AND the
+  // columns really were differenced — the old note asserted the differencing unconditionally,
+  // so a US filer's discrete quarters were described with somebody else's reporting convention.
+  const stmtEpsCumNote = cumulativeQuarterNote(stmtEpsView, !!zh)
 
   // Whether we have no reported EPS history at all (estimates-only state)
   const hasNoReportedEps = qs.every((q) => q.eps_a == null) && fys.every((fy) => fy.eps_a == null) && stmtEpsFallback.length === 0
@@ -467,14 +437,24 @@ export default function EarningsPage({ fund, zh, sym }: EarningsPageProps) {
           </div>
         )}
 
-        {/* Statements fallback note */}
+        {/* Statements fallback note. Provenance is unconditional; the differencing sentence is
+            not — it rides cumulativeQuarterNote, which speaks only when the columns on screen
+            really were derived from cumulative year-to-date totals. Same two-note stack the
+            Statements tab uses. */}
         {usingStmtFallback && (
-          <div className="fin-chart-note" style={{ marginTop: 0, marginBottom: 8 }}>
-            {pick(!!zh,
-              "Derived from reported financial statements (discrete quarterly figures; cumulative YTD data differenced at each fiscal Q1).",
-              "来自已报告财务报表（离散季度数据；累计年初至今数据已在每财年Q1处差分还原）。"
+          <>
+            <div className="fin-chart-note" style={{ marginTop: 0, marginBottom: 8 }}>
+              {pick(!!zh,
+                "Derived from reported financial statements.",
+                "来自已报告财务报表。"
+              )}
+            </div>
+            {stmtEpsCumNote && (
+              <div className="fin-chart-note" style={{ marginTop: 0, marginBottom: 8 }}>
+                {stmtEpsCumNote}
+              </div>
             )}
-          </div>
+          </>
         )}
 
         {/* EPS dumbbell chart — TV parity: dots color by beat/miss via surp_pct */}

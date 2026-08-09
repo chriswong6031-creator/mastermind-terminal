@@ -41,6 +41,26 @@ export type StatementMarket = MarketId;
  * report this way. US filings (yfinance + the Massive/XBRL backfill), Canada, and the
  * international tail report the period itself. Adding a market here is a deliberate act:
  * it turns differencing ON for every income row of every name in that market.
+ *
+ * HK MEASURED, NOT ASSUMED (2026-08-08). The entry above first shipped as a prose claim, and
+ * the obvious objection is that some HK issuers — Tencent being the stock example — publish
+ * DISCRETE quarters in their own results announcements, while `isCumulativeShape` is satisfied
+ * by any strictly-rising series. Checked against the 2,798 real cached akshare payloads that
+ * feed this contract: 98.7% of 35,984 fiscal years are monotone non-decreasing, the
+ * annual÷earliest-interim ratio is ≈2x for 80.7% and ≈4x for 12.5% against only 3.4% at ≈1x,
+ * and just 3 names of 2,567 look discrete. The objection inverts on contact with the data —
+ * Tencent's announcements are discrete, but the rows this feed carries are the cumulative
+ * ladder, and differencing is what RECOVERS the published quarter (0700.HK Q3 2024: as-filed
+ * 487.81B is the nine-month total; differenced 167.19B is the quarter Tencent reported).
+ * Pinned end-to-end in lib/__tests__/hkCumulativeReporting.test.ts.
+ *
+ * ⚠ The same measurement found a cadence problem this gate does NOT address: 92.0% of HK
+ * fiscal years carry only two rows, because most HK issuers file SEMI-ANNUALLY. `gen_fund_hk`
+ * labels those two rows "Q2"/"Q4" by period-end month, so for those names `discreteQuarters`
+ * blanks every H1 column and emits FY−H1 — a half-year — under a "Q4" label. Correct
+ * arithmetic, wrong label. Fixing it means changing the labels the generator emits for every
+ * HK name, so it is deliberately out of scope here; the current behaviour is pinned in that
+ * same test file so it cannot drift unnoticed.
  */
 export const CUMULATIVE_YTD_MARKETS: readonly MarketId[] = ["cn", "hk"] as const;
 const CUMULATIVE_SET = new Set<string>(CUMULATIVE_YTD_MARKETS);

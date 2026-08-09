@@ -15,7 +15,13 @@
 import { useState } from "react";
 import { useLang } from "../../lib/i18n";
 import { pick, fmtNum, fmtPct, fmtDate, currencySymbol } from "../../lib/finFormat";
-import type { Fund, StatementPeriodSet } from "../../lib/fund";
+import type { Fund, IncomeBlock, StatementPeriodSet } from "../../lib/fund";
+// Every income series on this page is normalized ONCE (lib/finStatementMath): raw for a
+// discrete-quarter market, differenced for a cumulative year-to-date one. Reading `set.income`
+// straight made the Valuation, Performance and Waterfall cards disagree with the Statements tab —
+// and, on the same A/Q toggle, with each other.
+import { cumulativeQuarterNote, incomeChartValues, incomeView } from "../../lib/finStatementMath";
+import { netMarginPct, opExpenseStep, priceToSalesSeries } from "../../lib/finSeries";
 import type { FinPage } from "./MegaPane";
 import {
   Donut,
@@ -205,35 +211,43 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
   // currencies differ we have no FX rate in the contract, so the ratio is
   // meaningless — suppress the series and show a cross-currency empty state.
   const valSet = valAQ === "annual" ? ann : qtr;
+  const valView = incomeView(sym, valSet, valAQ);
   const psLabels = valSet?.periods ?? [];
   const psSeries: Series[] = [
     {
       name: pick(zh, "P/S (at current mkt cap)", "市销率（按当前市值）"),
-      values: computePS(valSet, s?.mktcap ?? null),
+      // Normalized revenue: a market cap over a year-to-date total is a P/S no quarter ever had.
+      values: priceToSalesSeries(valView.income.revenue, s?.mktcap ?? null, psLabels),
       color: "var(--brand)",
     },
   ];
+  // Disclosure for a differenced quarterly statement — null unless this issuer's market actually
+  // files cumulative year-to-date interims, so it can never describe a US filer's numbers.
+  const valCumNote = cumulativeQuarterNote(valView, zh);
 
   // ── Performance combo (revenue bars + net income bars + net margin line) ──
   const perfSet = perfAQ === "annual" ? ann : qtr;
+  const perfView = incomeView(sym, perfSet, perfAQ);
   const perfLabels = perfSet?.periods ?? [];
+  const perfInc = incomeChartValues(perfView);
   const perfBars: Series[] = [
-    { name: pick(zh, "Revenue", "营收"), values: perfSet?.income?.revenue ?? [], color: "var(--brand)" },
-    { name: pick(zh, "Net income", "净利润"), values: perfSet?.income?.net_income ?? [], color: "var(--up)" },
+    { name: pick(zh, "Revenue", "营收"), values: perfInc.revenue, color: "var(--brand)" },
+    { name: pick(zh, "Net income", "净利润"), values: perfInc.net_income, color: "var(--up)" },
   ];
   const perfLine: Series = {
     name: pick(zh, "Net margin %", "净利率 %"),
-    values: (perfSet?.income?.revenue ?? []).map((rev, i) => {
-      const ni = perfSet?.income?.net_income?.[i];
-      return rev && ni != null ? (ni / rev) * 100 : null;
-    }),
+    // Same normalized pair as the bars above it (lib/finSeries) — never a differenced net income
+    // over a cumulative revenue.
+    values: netMarginPct(perfInc.revenue, perfInc.net_income),
     color: "var(--warn)",
   };
 
   // ── Revenue → profit conversion waterfall (latest period) ──
   const wfSet = wfAQ === "annual" ? ann : qtr;
-  const wfIdx = lastFiniteIdx(wfSet?.income?.revenue);
-  const wfSteps: WaterfallStep[] = wfIdx == null ? [] : buildWaterfall(wfSet!, wfIdx, zh);
+  const wfView = incomeView(sym, wfSet, wfAQ);
+  const wfIdx = lastFiniteIdx(wfView.income.revenue);
+  const wfSteps: WaterfallStep[] =
+    wfIdx == null ? [] : buildWaterfall(wfView.income, wfView.opexExclCogs, wfIdx, zh);
 
   // ── Revenue breakdown (R6: empty unless fund.segments present) ──
   const seg = fund.segments;
@@ -408,6 +422,7 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
                   "以当前市值除以各期营收计算，并非历史估值（无历史市值数据）。",
                 )}
               </div>
+              {valCumNote && <div className="fin-chart-note">{valCumNote}</div>}
             </>
           )}
         </div>
@@ -704,23 +719,32 @@ function latestEps(set?: StatementPeriodSet): number | null {
 }
 
 /**
- * "P/S (at current mkt cap)" per period: CURRENT mktcap / revenue[i]. This is NOT
- * a historical valuation — past market caps aren't in the contract, so mktcap is
- * held constant. The series name + chart note make that basis explicit to the user.
+ * The bridge from revenue to net income for ONE period of an ALREADY-NORMALIZED income block.
+ *
+ * Takes `incomeView(...).income`, never a `StatementPeriodSet`: with no set in scope the bridge
+ * cannot reach a raw `set.income` array, so a cumulative year-to-date column can never be walked
+ * down as though it were the quarter. (P/S moved out entirely — lib/finSeries.priceToSalesSeries.)
+ *
+ * `opexExcl` is `incomeView(...).opexExclCogs`, passed in rather than derived here. This step
+ * used to compute its own `-Math.abs(opex - cogs)`, which is the "mirror mistake" named in
+ * lib/finStatementMath's header (§opexExclCogs): the contract's `opex` ALREADY excludes cost of
+ * revenue on both the yfinance and Massive paths, so subtracting COGS a second time printed
+ * AAPL FY2025's operating expenses at −158.8B against a true 62.2B — and the bridge visibly did
+ * not close (gross 195.2 − 158.8 = 36.4B against a real op income of 133.1B). That identity was
+ * derived once for the Statements table; the waterfall never got it. Now there is one copy.
+ *
+ * NOT wrapped in `Math.abs`: a waterfall step is a SIGNED contribution (positive = rise), and
+ * `-opexExcl` is exactly the delta that carries gross profit to operating income. When operating
+ * expenses net NEGATIVE — op income above gross profit, e.g. large other operating income — the
+ * step is drawn as the rise it actually is instead of being folded into a fall of the same size.
  */
-function computePS(set: StatementPeriodSet | undefined, mktcap: number | null): (number | null)[] {
-  if (!set || mktcap == null) return set?.periods.map(() => null) ?? [];
-  return set.income.revenue.map((rev) => (rev && rev > 0 ? mktcap / rev : null));
-}
-
-function buildWaterfall(set: StatementPeriodSet, i: number, zh: boolean): WaterfallStep[] {
-  const inc = set.income;
+function buildWaterfall(inc: IncomeBlock, opexExcl: (number | null)[], i: number, zh: boolean): WaterfallStep[] {
   const g = (a: (number | null)[]) => (a?.[i] != null && isFinite(a[i] as number) ? (a[i] as number) : null);
   const rev = g(inc.revenue);
   if (rev == null) return [];
   const cogs = g(inc.cogs);
   const gp = g(inc.gross_profit);
-  const opex = g(inc.opex);
+  const oxcStep = opExpenseStep(opexExcl, i);
   const opInc = g(inc.op_income);
   const nonop = g(inc.nonop_income);
   const taxes = g(inc.taxes);
@@ -728,8 +752,8 @@ function buildWaterfall(set: StatementPeriodSet, i: number, zh: boolean): Waterf
   const steps: WaterfallStep[] = [{ label: pick(zh, "Revenue", "营收"), value: rev, total: true }];
   if (cogs != null) steps.push({ label: pick(zh, "COGS", "成本"), value: -Math.abs(cogs) });
   if (gp != null) steps.push({ label: pick(zh, "Gross profit", "毛利"), value: gp, total: true });
-  if (opex != null && cogs != null) steps.push({ label: pick(zh, "Op expenses", "营业费用"), value: -Math.abs(opex - cogs) });
-  else if (opex != null) steps.push({ label: pick(zh, "Op expenses", "营业费用"), value: -Math.abs(opex) });
+  // Nothing derivable → the step is omitted entirely. A dash over a number we cannot stand behind.
+  if (oxcStep != null) steps.push({ label: pick(zh, "Op expenses", "营业费用"), value: oxcStep });
   if (opInc != null) steps.push({ label: pick(zh, "Op income", "营业利润"), value: opInc, total: true });
   if (nonop != null) steps.push({ label: pick(zh, "Non-op & other", "营业外及其他"), value: nonop });
   if (taxes != null) steps.push({ label: pick(zh, "Taxes & other", "税项及其他"), value: -Math.abs(taxes) });

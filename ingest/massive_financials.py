@@ -116,11 +116,33 @@ def fetch_financials(
 
     Follows `next_url` (100/page). `max_pages` bounds a runaway cursor; 12 pages is
     1,200 periods — far past any issuer's filing history.
+
+    WHY `sort=filing_date` AND NOT `period_of_report_date`: this used to sort on
+    `period_of_report_date`, which comes back null on every live row (0/69 non-null on
+    AAPL — the same fact `tests/test_massive_financials.py` pins in its fixture). Sorting a
+    cursor on an all-null column is not a defensible request to make: the ordering it asks
+    for does not exist in the data, so the row SET the cursor walks is at the vendor's
+    discretion rather than ours.
+
+    Probed live 2026-08-08 before changing it, because "could be non-deterministic" is not
+    the same as "is". Four tickers (AAPL, MSFT, BRK.B, F) × both timeframes × 3 consecutive
+    runs each, at limit=10 to force ~7 cursor hops per fetch: every run came back both
+    set-equal and order-equal. So the vendor's cursor is stable in practice even on the null
+    column, and nothing observable was broken — this is hygiene, not a bug fix, and no
+    published figure moves.
+
+    `filing_date` is the column we switch to because it is the one the vendor actually
+    ACCEPTS: `sort=acceptance_datetime` and `sort=end_date` are both rejected 400, so the
+    merge's own preferred anchor (`row_filing_date`, acceptance-then-filing) is not available
+    as a sort key. `filing_date` returns HTTP 200, is genuinely ordered ascending in the
+    response, is 52/69 non-null on AAPL rather than 0/69, and was verified to return the
+    IDENTICAL row set as the old request. It is not fully populated either — which is exactly
+    why `merge_rows` still orders client-side and does not trust wire order.
     """
     key = key or api_key()
     url = (
         f"{BASE}?ticker={ticker}&timeframe={timeframe}&limit=100"
-        "&sort=period_of_report_date&order=asc"
+        "&sort=filing_date&order=asc"
     )
     rows: list[dict] = []
     pages = 0
