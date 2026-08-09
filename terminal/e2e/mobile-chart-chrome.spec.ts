@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { DRAWING_TOOL_REGISTRY } from "../lib/drawingTools";
+import { settled } from "./settle";
 
 // Phone chart chrome (R2.1–R2.4): the bottom roller strip, the TV-anatomy Drawings sheet and the
 // Analysis hub replace the phone's top toolbar row and its floating drawing dock. Everything here
@@ -398,21 +399,72 @@ test("phone: the fullscreen control is the only expansion affordance", async ({ 
 
   // Double-tap remains the phone's maximize verb, so nothing was lost with the button: the price
   // pane swallows the sub-panes' band and a second double-tap hands it back.
-  const priceBand = () => page.evaluate(() => Math.max(
-    ...Array.from(document.querySelectorAll(".chart-wrap canvas")).map((c) => c.getBoundingClientRect().height)));
+  //
+  // The pane's own maximize flag rides along with the band. Double-tap is a gesture the pane can
+  // DROP — the two taps have to land inside its 350ms window, and a commit landing between them
+  // re-reads the second as a fresh first tap (the R3.3 note at the top of TerminalShell). That is
+  // what made this flake, and it flaked at EXACTLY the resting band: no maximize had happened, so
+  // no amount of waiting would have produced one. `settled` therefore re-issues the tap — and reads
+  // the flag rather than the band to decide whether to, because the band lags the toggle by a
+  // relayout and a blind retry would hand the maximize straight back.
+  const paneState = () => page.evaluate(() => ({
+    maximized: (window as Window & { __mmPaneMaximized?: () => string | null }).__mmPaneMaximized?.() ?? null,
+    band: Math.max(...Array.from(document.querySelectorAll(".chart-wrap canvas"))
+      .map((c) => c.getBoundingClientRect().height)),
+  }));
+  const restedBand = (a: { band: number }, b: { band: number }) => Math.abs(a.band - b.band) <= 1;
   const wrap = (await page.locator(".chart-wrap").first().boundingBox())!;
   const point = { x: wrap.x + wrap.width * 0.4, y: wrap.y + wrap.height * 0.3 };
-  const doubleTap = async () => {
-    await page.touchscreen.tap(point.x, point.y);
-    await page.waitForTimeout(70);
-    await page.touchscreen.tap(point.x, point.y);
-  };
-  const atRest = await priceBand();
-  await doubleTap();
-  await expect.poll(priceBand).toBeGreaterThan(atRest * 1.15);
-  const maximized = await priceBand();
-  await doubleTap();
-  await expect.poll(priceBand).toBeLessThan(maximized * 0.85);
+  // Delivered as DOM pointer events rather than through page.touchscreen, and BOTH taps from one
+  // page-side call: the pane pairs a double-tap only when the two pointerups land <350ms apart, and
+  // on a saturated box the CDP touch transport stretched that gap to 0.9–3.3s (measured, against
+  // ~110ms on an idle one) — the gesture stopped being deliverable at all, which no amount of
+  // retrying can rescue. Keeping the 70ms gap in PAGE time makes it independent of driver latency.
+  // Dispatching at elementFromPoint reproduces what a real tap hands the handler, `e.target`
+  // included, and it is the same primary-pointer shape pointerDrag above uses for this file's
+  // other touch gestures.
+  const doubleTap = () => page.evaluate(([px, py]) => new Promise<void>((resolve) => {
+    const el = document.elementFromPoint(px, py);
+    if (!el) { resolve(); return; }
+    const base = { pointerId: 11, pointerType: "touch", isPrimary: true, bubbles: true, cancelable: true, clientX: px, clientY: py };
+    const tap = () => {
+      el.dispatchEvent(new PointerEvent("pointerdown", { ...base, button: 0, buttons: 1 }));
+      el.dispatchEvent(new PointerEvent("pointerup", { ...base, button: 0, buttons: 0 }));
+    };
+    tap();
+    setTimeout(() => { tap(); resolve(); }, 70);
+  }), [point.x, point.y]);
+
+  // The baseline is measured settled too — a band still being laid out is the other half of a
+  // ratio that the two assertions below both hang off.
+  const atRest = await settled({
+    read: paneState,
+    ok: (s) => s.maximized == null,
+    same: restedBand,
+    message: "the panes should come to rest before the first double-tap",
+  });
+  // 30s, not the 20s default: each round here costs a gesture plus a full pane relayout, and on a
+  // loaded box one round has been measured at seconds rather than the poll interval — the default
+  // buys only a handful of retries there.
+  const maximized = await settled({
+    drive: async (last) => { if (last == null || last.maximized == null) await doubleTap(); },
+    read: paneState,
+    ok: (s) => s.maximized != null,
+    same: restedBand,
+    message: "a double-tap should maximize the price pane",
+    timeout: 30_000,
+  });
+  expect(maximized.band).toBeGreaterThan(atRest.band * 1.15);
+
+  const handedBack = await settled({
+    drive: async (last) => { if (last == null || last.maximized != null) await doubleTap(); },
+    read: paneState,
+    ok: (s) => s.maximized == null,
+    same: restedBand,
+    message: "a second double-tap should hand the band back",
+    timeout: 30_000,
+  });
+  expect(handedBack.band).toBeLessThan(maximized.band * 0.85);
 });
 
 test("tablet and desktop never see the phone chrome", async ({ page }) => {

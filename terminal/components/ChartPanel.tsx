@@ -2854,6 +2854,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           tagTop: tag ? parseFloat(tag.style.top || "0") : null,   // pane-space anchor the badge renders at
         };
       };
+      // Pane-maximize test hook. Double-tap is a gesture the pane can legitimately DROP — the two
+      // taps must land inside the 350ms window below, and a commit landing between them re-reads the
+      // second as a fresh first tap (the R3.3 note in TerminalShell). A test therefore has to be able
+      // to re-issue it, and re-issuing a TOGGLE blind would undo a tap that did register. Canvas
+      // geometry cannot arbitrate that — it lags the toggle by a relayout — so expose the flag the
+      // handler sets synchronously; `null` = no pane is maximized.
+      (window as any).__mmPaneMaximized = () => paneCtl.current.maximized;
     }
 
     // ── create the ONE chart (the hard invariant — exactly one renderer instance — now
@@ -6243,7 +6250,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (dragCleanup) dragCleanup();
       drawingTransactionRef.current = false;
       window.removeEventListener("mm:snapshot", snapshot);
-      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmChartSeriesTitles; delete (window as any).__mmChartAxisOpts; delete (window as any).__mmCrosshairDodge; } catch {} }
+      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmChartSeriesTitles; delete (window as any).__mmChartAxisOpts; delete (window as any).__mmCrosshairDodge; delete (window as any).__mmPaneMaximized; } catch {} }
       if (onKey) window.removeEventListener("keydown", onKey);
       if (winDown) window.removeEventListener("pointerdown", winDown);
       window.removeEventListener("pointerup", onProjectionPointerEnd);
