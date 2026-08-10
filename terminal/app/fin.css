@@ -178,7 +178,7 @@
 
 /* ── half-gauge ── */
 .fin-gauge{display:flex;flex-direction:column;align-items:center;gap:6px}
-.fin-gauge-svg{flex:none;max-width:100%}
+.fin-gauge-svg{flex:none;max-width:100%;height:auto}
 .fin-gauge-tick{stroke:var(--bg);stroke-width:1.5;vector-effect:non-scaling-stroke}
 .fin-needle{stroke:var(--text);stroke-width:2.2;stroke-linecap:round;vector-effect:non-scaling-stroke}
 .fin-needle-hub{fill:var(--text);stroke:var(--bg);stroke-width:1.5}
@@ -425,11 +425,11 @@
 .fin-tf-pill:hover{color:var(--text)}
 .fin-tf-pill.on{background:var(--text);color:var(--bg)}
 
-/* ── Technicals: three gauges ── */
-.fin-tech-summary{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:8px;align-items:end;justify-items:center}
+/* ── Technicals: source gauges ── */
+.fin-tech-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-items:end;justify-items:center}
 .fin-tech-gauge{display:flex;flex-direction:column;align-items:center;gap:4px}
 .fin-tech-gauge-t{font:600 12px/1 var(--font-ui);color:var(--text-2)}
-@media (max-width:640px){.fin-tech-summary{grid-template-columns:1fr}}
+@media (max-width:360px){.fin-tech-summary{grid-template-columns:1fr}}
 
 /* ── Technicals: rating + pivots tables ── */
 .fin-tech-tbl{padding:12px 12px 6px}

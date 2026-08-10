@@ -30,6 +30,7 @@ export default function IndicatorsModal({ open, active, onClose, onToggle, scrip
     scripts?: UserScript[]; enabled?: Set<string>; onToggleScript?: (id: string) => void; onRenameScript?: (id: string, name: string) => void; onDeleteScript?: (id: string) => void }) {
   const t = useT();
   const [cat, setCat] = useState("Mastermind");
+  const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);   // scriptId being inline-renamed
   const [draft, setDraft] = useState("");
   // close on Escape, matching SearchModal's behavior
@@ -42,11 +43,47 @@ export default function IndicatorsModal({ open, active, onClose, onToggle, scrip
   if (!open) return null;
 
   const commitRename = (id: string) => { const nm = draft.trim(); if (nm) onRenameScript?.(id, nm); setRenaming(null); };
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const indicatorMatches = normalizedQuery
+    ? Object.entries(CATS).flatMap(([category, items]) => items
+        .filter((item) => `${item.label} ${item.key} ${category}`.toLocaleLowerCase().includes(normalizedQuery))
+        .map((item) => ({ ...item, category })))
+    : [];
+  const scriptMatches = normalizedQuery
+    ? scripts.filter((script) => script.name.toLocaleLowerCase().includes(normalizedQuery))
+    : [];
 
   return (
     <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="imodal" onClick={(e) => e.stopPropagation()}>
-        <div className="mh"><b>{t("indicatorsTitle")}</b><span className="x" onClick={onClose}>✕</span></div>
+        <div className="mh">
+          <div className="mh-copy">
+            <b>{t("indicatorsTitle")}</b>
+            <span>{t("indicatorsSubtitle")}</span>
+          </div>
+          <button className="x" type="button" aria-label={t("close")} onClick={onClose}>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
+          </button>
+        </div>
+        <div className="isearch">
+          <svg className="isearch-icon" viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="8.5" cy="8.5" r="5.25" /><path d="M12.5 12.5L17 17" />
+          </svg>
+          <input
+            autoFocus
+            aria-label={t("indicatorSearchPlaceholder")}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={t("indicatorSearchPlaceholder")}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {query && (
+            <button className="isearch-clear" type="button" aria-label={t("clearSearch")} onClick={() => setQuery("")}>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" /></svg>
+            </button>
+          )}
+        </div>
         <div className="ib">
           <div className="inav">
             <div className="grp">{t("library")}</div>
@@ -54,7 +91,33 @@ export default function IndicatorsModal({ open, active, onClose, onToggle, scrip
             <a className={cat === MY_SCRIPTS ? "on" : ""} onClick={() => setCat(MY_SCRIPTS)}>{t("myScripts")}</a>
           </div>
           <div className="ilist">
-            {cat === MY_SCRIPTS ? (
+            {normalizedQuery ? (
+              indicatorMatches.length === 0 && scriptMatches.length === 0
+                ? <div className="li-empty">{t("noIndicatorMatches")}</div>
+                : <>
+                    {indicatorMatches.map((item) => {
+                      const on = active.has(item.key);
+                      return (
+                        <div key={`${item.category}:${item.key}`} className={`li li-search${on ? " on" : ""}`} onClick={() => onToggle(item.key)}>
+                          <span className="li-search-copy">
+                            <span>{item.tkey ? t(item.tkey, item.label) : item.label}</span>
+                            <small>{t(CAT_TKEY[item.category] || item.category, item.category)}</small>
+                          </span>
+                          <span className="chk"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>
+                        </div>
+                      );
+                    })}
+                    {scriptMatches.map((script) => {
+                      const on = !!enabled?.has(script.id);
+                      return (
+                        <div key={`script:${script.id}`} className={`li li-search${on ? " on" : ""}`} onClick={() => onToggleScript?.(script.id)}>
+                          <span className="li-search-copy"><span>{script.name}</span><small>{t("myScripts")}</small></span>
+                          <span className="chk"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>
+                        </div>
+                      );
+                    })}
+                  </>
+            ) : cat === MY_SCRIPTS ? (
               scripts.length === 0 ? (
                 <div className="li-empty">
                   {t("noScriptsYet")} <Link href="/scripts" className="li-link" onClick={onClose}>{t("openPineEditor")}</Link>

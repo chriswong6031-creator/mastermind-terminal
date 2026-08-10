@@ -731,12 +731,11 @@ const GAUGE_ZONES_EN = ["Strong sell", "Sell", "Neutral", "Buy", "Strong buy"];
 const GAUGE_ZONES_ZH = ["强烈卖出", "卖出", "中性", "买入", "强烈买入"];
 
 /**
- * Semicircular 5-zone gauge (Strong sell…Strong buy) with a 5-stop gradient arc,
+ * Semicircular 5-zone gauge (Strong sell…Strong buy) with a segmented arc,
  * a needle at `value` ∈ [-1,1], the verdict word beneath, and optional
  * Sell/Neutral/Buy vote counts. Used by Technicals + Analyst rating.
  */
 export function HalfGauge({ value, verdict, counts, size = 200, zh, variant = "tech" }: HalfGaugeProps) {
-  const gid = useId().replace(/:/g, "");
   const v = num(value) ? Math.max(-1, Math.min(1, value as number)) : null;
   if (v == null) return <Empty zh={zh} label={pick(!!zh, "No signal", "无信号")} />;
   const w = size;
@@ -751,25 +750,41 @@ export function HalfGauge({ value, verdict, counts, size = 200, zh, variant = "t
   const [ax, ay] = pt(ang(-1), rad);
   const [bx, by] = pt(ang(1), rad);
   const arc = `M ${ax} ${ay} A ${rad} ${rad} 0 0 1 ${bx} ${by}`;
+  const segmentArc = (from: number, to: number) => {
+    const [sx, sy] = pt(ang(from), rad);
+    const [ex, ey] = pt(ang(to), rad);
+    return `M ${sx} ${sy} A ${rad} ${rad} 0 0 1 ${ex} ${ey}`;
+  };
   const na = ang(v);
   const [nx, ny] = pt(na, rad - sw * 0.2);
   const zoneIdx = Math.min(4, Math.max(0, Math.floor(((v + 1) / 2) * 5 - 1e-9)));
   const zones = zh ? GAUGE_ZONES_ZH : GAUGE_ZONES_EN;
   const verdictText = verdict ?? zones[zoneIdx];
-  const grad = variant === "analyst"
-    ? [["0%", "var(--down)"], ["50%", "var(--warn)"], ["100%", "var(--up)"]]
-    : [["0%", "var(--down)"], ["50%", "var(--code-fn)"], ["100%", "var(--up)"]];
+  // Paint independent arc segments instead of a local url(#gradient) reference.
+  // Mobile Safari can intermittently lose that reference when a hidden tab is
+  // mounted or repainted, leaving an otherwise valid gauge visually blank.
+  const zoneColors = variant === "analyst"
+    ? ["var(--down)", "var(--down)", "var(--warn)", "var(--up)", "var(--up)"]
+    : ["var(--down)", "var(--down)", "var(--code-fn)", "var(--up)", "var(--up)"];
+  const zoneOpacity = [1, 0.58, 1, 0.58, 1];
   const verdictColor = zoneIdx <= 1 ? "var(--down)" : zoneIdx >= 3 ? "var(--up)" : "var(--text)";
   return (
     <div className="fin-gauge">
       <svg viewBox={`0 0 ${w} ${h + 4}`} width={w} height={h + 4} className="fin-gauge-svg" aria-hidden>
-        <defs>
-          <linearGradient id={gid} x1="0%" y1="0%" x2="100%" y2="0%">
-            {grad.map(([o, c]) => <stop key={o} offset={o} stopColor={c} />)}
-          </linearGradient>
-        </defs>
         <path d={arc} fill="none" stroke="var(--line)" strokeWidth={sw + 2} strokeLinecap="round" />
-        <path d={arc} fill="none" stroke={`url(#${gid})`} strokeWidth={sw} strokeLinecap="round" />
+        {zoneColors.map((color, i) => {
+          const from = -1 + i * 0.4;
+          return (
+            <path
+              key={i}
+              d={segmentArc(from, from + 0.4)}
+              fill="none"
+              stroke={color}
+              strokeOpacity={zoneOpacity[i]}
+              strokeWidth={sw}
+            />
+          );
+        })}
         {/* zone tick separators */}
         {[-0.6, -0.2, 0.2, 0.6].map((t) => {
           const [x1, y1] = pt(ang(t), rad - sw / 2);

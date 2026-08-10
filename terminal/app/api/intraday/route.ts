@@ -24,7 +24,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const sym = (searchParams.get("sym") || "").trim();
   const tf = (searchParams.get("tf") || "").trim();
-  const ext = searchParams.get("ext") !== "0"; // extended hours on by default (US only)
+  const ext = searchParams.get("ext") === "1"; // regular hours by default; explicit opt-in for US extended
   if (!sym || !isIntradayTf(tf)) return NextResponse.json({ error: "bad params" }, { status: 400 });
 
   // serve a warm cache without re-auth (it's public market data); only a fresh upstream fetch is gated

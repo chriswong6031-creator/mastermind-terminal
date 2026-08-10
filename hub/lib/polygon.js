@@ -14,6 +14,7 @@
 
 const WebSocket = require("ws");
 const log = require("./log");
+const { classifySession, etDate } = require("./usSession");
 
 const URL = "wss://delayed.polygon.io/stocks";
 const LRU_CAP = 500;
@@ -22,21 +23,11 @@ const SWEEP_INTERVAL_MS = 60 * 1000;
 const MAX_BACKOFF_MS = 30 * 1000;
 const MAX_PARAMS_PER_FRAME = 50; // batch subscribe/unsubscribe frames
 
-// ET trading-date formatter (mirror of intradaySources.ts:etDisplay date components).
-const ET_DATE_FMT = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/New_York",
-  year: "numeric", month: "2-digit", day: "2-digit",
-});
-function etDate(ms) {
-  const p = {};
-  for (const part of ET_DATE_FMT.formatToParts(ms)) p[part.type] = part.value;
-  return `${p.year}-${p.month}-${p.day}`;
-}
-
 class Polygon {
-  constructor(store, apiKey) {
+  constructor(store, apiKey, extFeed) {
     this.store = store;
     this.apiKey = apiKey || "";
+    this.extFeed = extFeed || null;
     this.ws = null;
     this.authed = false;
     this.authFailed = false;
@@ -153,8 +144,27 @@ class Polygon {
     const c = Number(m.c);
     if (!Number.isFinite(c)) return;
     const o = Number(m.o), h = Number(m.h), l = Number(m.l), v = Number(m.v);
+    const startMs = Number(m.s) || Number(m.e) || Date.now();
     const endMs = Number(m.e) || Date.now();
-    const date = etDate(endMs);
+    const session = classifySession(startMs);
+
+    // Polygon's AM stream includes pre/post-market aggregates. Those prints are
+    // a separate quote lane: they must never mutate regular LAST/OHLC/volume or
+    // the daily candle. Feed them into ExtFeed as a delayed fallback instead.
+    if (session !== "rth") {
+      if (this.extFeed) {
+        this.extFeed.ingest(sym, {
+          price: c,
+          ts: Math.floor(endMs / 1000),
+          session,
+          source: "polygon-delayed",
+          basis: "DELAYED_15M",
+        });
+      }
+      return;
+    }
+
+    const date = etDate(startMs);
 
     let acc = this.dayAcc.get(sym);
     if (!acc || acc.date !== date) {
@@ -186,6 +196,8 @@ class Polygon {
       source: "polygon-delayed",
       market: "us",
       basis: "DELAYED_15M",
+      regularSessionDate: date,
+      regularSession: "rth",
     });
   }
 
@@ -235,6 +247,7 @@ class Polygon {
       source: "polygon-delayed",
       market: "us",
       basis: "DELAYED_15M",
+      regularSession: "closed",
     });
   }
 

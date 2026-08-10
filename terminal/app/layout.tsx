@@ -11,12 +11,23 @@ const jetbrainsMono = JetBrains_Mono({ variable: "--font-jetbrains-mono", subset
 export const metadata: Metadata = {
   title: "Mastermind Terminal",
   description: "Institutional charting — proprietary confluence signals, macro regime, and an AI copilot.",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Mastermind",
+  },
+  formatDetection: {
+    telephone: false,
+  },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  themeColor: "#0a0b0e",
+  colorScheme: "dark",
+  interactiveWidget: "resizes-content",
 };
 
 // Runs before first paint (no flash): pick the up/down color scheme + language from a saved

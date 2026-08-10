@@ -16,21 +16,73 @@ export type ChartSettings = {
   gridHVisible: boolean;       // horizontal grid lines
   gridVVisible: boolean;       // vertical grid lines
   crosshairMode: number;       // 0=Normal, 1=Magnet (reserved for crosshair API)
+  scaleMarginsTop: number;     // percentages, converted to LWC 0..1 values
+  scaleMarginsBottom: number;
+  rightOffsetBars: number;
+  scaleTextColor: string;
+  scaleFontSize: number;
+  scaleLineColor: string;
+  countdownVisible: boolean;
+  noOverlappingLabels: boolean;
+  plusButtonVisible: boolean;
+  dayOfWeekLabels: boolean;
+  dateFormat: "locale" | "yyyy-mm-dd" | "dd-mm-yyyy" | "mm-dd-yyyy";
+  hourFormat: "12" | "24";
+  preserveLeftEdge: boolean;
   // Symbol (candle body/wick/border colors)
+  candleBodyVisible: boolean;
+  candleBordersVisible: boolean;
+  candleWicksVisible: boolean;
+  colorBarsPrevClose: boolean;
   candleUpColor: string;
   candleDownColor: string;
   candleUpBorder: string;
   candleDownBorder: string;
   candleUpWick: string;
   candleDownWick: string;
+  precision: "auto" | "2" | "3" | "4";
+  timezone: "exchange" | "local" | "utc";
+  adjustForDividends: boolean;
   // Status line
+  showLogo: boolean;
   showOHLC: boolean;           // status line bar change display
   showBarChange: boolean;      // show % change on status line
   showSymbolName: boolean;     // show symbol name on status line
+  titleMode: "ticker" | "name" | "both";
+  showVolume: boolean;
+  showLastDayChange: boolean;
+  showIndicatorTitles: boolean;
+  showIndicatorInputs: boolean;
+  showIndicatorValues: boolean;
+  indicatorBackgroundOpacity: number;
   // Canvas
   showWatermark: boolean;
+  backgroundType: "solid" | "gradient";
+  backgroundTop: string;
+  backgroundBottom: string;
+  gridHColor: string;
+  gridVColor: string;
+  paneSeparatorColor: string;
+  crosshairColor: string;
+  watermarkColor: string;
+  navigationButtons: "always" | "hover" | "never";
+  paneButtons: "always" | "hover" | "never";
   // Extended hours (intraday only)
   extHours: boolean;
+  extendedLineVisible: boolean;
+  preMarketColor: string;
+  postMarketColor: string;
+  overnightColor: string;
+  // Alerts
+  alertLinesVisible: boolean;
+  onlyActiveAlerts: boolean;
+  autoHideToasts: boolean;
+  // Corporate events
+  showDividends: boolean;
+  showSplits: boolean;
+  showEarnings: boolean;
+  showEarningsBreaks: boolean;
+  showLatestNews: boolean;
 };
 export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   mode: PriceScaleMode.Normal,
@@ -42,20 +94,70 @@ export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   gridHVisible: true,
   gridVVisible: true,
   crosshairMode: 0,
+  scaleMarginsTop: 10,
+  scaleMarginsBottom: 8,
+  rightOffsetBars: 10,
+  scaleTextColor: "",
+  scaleFontSize: 12,
+  scaleLineColor: "",
+  countdownVisible: true,
+  noOverlappingLabels: true,
+  plusButtonVisible: true,
+  dayOfWeekLabels: true,
+  dateFormat: "locale",
+  hourFormat: "24",
+  preserveLeftEdge: false,
   // Empty strings = "use CSS theme tokens (--up/--down)". Non-empty = user-overridden hex.
   // Effect 7 only applies candle colors when truthy, so the up/down flip in Effect 5 is never
   // clobbered by a settings-load on mount.
+  candleBodyVisible: true,
+  candleBordersVisible: true,
+  candleWicksVisible: true,
+  colorBarsPrevClose: false,
   candleUpColor: "",
   candleDownColor: "",
   candleUpBorder: "",
   candleDownBorder: "",
   candleUpWick: "",
   candleDownWick: "",
+  precision: "auto",
+  timezone: "exchange",
+  adjustForDividends: true,
+  showLogo: true,
   showOHLC: true,
   showBarChange: true,
   showSymbolName: true,
+  titleMode: "name",
+  showVolume: false,
+  showLastDayChange: false,
+  showIndicatorTitles: true,
+  showIndicatorInputs: false,
+  showIndicatorValues: true,
+  indicatorBackgroundOpacity: 70,
   showWatermark: true,
+  backgroundType: "solid",
+  backgroundTop: "",
+  backgroundBottom: "",
+  gridHColor: "",
+  gridVColor: "",
+  paneSeparatorColor: "",
+  crosshairColor: "",
+  watermarkColor: "",
+  navigationButtons: "hover",
+  paneButtons: "hover",
   extHours: false,
+  extendedLineVisible: true,
+  preMarketColor: "#ff9800",
+  postMarketColor: "#2962ff",
+  overnightColor: "#9c27b0",
+  alertLinesVisible: true,
+  onlyActiveAlerts: true,
+  autoHideToasts: true,
+  showDividends: true,
+  showSplits: true,
+  showEarnings: true,
+  showEarningsBreaks: false,
+  showLatestNews: true,
 };
 
 // Range presets — the button click scrolls the chart time axis to show this window.
@@ -127,12 +229,14 @@ export default function ChartFrameBar({
   settings,
   onSettings,
   onOpenSettingsModal,
+  extendedEligible = false,
 }: {
   timeframe: string;
   chartApi: IChartApi | null;
   settings: ChartSettings;
   onSettings: (patch: Partial<ChartSettings>) => void;
   onOpenSettingsModal?: (tab?: string) => void;
+  extendedEligible?: boolean;
 }) {
   const t = useT();
   // Client-only clock: render nothing until mounted to avoid SSR/hydration mismatch.
@@ -267,10 +371,10 @@ export default function ChartFrameBar({
         )}
         {/* ETH chip — active when on; muted+non-interactive on daily TFs (no tooltip per spec) */}
         <button
-          className={`cfb-chip${s.extHours ? " on" : ""}${!isIntraday ? " dis" : ""}`}
-          disabled={!isIntraday}
-          onClick={() => isIntraday && onSettings({ extHours: !s.extHours })}
-          title={isIntraday ? (s.extHours ? t("ethOff") : t("ethOn")) : undefined}
+          className={`cfb-chip${s.extHours && extendedEligible ? " on" : ""}${!isIntraday || !extendedEligible ? " dis" : ""}`}
+          disabled={!isIntraday || !extendedEligible}
+          onClick={() => isIntraday && extendedEligible && onSettings({ extHours: !s.extHours })}
+          title={isIntraday && extendedEligible ? (s.extHours ? t("ethOff") : t("ethOn")) : undefined}
           aria-label="Extended trading hours"
         >ETH</button>
         {/* ADJ chip — always passive (display-only; we only serve adjusted data) */}
@@ -371,8 +475,8 @@ export default function ChartFrameBar({
               </div>
 
               {/* Plus button toggle */}
-              <div className="qsg-item" onClick={() => { window.dispatchEvent(new CustomEvent("mm:plus-btn")); setGearOpen(false); }}>
-                <span className="qsg-check">✓</span>
+              <div className={`qsg-item${s.plusButtonVisible ? " checked" : ""}`} onClick={() => onSettings({ plusButtonVisible: !s.plusButtonVisible })}>
+                <span className="qsg-check">{s.plusButtonVisible ? "✓" : ""}</span>
                 <span className="qsg-lbl">{t("qsgPlusBtn")}</span>
               </div>
 

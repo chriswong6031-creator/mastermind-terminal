@@ -50,6 +50,7 @@ import { type PineScript } from "@/components/ChartPanel";
 import ChartTableView from "@/components/ChartTableView";
 import ChartObjectTree, { type OTEntry } from "@/components/ChartObjectTree";
 import { listTemplates, saveTemplate } from "@/lib/chartTemplates";
+import AssetLogo from "@/components/AssetLogo";
 
 type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -262,9 +263,28 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // symbol-keyed live top-of-book — ONE source for the header AND every watchlist row (via a single
   // batched /api/quote?syms= poll), so the detail pane and the watchlist can't disagree on a price.
   const [quotes, setQuotes] = useState<Record<string, any>>({});
-  // item-26/27: symbol-keyed extended/overnight ext prints — polled from /api/ext-quote (separate
-  // from the main quote poll so the Quote Hub lane surface stays clean). Each entry: { extPrice, extChg, extTs } | null.
-  const [extQuotes, setExtQuotes] = useState<Record<string, { extPrice: number; extChg: number; extTs: number } | null>>({});
+  // Extended-session fields travel in the same quote payload as the regular
+  // price. One symbol therefore has one authoritative snapshot and cannot race
+  // a second polling lane.
+  const extQuotes = useMemo(() => {
+    const out: Record<string, {
+      extPrice: number; extChg: number | null; extTs: number;
+      extSession?: "pre" | "post" | "overnight"; extSource?: string; extBasis?: string;
+    } | null> = {};
+    for (const [sym, q] of Object.entries(quotes)) {
+      out[sym] = q && typeof q.extPrice === "number"
+        ? {
+            extPrice: q.extPrice,
+            extChg: typeof q.extChg === "number" ? q.extChg : null,
+            extTs: typeof q.extTs === "number" ? q.extTs : 0,
+            extSession: q.extSession,
+            extSource: q.extSource,
+            extBasis: q.extBasis,
+          }
+        : null;
+    }
+    return out;
+  }, [quotes]);
   const [slice, setSlice] = useState<any>(null);
   const [fund, setFund] = useState<Fund | null>(null);
   const [opts, setOpts] = useState<any>(null);
@@ -338,6 +358,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }, []);
   // mobile + fullscreen + expanded-analysis state
   const [fullChart, setFullChart] = useState(false);
+  const [mobileDrawOpen, setMobileDrawOpen] = useState(false);
   // SSR-consistent default; the persisted width is read after mount (below) so the server- and
   // client-rendered `--rail-w` style always agree on the first paint (no hydration mismatch).
   const [railW, setRailW] = useState<number>(360);
@@ -573,47 +594,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     return () => clearTimeout(id);
   }, [quoteSymsKey, pollQuotes]);
 
-  // item-26/27: extended/overnight poll — US equities only. Always includes the active symbol
-  // (pane-card secondary block, item-25) plus all watchlist US singles when the Ext column is on.
-  // Runs at 30 s cadence (ext prints move slowly). Separate from main quote poll so the hub
-  // lane surface (/api/quote route) stays untouched.
-  const extSymsKey = useMemo(() => {
-    const syms: string[] = [];
-    // Always poll the active symbol for the pane-card secondary block (item-25)
-    if (!isComposite(active) && classify(active) === "us") syms.push(active);
-    // Add watchlist US singles when Ext column is enabled (item-26)
-    if (set.cols.ext) {
-      for (const { symbol } of wl) {
-        if (!isComposite(symbol) && classify(symbol) === "us") syms.push(symbol);
-      }
-    }
-    return syms.filter((v, i, a) => a.indexOf(v) === i).join(",");
-  }, [wl, active, set.cols.ext]);
-  const extSymsKeyRef = useRef(extSymsKey);
-  extSymsKeyRef.current = extSymsKey;
-  const extAliveRef = useRef(true);
-  const pollExtQuotes = useCallback(() => {
-    const key = extSymsKeyRef.current;
-    if (!key) return;
-    fetch(`/api/ext-quote?syms=${encodeURIComponent(key)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (!extAliveRef.current || !d?.quotes) return;
-        setExtQuotes((prev) => ({ ...prev, ...d.quotes }));
-      })
-      .catch(() => {});
-  }, []);
-  useEffect(() => {
-    extAliveRef.current = true;
-    const id = setInterval(pollExtQuotes, 30_000);
-    return () => { extAliveRef.current = false; clearInterval(id); };
-  }, [pollExtQuotes]);
-  useEffect(() => {
-    if (!extSymsKey) return;
-    const id = setTimeout(pollExtQuotes, 500);
-    return () => clearTimeout(id);
-  }, [extSymsKey, pollExtQuotes]);
-
   useEffect(() => { fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || [])).catch(() => {}); }, []);
   useEffect(() => { const open = () => setCopilot(true); window.addEventListener("mm:copilot", open); try { if (new URLSearchParams(window.location.search).get("ai") === "1") setCopilot(true); } catch {} return () => window.removeEventListener("mm:copilot", open); }, []);
   // shallow deep-link: ?pane=<page> opens the MegaPane on that page (MegaPane keeps the URL in sync
@@ -778,7 +758,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // for singles, summed EOD/live composite quote for composites.
   const paneRows = useMemo(() => {
     return panes.map((sym) => {
-      if (!isComposite(sym)) return man?.symbols?.[sym] as { col?: string; last?: number; chg?: number } | undefined;
+      if (!isComposite(sym)) return mergeLive(man?.symbols?.[sym], quotes[sym]);
       const legs = parseComposite(sym) ?? [];
       if (!legs.length) return undefined;
       const legQuotes: Record<string, { last?: number; prevClose?: number } | null> = {};
@@ -827,15 +807,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     };
   }, [intel, m?.verdict]);
   // live quote (China/HK) wins over the WS tick and the manifest EOD row for both price and % change
-  // AH semantics: when the hub emits `close` (official EOD) use it as the primary display price.
-  // The `last` field may be a delayed AH print; expose it as a secondary line when it differs.
+  // The hub guarantees that `last` is regular-session-only. `close` becomes
+  // available when the authoritative daily bar rolls and may correct that value.
   const officialClose = liveQuote?.close as number | undefined;
-  const ahPrint = liveQuote?.afterHours as number | undefined;
-  // AH % change vs the official close (shown alongside ahPrint in the secondary line).
-  const ahChg: number | null =
-    ahPrint != null && officialClose != null && officialClose !== 0
-      ? ((ahPrint - officialClose) / officialClose) * 100
-      : null;
   // F2: for composites, use summed composite quote; for singles, use existing logic.
   const lastPx: number | undefined = activeIsComposite
     ? (compositeQ?.last ?? undefined)
@@ -856,6 +830,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     const isCrypto = m?.sec === "Crypto" || active.endsWith("-USD");
     function compute() {
       if (isCrypto) { setMktClosed(false); return; }
+      if (classify(active) === "us" && liveQuote?.marketSession) {
+        setMktClosed(liveQuote.marketSession !== "rth");
+        return;
+      }
       const mkt = m?.mkt ?? "";
       // Known per-market sessions (local open/close HH:MM + IANA timezone).
       // Unlisted markets: show no chip rather than wrong status.
@@ -891,7 +869,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     compute();
     const id = setInterval(compute, 60_000);
     return () => clearInterval(id);
-  }, [active, m?.sec, m?.mkt]);
+  }, [active, m?.sec, m?.mkt, liveQuote?.marketSession]);
   // ────────────────────────────────────────────────────────────────────────────
 
   async function addSymbol(sym: string) {
@@ -1166,7 +1144,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   function delLayout(id: string) { fetch(`/api/layouts?id=${id}`, { method: "DELETE" }).then(() => setLayouts((ls) => ls.filter((x) => x.id !== id))); }
 
   const colList = (): [string, string][] => { const a: [string, string][] = [["last", t("colLast")]]; if (set.cols.change) a.push(["change", t("colChgShort")]); if (set.cols.changePct) a.push(["changePct", t("colChgPctShort")]); if (set.cols.volume) a.push(["volume", t("colVolShort")]); if (set.cols.ext) a.push(["ext", t("colExtShort")]); return a; };
-  // item-26: ext column reads from extQuotes (separate poll); dash when closed or no ext print.
+  // The ext column reads the isolated extended-session fields from the same
+  // authoritative quote snapshot; show a dash when no extended print exists.
   const colVal = (sym: string, r: Row | undefined, key: string) => {
     if (!r) return "—";
     const u = r.chg >= 0;
@@ -1264,10 +1243,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           return (pane === "analyst" || pane === "forecast") ? "analyst" : "chart";
         })()}
       />
-      {/* ── mobile symbol bar (tap → search) ── */}
-      <div className="m-symbar" onClick={() => { setSeed(""); setSearchOpen(true); }}>
-        <span className="m-sym"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span><b>{active}</b><svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></span>
-        <span className="m-px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></span>
+      {/* ── mobile symbol bar: symbol search + desktop-parity compare access ── */}
+      <div className="m-symbar">
+        <button className="m-sym-main" onClick={() => { setSeed(""); setSearchMode("go"); setSearchOpen(true); }}>
+          <span className="m-sym"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span><b>{active}</b><svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></span>
+          <span className="m-px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></span>
+        </button>
+        <button className="m-compare" aria-label={t("compare")} onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}>
+          <svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>
+          {compare.filter((c) => c !== active).length > 0 && <i>{compare.filter((c) => c !== active).length}</i>}
+        </button>
       </div>
 
       <AppNav />
@@ -1306,6 +1291,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               </div>
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
+            <button className={`tbtn mobile-only${mobileDrawOpen ? " on" : ""}`} aria-pressed={mobileDrawOpen} onClick={() => setMobileDrawOpen((open) => !open)}>
+              <svg viewBox="0 0 24 24"><path d="M4 20l4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20zM14.5 7.5l3 3" /></svg>
+              {t("draw")}
+            </button>
             <div className="seg tool-adv" title={t("splitLayout")}>{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
             <button className={`tbtn tool-adv${isMtf ? " on" : ""}`} title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
             <button className={`tbtn dtm${dtm ? " on" : ""}`} title={t("dtmTip")} onClick={toggleDtm}><svg viewBox="0 0 24 24" style={{ width: 13, height: 13 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>{t("dtmBtn")}</button>
@@ -1397,31 +1386,48 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             onBack={() => setTableViewOpen(false)}
           />
         ) : view === "price" ? (
-          <div className="chart-body">
-            <DrawingSidebar
-              tool={tool}
-              magnet={magnet}
-              drawStyle={drawStyle}
-              onTool={(id) => setTool(id)}
-              onMagnet={() => setMagnet((mg) => !mg)}
-              onClear={() => detect("clearAll")}
-              onDrawStyle={(patch) => setDrawStyle((s) => ({ ...s, ...patch }))}
-            />
-            <div className="pane-grid" data-n={panes.length}>
-              {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm}
-                  onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
-                  onTableView={() => setTableViewOpen(true)}
-                  onObjectTree={() => setObjectTreeOpen((o) => !o)}
-                  lockedVLine={lockedVLine}
-                  onSetLockedVLine={(t2) => setLockedVLine(t2)}
-                  onIndRowsAt={(fn) => setIndRowsAt(() => fn)}
-                />
-              ))}
-            </div>
-            {/* D4: Object Tree right-rail panel */}
-            {objectTreeOpen && (
-              <ChartObjectTree
+          <>
+            {panes.length > 1 && (
+              <div className="mobile-pane-tabs" role="tablist" aria-label="Chart panes">
+                {panes.map((symbol, index) => (
+                  <button
+                    key={`${symbol}-${paneTfs[index] ?? "D"}-${index}`}
+                    className={index === activePane ? "on" : ""}
+                    role="tab"
+                    aria-selected={index === activePane}
+                    onClick={() => setActivePane(index)}
+                  >
+                    <b>{symbol}</b>
+                    <span>{paneTfs[index] ?? "D"}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className={`chart-body${mobileDrawOpen ? " mobile-draw-open" : ""}`}>
+              <DrawingSidebar
+                tool={tool}
+                magnet={magnet}
+                drawStyle={drawStyle}
+                onTool={(id) => setTool(id)}
+                onMagnet={() => setMagnet((mg) => !mg)}
+                onClear={() => detect("clearAll")}
+                onDrawStyle={(patch) => setDrawStyle((s) => ({ ...s, ...patch }))}
+              />
+              <div className="pane-grid" data-n={panes.length}>
+                {panes.map((sym, i) => (
+                  <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm}
+                    onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
+                    onTableView={() => setTableViewOpen(true)}
+                    onObjectTree={() => setObjectTreeOpen((o) => !o)}
+                    lockedVLine={lockedVLine}
+                    onSetLockedVLine={(t2) => setLockedVLine(t2)}
+                    onIndRowsAt={(fn) => setIndRowsAt(() => fn)}
+                  />
+                ))}
+              </div>
+              {/* D4: Object Tree right-rail panel */}
+              {objectTreeOpen && (
+                <ChartObjectTree
                 symbol={active}
                 entries={[
                   // overlay indicators (price pane)
@@ -1448,9 +1454,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 onEye={toggleHidden}
                 onRemove={removeInd}
                 onClose={() => setObjectTreeOpen(false)}
-              />
-            )}
-          </div>
+                />
+              )}
+            </div>
+          </>
         ) : (
           <StrategyTester symbol={active} key={"strat" + active} />
         )}
@@ -1540,7 +1547,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                         <SortableWlRow key={sym} sym={sym} className={`wl-row${sym === active ? " on" : ""}${set.tableView ? " tv" : ""}`} style={{ gridTemplateColumns: wlGrid, minWidth: wlMinW, height: set.tableView ? 32 : 46 }} onClick={() => pick(sym)} onMouseEnter={() => { if (!isCompSym) { prefetch(`/data/${sym}.json`); prefetch(`/data/${sym}.slice.json`); prefetch(`/data/${sym}.intel.json`); } }}>
                           {/* F1 flag slot — click to apply lastFlagColor; hover when already set shows palette */}
                           <WlFlagSlot sym={sym} color={flagColor} onSet={(c) => setFlag(sym, c)} onRemove={() => removeFlag(sym)} lastColor={lastFlagColor} />
-                          <div className="s">{set.logo && !isCompSym && <span className="ic" style={{ background: r?.col || "#888", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24 }}>{sym[0]}</span>}
+                          <div className="s">{set.logo && !isCompSym && <AssetLogo className="ic" symbol={sym} name={nm} market={r?.mkt || r?.sec} color={r?.col} size={set.tableView ? 18 : 24} />}
                             {set.logo && isCompSym && <span className="ic" style={{ background: "#2962ff", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24, fontSize: 7, fontWeight: 700, color: "#fff" }}>M</span>}
                             <span className="nm"><span className="tk">{isCompSym ? sym.split("+").slice(0, 2).join("+") + (sym.split("+").length > 2 ? "+…" : "") : primary}</span>{secondary && !isCompSym && <span className={set.tableView ? "tk-sub" : "sub"}>{secondary}</span>}</span></div>
                           {dataCols.map(([k]) => {
@@ -1565,7 +1572,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className="board detail-board">
             {/* detail-hd: flex-wrap 2-row — top: icon+name, bottom: big price + status chip */}
             <div className="detail-hd">
-              <span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
+              <AssetLogo className="ic" symbol={active} name={nameOf(m)} market={m?.mkt || m?.sec} color={m?.col || "#76b900"} size={26} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="nm">{nameOf(m) || active}</div>
                 <div className="ex">{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</div>
@@ -1579,34 +1586,26 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>
                 {mktClosed && <span className="mkt-closed">{t("marketClosed")}</span>}
               </div>
-              {/* item-25: Overnight / extended-hours secondary price block (TV parity).
-                  Shown ONLY when market is closed and we have an ext print.
-                  Sources in priority order:
-                    1. Hub-emitted afterHours field on the live quote (existing leg).
-                    2. ext-quote poll result from /api/ext-quote (Yahoo grey fallback).
-                  Disappears at market open (mktClosed gate) — TV's "Overnight via BOATS" mechanic.
-                  We label by our actual source, never a borrowed brand. */}
+              {/* Separate pre/post/overnight quote. It disappears at the open,
+                  while the primary price remains the regular-session close. */}
               {(() => {
                 if (!mktClosed) return null;
-                // Prefer hub afterHours print; fall back to ext-quote poll
-                const hubExt = ahPrint != null && ahPrint !== officialClose ? {
-                  price: ahPrint,
-                  chg: ahChg,
-                  ts: null as number | null,
-                  source: "hub",
+                const q = !isComposite(active) && classify(active) === "us" ? liveQuote : null;
+                const extData = q && typeof q.extPrice === "number" ? {
+                  price: q.extPrice as number,
+                  chg: typeof q.extChg === "number" ? q.extChg as number : null,
+                  ts: typeof q.extTs === "number" ? q.extTs as number : null,
+                  session: q.extSession as "pre" | "post" | "overnight" | undefined,
+                  basis: q.extBasis as string | undefined,
                 } : null;
-                const pollExt = !isComposite(active) && classify(active) === "us"
-                  ? extQuotes[active]
-                  : null;
-                const extData = hubExt ?? (pollExt ? {
-                  price: pollExt.extPrice,
-                  chg: pollExt.extChg,
-                  ts: pollExt.extTs,
-                  source: "ext-quote",
-                } : null);
                 if (!extData) return null;
-                const { price, chg, ts } = extData;
+                const { price, chg, ts, session, basis } = extData;
                 const eu = (chg ?? 0) >= 0;
+                const sessionLabel = session === "pre"
+                  ? t("preMarket")
+                  : session === "post"
+                    ? t("afterHours")
+                    : t("overnight");
                 const tsStr = ts
                   ? new Date(ts * 1000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
                   : null;
@@ -1621,7 +1620,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                       )}
                     </div>
                     <div className="ah-meta">
-                      <span>{t("overnight")}</span>
+                      <span>{sessionLabel}</span>
+                      {basis === "DELAYED_15M" && <span> · {t("delayed15mShort")}</span>}
                       {tsStr && <span> · {t("extLastUpdate").replace("{time}", tsStr)}</span>}
                     </div>
                   </div>
@@ -1644,6 +1644,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
           </div>
         </div>
+        <a className="logo-attribution" href="https://logo.dev" target="_blank" rel="noopener">Logos provided by Logo.dev</a>
       </aside>
 
       <div className="ticker">
@@ -1750,10 +1751,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   );
 }
 
-// ── F1 watchlist flag slot ─────────────────────────────────────────────────────
-// A 4px wide left-edge band per row. Click unflagged → apply lastColor. Click flagged → toggle palette pop (re-click or click-outside to close).
+// ── F1 watchlist flag ribbon ───────────────────────────────────────────────────
+// A compact TradingView-style ribbon lives on the row's left edge. Clicking it
+// opens the palette without changing the row; selecting a color applies the flag.
 // Note: useState/useEffect/useRef are already imported at the top of this module — reuse them directly.
-function WlFlagSlot({ color, onSet, onRemove, lastColor }: { sym: string; color?: string; onSet: (c: string) => void; onRemove: () => void; lastColor: string }) {
+function WlFlagSlot({ sym, color, onSet, onRemove, lastColor }: { sym: string; color?: string; onSet: (c: string) => void; onRemove: () => void; lastColor: string }) {
   const [popOpen, setPopOpen] = useState(false);
   const t = useT();
   const PAL = FLAG_COLORS;
@@ -1765,37 +1767,43 @@ function WlFlagSlot({ color, onSet, onRemove, lastColor }: { sym: string; color?
     window.addEventListener("click", h);
     return () => window.removeEventListener("click", h);
   }, [popOpen]);
-  if (color) {
-    return (
-      <span
-        className="wl-flag-slot wl-flag-slot--set"
-        style={{ background: color }}
-        title={t("flagSetColor")}
+
+  return (
+    <span className={`wl-flag-control${popOpen ? " is-open" : ""}`} onPointerDown={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        className={`wl-flag-trigger${color ? " is-set" : ""}`}
+        title={color ? t("flagSetColor") : t("flagAdd")}
+        aria-label={`${color ? t("flagSetColor") : t("flagAdd")} ${sym}`}
+        aria-expanded={popOpen}
         onClick={(e) => { e.stopPropagation(); setPopOpen((v) => !v); }}
       >
-        {popOpen && (
-          <span className="wl-flag-pop" onClick={(e) => e.stopPropagation()}>
-            {PAL.map((c) => (
-              <span
-                key={c}
-                className={`wl-flag-dot${c === color ? " wl-flag-dot--sel" : ""}`}
-                style={{ background: c, color: c }}
-                onClick={(e) => { e.stopPropagation(); onSet(c); setPopOpen(false); }}
-              />
-            ))}
-            <span className="wl-flag-rm" title={t("flagRemove")} onClick={(e) => { e.stopPropagation(); onRemove(); setPopOpen(false); }}>
-              <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg>
-            </span>
-          </span>
-        )}
-      </span>
-    );
-  }
-  return (
-    <span
-      className="wl-flag-slot wl-flag-slot--empty"
-      title={t("flagAdd")}
-      onClick={(e) => { e.stopPropagation(); onSet(lastColor); }}
-    />
+        <span className="wl-flag-ribbon" style={color ? { background: color } : undefined} />
+      </button>
+      {popOpen && (
+        <span className="wl-flag-pop" role="menu" aria-label={t("flagSetColor")} onClick={(e) => e.stopPropagation()}>
+          {PAL.map((c, index) => (
+            <button
+              type="button"
+              key={c}
+              role="menuitemradio"
+              aria-checked={c === color}
+              aria-label={`${t("flagSetColor")} ${index + 1}`}
+              className={`wl-flag-dot${c === color ? " wl-flag-dot--sel" : ""}${!color && c === lastColor ? " wl-flag-dot--last" : ""}`}
+              style={{ background: c, color: c }}
+              onClick={(e) => { e.stopPropagation(); onSet(c); setPopOpen(false); }}
+            />
+          ))}
+          {color && (
+            <>
+              <span className="wl-flag-sep" aria-hidden="true" />
+              <button type="button" className="wl-flag-rm" title={t("flagRemove")} aria-label={`${t("flagRemove")} ${sym}`} onClick={(e) => { e.stopPropagation(); onRemove(); setPopOpen(false); }}>
+                <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+              </button>
+            </>
+          )}
+        </span>
+      )}
+    </span>
   );
 }

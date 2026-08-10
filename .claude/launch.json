@@ -2,13 +2,331 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "terminal-wt-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/ui-institutional-overhaul/terminal",
+      "port": 3007,
+      "autoPort": true,
+      "env": {
+        "PORT": "3007",
+        "FLOW_FIXTURE": "1",
+        "NW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
       "name": "terminal-flow",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "cwd": "terminal",
       "port": 3000,
       "env": {
         "FLOW_FIXTURE": "1"
+      }
+    },
+    {
+      "name": "pass4-i-fixture",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3018"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/pass4-i-ui/terminal",
+      "port": 3018,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass5-q-perf-prod",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "start",
+        "--",
+        "-p",
+        "3025"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/pass5-q-perf/terminal",
+      "port": 3025,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass5-p-prices",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3020"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/pass5-p-prices/terminal",
+      "port": 3020,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass6-p0",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "-p",
+        "3022"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/pass6-p0/terminal",
+      "port": 3022
+    },
+    {
+      "name": "pass6-p1",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3023"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/pass6-p1/terminal",
+      "port": 3023,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass6-boot-prod",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "start",
+        "--",
+        "-p",
+        "3028"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/pass6-boot/terminal",
+      "port": 3028,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass6-p2",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3026"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/pass6-p2/terminal",
+      "port": 3026,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass6-p6",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3033"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/pass6-p6/terminal",
+      "port": 3033,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass6-p7",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3034"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/pass6-p7/terminal",
+      "port": 3034,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass6-p4a",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3036"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/pass6-p4a/terminal",
+      "port": 3036,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "techlab-w5",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3002"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/techlab-w5-dt/terminal",
+      "port": 3002,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "premium-suites",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3040"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/premium-suites/terminal",
+      "port": 3040,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "r010-gexdates",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3244"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/keen-easley-a4c22b/terminal",
+      "port": 3244,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "r3-structure",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3246"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/hungry-galileo-053c52/terminal",
+      "port": 3246,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "msc-r0",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3251"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/options-analytics-platform-rebuild-5817fe/terminal",
+      "port": 3251,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "NW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "shandong-verdict",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3262"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/shandong-gold-signal-blocking-2147c5/terminal",
+      "port": 3262,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "NW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "tab-seed",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3265"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/determined-pascal-40b3f9/terminal",
+      "port": 3265,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "NW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
       }
     }
   ]

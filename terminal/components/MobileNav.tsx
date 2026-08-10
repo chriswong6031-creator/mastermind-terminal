@@ -1,6 +1,6 @@
 "use client";
-import { useState } from "react";
-import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { BrandLockup, BrandMark } from "@/components/BrandMark";
 import { TOP, Glyph as NavGlyph } from "@/components/AppNav";
@@ -44,7 +44,10 @@ export default function MobileNav({
   isTerminal = false,
 }: MobileNavProps) {
   const [drawer, setDrawer] = useState(false);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const navPath = usePathname();
+  const router = useRouter();
   const t = useT();
 
   const derivedKey = activeKeyProp ?? (
@@ -58,20 +61,46 @@ export default function MobileNav({
   );
 
   const handleAI = () => {
-    setDrawer(false);
+    closeDrawer();
     if (onOpenCopilot) {
       onOpenCopilot();
     } else {
-      window.location.href = "/terminal?ai=1";
+      router.push("/terminal?ai=1");
     }
   };
 
   const handleAnalystClick = () => {
-    setDrawer(false);
+    closeDrawer();
     if (isTerminal) {
       window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "analyst" }));
     }
   };
+
+  const openDrawer = () => {
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setDrawer(true);
+  };
+
+  const closeDrawer = () => setDrawer(false);
+
+  useEffect(() => {
+    if (!drawer) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusTimer = window.setTimeout(() => closeRef.current?.focus(), 0);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeDrawer();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+      returnFocusRef.current?.focus();
+    };
+  }, [drawer]);
+
+  const quickItems = TOP.filter((item) => ["chart", "analyst", "screener", "portfolio"].includes(item.k));
 
   return (
     <>
@@ -85,14 +114,14 @@ export default function MobileNav({
             </button>
           )
           : (
-            <button className="m-ic" onClick={() => setDrawer(true)} aria-label="Menu">
+            <button className="m-ic" onClick={openDrawer} aria-label="Menu" aria-expanded={drawer} aria-controls="mobile-navigation-drawer">
               <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" /></svg>
             </button>
           )}
         <span className="m-brand"><BrandMark size={22} /><b>MASTERMIND</b></span>
         <div className="m-right">
           {fromMacro && (
-            <button className="m-ic" onClick={() => setDrawer(true)} aria-label="Menu">
+            <button className="m-ic" onClick={openDrawer} aria-label="Menu" aria-expanded={drawer} aria-controls="mobile-navigation-drawer">
               <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" /></svg>
             </button>
           )}
@@ -108,13 +137,26 @@ export default function MobileNav({
       {/* ── drawer scrim ── */}
       <div
         className={`m-drawer-scrim${drawer ? " open" : ""}`}
-        onClick={() => setDrawer(false)}
+        onClick={closeDrawer}
+        aria-hidden="true"
       />
 
       {/* ── slide-in drawer ── */}
-      <div className={`m-drawer${drawer ? " open" : ""}`}>
-        <div className="m-drawer-h"><BrandLockup /></div>
-        <nav className="m-nav">
+      <div
+        id="mobile-navigation-drawer"
+        className={`m-drawer${drawer ? " open" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Navigation"
+        aria-hidden={!drawer}
+      >
+        <div className="m-drawer-h">
+          <BrandLockup />
+          <button ref={closeRef} className="m-drawer-close" onClick={closeDrawer} aria-label="Close menu">
+            <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+        <nav className="m-nav" aria-label="Mobile primary">
           {TOP.map((it) => {
             const isAnalyst = it.k === "analyst";
             const on = it.k === derivedKey;
@@ -125,6 +167,7 @@ export default function MobileNav({
                   href={it.href}
                   className={on ? "on" : ""}
                   onClick={handleAnalystClick}
+                  aria-current={on ? "page" : undefined}
                 >
                   <NavGlyph k={it.k} />
                   {t(it.k, it.label)}
@@ -136,7 +179,8 @@ export default function MobileNav({
                 key={it.k}
                 href={it.href}
                 className={on ? "on" : ""}
-                onClick={() => setDrawer(false)}
+                onClick={closeDrawer}
+                aria-current={on ? "page" : undefined}
               >
                 <NavGlyph k={it.k} />
                 {t(it.k, it.label)}
@@ -152,6 +196,29 @@ export default function MobileNav({
         </nav>
         <div className="m-drawer-ft"><SettingsMenu email={email} /></div>
       </div>
+
+      {/* Native-app-style quick navigation; the full inventory remains in More. */}
+      <nav className="mobile-bottom-nav" aria-label="Quick navigation">
+        {quickItems.map((it) => {
+          const on = it.k === derivedKey;
+          return (
+            <Link
+              key={it.k}
+              href={it.href}
+              className={on ? "on" : ""}
+              onClick={it.k === "analyst" && isTerminal ? handleAnalystClick : undefined}
+              aria-current={on ? "page" : undefined}
+            >
+              <NavGlyph k={it.k} />
+              <span>{t(it.k, it.label)}</span>
+            </Link>
+          );
+        })}
+        <button onClick={openDrawer} aria-label="More navigation" aria-expanded={drawer} aria-controls="mobile-navigation-drawer">
+          <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg>
+          <span>{t("more")}</span>
+        </button>
+      </nav>
     </>
   );
 }

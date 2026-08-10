@@ -5,7 +5,7 @@
 
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
-const { Store, AH_MATERIALITY_THRESHOLD } = require("../lib/store");
+const { Store } = require("../lib/store");
 
 // ── helpers ──
 
@@ -141,19 +141,27 @@ describe("close-leak regression — two-session boundary", () => {
       "close MUST be set from anchor when anchor.close is present (post-close)");
   });
 
-  it("getQuotes: afterHours emitted only when live differs materially from close", () => {
-    const ahLast = DAY_N_CLOSE + AH_MATERIALITY_THRESHOLD + 0.01; // 202.78 + 0.02 = 202.80
+  it("getQuotes: extended print remains separate from the official close and regular last", () => {
+    const ahLast = 203.80;
     const storeAH = makeStore(new Map([
       ["NVDA", { prevClose: DAY_N_PREVCLOSE, close: DAY_N_CLOSE, anchor_source: "daily_file" }],
     ]));
     storeAH.quotes.set("NVDA", {
-      sym: "NVDA", last: ahLast, market: "us",
+      sym: "NVDA", last: DAY_N_CLOSE, market: "us",
       prevClose: DAY_N_PREVCLOSE, chg: -0.50, ts: Math.floor(NOW_DAY_N_AH / 1000) - 10,
       anchor_source: "daily_file",
     });
-    const result = storeAH.getQuotes(["NVDA"], NOW_DAY_N_AH);
-    assert.equal(result.NVDA.afterHours, ahLast,
-      "afterHours should be the live AH print when it differs materially from close");
+    const extFeed = {
+      getExt() {
+        return { extPrice: ahLast, extChg: 0.503, extTs: Math.floor(NOW_DAY_N_AH / 1000), extSession: "post", extSource: "test", extBasis: "DELAYED_15M" };
+      },
+    };
+    const result = storeAH.getQuotes(["NVDA"], NOW_DAY_N_AH, extFeed);
+    assert.equal(result.NVDA.last, DAY_N_CLOSE, "regular last must remain the official close");
+    assert.equal(result.NVDA.close, DAY_N_CLOSE, "official close must remain independently visible");
+    assert.equal(result.NVDA.extPrice, ahLast, "extended print belongs in the ext namespace");
+    assert.equal(result.NVDA.extSession, "post");
+    assert.equal(result.NVDA.afterHours, undefined, "legacy afterHours overlay must never be emitted");
   });
 });
 

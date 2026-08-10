@@ -15,7 +15,7 @@ import {
   createChart, CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries, BaselineSeries,
   createSeriesMarkers, type ISeriesMarkersPluginApi,
   createTextWatermark,
-  CrosshairMode, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
+  CrosshairMode, ColorType, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
 } from "lightweight-charts";
 import { runPine, type RunResult } from "@/lib/pine-engine";
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
@@ -32,14 +32,99 @@ import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/Cha
 import DayStatsStrip from "@/components/DayStatsStrip";
 import { tPlain } from "@/lib/i18n";
 import { listTemplates } from "@/lib/chartTemplates";
+import { buildEventMarkers, parseChartEvents, type ChartEvent } from "@/lib/chartEvents";
+import type { ChartSettings } from "@/components/ChartFrameBar";
+import { assetInitial, assetLogoPath } from "@/lib/assetLogos";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
 export type DetectCmd = { kind: "trendlines" | "fib" | "sr" | "mtfa" | "clear" | "clearAll"; nonce: number } | null;
 
+function formatTick(time: any, settings: Partial<ChartSettings>): string {
+  const numeric = typeof time === "number" || (typeof time === "string" && /^\d+$/.test(time));
+  const date = numeric
+    ? new Date(Number(time) * 1000)
+    : typeof time === "string"
+      ? new Date(`${time.slice(0, 10)}T00:00:00Z`)
+      : new Date(Date.UTC(time?.year ?? 1970, (time?.month ?? 1) - 1, time?.day ?? 1));
+  if (!Number.isFinite(date.getTime())) return String(time ?? "");
+
+  const local = settings.timezone === "local";
+  const get = (part: "Hours" | "Minutes" | "Date" | "Month" | "FullYear" | "Day") =>
+    (date as any)[`get${local ? "" : "UTC"}${part}`]() as number;
+  if (numeric) {
+    let hour = get("Hours");
+    const minute = String(get("Minutes")).padStart(2, "0");
+    if (settings.hourFormat === "12") {
+      const suffix = hour >= 12 ? "PM" : "AM";
+      hour = hour % 12 || 12;
+      return `${hour}:${minute} ${suffix}`;
+    }
+    return `${String(hour).padStart(2, "0")}:${minute}`;
+  }
+  const year = get("FullYear");
+  const month = String(get("Month") + 1).padStart(2, "0");
+  const day = String(get("Date")).padStart(2, "0");
+  const formatted = settings.dateFormat === "dd-mm-yyyy" ? `${day}-${month}-${year}`
+    : settings.dateFormat === "mm-dd-yyyy" ? `${month}-${day}-${year}`
+      : settings.dateFormat === "yyyy-mm-dd" ? `${year}-${month}-${day}`
+        : `${month}/${day}/${String(year).slice(-2)}`;
+  if (settings.dayOfWeekLabels === false) return formatted;
+  const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return `${weekdays[get("Day")]} ${formatted}`;
+}
+
+function EventPopover({ popup, symbol, onClose }: {
+  popup: { event: ChartEvent; x: number; y: number };
+  symbol: string;
+  onClose: () => void;
+}) {
+  const e = popup.event;
+  const accent = e.kind === "earnings" ? (e.surprisePct != null && e.surprisePct < 0 ? "#f23645" : "#00a98f") : e.kind === "dividend" ? "#2962ff" : "#ff9800";
+  const number = (value: number | null | undefined) => value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 3 });
+  const money = (value: number | null | undefined) => value == null ? "—" : value.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 3 });
+  const compact = (value: number | null | undefined) => value == null ? "—" : value.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 2 });
+  const openPane = () => {
+    window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: e.kind === "earnings" ? "earnings" : e.kind === "dividend" ? "dividends" : "statistics" }));
+    onClose();
+  };
+  return <div className="chart-event-pop" style={{ left: popup.x, top: popup.y, borderLeftColor: accent }} onPointerDown={(ev) => ev.stopPropagation()}>
+    <button className="chart-event-close" onClick={onClose} aria-label="Close event details">×</button>
+    <div className="chart-event-title"><span style={{ color: accent }}>{e.kind === "earnings" ? "E" : e.kind === "dividend" ? "D" : "S"}</span>{e.title}</div>
+    <dl>
+      <dt>Date</dt><dd>{e.date}</dd>
+      {e.period && <><dt>Period ending</dt><dd>{e.period}</dd></>}
+      {e.kind === "earnings" && <>
+        <dt className="chart-event-group">Earnings</dt><dd />
+        <dt>Reported</dt><dd>{number(e.epsActual)}</dd>
+        <dt>Estimate</dt><dd>{number(e.epsEstimate)}</dd>
+        <dt>Surprise</dt><dd style={{ color: accent }}>{e.surprisePct == null ? "—" : `${e.surprisePct > 0 ? "+" : ""}${e.surprisePct.toFixed(2)}%`}</dd>
+        {(e.revenueActual != null || e.revenueEstimate != null) && <>
+          <dt className="chart-event-group">Revenue</dt><dd />
+          <dt>Reported</dt><dd>{compact(e.revenueActual)}</dd>
+          <dt>Estimate</dt><dd>{compact(e.revenueEstimate)}</dd>
+        </>}
+      </>}
+      {e.kind === "dividend" && <>
+        <dt>Amount</dt><dd>{money(e.amount)}</dd>
+        <dt>Payment date</dt><dd>{e.paymentDate || "—"}</dd>
+      </>}
+      {e.kind === "split" && <><dt>Ratio</dt><dd>{e.ratio || "—"}</dd></>}
+    </dl>
+    <button className="chart-event-more" onClick={openPane}>More {symbol} {e.kind === "split" ? "financials" : e.kind === "dividend" ? "dividends" : "earnings"}</button>
+  </div>;
+}
+
 // Optional live/delayed snapshot threaded ChartPane → ChartPanel for the R11 live-bar splice.
 // `ts` is a unix epoch in SECONDS (from the quote hub); `basis` gates whether we splice at all.
-export type LiveQuote = { last?: number; open?: number; high?: number; low?: number; vol?: number; ts?: number; basis?: string } | null | undefined;
+export type LiveQuote = {
+  last?: number; open?: number; high?: number; low?: number; vol?: number;
+  ts?: number; basis?: string; market?: Market;
+  marketSession?: "pre" | "rth" | "post" | "overnight";
+  regularSessionDate?: string; regularSession?: "rth" | "closed";
+  extPrice?: number; extChg?: number; extTs?: number;
+  extSession?: "pre" | "post" | "overnight"; extSource?: string; extBasis?: string;
+} | null | undefined;
 
 // Which markets can show intraday TFs (R12): everyone but Canadian `.TO` (no Polygon intraday leg).
 // Exported so the shell can gate its TF picker per active symbol.
@@ -228,14 +313,14 @@ const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
-  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false }:
+  instrumentName, instrumentMarket, instrumentColor, onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
     tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
-    chartSettings?: { mode?: number; invertScale?: boolean; scaleLeft?: boolean; autoScale?: boolean; priceLineVisible?: boolean; lastValueVisible?: boolean;
-      gridHVisible?: boolean; gridVVisible?: boolean;
-      candleUpColor?: string; candleDownColor?: string; candleUpBorder?: string; candleDownBorder?: string; candleUpWick?: string; candleDownWick?: string;
-      showWatermark?: boolean; showOHLC?: boolean; showBarChange?: boolean; showSymbolName?: boolean; };
+    chartSettings?: Partial<ChartSettings>;
+    instrumentName?: string;
+    instrumentMarket?: string;
+    instrumentColor?: string;
     onChartApi?: (api: IChartApi | null) => void; extHours?: boolean;
     onAddAlert?: (price: number) => void;
     onTableView?: () => void;
@@ -262,6 +347,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const pineSeriesRef = useRef<Map<string, ISeriesApi<any>[]>>(new Map());   // scriptId → its series (all panes)
   const pineMarkersRef = useRef<Map<string, ISeriesMarkersPluginApi<any>>>(new Map()); // scriptId → its markers plugin
   const ttmsqMarkersRef = useRef<ISeriesMarkersPluginApi<any> | null>(null); // ttmsq squeeze-tier dots plugin
+  const eventMarkersRef = useRef<ISeriesMarkersPluginApi<any> | null>(null);
+  const eventByIdRef = useRef<Map<string, ChartEvent>>(new Map());
+  const fundRef = useRef<any>(null);
   const pinePaneMapRef = useRef<Map<string, number>>(new Map());             // sub-pane scriptId → pane index (overlay scripts absent)
   const pineErrRef = useRef<Map<string, string>>(new Map());                 // scriptId → error text (surfaced in the legend)
   const pineCacheRef = useRef<Map<string, { key: string; result: RunResult | null; error: string | null }>>(new Map()); // memo: scriptId → last run
@@ -316,6 +404,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const panesMeta = useRef<{ key: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[]>([]);
   // collapse/maximize/resize state, keyed by pane key — survives reorder + indicator churn
   const paneCtl = useRef<{ collapsed: Set<string>; maximized: string | null; normal: Map<string, number> }>({ collapsed: new Set(), maximized: null, normal: new Map() });
+  // ResizeObserver also sees our own pane sizing. Keep those callbacks from overwriting the user's
+  // normal stretch factors while a collapse/restore/maximize layout is settling.
+  const paneProgrammaticResizeUntilRef = useRef(0);
   const hiddenRef = useRef<Set<string>>(hidden); hiddenRef.current = hidden;
   const indParamsRef = useRef<Record<string, any>>(indParams); indParamsRef.current = indParams;
   const wrapElRef = useRef<HTMLElement | null>(null);
@@ -327,6 +418,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [legendOpen, setLegendOpen] = useState(true);
   const [showDetail, setShowDetail] = useState(true);   // GC v2: early-dots + warnings overlay toggle
+  const [eventPopup, setEventPopup] = useState<{ event: ChartEvent; x: number; y: number } | null>(null);
   // DayStatsStrip: snapshot of bars + dailyBars for the strip (updated when intraday data loads)
   // Using state so React re-renders the strip when data changes; refs are not enough.
   const [stripBars, setStripBars] = useState<Bar[]>([]);
@@ -358,6 +450,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const tagTimerRef = useRef<number | null>(null);          // 1s ticker so the bar-close countdown stays live
   const watermarkPluginRef = useRef<{ applyOptions: (opts: Record<string, any>) => void } | null>(null); // v5 text watermark plugin
   const lastValueVisibleRef = useRef<boolean>(true);        // mirrors chartSettings.lastValueVisible; gates the custom priceTag
+  const countdownVisibleRef = useRef<boolean>(true);
+  const chartSettingsRef = useRef<Partial<ChartSettings>>(chartSettings ?? {});
+  const instrumentNameRef = useRef<string>(instrumentName || symbol);
+  const instrumentMarketRef = useRef<string>(instrumentMarket || "");
+  const instrumentColorRef = useRef<string>(instrumentColor || "#64748b");
   // status-line visibility knobs (chartSettings.showOHLC/showBarChange/showSymbolName)
   const showOHLCRef = useRef<boolean>(true);
   const showBarChangeRef = useRef<boolean>(true);
@@ -375,6 +472,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Price lines created on the price series for slevels / pivots — must be removed explicitly on clear.
   // Keyed per indicator so removing ONE of slevels/pivots doesn't clear the survivor's lines.
   const indPriceLinesRef = useRef<Map<string, IPriceLine[]>>(new Map());
+  const extendedPriceLineRef = useRef<IPriceLine | null>(null);
   const pushIndPriceLine = (key: string, pl: IPriceLine) => {
     const m = indPriceLinesRef.current;
     if (!m.has(key)) m.set(key, []);
@@ -404,6 +502,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
   chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol;
   lastValueVisibleRef.current = chartSettings?.lastValueVisible !== false;
+  countdownVisibleRef.current = chartSettings?.countdownVisible !== false;
+  chartSettingsRef.current = chartSettings ?? {};
+  instrumentNameRef.current = instrumentName || symbol;
+  instrumentMarketRef.current = instrumentMarket || "";
+  instrumentColorRef.current = instrumentColor || "#64748b";
   showOHLCRef.current = chartSettings?.showOHLC !== false;
   showBarChangeRef.current = chartSettings?.showBarChange !== false;
   showSymbolNameRef.current = chartSettings?.showSymbolName !== false;
@@ -423,16 +526,41 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const priceData = (rows: Bar[]) => {
     const display = chartTypeRef.current === "heikin" ? heikin(rows) : rows;
     if (chartTypeRef.current === "line" || chartTypeRef.current === "area") return display.map((r) => ({ time: r.time, value: r.c }));
-    return display.map((r) => ({ time: r.time, open: r.o, high: r.h, low: r.l, close: r.c }));
+    const byPreviousClose = chartSettingsRef.current.colorBarsPrevClose && chartTypeRef.current !== "bars";
+    return display.map((r, index) => {
+      const point: Record<string, any> = { time: r.time, open: r.o, high: r.h, low: r.l, close: r.c };
+      if (byPreviousClose) {
+        const previous = display[index - 1]?.c ?? r.o;
+        const up = r.c >= previous;
+        const s = chartSettingsRef.current;
+        const color = up ? (s.candleUpColor || tokensRef.current.up) : (s.candleDownColor || tokensRef.current.down);
+        point.color = s.candleBodyVisible === false ? "rgba(0,0,0,0)" : color;
+        point.borderColor = up ? (s.candleUpBorder || color) : (s.candleDownBorder || color);
+        point.wickColor = up ? (s.candleUpWick || color) : (s.candleDownWick || color);
+      }
+      return point;
+    });
   };
 
   // Create the price series (removed+re-added when the chartType actually changes).
   const addPriceSeries = (chart: IChartApi, t: Tokens) => {
     const pf = priceFmt();
-    if (chartTypeRef.current === "line") return chart.addSeries(LineSeries, { color: t.brand2, lineWidth: 2, priceFormat: pf, lastValueVisible: false, priceLineVisible: true }, 0);
-    if (chartTypeRef.current === "area") return chart.addSeries(AreaSeries, { lineColor: t.brand2, topColor: "rgba(41,98,255,.30)", bottomColor: "rgba(41,98,255,.02)", lineWidth: 2, priceFormat: pf, lastValueVisible: false, priceLineVisible: true }, 0);
-    if (chartTypeRef.current === "bars") return chart.addSeries(BarSeries, { upColor: t.up, downColor: t.down, priceFormat: pf, lastValueVisible: false, priceLineVisible: true }, 0);
-    return chart.addSeries(CandlestickSeries, { upColor: t.up, downColor: t.down, wickUpColor: t.up, wickDownColor: t.down, borderVisible: false, priceFormat: pf, lastValueVisible: false, priceLineVisible: true }, 0);
+    const s = chartSettingsRef.current;
+    const common = { priceFormat: pf, lastValueVisible: false, priceLineVisible: s.priceLineVisible !== false };
+    if (chartTypeRef.current === "line") return chart.addSeries(LineSeries, { ...common, color: t.brand2, lineWidth: 2 }, 0);
+    if (chartTypeRef.current === "area") return chart.addSeries(AreaSeries, { ...common, lineColor: t.brand2, topColor: "rgba(41,98,255,.30)", bottomColor: "rgba(41,98,255,.02)", lineWidth: 2 }, 0);
+    if (chartTypeRef.current === "bars") return chart.addSeries(BarSeries, { ...common, upColor: s.candleUpColor || t.up, downColor: s.candleDownColor || t.down }, 0);
+    return chart.addSeries(CandlestickSeries, {
+      ...common,
+      upColor: s.candleBodyVisible === false ? "rgba(0,0,0,0)" : (s.candleUpColor || t.up),
+      downColor: s.candleBodyVisible === false ? "rgba(0,0,0,0)" : (s.candleDownColor || t.down),
+      wickUpColor: s.candleUpWick || s.candleUpColor || t.up,
+      wickDownColor: s.candleDownWick || s.candleDownColor || t.down,
+      borderUpColor: s.candleUpBorder || s.candleUpColor || t.up,
+      borderDownColor: s.candleDownBorder || s.candleDownColor || t.down,
+      borderVisible: s.candleBordersVisible !== false,
+      wickVisible: s.candleWicksVisible !== false,
+    }, 0);
   };
 
   // per-indicator params merged over the registry defaults (drives the Settings dialog + the math/style)
@@ -1000,15 +1128,26 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   };
 
   // ── pane sizing: collapse/maximize/normal, keyed by pane KEY so it survives indicator churn+reorder ──
+  // A collapsed pane is a real, fixed-height header bar: tall enough for its title and 28px action
+  // menu, while the series themselves are hidden by applyHidden(). A proportional near-zero stretch
+  // made the height vary with the chart and squeezed the plot into a distracting colored line.
+  const COLLAPSED_PANE_HEIGHT = 38;
   // applyStretch is the successor to the base's "price 3.4 / sub 1" normalize: same baseline, but it
   // also honors the collapsed set + the maximized pane (via paneCtl) and any user-dragged normal sizes.
   const applyStretch = () => {
     const ctl = paneCtl.current;
+    paneProgrammaticResizeUntilRef.current = performance.now() + 120;
     for (const m of panesMeta.current) {
       let s: number;
       if (ctl.maximized) s = m.key === ctl.maximized ? 1000 : 0.0001;
-      else s = ctl.collapsed.has(m.key) ? 0.06 : (ctl.normal.get(m.key) ?? (m.isPrice ? 3.4 : 1));
+      else s = ctl.normal.get(m.key) ?? (m.isPrice ? 3.4 : 1);
       try { m.pane.setStretchFactor(s); } catch {}
+    }
+    if (!ctl.maximized) {
+      for (const m of panesMeta.current) {
+        if (!ctl.collapsed.has(m.key)) continue;
+        try { m.pane.setHeight(COLLAPSED_PANE_HEIGHT); } catch {}
+      }
     }
   };
   // legacy call-site name kept: every builder path calls normalizeStretch(). It now rebuilds the pane
@@ -1017,7 +1156,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const normalizeStretch = () => { rebuildPaneMeta(); applyStretch(); applyHidden(); };
 
   // a genuine separator drag (normal mode only) becomes the new baseline; ignore programmatic sizing
-  const captureNormal = () => { const ctl = paneCtl.current; if (ctl.maximized) return; for (const m of panesMeta.current) { if (ctl.collapsed.has(m.key)) continue; try { ctl.normal.set(m.key, m.pane.getStretchFactor()); } catch {} } };
+  const captureNormal = () => {
+    const ctl = paneCtl.current;
+    if (ctl.maximized || performance.now() < paneProgrammaticResizeUntilRef.current) return;
+    for (const m of panesMeta.current) {
+      if (ctl.collapsed.has(m.key)) continue;
+      try { ctl.normal.set(m.key, m.pane.getStretchFactor()); } catch {}
+    }
+  };
 
   // Legend swatch color for a script = its first rendered series' color (best-effort), else grey.
   const pineColorOf = (arr?: ISeriesApi<any>[]): string => {
@@ -1119,9 +1265,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ── pane-control operations (read chart refs; safe to recreate every render) ──
   const keyOfPaneIndex = (pi: number) => { const m = panesMeta.current.find((x) => { try { return x.pane.paneIndex() === pi; } catch { return false; } }); return m?.key ?? null; };
   const measure = () => measureRef.current();
-  const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { ctl.maximized = key; ctl.collapsed.delete(key); } applyStretch(); requestAnimationFrame(measure); };
-  const doCollapse = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; ctl.maximized = null; if (ctl.collapsed.has(key)) ctl.collapsed.delete(key); else ctl.collapsed.add(key); applyStretch(); requestAnimationFrame(measure); };
-  const collapseAllPanes = () => { const ctl = paneCtl.current; ctl.maximized = null; const subs = panesMeta.current.filter((m) => !m.isPrice).map((m) => m.key); if (!subs.length) return; const all = subs.every((k) => ctl.collapsed.has(k)); if (all) subs.forEach((k) => ctl.collapsed.delete(k)); else subs.forEach((k) => ctl.collapsed.add(k)); applyStretch(); requestAnimationFrame(measure); };
+  const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { ctl.maximized = key; ctl.collapsed.delete(key); } applyStretch(); applyHidden(); requestAnimationFrame(measure); };
+  const doCollapse = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; ctl.maximized = null; if (ctl.collapsed.has(key)) ctl.collapsed.delete(key); else ctl.collapsed.add(key); applyStretch(); applyHidden(); requestAnimationFrame(measure); };
+  const collapseAllPanes = () => { const ctl = paneCtl.current; ctl.maximized = null; const subs = panesMeta.current.filter((m) => !m.isPrice).map((m) => m.key); if (!subs.length) return; const all = subs.every((k) => ctl.collapsed.has(k)); if (all) subs.forEach((k) => ctl.collapsed.delete(k)); else subs.forEach((k) => ctl.collapsed.add(k)); applyStretch(); applyHidden(); requestAnimationFrame(measure); };
   const doMove = (pi: number, dir: -1 | 1) => { const ch = chartRef.current; if (!ch) return; const tgt = pi + dir; let n = 1; try { n = ch.panes().length; } catch {} if (tgt < 0 || tgt >= n) return; try { ch.swapPanes(pi, tgt); } catch {} requestAnimationFrame(measure); };
   const canMoveUp = (pi: number) => pi > 0;
   const canMoveDown = (pi: number) => pi < paneLayoutRef.current.length - 1;
@@ -1135,16 +1281,18 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   };
   // flip series visibility (eye toggle + tf-visibility) WITHOUT a chart/series rebuild
   const applyHidden = () => {
-    const h = hiddenRef.current; const SB = indSeriesRef.current;
+    const h = hiddenRef.current; const SB = indSeriesRef.current; const ctl = paneCtl.current;
+    const paneContentVisible = (paneKey: string) =>
+      !ctl.collapsed.has(paneKey) && (ctl.maximized == null || ctl.maximized === paneKey);
     // rsi + stochrsi share the osc series list; toggle each series by which indicator it belongs to via its title
     for (const [k, arr] of SB) {
-      if (k === "osc") { for (const s of arr) { try { const ttl = ((s.options() as any)?.title || "").toUpperCase(); const own = ttl.includes("RSI") && !ttl.includes("%") ? "rsi" : "stochrsi"; s.applyOptions({ visible: !h.has(own) && tfVisible(own) } as any); } catch {} } continue; }
-      const vis = !h.has(k) && tfVisible(k); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} }
+      if (k === "osc") { for (const s of arr) { try { const ttl = ((s.options() as any)?.title || "").toUpperCase(); const own = ttl.includes("RSI") && !ttl.includes("%") ? "rsi" : "stochrsi"; s.applyOptions({ visible: paneContentVisible("osc") && !h.has(own) && tfVisible(own) } as any); } catch {} } continue; }
+      const vis = paneContentVisible(k) && !h.has(k) && tfVisible(k); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} }
     }
     // custom scripts: eye toggle by scriptId (no tf-visibility gating — scripts don't declare _vis)
-    for (const [id, arr] of pineSeriesRef.current) { const vis = !h.has(id); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} } }
+    for (const [id, arr] of pineSeriesRef.current) { const vis = paneContentVisible(pinePaneMapRef.current.has(id) ? pineKeyOf(id) : "__price__") && !h.has(id); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} } }
     // compare series: eye toggle by cmpKey(sym)
-    for (const [sym, s] of cmpSeriesRef.current) { try { s.applyOptions({ visible: !h.has(cmpKey(sym)) } as any); } catch {} }
+    for (const [sym, s] of cmpSeriesRef.current) { try { s.applyOptions({ visible: paneContentVisible("__price__") && !h.has(cmpKey(sym)) } as any); } catch {} }
   };
 
   // Remove EVERY tracked indicator series (price/compare/drawings survive). Used by the bounded rebuild.
@@ -1359,9 +1507,35 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const showBarChange = showBarChangeRef.current;
       const ch = last.c - prev.c, cp = (ch / prev.c) * 100, u = ch >= 0, f = (x: number) => x.toFixed(prec);
       let html = "";
-      if (showOHLC) html += `<span class="mut">O</span><b>${f(last.o)}</b> <span class="mut">H</span><b>${f(last.h)}</b> <span class="mut">L</span><b>${f(last.l)}</b> <span class="mut">C</span><b>${f(last.c)}</b>`;
-      if (showBarChange) { if (html) html += " "; html += `<b class="${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`; }
+      const statusSettings = chartSettingsRef.current;
+      const currentSymbol = symbolRef.current;
+      const displayName = instrumentNameRef.current || currentSymbol;
+      const titleMode = statusSettings.titleMode || "name";
+      const title = titleMode === "ticker"
+        ? currentSymbol
+        : titleMode === "both" && displayName !== currentSymbol
+          ? `${displayName} (${currentSymbol})`
+          : displayName;
+      let identityHtml = "";
+      if (statusSettings.showLogo !== false) {
+        const fallbackColor = /^#[0-9a-f]{3,8}$/i.test(instrumentColorRef.current) ? instrumentColorRef.current : "#64748b";
+        const logoSrc = assetLogoPath(currentSymbol, instrumentMarketRef.current);
+        identityHtml += `<span class="status-symbol-logo" style="--status-logo-fallback:${fallbackColor}"><span>${escH(assetInitial(currentSymbol))}</span>${logoSrc ? `<img src="${escH(logoSrc)}" alt="" referrerpolicy="origin">` : ""}</span>`;
+      }
+      if (showSymbolNameRef.current) {
+        const identity = [title, timeframeRef.current, instrumentMarketRef.current].filter(Boolean).map(escH).join(" · ");
+        const quoteBasis = liveQuoteRef.current?.basis;
+        identityHtml += `<b class="status-symbol-name">${identity}</b><i class="status-market-dot ${quoteBasis === "LIVE" ? "is-live" : quoteBasis === "DELAYED_15M" ? "is-delayed" : ""}"></i>`;
+      }
+      if (identityHtml) html += `<span class="status-identity">${identityHtml}</span>`;
+      let valuesHtml = "";
+      if (showOHLC) valuesHtml += `<span class="mut">O</span><b>${f(last.o)}</b><span class="mut">H</span><b>${f(last.h)}</b><span class="mut">L</span><b>${f(last.l)}</b><span class="mut">C</span><b>${f(last.c)}</b>`;
+      if (showBarChange) valuesHtml += `<b class="status-change ${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`;
+      if (statusSettings.showVolume) valuesHtml += `<span class="mut">Vol</span><b>${last.v.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 2 })}</b>`;
+      if (valuesHtml) html += `<span class="status-values">${valuesHtml}</span>`;
       statusRef.current.innerHTML = html;
+      const logoImage = statusRef.current.querySelector<HTMLImageElement>(".status-symbol-logo img");
+      logoImage?.addEventListener("error", () => { logoImage.hidden = true; }, { once: true });
     }
     // Gate oracle verdict text on whether the _oracle indicator is active. The chip's display:none
     // is controlled by oracleVisible in JSX; this guard prevents stale text from painting in the
@@ -1382,6 +1556,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (replayIdxRef.current != null) return;              // never splice under replay
     const q = liveQuoteRef.current;
     if (!q || q.last == null || !isFinite(q.last)) return;
+    // US extended prints live on a separate marker lane. Never create or patch
+    // a daily candle while the exchange is outside its regular session.
+    if (classify(symbol) === "us" && q.marketSession !== "rth") return;
     if (!SPLICE_BASES.has(q.basis || "")) return;          // EOD / missing basis → no splice
     const daily = dailyBarsRef.current; if (!daily.length) return;
     const tf = timeframeRef.current;
@@ -1427,6 +1604,77 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     renderTagRef.current?.();   // live-quote splice moved the last close → refresh the price/countdown tag now
   };
 
+  const clearExtendedPriceLine = () => {
+    const priceS = priceSeriesRef.current;
+    const line = extendedPriceLineRef.current;
+    if (priceS && line) { try { priceS.removePriceLine(line); } catch {} }
+    extendedPriceLineRef.current = null;
+  };
+
+  const clearEventMarkers = () => {
+    try { (eventMarkersRef.current as any)?.detach?.(); } catch {}
+    eventMarkersRef.current = null;
+    eventByIdRef.current = new Map();
+  };
+
+  const applyEventMarkers = (rows: Bar[]) => {
+    clearEventMarkers();
+    const priceS = priceSeriesRef.current;
+    const fund = fundRef.current;
+    if (!priceS || !fund || !rows.length) return;
+    const s = chartSettingsRef.current;
+    const events = parseChartEvents(fund, {
+      showEarnings: s.showEarnings !== false,
+      showDividends: s.showDividends !== false,
+      showSplits: s.showSplits !== false,
+    });
+    const built = buildEventMarkers(events, rows);
+    eventByIdRef.current = built.byId;
+    if (!built.markers.length) return;
+    try { eventMarkersRef.current = createSeriesMarkers(priceS, built.markers as any); } catch {}
+  };
+
+  const loadEventMarkers = async (sym: string, rows: Bar[], epoch: number) => {
+    try {
+      const fund = await getJSON(`/data/${encodeURIComponent(sym)}.fund.json`);
+      if (epochRef.current !== epoch || symbolRef.current !== sym) return;
+      fundRef.current = fund;
+      applyEventMarkers(rows);
+    } catch {
+      if (epochRef.current === epoch) { fundRef.current = null; clearEventMarkers(); }
+    }
+  };
+
+  // Daily+ OHLC stays regular-session-only. The newest pre/post/overnight
+  // print is represented by a separate TradingView-style dotted line and tag.
+  const applyExtendedPriceLine = () => {
+    clearExtendedPriceLine();
+    const priceS = priceSeriesRef.current;
+    const q = liveQuoteRef.current;
+    const s = chartSettingsRef.current;
+    if (!priceS || isIntradayRef.current || !q || classify(symbolRef.current) !== "us" || s.extendedLineVisible === false) return;
+    if (q.marketSession === "rth") return;
+    if (q.extPrice == null || !isFinite(q.extPrice)) return;
+    const session = q.extSession;
+    const title = session === "pre" ? "Pre" : session === "post" ? "AH" : "ON";
+    const color = session === "pre"
+      ? (s.preMarketColor || "#ff9800")
+      : session === "post"
+        ? (s.postMarketColor || "#2962ff")
+        : (s.overnightColor || "#9c27b0");
+    try {
+      extendedPriceLineRef.current = priceS.createPriceLine({
+        price: q.extPrice,
+        color,
+        lineWidth: 1,
+        lineStyle: 1,
+        lineVisible: true,
+        axisLabelVisible: true,
+        title,
+      } as any);
+    } catch {}
+  };
+
   // Apply the default view (recent ~240 window in normal mode; fit the slice in replay).
   const applyView = (rows: Bar[], replay: number | null) => {
     const chart = chartRef.current; if (!chart) return;
@@ -1445,6 +1693,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     let onCtx: ((e: MouseEvent) => void) | null = null, winDown: ((e: PointerEvent) => void) | null = null, dragCleanup: (() => void) | null = null;
     let rafId: number | null = null, measRaf: number | null = null;
     let onPaneMove: ((e: MouseEvent) => void) | null = null, onPaneLeave: (() => void) | null = null, onPaneDbl: ((e: MouseEvent) => void) | null = null;
+    let onPanePointerDown: ((e: PointerEvent) => void) | null = null;
+    let onScalePointerDown: ((e: PointerEvent) => void) | null = null, onScalePointerMove: (() => void) | null = null, onScalePointerEnd: (() => void) | null = null, onScaleWheel: (() => void) | null = null;
+    let onChartClick: ((param: any) => void) | null = null;
     // ── snapshot: composite the chart with per-pane labels + brand logo + timestamp ──
     // action = "download" | "copy" | "share" | "tab" (from event detail; default = "download")
     // Reads live refs so labels match the on-screen state.
@@ -1457,6 +1708,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       return new Promise((resolve) => {
         try {
           const clone = svgEl.cloneNode(true) as SVGSVGElement;
+          // Children are authored in CSS-pixel coordinates. Supplying the original coordinate space
+          // lets the browser scale those coordinates into the 2x bitmap; without a viewBox the bitmap
+          // doubled but every Oracle/drawing coordinate stayed 1x in the upper-left quadrant.
+          clone.setAttribute("viewBox", `0 0 ${cssW} ${cssH}`);
+          clone.setAttribute("preserveAspectRatio", "none");
           clone.setAttribute("width", String(cssW * TARGET_SCALE));
           clone.setAttribute("height", String(cssH * TARGET_SCALE));
           const xml = new XMLSerializer().serializeToString(clone);
@@ -1474,6 +1730,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const action: string = (ev as CustomEvent)?.detail?.action || "download";
       (async () => {
         try {
+          // Snapshot requests can arrive immediately after a price-scale gesture. Re-project every
+          // external layer synchronously so the serialized SVG and the chart canvas share one scale.
+          renderSignalsRef.current();
+          renderRef.current();
           const src = chartRef.current!.takeScreenshot();   // HTMLCanvasElement — all panes (lightweight-charts' own px ratio)
           const wrap = wrapElRef.current;
           const cssW = wrap ? wrap.clientWidth : src.width;
@@ -1654,6 +1914,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       timeScale: { borderColor: t.line, rightOffset: 6, barSpacing: 8 },
     });
     chartRef.current = chart;
+    onChartClick = (param: any) => {
+      const id = String(param?.hoveredObjectId ?? param?.hoveredInfo?.objectId ?? "");
+      const event = eventByIdRef.current.get(id);
+      if (!event || !param?.point) { setEventPopup(null); return; }
+      const host = el.parentElement;
+      const maxX = Math.max(16, (host?.clientWidth ?? 360) - 340);
+      const maxY = Math.max(16, (host?.clientHeight ?? 300) - 260);
+      setEventPopup({
+        event,
+        x: Math.max(12, Math.min(maxX, Number(param.point.x) - 20)),
+        y: Math.max(46, Math.min(maxY, Number(param.point.y) - 165)),
+      });
+    };
+    chart.subscribeClick(onChartClick);
 
     // ── v5 text watermark (createTextWatermark plugin — chart.applyOptions({ watermark }) removed in v5) ──
     // Created once on mount; Effect 7 toggles visibility via applyOptions on the plugin instance.
@@ -1723,7 +1997,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         }
         if (rem != null && isFinite(rem)) cd = fmtCountdown(rem, isIntradayRef.current);
       }
-      tagCd.textContent = cd; tagCd.style.display = cd ? "block" : "none";
+      tagCd.textContent = cd; tagCd.style.display = cd && countdownVisibleRef.current ? "block" : "none";
       tagSym.style.background = col; tagVal.style.background = col;
       tag.style.top = Math.round(y) + "px"; tag.style.display = lastValueVisibleRef.current ? "flex" : "none";
     };
@@ -2488,9 +2762,38 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // coalesce the overlay rebuild to one paint per frame on the hot pan/zoom path
     const scheduleRender = () => { if (rafId != null) return; rafId = requestAnimationFrame(() => { rafId = null; if (!dead) { renderSignals(); renderDraw(); } }); };
     chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleRender);
-    // Re-project SVG overlays on vertical price-scale drags (LWC repaints candles but not SVG;
-    // crosshairMove fires on any mouse interaction including Y-axis drag — chart.remove() cleans up).
+    // Crosshair moves cover the plot area, but lightweight-charts does not emit them reliably while
+    // the pointer is captured by a price axis. Track that edge gesture explicitly so SVG overlays are
+    // re-projected in the same animation frame as fast vertical scale changes.
     chart.subscribeCrosshairMove(scheduleRender);
+    let scaleDragActive = false;
+    const scheduleRenderBurst = () => {
+      scheduleRender();
+      requestAnimationFrame(() => {
+        if (dead) return;
+        scheduleRender();
+        requestAnimationFrame(() => { if (!dead) scheduleRender(); });
+      });
+    };
+    onScalePointerDown = (e: PointerEvent) => {
+      const r = wrap.getBoundingClientRect();
+      const edge = Math.min(96, Math.max(56, r.width * 0.08));
+      if (e.clientX > r.left + edge && e.clientX < r.right - edge) return;
+      scaleDragActive = true;
+      scheduleRender();
+    };
+    onScalePointerMove = () => { if (scaleDragActive) scheduleRender(); };
+    onScalePointerEnd = () => {
+      if (!scaleDragActive) return;
+      scaleDragActive = false;
+      scheduleRenderBurst();
+    };
+    onScaleWheel = scheduleRenderBurst;
+    wrap.addEventListener("pointerdown", onScalePointerDown, true);
+    window.addEventListener("pointermove", onScalePointerMove, true);
+    window.addEventListener("pointerup", onScalePointerEnd, true);
+    window.addEventListener("pointercancel", onScalePointerEnd, true);
+    wrap.addEventListener("wheel", onScaleWheel, { capture: true, passive: true });
     renderSignals(); renderDraw();
 
     // ── pane geometry measurement → drives the legend/pane-menu overlay layer (ChartOverlays) ──
@@ -2519,10 +2822,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const scheduleMeasure = () => { if (measRaf != null) return; measRaf = requestAnimationFrame(() => { measRaf = null; if (!dead) measureImpl(); }); };
 
     // ── pane hover + double-click (collapse-all on the price pane, maximize on a sub-pane) ──
-    onPaneMove = (e: MouseEvent) => {
-      const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect(); const y = e.clientY - wr.top;
+    const selectPaneAt = (clientY: number) => {
+      const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect(); const y = clientY - wr.top;
       let hk: string | null = null; for (const p of paneLayoutRef.current) { if (y >= p.top && y <= p.top + p.height) { hk = p.key; break; } }
       if (hk !== hoveredKeyRef.current) { hoveredKeyRef.current = hk; setHoveredKey(hk); }
+    };
+    onPaneMove = (e: MouseEvent) => selectPaneAt(e.clientY);
+    // Touch screens have no hover. Selecting a pane on pointer-down exposes the same
+    // pane controls that desktop users receive on mouse hover without consuming the gesture.
+    onPanePointerDown = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse") selectPaneAt(e.clientY);
     };
     onPaneLeave = () => { if (hoveredKeyRef.current !== null) { hoveredKeyRef.current = null; setHoveredKey(null); } };
     onPaneDbl = (e: MouseEvent) => {
@@ -2532,6 +2841,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (p.isPrice) collapseAllPanes(); else doMaximize(p.paneIndex);
     };
     wrap.addEventListener("mousemove", onPaneMove); wrap.addEventListener("mouseleave", onPaneLeave); wrap.addEventListener("dblclick", onPaneDbl);
+    wrap.addEventListener("pointerdown", onPanePointerDown, true);
 
     // observe each pane element so separator drags / collapses reposition the overlay + rebaseline sizes.
     // scheduleRender() re-lays the signal-marker + drawing SVG overlays: a pane collapse/maximize/drag
@@ -2603,7 +2913,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     window.addEventListener("keydown", onKey);
 
-    ro = new ResizeObserver(() => { const ch2 = chartRef.current; if (!ch2) return; const r = ch2.timeScale().getVisibleLogicalRange(); ch2.resize(el.clientWidth, el.clientHeight); if (r) ch2.timeScale().setVisibleLogicalRange(r); scheduleRender(); scheduleMeasure(); });
+    ro = new ResizeObserver(() => { const ch2 = chartRef.current; if (!ch2) return; const r = ch2.timeScale().getVisibleLogicalRange(); ch2.resize(el.clientWidth, el.clientHeight); if (r) ch2.timeScale().setVisibleLogicalRange(r); applyStretch(); scheduleRender(); scheduleMeasure(); });
     ro.observe(el);
 
     // ── mount teardown (base line-416 logic + the new refs) ──
@@ -2613,10 +2923,23 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (dragCleanup) dragCleanup();
       window.removeEventListener("mm:snapshot", snapshot);
       if (onKey) window.removeEventListener("keydown", onKey);
+      if (onChartClick) { try { chart.unsubscribeClick(onChartClick); } catch {} }
       if (winDown) window.removeEventListener("pointerdown", winDown);
       const wEl = wrapElRef.current;
       if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx);
-      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); }
+      if (wEl) {
+        if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove);
+        if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave);
+        if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl);
+        if (onPanePointerDown) wEl.removeEventListener("pointerdown", onPanePointerDown, true);
+        if (onScalePointerDown) wEl.removeEventListener("pointerdown", onScalePointerDown, true);
+        if (onScaleWheel) wEl.removeEventListener("wheel", onScaleWheel, true);
+      }
+      if (onScalePointerMove) window.removeEventListener("pointermove", onScalePointerMove, true);
+      if (onScalePointerEnd) {
+        window.removeEventListener("pointerup", onScalePointerEnd, true);
+        window.removeEventListener("pointercancel", onScalePointerEnd, true);
+      }
       paneRO?.disconnect(); paneRORef.current = null; wrapElRef.current = null;
       ro?.disconnect();
       if (textEditRef.current) { try { textEditRef.current.remove(); } catch {} textEditRef.current = null; }
@@ -2632,6 +2955,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (countdownTimerRef.current) { clearInterval(countdownTimerRef.current); countdownTimerRef.current = null; }
       if (countdownChipRef.current) { try { countdownChipRef.current.remove(); } catch {} countdownChipRef.current = null; }
       if (shadingPrimRef.current && priceSeriesRef.current) { try { detachSessionShading(priceSeriesRef.current, shadingPrimRef.current); } catch {} shadingPrimRef.current = null; }
+      extendedPriceLineRef.current = null;
+      clearEventMarkers();
       indPriceLinesRef.current = new Map();
       indSeriesRef.current.clear(); cmpSeriesRef.current.clear(); paneMapRef.current.clear();
       pineSeriesRef.current.clear(); pineMarkersRef.current.clear(); pinePaneMapRef.current.clear(); pineErrRef.current.clear(); pineCacheRef.current.clear();
@@ -2648,6 +2973,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const chart = chartRef.current; if (!chart) return;
     cpMark(`chart-effect2-start[${symbol}]`);
     const epoch = ++epochRef.current;
+    clearEventMarkers();
+    fundRef.current = null;
+    setEventPopup(null);
     let cancelled = false;
     const intraday = isIntradayTf(timeframe);
     // crossing the intraday↔daily boundary changes the TIME TYPE of every series (numeric epoch vs
@@ -2665,7 +2993,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         let bars: any[] = [];
         let feedErr: string | null = null;       // the route's j.error (route returns {bars:[],error} on an upstream/config failure)
         try {
-          const r = await fetch(`/api/intraday?sym=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(timeframe)}${extHours ? "&ext=1" : ""}`, { cache: "no-store" });
+          const r = await fetch(`/api/intraday?sym=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(timeframe)}&ext=${extHours ? "1" : "0"}`, { cache: "no-store" });
           const j = await r.json().catch(() => null);
           bars = Array.isArray(j?.bars) ? j.bars : [];
           if (!r.ok || j?.error) feedErr = String(j?.error || `HTTP ${r.status}`);
@@ -2724,12 +3052,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const wantFamily = familyOf(chartType);
         let priceS = priceSeriesRef.current;
         if (!priceS || priceFamilyRef.current !== wantFamily) {
-          if (priceS) { try { chart.removeSeries(priceS); } catch {} }
+          if (priceS) { clearExtendedPriceLine(); try { chart.removeSeries(priceS); } catch {} }
           priceS = addPriceSeries(chart, tokensRef.current);
           priceFamilyRef.current = wantFamily;
           priceSeriesRef.current = priceS;
         } else { priceS.applyOptions({ priceFormat: priceFmt() }); }
         priceS!.setData(priceData(onChart) as any);
+        void loadEventMarkers(symbol, onChart, epoch);
         clearAllIndicators();
         buildAllIndicators(onChart, closes);
         buildIndDataMap(onChart, closes);
@@ -2833,7 +3162,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const wantFamily = familyOf(chartType);
       let priceS = priceSeriesRef.current;
       if (!priceS || priceFamilyRef.current !== wantFamily) {
-        if (priceS) { try { chart.removeSeries(priceS); } catch {} }
+        if (priceS) { clearExtendedPriceLine(); try { chart.removeSeries(priceS); } catch {} }
         priceS = addPriceSeries(chart, tokensRef.current);
         priceFamilyRef.current = wantFamily;
         priceSeriesRef.current = priceS;
@@ -2841,6 +3170,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         priceS.applyOptions({ priceFormat: priceFmt() });
       }
       priceS!.setData(priceData(onChart) as any);
+      void loadEventMarkers(symbol, onChart, epoch);
       cpMark(`chart-painted[${symbol}]`);   // first candle on canvas
 
       // ── PERF-FIX (a): indicators — on same-symbol TF/chartType switch, update series data in-place
@@ -2885,6 +3215,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // ── R11: re-apply the live splice AFTER setData (which erased any prior splice). No-op under
       //    replay / EOD basis / intraday (guarded inside). Runs last so status + sig marks agree. ──
       applyLiveSplice();
+      applyExtendedPriceLine();
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line
@@ -3153,6 +3484,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     reRegisterSync();
     // exiting replay returns to the live series → re-apply the splice (self-guards under replay/EOD/intraday)
     applyLiveSplice();
+    applyExtendedPriceLine();
+    if (fundRef.current) applyEventMarkers(barsRef.current);
     // eslint-disable-next-line
   }, [replayIdx]);
 
@@ -3161,11 +3494,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   //   Keyed on a stable signature so it fires on each new snapshot from the 6s poll. All guards
   //   (intraday / replay / EOD basis / no-quote) live inside applyLiveSplice.
   // ────────────────────────────────────────────────────────────────────────────
-  const liveSig = liveQuote ? `${liveQuote.last ?? ""}|${liveQuote.ts ?? ""}|${liveQuote.basis ?? ""}` : "";
+  const liveSig = liveQuote
+    ? `${liveQuote.last ?? ""}|${liveQuote.ts ?? ""}|${liveQuote.basis ?? ""}|${liveQuote.marketSession ?? ""}|${liveQuote.extPrice ?? ""}|${liveQuote.extTs ?? ""}|${liveQuote.extSession ?? ""}`
+    : "";
   useEffect(() => {
     if (!chartRef.current || !priceSeriesRef.current) return;
     if (!barsRef.current.length) return;   // no data yet — Effect 2's tail will apply it
     applyLiveSplice();
+    applyExtendedPriceLine();
     // eslint-disable-next-line
   }, [liveSig]);
 
@@ -3262,26 +3598,61 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (priceS) try { priceS.applyOptions({ priceScaleId: scaleLeft ? "left" : "right" } as any); } catch {}
       }
       const scaleId = (chartSettings.scaleLeft) ? "left" : "right";
-      if (mode != null || invertScale != null || autoScale != null) {
+      if (mode != null || invertScale != null || autoScale != null || chartSettings.scaleMarginsTop != null) {
         const opts: Record<string, any> = {};
         if (mode != null) opts.mode = mode;
         if (invertScale != null) opts.invertScale = invertScale;
         if (autoScale != null) opts.autoScale = autoScale;
+        if (chartSettings.noOverlappingLabels != null) opts.entireTextOnly = chartSettings.noOverlappingLabels;
+        if (chartSettings.scaleMarginsTop != null || chartSettings.scaleMarginsBottom != null) {
+          opts.scaleMargins = {
+            top: Math.max(0, Math.min(0.5, (chartSettings.scaleMarginsTop ?? 10) / 100)),
+            bottom: Math.max(0, Math.min(0.5, (chartSettings.scaleMarginsBottom ?? 8) / 100)),
+          };
+        }
         chart.priceScale(scaleId).applyOptions(opts);
       }
-      // Grid visibility
-      if (gridHVisible != null || gridVVisible != null) {
-        const t = tokensRef.current;
-        chart.applyOptions({
-          grid: {
-            horzLines: { color: t?.grid ?? "rgba(255,255,255,.04)", visible: gridHVisible !== false },
-            vertLines: { color: t?.grid ?? "rgba(255,255,255,.04)", visible: gridVVisible !== false },
+      const t = tokensRef.current;
+      const bgTop = chartSettings.backgroundTop || "transparent";
+      const bgBottom = chartSettings.backgroundBottom || bgTop;
+      const background = chartSettings.backgroundType === "gradient"
+        ? { type: ColorType.VerticalGradient, topColor: bgTop, bottomColor: bgBottom }
+        : { type: ColorType.Solid, color: bgTop };
+      chart.applyOptions({
+        layout: {
+          background: background as any,
+          textColor: chartSettings.scaleTextColor || t.mut,
+          fontSize: chartSettings.scaleFontSize || 12,
+          panes: {
+            separatorColor: chartSettings.paneSeparatorColor || css("--pane-sep"),
+            separatorHoverColor: chartSettings.paneSeparatorColor || css("--pane-sep-h"),
           },
-        });
-      }
+        },
+        grid: {
+          horzLines: { color: chartSettings.gridHColor || t.grid, visible: gridHVisible !== false },
+          vertLines: { color: chartSettings.gridVColor || t.grid, visible: gridVVisible !== false },
+        },
+        crosshair: {
+          mode: chartSettings.crosshairMode === 1 ? CrosshairMode.Magnet : CrosshairMode.Normal,
+          vertLine: { color: chartSettings.crosshairColor || "rgba(214,218,227,.32)" },
+          horzLine: { color: chartSettings.crosshairColor || "rgba(214,218,227,.32)" },
+        },
+        leftPriceScale: { borderColor: chartSettings.scaleLineColor || t.line },
+        rightPriceScale: { borderColor: chartSettings.scaleLineColor || t.line },
+        timeScale: {
+          borderColor: chartSettings.scaleLineColor || t.line,
+          rightOffset: chartSettings.rightOffsetBars ?? 10,
+          tickMarkFormatter: (time: any) => formatTick(time, chartSettings),
+        } as any,
+      });
       // Watermark visibility — v5 uses the createTextWatermark plugin (chart-level watermark removed in v5).
       if (showWatermark != null) {
-        try { watermarkPluginRef.current?.applyOptions({ visible: showWatermark }); } catch {}
+        try {
+          watermarkPluginRef.current?.applyOptions({
+            visible: showWatermark,
+            lines: [{ text: "Mastermind Terminal", color: chartSettings.watermarkColor || "rgba(214,218,227,0.04)", fontSize: 48, fontStyle: "bold", fontFamily: "var(--font-ui, system-ui, sans-serif)" }],
+          });
+        } catch {}
       }
       if (priceS) {
         const sOpts: Record<string, any> = {};
@@ -3293,24 +3664,41 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // Candle colors — only apply when the user has set an explicit hex (non-empty).
         // Empty-string means "follow CSS --up/--down tokens" (set by Effect 5 on theme/flip change).
         // This prevents the settings-load on mount from clobbering Effect 5's token-derived colors.
-        if (candleUpColor) sOpts.upColor = candleUpColor;
-        if (candleDownColor) sOpts.downColor = candleDownColor;
-        if (candleUpBorder) sOpts.borderUpColor = candleUpBorder;
-        if (candleDownBorder) sOpts.borderDownColor = candleDownBorder;
-        if (candleUpWick) sOpts.wickUpColor = candleUpWick;
-        if (candleDownWick) sOpts.wickDownColor = candleDownWick;
+        sOpts.borderVisible = chartSettings.candleBordersVisible !== false;
+        sOpts.wickVisible = chartSettings.candleWicksVisible !== false;
+        sOpts.upColor = chartSettings.candleBodyVisible === false ? "rgba(0,0,0,0)" : (candleUpColor || t.up);
+        sOpts.downColor = chartSettings.candleBodyVisible === false ? "rgba(0,0,0,0)" : (candleDownColor || t.down);
+        sOpts.borderUpColor = candleUpBorder || candleUpColor || t.up;
+        sOpts.borderDownColor = candleDownBorder || candleDownColor || t.down;
+        sOpts.wickUpColor = candleUpWick || candleUpColor || t.up;
+        sOpts.wickDownColor = candleDownWick || candleDownColor || t.down;
+        if (chartSettings.precision && chartSettings.precision !== "auto") {
+          precRef.current = Number(chartSettings.precision);
+        } else if (barsRef.current.length) {
+          precRef.current = barsRef.current[barsRef.current.length - 1].c < 10 ? 4 : 2;
+        }
+        sOpts.priceFormat = priceFmt();
         if (Object.keys(sOpts).length) priceS.applyOptions(sOpts as any);
+        if (barsRef.current.length) priceS.setData(priceData(barsRef.current) as any);
       }
       // Re-render the custom priceTag immediately when lastValueVisible changes so the toggle
       // is visible without waiting for the 1s interval tick.
-      if (lastValueVisible != null) renderTagRef.current?.();
+      if (lastValueVisible != null || chartSettings.countdownVisible != null || chartSettings.precision != null) renderTagRef.current?.();
       // Re-paint status line immediately when the status-line toggles change.
-      if (showOHLC != null || showBarChange != null) {
-        if (barsRef.current.length) paintStatus(barsRef.current, sliceRef.current);
-      }
+      if (barsRef.current.length) paintStatus(barsRef.current, sliceRef.current);
+      applyExtendedPriceLine();
+      if (fundRef.current && barsRef.current.length) applyEventMarkers(barsRef.current);
     } catch {}
     // eslint-disable-next-line
   }, [JSON.stringify(chartSettings)]);
+
+  // Manifest metadata arrives after the chart's OHLC request on a cold load. Refresh the
+  // identity segment when that descriptive data lands so the status line upgrades from a
+  // ticker-only placeholder without rebuilding the chart or waiting for the next quote.
+  useEffect(() => {
+    if (barsRef.current.length) paintStatus(barsRef.current, sliceRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instrumentName, instrumentMarket, instrumentColor, timeframe]);
 
   // ── EFFECT 8 ─ expose the chart API to the parent (for range navigation from the frame bar).
   const onChartApiRef = useRef(onChartApi); onChartApiRef.current = onChartApi;
@@ -3422,8 +3810,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         </span>}
       </div>
       <div ref={ref} style={{ position: "absolute", inset: 0 }} />
+      {eventPopup && <EventPopover popup={eventPopup} symbol={symbol} onClose={() => setEventPopup(null)} />}
       <ChartOverlays
         panes={paneLayout} hoveredKey={hoveredKey} legendOpen={legendOpen} onToggleLegend={() => setLegendOpen((o) => !o)}
+        showTitles={chartSettings?.showIndicatorTitles !== false}
+        backgroundOpacity={chartSettings?.indicatorBackgroundOpacity ?? 70}
+        paneButtons={chartSettings?.paneButtons ?? "hover"}
         onEye={(k) => onToggleHidden?.(k)} onSettings={(k) => onOpenSettings?.(k)} onSource={(k) => onOpenSource?.(k)} onRemove={(k) => onRemoveInd?.(k)}
         onMoveUp={(pi) => doMove(pi, -1)} onMoveDown={(pi) => doMove(pi, 1)} onCollapse={doCollapse} onMaximize={doMaximize}
         canMoveUp={canMoveUp} canMoveDown={canMoveDown}

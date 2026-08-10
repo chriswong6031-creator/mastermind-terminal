@@ -7,7 +7,7 @@
  *     the daily `bars`) are ALWAYS available; intraday pills (15m / 1h / 4h …)
  *     are enabled per intradayCapable(market) and fetch /api/intraday directly
  *     (no cache).
- *   - Summary: three HalfGauges (Oscillators / Summary / Moving Averages).
+ *   - Signal gauges: Oscillators / Moving Averages.
  *   - Oscillators + Moving Averages tables (name+params, value, action).
  *   - Pivots table across Classic / Fibonacci / Camarilla / Woodie / DM.
  *
@@ -152,11 +152,10 @@ function TechnicalsPage({ sym, bars = [], zh = false }: TechnicalsPageProps) {
 
       {loading && <div className="fin-sec-cap">{pick(zh, "Loading intraday…", "加载盘中数据…")}</div>}
 
-      {/* Summary — three gauges */}
+      {/* The aggregate summary duplicated the two underlying signal groups. */}
       <div className="fin-sec">
         <div className="fin-tech-summary">
           <Gauge title={pick(zh, "Oscillators", "震荡指标")} group={ratings?.summary[0]} zh={zh} />
-          <Gauge title={pick(zh, "Summary", "综合")} group={ratings?.summary[2]} zh={zh} big />
           <Gauge title={pick(zh, "Moving Averages", "移动平均")} group={ratings?.summary[1]} zh={zh} />
         </div>
       </div>
@@ -179,22 +178,20 @@ function Gauge({
   title,
   group,
   zh,
-  big,
 }: {
   title: string;
   group: Ratings["summary"][number] | undefined;
   zh: boolean;
-  big?: boolean;
 }) {
   return (
-    <div className={"fin-tech-gauge" + (big ? " big" : "")}>
+    <div className="fin-tech-gauge">
       <div className="fin-tech-gauge-t">{title}</div>
       <HalfGauge
         value={group ? group.score : null}
         verdict={group ? verdictWord(group.verdict, zh) : undefined}
         counts={group ? { sell: group.sell, neutral: group.neutral, buy: group.buy } : null}
         variant="tech"
-        size={big ? 220 : 180}
+        size={180}
         zh={zh}
       />
     </div>

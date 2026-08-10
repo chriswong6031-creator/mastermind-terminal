@@ -2,29 +2,30 @@
 // Central quote store + manifest-derived prev-close map.
 //
 // Contract §1 quote shape:
-//   { sym, last, chg, prevClose?, close?, afterHours?, open?, high?, low?, vol?,
-//     amount?, ts, live, source, market, basis, anchor_source?, stale_anchor? }
+//   { sym, last, chg, prevClose?, close?, open?, high?, low?, vol?, amount?,
+//     ts, live, source, market, basis, marketSession?, regularSessionDate?,
+//     extPrice?, extChg?, extTs?, extSession?, extSource?, extBasis? }
 //
 // prevClose derivation (session-keyed, not manifest-derived):
 //   US:     prevClose comes from AnchorCache — daily file → Polygon REST → manifest fallback.
 //           chg = (hubLast - prevClose) / prevClose * 100.
 //   crypto: prevClose = open_24h (carried on the quote, not the manifest); chg vs open_24h.
 //
-// After-hours semantics:
-//   When the daily file has already rolled for today (post-close), setQuote receives the
-//   AM-feed's delayed `last` as the live print. The anchor carries `close` (official EOD).
-//   If the live print differs from close by >$0.01, we emit `afterHours` = live print.
-//   The UI uses `close` as the primary display and `afterHours` as the secondary AH line.
+// Extended-session semantics:
+//   `last`/`chg` remain regular-session values. Pre/post/overnight prints are merged
+//   at read time under the separate ext* namespace and disappear during RTH.
 //
 // AM/ticker messages that carry only o/h/l/c/v must NOT clobber source/basis/market set at
 // subscribe time — setQuote merges partials.
 
 const fs = require("fs");
 const log = require("./log");
+const { classifySession, etDate } = require("./usSession");
 
 const STALE_EVICT_MS = 45 * 60 * 1000; // 45 min
 const MANIFEST_CHECK_MIN_INTERVAL = 30 * 1000; // ≤1 stat/reparse per 30 s
-// Minimum $ difference between a delayed AH print and official close to emit afterHours.
+// Deprecated compatibility export. Extended prints are no longer inferred by comparing
+// a regular quote to the close; providers must populate the explicit ext* namespace.
 const AH_MATERIALITY_THRESHOLD = 0.01;
 
 class Store {
@@ -61,7 +62,7 @@ class Store {
   // (o/h/l/c/v) erase source/basis/market. Stamps ts if absent, recomputes chg.
   //
   // When anchorCache is attached, prevClose comes from the session-keyed anchor (not the
-  // manifest). The anchor also contributes close/afterHours for post-close sessions.
+  // manifest). The anchor also contributes the official close.
   setQuote(sym, partial, nowMs) {
     const now = nowMs != null ? nowMs : Date.now();
     const prev = this.quotes.get(sym) || { sym };
@@ -82,23 +83,15 @@ class Store {
         anchorSource = anchor.anchor_source || "daily_file";
         staleAnchor = !!anchor.stale_anchor;
 
-        // After-hours: anchor carries official close when today's daily bar is present.
+        // The regular close is a regular-session field. Extended prints are
+        // carried exclusively by extPrice/extChg and never overlaid onto last.
         if (anchor.close != null) {
           q.close = anchor.close;
-          // Overlay afterHours from the live AM print if it differs materially.
-          const livePrint = q.last;
-          if (livePrint != null && Math.abs(livePrint - anchor.close) > AH_MATERIALITY_THRESHOLD) {
-            q.afterHours = livePrint;
-          } else {
-            // Live matches EOD — no AH divergence to surface.
-            delete q.afterHours;
-          }
         } else {
-          // No today-close yet (RTH / overnight). Evict any close that may have leaked
-          // from a prior session via the spread at q = { ...prev, ...partial }.
+          // No today-close yet. Evict a close from a prior ET session.
           delete q.close;
-          delete q.afterHours;
         }
+        delete q.afterHours;
       }
     }
 
@@ -151,49 +144,48 @@ class Store {
     for (const sym of symList) {
       const q = this.quotes.get(sym);
       if (!q) continue;
+      const marketSession = q.market === "us" ? classifySession(now) : null;
       const anchor =
         this.anchorCache && q.market === "us" ? this.anchorCache.get(sym, now) : null;
       if (!anchor || anchor.prevClose == null || anchor.prevClose <= 0) {
-        out[sym] = q;
+        out[sym] = marketSession ? { ...q, marketSession } : q;
         continue;
       }
       // Serve-time derivation (write-time is not enough: after hours no tape
       // message arrives, so applyPartial never re-runs on boot-built quotes):
       //   close          — anchor carries today's official close once the daily file rolls
-      //   afterHours     — the delayed AM `last` when it differs materially from close
-      //   chg            — the DAY's move: (close ?? last) vs prevClose
-      //   prevSessionChg — last completed session's chg, shown when live session is absent
-      //                    (overnight: no today-close, last ≈ prevClose within $0.01)
+      //   chg            — regular-session performance only
+      //   prevSessionChg — last completed session's chg before a new RTH begins
       const close =
         anchor.close != null && Number.isFinite(anchor.close) ? anchor.close : null;
-      const ah =
-        close != null &&
-        typeof q.last === "number" &&
-        Math.abs(q.last - close) > AH_MATERIALITY_THRESHOLD
-          ? q.last
-          : null;
       const dayRef = close != null ? close : typeof q.last === "number" ? q.last : null;
-      const chg =
-        dayRef != null ? ((dayRef - anchor.prevClose) / anchor.prevClose) * 100 : q.chg;
-
-      // Overnight detection: no today-close yet AND live last is within $0.01 of prevClose.
-      // In this window, chg computes to ~0.00% which is misleading. Surface prevSessionChg
-      // (the last completed session's move) instead of the flat overnight placeholder.
-      const isOvernight =
+      const hasCurrentRegularSession =
+        q.regularSessionDate != null && q.regularSessionDate === etDate(now);
+      // Before today's RTH begins (or after a hub restart with only an EOD
+      // placeholder), the primary quote represents the last completed session.
+      // Keep that session's performance rather than showing a flat 0%.
+      const usePreviousSession =
+        marketSession !== "rth" &&
         close == null &&
-        typeof q.last === "number" &&
-        Math.abs(q.last - anchor.prevClose) <= AH_MATERIALITY_THRESHOLD;
+        !hasCurrentRegularSession &&
+        anchor.prevSessionChg != null &&
+        Number.isFinite(anchor.prevSessionChg);
       const prevSessionChg =
-        isOvernight && anchor.prevSessionChg != null && Number.isFinite(anchor.prevSessionChg)
+        usePreviousSession
           ? anchor.prevSessionChg
           : null;
+      const chg = prevSessionChg != null
+        ? prevSessionChg
+        : dayRef != null
+          ? ((dayRef - anchor.prevClose) / anchor.prevClose) * 100
+          : q.chg;
 
       const changed =
         anchor.prevClose !== q.prevClose ||
         (close != null ? q.close !== close : q.close != null) ||
-        (ah != null ? q.afterHours !== ah : q.afterHours != null) ||
         chg !== q.chg ||
-        (prevSessionChg != null ? q.prevSessionChg !== prevSessionChg : q.prevSessionChg != null);
+        (prevSessionChg != null ? q.prevSessionChg !== prevSessionChg : q.prevSessionChg != null) ||
+        q.marketSession !== marketSession;
       if (!changed) {
         out[sym] = q;
         continue;
@@ -203,10 +195,10 @@ class Store {
       fresh.chg = chg;
       if (close != null) fresh.close = close;
       else delete fresh.close;
-      if (ah != null) fresh.afterHours = ah;
-      else delete fresh.afterHours;
+      delete fresh.afterHours;
       if (prevSessionChg != null) fresh.prevSessionChg = prevSessionChg;
       else delete fresh.prevSessionChg;
+      fresh.marketSession = marketSession;
       fresh.anchor_source = anchor.anchor_source;
       if (anchor.stale_anchor) fresh.stale_anchor = true;
       else delete fresh.stale_anchor;
@@ -244,6 +236,7 @@ class Store {
             delete copy.extTs;
             delete copy.extSession;
             delete copy.extSource;
+            delete copy.extBasis;
             out[sym] = copy;
           }
         }

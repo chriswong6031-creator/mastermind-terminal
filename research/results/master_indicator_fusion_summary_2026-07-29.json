@@ -1,0 +1,260 @@
+{
+  "schema": "mastermind.master-indicator-fusion-summary/v1",
+  "generated_at": "2026-07-29T23:46:50-07:00",
+  "purpose": "Pinned summary of the causal Golden Oracle, Trend Waves, and Pulse fusion investigation",
+  "research_window": {
+    "start": "2021-01-01",
+    "diagnostic_holdout_start": "2024-01-01",
+    "holdout_is_untouched": false,
+    "reason": "The holdout was inspected during this investigation and is diagnostic only"
+  },
+  "source_snapshot": {
+    "lab_sha256": "09b159ace74e9dac4f41e72ce41b314a9dedc3e8d309addd2f5ca3f085138bdc",
+    "tests_sha256": "488517f9f1d13952c6dafc4023fa64213bb121a651b6e1cb9249b51d8520b6ee",
+    "investigation_doc_sha256": "a9c9c7329a3b926df98c0eb8a1876edef7e605ddcd99f3ff0ab481a763d99b3c",
+    "overlap_data_manifest_sha256": "4ab1d738193c3cb5673bbc76f4ee4731d03746ffd0db8f4bc4baba4051ce8750",
+    "real25_data_manifest_sha256": "45961bcfb67c6b09acb2a2ae7ca324a8b27fd77b72ba2a5e162370e43d448fec",
+    "manifest_method": "SHA-256 over each sorted symbol's terminal JSON path+content hash and external deep-store parquet path+content hash"
+  },
+  "cohorts": {
+    "symbols_requested": 228,
+    "symbols_analyzed": 221,
+    "real_ohlc": 25,
+    "synthetic_open_deepstore": 196,
+    "skipped": 7,
+    "real_ohlc_symbols": [
+      "AAPL",
+      "ADP",
+      "AMD",
+      "AMZN",
+      "APH",
+      "AVGO",
+      "COST",
+      "CRWD",
+      "CVNA",
+      "EIX",
+      "GD",
+      "GOOGL",
+      "HOOD",
+      "INTC",
+      "JPM",
+      "LLY",
+      "MSFT",
+      "MU",
+      "NFLX",
+      "NVDA",
+      "PLTR",
+      "TSLA",
+      "V",
+      "WM",
+      "XOM"
+    ],
+    "notable_exclusion": {
+      "symbol": "META",
+      "coverage": 0.928172,
+      "price_scale_p95_p05": 23.723667,
+      "return_correlation": -0.349042,
+      "reason": "Terminal history did not reliably represent the same security as Golden's close history"
+    }
+  },
+  "entry_holdout_real_common_21_sessions": [
+    {
+      "family": "golden_buy",
+      "completed_outcomes": 98,
+      "win_rate": 0.5816,
+      "mean_return": 0.0457,
+      "median_return": 0.0149
+    },
+    {
+      "family": "golden_early_causal_2D3D",
+      "completed_outcomes": 248,
+      "win_rate": 0.5968,
+      "mean_return": 0.0464,
+      "median_return": 0.0191
+    },
+    {
+      "family": "pulse_2D_day",
+      "completed_outcomes": 43,
+      "win_rate": 0.6744,
+      "mean_return": 0.0575,
+      "median_return": 0.0486
+    },
+    {
+      "family": "pulse_3D_day",
+      "completed_outcomes": 24,
+      "win_rate": 0.7917,
+      "mean_return": 0.0749,
+      "median_return": 0.0711
+    },
+    {
+      "family": "pulse_3D_swing",
+      "completed_outcomes": 8,
+      "win_rate": 0.75,
+      "mean_return": 0.0389,
+      "median_return": 0.036
+    },
+    {
+      "family": "trend_2D_s5",
+      "completed_outcomes": 111,
+      "win_rate": 0.5405,
+      "mean_return": 0.0469,
+      "median_return": 0.0027
+    },
+    {
+      "family": "trend_3D_s5",
+      "completed_outcomes": 76,
+      "win_rate": 0.5789,
+      "mean_return": 0.0431,
+      "median_return": 0.0093
+    },
+    {
+      "family": "trend_3D_s5_strong",
+      "completed_outcomes": 32,
+      "win_rate": 0.625,
+      "mean_return": 0.0494,
+      "median_return": 0.014
+    }
+  ],
+  "lead_conversion_all_aligned_symbols": [
+    {
+      "family": "golden_early_causal_2D3D",
+      "symbols": 221,
+      "eligible_golden_buys": 2567,
+      "eligible_scout_buys": 5630,
+      "matched_one_to_one": 1557,
+      "golden_coverage": 0.6065,
+      "median_calendar_day_lead": 13.0,
+      "scout_conversion": 0.2766
+    },
+    {
+      "family": "pulse_2D_day",
+      "symbols": 221,
+      "eligible_golden_buys": 1628,
+      "eligible_scout_buys": 505,
+      "matched_one_to_one": 130,
+      "golden_coverage": 0.0799,
+      "median_calendar_day_lead": 11.5,
+      "scout_conversion": 0.2574
+    },
+    {
+      "family": "pulse_3D_day",
+      "symbols": 220,
+      "eligible_golden_buys": 1133,
+      "eligible_scout_buys": 251,
+      "matched_one_to_one": 35,
+      "golden_coverage": 0.0309,
+      "median_calendar_day_lead": 5.0,
+      "scout_conversion": 0.1394
+    },
+    {
+      "family": "trend_2D_s5",
+      "symbols": 221,
+      "eligible_golden_buys": 2565,
+      "eligible_scout_buys": 2633,
+      "matched_one_to_one": 416,
+      "golden_coverage": 0.1622,
+      "median_calendar_day_lead": 5.0,
+      "scout_conversion": 0.158
+    },
+    {
+      "family": "trend_3D_s5",
+      "symbols": 221,
+      "eligible_golden_buys": 2565,
+      "eligible_scout_buys": 1728,
+      "matched_one_to_one": 80,
+      "golden_coverage": 0.0312,
+      "median_calendar_day_lead": 12.0,
+      "scout_conversion": 0.0463
+    }
+  ],
+  "policy_holdout_real_ohlc": {
+    "aggregation": "trades is a total; all other numeric metrics are medians of per-symbol results",
+    "symbols_with_trades": 24,
+    "commission_bps_per_side": 3.0,
+    "slippage_bps_per_side": 1.0,
+    "rows": [
+      {
+        "policy": "oracle_next_open",
+        "trades": 75,
+        "win_rate": 0.6667,
+        "expectancy": 0.1652,
+        "total_return": 0.3313,
+        "cagr": 0.1222,
+        "max_drawdown": -0.338,
+        "sharpe": 0.5871
+      },
+      {
+        "policy": "oracle_tp_1.5_2.5_3.5",
+        "trades": 75,
+        "win_rate": 0.6667,
+        "expectancy": 0.0988,
+        "total_return": 0.2807,
+        "cagr": 0.1048,
+        "max_drawdown": -0.2101,
+        "sharpe": 0.691,
+        "tp1_rate": 0.775,
+        "tp2_rate": 0.6667,
+        "tp3_rate": 0.45
+      },
+      {
+        "policy": "oracle_tp_risk",
+        "trades": 113,
+        "win_rate": 0.6,
+        "expectancy": 0.0444,
+        "total_return": 0.1512,
+        "cagr": 0.0584,
+        "max_drawdown": -0.1768,
+        "sharpe": 0.5109
+      },
+      {
+        "policy": "oracle_tp_risk_trend_exit",
+        "trades": 115,
+        "win_rate": 0.6,
+        "expectancy": 0.028,
+        "total_return": 0.11,
+        "cagr": 0.0428,
+        "max_drawdown": -0.1783,
+        "sharpe": 0.4537
+      },
+      {
+        "policy": "oracle_tp_risk_structure_add",
+        "trades": 120,
+        "win_rate": 0.6,
+        "expectancy": 0.0256,
+        "total_return": 0.1031,
+        "cagr": 0.0403,
+        "max_drawdown": -0.1643,
+        "sharpe": 0.498
+      },
+      {
+        "policy": "oracle_tp_risk_structure_replace",
+        "trades": 115,
+        "win_rate": 0.6,
+        "expectancy": 0.0232,
+        "total_return": 0.0924,
+        "cagr": 0.0362,
+        "max_drawdown": -0.1686,
+        "sharpe": 0.498
+      }
+    ]
+  },
+  "verification": {
+    "fusion_tests": "12 passed",
+    "existing_golden_gate_status": "2 pre-existing contract-parity failures; production Golden code was not modified",
+    "commands": [
+      "python3 -m py_compile research/master_indicator_fusion_lab.py",
+      "pytest -q tests/test_master_indicator_fusion_lab.py",
+      "python3 research/master_indicator_fusion_lab.py",
+      "python3 research/master_indicator_fusion_lab.py --symbols <real-OHLC cohort>"
+    ]
+  },
+  "limitations": [
+    "Current-listing and survivorship-biased local universe",
+    "Diagnostic holdout has been inspected",
+    "Only 25 aligned symbols have real daily OHLC",
+    "Daily OHLC cannot reveal unknown intraday TP-versus-SL ordering",
+    "Trend and Pulse are clean-room app analogues, not BigBeluga formula parity",
+    "Canonical completed bars are a fusion counterfactual, not current ChartPanel clock parity",
+    "No block-bootstrap confidence intervals yet"
+  ]
+}

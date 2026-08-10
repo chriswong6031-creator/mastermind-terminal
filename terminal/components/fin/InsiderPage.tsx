@@ -101,7 +101,15 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
   }
 
   const d = data;
-  const gaugeVal = Math.max(-1, Math.min(1, (d.score - 50) / 50));
+  const score = Number.isFinite(d.score) ? Math.max(0, Math.min(100, d.score)) : null;
+  const gaugeVal = score == null ? null : (score - 50) / 50;
+  const gaugeColor = gaugeVal == null
+    ? "var(--text)"
+    : gaugeVal > 0.001
+      ? "var(--up)"
+      : gaugeVal < -0.001
+        ? "var(--down)"
+        : "var(--text)";
 
   // ── asof quarter label — SEC publishes bulk Form-4 data one quarter at a time,
   // roughly 45 days after quarter-end. Show "Q1 2026" rather than just the ISO date
@@ -154,10 +162,10 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
         <div className="fin-sec-h">{pick(zh, "Insider Power", "内部人操作力度")}</div>
         <div className="fin-insider-hero">
           <div className="fin-insider-gaugebox">
-            <HalfGauge value={gaugeVal} verdict={powerWord(d.score, zh)} variant="analyst" zh={zh} />
+            <HalfGauge value={gaugeVal} verdict={score == null ? undefined : powerWord(score, zh)} variant="analyst" zh={zh} />
             <div className="fin-insider-score">
-              <span className="num" style={{ color: gaugeVal > 0.001 ? "var(--up)" : gaugeVal < -0.001 ? "var(--down)" : "var(--text)" }}>
-                {d.score.toFixed(0)}
+              <span className="num" style={{ color: gaugeColor }}>
+                {score == null ? "—" : score.toFixed(0)}
               </span>
               <span className="scale">/ 100</span>
             </div>

@@ -47,33 +47,9 @@
 const https = require("https");
 const WebSocket = require("ws");
 const log = require("./log");
+const { classifySession } = require("./usSession");
 
 // ── Session window classification ──────────────────────────────────────────────
-
-const ET_FMT = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/New_York",
-  hour: "numeric",
-  minute: "numeric",
-  hour12: false,
-});
-
-/**
- * Classify the current ET time into a trading session.
- * @param {number} nowMs
- * @returns {'pre'|'rth'|'post'|'overnight'}
- */
-function classifySession(nowMs) {
-  const parts = {};
-  for (const p of ET_FMT.formatToParts(new Date(nowMs))) parts[p.type] = Number(p.value);
-  // formatToParts hour12:false: midnight = 0 or 24 depending on engine; normalise.
-  const h = parts.hour === 24 ? 0 : parts.hour;
-  const mins = h * 60 + parts.minute;
-
-  if (mins >= 4 * 60 && mins < 9 * 60 + 30) return "pre";
-  if (mins >= 9 * 60 + 30 && mins < 16 * 60) return "rth";
-  if (mins >= 16 * 60 && mins < 20 * 60) return "post";
-  return "overnight"; // 20:00–04:00 ET
-}
 
 // ── LRU map (insertion-ordered, Map iteration order is stable in V8) ──────────
 
@@ -459,7 +435,15 @@ class ExtFeed {
     if (alpacaKey && alpacaSecret) {
       this.mode = "alpaca";
       this.alpaca = new AlpacaFeed(alpacaKey, alpacaSecret, (sym, { price, ts, session }) => {
-        this._extMap.set(sym, { price, ts, session, source: "alpaca_overnight" });
+        this.ingest(sym, {
+          price,
+          ts,
+          session,
+          source: "alpaca_overnight",
+          // Alpaca Basic's overnight trade stream is delayed. Keep the basis
+          // explicit so the client never presents a delayed trade as live.
+          basis: "DELAYED_15M",
+        });
         log.every(`ext-${sym}`, "DEBUG", "ext trade", sym, price, session);
       });
       // Yahoo fallback structures are initialised unconditionally so that if Alpaca
@@ -525,6 +509,21 @@ class ExtFeed {
   }
 
   /**
+   * Ingest an extended-session print from any hub feed. Newer timestamps win,
+   * which lets Alpaca and Polygon coexist without racing the displayed price.
+   *
+   * @param {string} sym
+   * @param {{price:number,ts:number,session:string,source:string,basis?:string}} entry
+   */
+  ingest(sym, entry) {
+    if (this.disabled || !this._extMap || !entry) return;
+    if (!Number.isFinite(entry.price) || !Number.isFinite(entry.ts)) return;
+    if (entry.session === "rth") return;
+    const prev = this._extMap.get(sym);
+    if (!prev || entry.ts >= prev.ts) this._extMap.set(sym, entry);
+  }
+
+  /**
    * Return ext fields to merge into a quote at serve-time.
    * Returns null when: feed disabled, current window is RTH, no ext print available.
    *
@@ -538,27 +537,13 @@ class ExtFeed {
     const session = classifySession(nowMs);
     if (session === "rth") return null;
 
-    let entry = null;
-    if (this.mode === "alpaca" && this._extMap) {
-      // Primary: Alpaca websocket.
-      // Fallback: if Alpaca auth failed (plan not entitled), degrade to Yahoo cache
-      // for pre/post windows so ext fields are not silently absent.
-      const alpacaAuthFailed = this.alpaca && this.alpaca.authFailed;
-      if (!alpacaAuthFailed) {
-        entry = this._extMap.get(sym) || null;
-      }
-      if (!entry && alpacaAuthFailed && this._yahooCache) {
-        entry = this._yahooCache.get(sym) || null;
-        // Yahoo covers only pre/post, not overnight.
-        if (entry && entry.session === "overnight") entry = null;
-        if (entry) log.every("alpaca-yahoo-fallback", "WARN",
-          "alpaca authFailed — serving ext data from Yahoo fallback");
-      }
-    } else if (this.mode === "yahoo_fallback" && this._yahooCache) {
-      entry = this._yahooCache.get(sym) || null;
-      // Yahoo covers only pre/post, not overnight.
-      if (entry && entry.session === "overnight") entry = null;
-    }
+    // The unified map can contain Alpaca or Polygon prints. Yahoo is a fallback
+    // candidate; pick the freshest valid timestamp rather than tying selection
+    // to the configured feed mode.
+    let entry = this._extMap ? this._extMap.get(sym) || null : null;
+    let yahoo = this._yahooCache ? this._yahooCache.get(sym) || null : null;
+    if (yahoo && yahoo.session === "overnight") yahoo = null;
+    if (yahoo && (!entry || yahoo.ts > entry.ts)) entry = yahoo;
 
     if (!entry) return null;
 
@@ -583,6 +568,7 @@ class ExtFeed {
       extTs: entry.ts,
       extSession: entry.session,
       extSource: entry.source,
+      extBasis: entry.basis || (String(entry.source || "").startsWith("yahoo") ? "UNOFFICIAL" : "DELAYED_15M"),
     };
   }
 
@@ -625,11 +611,12 @@ class ExtFeed {
         const e = relay.quotes[sym];
         if (e && typeof e.extPrice === "number" && Number.isFinite(e.extPrice)) {
           this._yahooCache.set(sym, {
-            extPrice: e.extPrice,
-            extTs: typeof e.extTs === "number" ? e.extTs : Math.floor(relayAsof / 1000),
+            price: e.extPrice,
+            ts: typeof e.extTs === "number" ? e.extTs : Math.floor(relayAsof / 1000),
             close: typeof e.close === "number" ? e.close : undefined,
             session,
             source: "yahoo-relay",
+            basis: "UNOFFICIAL",
           });
           hit++;
         }

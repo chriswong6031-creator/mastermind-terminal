@@ -13,9 +13,15 @@
 // Pure helpers (Bar6, tfMinutes, classify, resample, isIntradayTf) live in intradayShared so they
 // can be imported by both this module (client-shared) and intradayStore (server-only, node:fs).
 export type { Bar6, Market } from "./intradayShared";
-export { INTRADAY_TFS, isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
+export {
+  INTRADAY_TFS, isIntradayTf, tfMinutes, classify, resample,
+  filterUsEquitySession, resampleUsEquitySession,
+} from "./intradayShared";
 import type { Bar6, Market } from "./intradayShared";
-import { isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
+import {
+  isIntradayTf, tfMinutes, classify, resample,
+  filterUsEquitySession, resampleUsEquitySession,
+} from "./intradayShared";
 
 // ── US / crypto → Polygon ──
 const ET_FMT = new Intl.DateTimeFormat("en-US", {
@@ -30,19 +36,31 @@ function etDisplay(ms: number): { epoch: number; minOfDay: number } {
   return { epoch, minOfDay: hh * 60 + +p.minute };
 }
 
+// Polygon's aggregates endpoint applies its 50k limit to the underlying base aggregates, not just
+// the returned multi-hour candles. A 120-day 2h/3h/4h request therefore stops weeks before "to" and
+// leaves the chart showing an old close as the current price. Keep the live tail below that ceiling;
+// withStoredHistory separately prepends the deep on-disk history after this fetch.
+export function polygonLookbackDays(minutes: number, market: Market): number {
+  if (minutes <= 5) return 10;
+  if (minutes <= 30) return 25;
+  // 24/7 crypto consumes 1,440 base minutes per calendar day; US equities consume only their
+  // premarket-through-after-hours session, so 60 calendar days remains below the same ceiling.
+  return market === "crypto" ? 30 : 60;
+}
+
 async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolean): Promise<Bar6[]> {
   const key = process.env.POLYGON_API_KEY || process.env.MASSIVE_API_KEY;
   if (!key) throw new Error("POLYGON_API_KEY not set");
-  const m = /^(\d+)(m|h)$/.exec(tf)!;
-  const mult = parseInt(m[1], 10) || 1;
-  const unit = m[2] === "h" ? "hour" : "minute";
   const minutes = tfMinutes(tf);
-  const days = minutes <= 5 ? 10 : minutes <= 30 ? 25 : minutes <= 60 ? 60 : 120;
+  const days = polygonLookbackDays(minutes, market);
   const iso = (d: Date) => d.toISOString().slice(0, 10);
   const to = new Date();
   const from = new Date(to.getTime() - days * 86400000);
   const ticker = market === "crypto" ? "X:" + sym.replace(/-/g, "").toUpperCase() : sym.toUpperCase();
-  const url = `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(ticker)}/range/${mult}/${unit}/${iso(from)}/${iso(to)}?adjusted=true&sort=asc&limit=50000&apiKey=${key}`;
+  // Fetch one-minute source bars, route them through the selected session, then
+  // resample. Provider-built hourly bars can straddle 09:30 and irreversibly mix
+  // premarket prints into a "Regular" candle.
+  const url = `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(ticker)}/range/1/minute/${iso(from)}/${iso(to)}?adjusted=true&sort=asc&limit=50000&apiKey=${key}`;
   const r = await fetch(url, { cache: "no-store" });
   if (!r.ok) {
     if (r.status === 429) throw new Error("polygon rate-limited");
@@ -53,11 +71,15 @@ async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolea
   const out: Bar6[] = [];
   for (const b of res) {
     if (market === "crypto") { out.push([Math.floor(b.t / 1000), b.o, b.h, b.l, b.c, b.v]); continue; }
-    const { epoch, minOfDay } = etDisplay(b.t);
-    if (!ext && unit === "minute" && (minOfDay < 570 || minOfDay >= 960)) continue; // RTH = 09:30–16:00 ET
+    const { epoch } = etDisplay(b.t);
     out.push([epoch, b.o, b.h, b.l, b.c, b.v]);
   }
-  return out;
+  if (market === "us") {
+    const session = ext ? "extended" : "regular";
+    const selected = filterUsEquitySession(out, session);
+    return minutes <= 1 ? selected : resampleUsEquitySession(selected, minutes, session);
+  }
+  return minutes <= 1 ? out : resample(out, minutes);
 }
 
 // ── China / Hong Kong → Tencent (free) ──
@@ -183,6 +205,14 @@ export type Quote = {
   // extPrice: the most recent ext print; extChg: % vs close; extTs: epoch-sec of that print.
   // Absent (undefined) when no ext data is available (keyless or no print).
   extPrice?: number | null; extChg?: number | null; extTs?: number | null;
+  extSession?: "pre" | "post" | "overnight";
+  extSource?: string;
+  extBasis?: "LIVE" | "DELAYED_15M" | "UNOFFICIAL";
+  marketSession?: "pre" | "rth" | "post" | "overnight";
+  regularSessionDate?: string;
+  regularSession?: "rth" | "closed";
+  close?: number | null;
+  prevSessionChg?: number | null;
 };
 
 function _n(s: string | undefined): number | null {

@@ -16,6 +16,7 @@ export const FLAG_COLORS = [
   "#f8b500", // yellow
   "#9c27b0", // purple
   "#00bcd4", // cyan
+  "#e91e63", // pink
 ];
 export const FLAG_DEFAULT = "#2962ff";
 
@@ -164,7 +165,7 @@ export default function SearchModal({
         {/* Header with title */}
         <div className="smodal-title-bar">
           <span className="smodal-title">{t(titleKey)}</span>
-          <span className="esc" onClick={onClose}>ESC</span>
+          <button type="button" className="esc" onClick={onClose} aria-label="Close symbol search">ESC</button>
         </div>
 
         {cmp && (

@@ -12,7 +12,17 @@ export default function SettingsMenu({ email }: { email: string }) {
   const t = useT();
 
   useEffect(() => { const v = document.documentElement.getAttribute("data-updown"); setUd(v === "east" ? "east" : "west"); }, []);
-  useEffect(() => { if (!open) return; const close = () => setOpen(false); window.addEventListener("click", close); return () => window.removeEventListener("click", close); }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   const setUpDown = (v: "east" | "west") => {
     setUd(v);
@@ -23,9 +33,18 @@ export default function SettingsMenu({ email }: { email: string }) {
 
   return (
     <div className="pophost" style={{ position: "relative" }}>
-      <button className="avatar" onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }} title={t("settings")}>{(email || "U")[0].toUpperCase()}</button>
+      <button
+        className="avatar"
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        title={t("settings")}
+        aria-label={t("settings")}
+        aria-expanded={open}
+        aria-haspopup="menu"
+      >
+        {(email || "U")[0].toUpperCase()}
+      </button>
       {open && (
-        <div className="pop show settings-pop" style={{ top: 38, right: 0 }} onClick={(e) => e.stopPropagation()}>
+        <div className="pop show settings-pop" role="menu" style={{ top: 38, right: 0 }} onClick={(e) => e.stopPropagation()}>
           <div className="set-h"><b>{t("settings")}</b></div>
           <div className="set-grp">{t("updownColors")}</div>
           <div className="set-seg">

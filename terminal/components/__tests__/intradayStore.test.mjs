@@ -34,6 +34,7 @@ function resample(bars, minutes) {
 
 // ── inline the store-layer pure logic (same as intradayStore.ts) ────────────────────────────────
 const RTH_START = 9 * 60 + 30, RTH_END = 16 * 60;
+const EXT_START = 4 * 60, EXT_END = 20 * 60;
 function storeBase(tf) {
   const mins = tfMinutes(tf);
   if (mins >= 60) return "1h";
@@ -41,6 +42,30 @@ function storeBase(tf) {
   return null;
 }
 const rthOK = (e) => { const m = (((e / 60) % 1440) + 1440) % 1440; return m >= RTH_START && m < RTH_END; };
+const inSession = (e, ext) => {
+  const m = (((e / 60) % 1440) + 1440) % 1440;
+  return ext ? m >= EXT_START && m < EXT_END : rthOK(e);
+};
+function sessionResample(bars, minutes, ext) {
+  const open = ext ? EXT_START : RTH_START;
+  const span = minutes * 60;
+  const out = [];
+  let cur = null, key = "";
+  for (const b of bars.filter((x) => inSession(x[0], ext))) {
+    const day = Math.floor(b[0] / 86400);
+    const minute = Math.floor((b[0] - day * 86400) / 60);
+    const bucket = `${day}:${Math.floor((minute - open) / minutes)}`;
+    if (bucket !== key) {
+      if (cur) out.push(cur);
+      key = bucket;
+      cur = [day * 86400 + (open + Math.floor((minute - open) / minutes) * minutes) * 60, b[1], b[2], b[3], b[4], b[5]];
+    } else {
+      cur[2] = Math.max(cur[2], b[2]); cur[3] = Math.min(cur[3], b[3]); cur[4] = b[4]; cur[5] += b[5];
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 
 // Extracted merge+dedup+cap from withStoredHistory (the part we can test without fs)
 function mergeStoredAndLive(stored, tf, ext, live, HIST_CAP = 20000) {
@@ -49,8 +74,8 @@ function mergeStoredAndLive(stored, tf, ext, live, HIST_CAP = 20000) {
   if (!stored.length) return live;
 
   const baseMin = base === "1h" ? 60 : 5;
-  let hb = tfMinutes(tf) === baseMin ? stored : resample(stored, tfMinutes(tf));
-  if (!ext && tf.endsWith("m")) hb = hb.filter((b) => rthOK(b[0]));
+  const selected = stored.filter((b) => inSession(b[0], ext));
+  let hb = tfMinutes(tf) === baseMin ? selected : sessionResample(selected, tfMinutes(tf), ext);
 
   const liveEp = new Set(live.map((b) => b[0]));
   const merged = [];
@@ -135,14 +160,15 @@ function make1hStore(hoursArray) {
   assert.equal(out.length, 3, "ext=true: all bars pass RTH filter");
 }
 
-// 6. ext filter does NOT apply to hourly tf (4h ends with 'h' not 'm')
+// 6. Regular-session filtering also applies to hourly timeframes.
 {
   const stored = [
     [etEpoch(7, 0),  100, 101, 99, 100, 1000],
     [etEpoch(11, 0), 110, 111, 109, 110, 1000],
   ];
   const out = mergeStoredAndLive(stored, "4h", false, []); // ext=false but tf=4h
-  assert.ok(out.length > 0, "4h tf: RTH filter not applied regardless of ext flag");
+  assert.equal(out.length, 1, "4h regular chart excludes the 07:00 premarket bar");
+  assert.equal(out[0][1], 110, "the surviving bucket is built only from the 11:00 RTH bar");
 }
 
 // 7. HIST_CAP slicing: only the last N bars are kept
@@ -150,7 +176,8 @@ function make1hStore(hoursArray) {
   const stored = Array.from({ length: 100 }, (_, i) => [DAY + i * 3600, 100, 101, 99, 100, 1]);
   const out = mergeStoredAndLive(stored, "1h", true, [], 10);
   assert.equal(out.length, 10, "HIST_CAP=10 trims to last 10 bars");
-  assert.equal(out[0][0], stored[90][0], "first bar after cap is the 91st stored bar");
+  const sessionBars = stored.filter((bar) => inSession(bar[0], true));
+  assert.equal(out[0][0], sessionBars.at(-10)[0], "cap is applied after session filtering");
 }
 
 // 8. Empty stored + empty live → empty output (no crash)

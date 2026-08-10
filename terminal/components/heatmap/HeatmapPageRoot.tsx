@@ -18,7 +18,7 @@ export default function HeatmapPageRoot() {
   const { lang, setLang } = useLang();
 
   return (
-    <div className="app2 obs obs-ambient">
+    <div className="app2">
       <MobileNav email="" />
       <header className="topbar">
         <BrandLockup />

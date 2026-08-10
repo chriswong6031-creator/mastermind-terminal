@@ -73,7 +73,15 @@ const ICONS = {
 
 type MoreState = { key: string; paneIndex: number; isPane: boolean; hidden: boolean; isCompare: boolean; noParams: boolean; x: number; y: number };
 
-export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: string | null; legendOpen: boolean; onToggleLegend: () => void } & OverlayActions) {
+export default function ChartOverlays(props: {
+  panes: PaneInfo[];
+  hoveredKey: string | null;
+  legendOpen: boolean;
+  onToggleLegend: () => void;
+  showTitles?: boolean;
+  backgroundOpacity?: number;
+  paneButtons?: "always" | "hover" | "never";
+} & OverlayActions) {
   const [more, setMore] = useState<MoreState | null>(null);
   const [flip, setFlip] = useState<{ key: string; n: number } | null>(null);
   // bump `n` (a monotonic nonce) so the flipped icon remounts and the CSS animation replays on every click
@@ -87,21 +95,34 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
   }, [more]);
 
   const stop = (fn: () => void) => (ev: React.MouseEvent) => { ev.stopPropagation(); ev.preventDefault(); fn(); };
-  const openMore = (e: LegendEntry, paneIndex: number, rect: DOMRect) =>
-    setMore({ key: e.key, paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: rect.left, y: rect.bottom + 4 });
+  const openMore = (e: LegendEntry, paneIndex: number, rect: DOMRect) => {
+    const menuWidth = 204;
+    const menuHeight = e.kind === "pane" ? 330 : 220;
+    const x = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
+    const y = Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuHeight - 8));
+    setMore({ key: e.key, paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x, y });
+  };
 
   return (
     <div className="chart-overlays">
       {props.panes.map((p) => {
         const legendTop = p.top + (p.isPrice ? 38 : 9);   // price legend clears the OHLC status line + breathing room
         const primaryKey = p.entries[0]?.key;
-        const showOps = !p.isPrice && primaryKey != null;
+        const showOps = !p.isPrice && primaryKey != null && props.paneButtons !== "never"
+          && (props.paneButtons === "always" || props.hoveredKey === p.key || p.collapsed || p.maximized);
+        // Shared panes (for example RSI + Stochastic RSI) need a single-line collapsed title so the
+        // fixed header bar keeps equal padding above/below instead of spilling a second row into the
+        // pane underneath. Restoring the pane exposes each indicator's individual controls again.
+        const legendEntries = p.collapsed && p.entries.length > 1
+          ? [{ ...p.entries[0], label: p.entries.map((e) => e.label).join(" · ") }]
+          : p.entries;
         return (
           <div key={p.key}>
-            {p.entries.length > 0 && (
+            {props.showTitles !== false && p.entries.length > 0 && (
               <div className="lg-block" style={{ top: legendTop, left: 8 }}>
-                {(p.isPrice ? props.legendOpen : true) && p.entries.map((e) => (
-                  <div key={e.key} className={`lg-row${e.hidden ? " is-hidden" : ""}${e.isCompare ? " is-cmp" : ""}`}>
+                {(p.isPrice ? props.legendOpen : true) && legendEntries.map((e) => (
+                  <div key={e.key} className={`lg-row${e.hidden ? " is-hidden" : ""}${e.isCompare ? " is-cmp" : ""}`}
+                    style={props.backgroundOpacity != null && props.backgroundOpacity > 0 ? { background: `rgba(10,12,16,${Math.min(1, props.backgroundOpacity / 100) * 0.7})` } : undefined}>
                     {e.isCompare && <span className="lg-dot" style={{ background: e.color || "currentColor" }} />}
                     <span className="lg-name">{e.label}</span>
                     <span className="lg-menu">
@@ -121,8 +142,8 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
               </div>
             )}
 
-            {showOps && (props.hoveredKey === p.key || p.collapsed || p.maximized) && (
-              <div className="pane-ops" style={{ top: p.top + 3, right: 10 }}>
+            {showOps && (
+              <div className="pane-ops" style={{ top: p.top + (p.collapsed ? 5 : 3), right: 10 }}>
                 <button className="po-ic" data-tip="Move pane up" disabled={!props.canMoveUp(p.paneIndex)} onClick={stop(() => { props.onMoveUp(p.paneIndex); doFlip(p.paneIndex + ":up"); })} aria-label="Move pane up">{flip?.key === p.paneIndex + ":up" ? <span key={flip.n} className="po-flip">{I(ICONS.up)}</span> : I(ICONS.up)}</button>
                 <button className="po-ic" data-tip="Move pane down" disabled={!props.canMoveDown(p.paneIndex)} onClick={stop(() => { props.onMoveDown(p.paneIndex); doFlip(p.paneIndex + ":down"); })} aria-label="Move pane down">{flip?.key === p.paneIndex + ":down" ? <span key={flip.n} className="po-flip">{I(ICONS.down)}</span> : I(ICONS.down)}</button>
                 <button className="po-ic" data-tip="Remove" onClick={stop(() => props.onRemove(primaryKey!))} aria-label="Remove">{I(ICONS.remove)}</button>
