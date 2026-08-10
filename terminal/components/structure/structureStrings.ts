@@ -76,6 +76,26 @@ const STRUCTURE_LEX = {
   timeAria:          ["Total call and put open interest across recent sessions", "近期各交易日的认购与认沽未平仓总量"],
   timeWindowCaption: ["{n} sessions · since {date}", "{n} 个交易日 · 自 {date}"],
 
+  // ── Put / Call OI history (R5) ────────────────────────────────────────────
+  pcHistoryTitle:    ["Put / Call OI history", "认沽 / 认购 OI 历史"],
+  pcHistoryLegend:   ["P/C open interest", "认沽/认购未平仓"],
+  pcHistoryFormula:  ["put OI ÷ call OI", "认沽 OI ÷ 认购 OI"],
+  pcHistoryLatest:   ["Latest P/C OI", "最新 P/C OI"],
+  pcHistoryRange:    ["Observed range", "观测区间"],
+  pcHistorySessions: ["Valid sessions", "有效交易日"],
+  pcHistoryReceiptsAria: ["Put call open-interest history receipts", "认沽认购未平仓历史摘要"],
+  pcHistoryEmptyTitle: ["Not enough P/C OI history to draw yet", "认沽认购未平仓历史不足，暂无法绘制"],
+  pcHistoryEmptyWhy: [
+    "The line needs at least 10 sessions with finite put OI and positive call OI. Invalid denominators remain gaps.",
+    "曲线需要至少 10 个交易日具备有限认沽 OI 与正数认购 OI；无效分母保留为空缺。",
+  ],
+  pcHistoryAria: ["Put open interest divided by call open interest across reported sessions", "各申报交易日认沽未平仓除以认购未平仓"],
+  pcHistoryEqualOi: ["1.0 · equal OI", "1.0 · OI 相等"],
+  pcHistoryNote: [
+    "Open-interest balance only. A value above 1 means reported put OI exceeds reported call OI; it is descriptive, not directional.",
+    "仅衡量未平仓余额。数值高于 1 表示申报的认沽 OI 高于认购 OI；仅为描述，不代表方向。",
+  ],
+
   // ── Max pain ───────────────────────────────────────────────────────────────
   maxPainTitle:      ["Max pain", "最大痛点"],
   maxPainEmptyTitle: ["No max-pain data for this name yet", "该品种暂无最大痛点数据"],

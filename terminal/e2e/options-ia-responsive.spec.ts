@@ -64,6 +64,36 @@ test("seven-category Options IA stays addressable, honest, and contained", async
     fullPage: false,
   });
 
+  // R5 P/C history is a strict read-only derivation over the Structure pane's
+  // existing nightly oi_time payload. It retains the source contract and t-1
+  // timing law, with no new fetch or directional interpretation.
+  await page.locator("#wtab-cat-structure").click();
+  await expect(page).toHaveURL(/\/options\?tab=structure$/);
+  const pcHistory = page.locator('[data-options-pc-oi-history="r5-v1"]');
+  await expect(pcHistory).toBeVisible({ timeout: 15_000 });
+  await expect(pcHistory).toHaveAttribute("data-options-source-contract", "options_hub.oi_time/v1");
+  await expect(pcHistory).toHaveAttribute("data-options-authority", "display_only");
+  await expect(pcHistory).toHaveAttribute("data-options-oi-timing", "t-1");
+  await expect(pcHistory).toHaveAttribute("data-options-derivation", "put_oi/call_oi");
+  await expect(pcHistory).toContainText(zh ? "认沽 / 认购 OI 历史" : "Put / Call OI history");
+  await expect(pcHistory).toContainText(zh ? "认沽 OI ÷ 认购 OI" : "put OI ÷ call OI");
+  await expect(pcHistory.locator('[data-options-pc-oi-receipt="latest"] strong')).toHaveText("1.05");
+  await expect(pcHistory.getByRole("img", {
+    name: zh ? "各申报交易日认沽未平仓除以认购未平仓" : "Put open interest divided by call open interest across reported sessions",
+  })).toBeVisible();
+  await pcHistory.scrollIntoViewIfNeeded();
+  const structureContainment = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    panelRight: document.querySelector<HTMLElement>('[data-options-pc-oi-history="r5-v1"]')?.getBoundingClientRect().right ?? Infinity,
+  }));
+  expect(structureContainment.documentWidth).toBeLessThanOrEqual(structureContainment.viewport + 1);
+  expect(structureContainment.panelRight).toBeLessThanOrEqual(structureContainment.viewport + 1);
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-options-pc-oi-history.png`),
+    fullPage: false,
+  });
+
   // #380/#382 remain the same pane-level contracts after navigation through the IA.
   await page.locator("#wtab-cat-flow").click();
   await expect(page).toHaveURL(/\/options\?tab=tape$/);
