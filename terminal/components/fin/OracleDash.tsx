@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { pick, fmtPct, fmtDate } from "../../lib/finFormat"
 import { LineSeries } from "./FinCharts"
 import { getJSON } from "../../lib/dataCache"
-import { oracleVerdict, deskVerdict, signalKnownTs, isBlockedSignal, isRetroOverride, isStructureStop, retroOverrideCopy, sliceSignalBasis } from "../../lib/signalVerdict"
+import { oracleVerdict, deskVerdict, signalKnownTs, isBlockedSignal, isRetroOverride, isStructureStop, retroLegendCopy, sliceSignalBasis } from "../../lib/signalVerdict"
 import { computeTrendState } from "../../lib/trend"
 import { computeRatings, verdictFromScore } from "../../lib/techRating"
 import type { Bar } from "../../lib/fund"
@@ -899,9 +899,7 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                       Rendered only when such a row is on screen, so it costs nothing on the
                       overwhelming majority of names that have none. */}
                   {sigs.some(isRetroOverride) && (
-                    <div className="sd-sig-legend">
-                      {retroOverrideCopy(null, zh).notes[0]}
-                    </div>
+                    <div className="sd-sig-legend">{retroLegendCopy(zh)}</div>
                   )}
                 </div>
               )}

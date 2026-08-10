@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { WASHOUT_NOTCH, WASHOUT_MEASURED_NOTCH,
+import { WASHOUT_NOTCH, WASHOUT_MEASURED_NOTCH, retroLegendCopy,
   oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs, SOFT_Q,
   isBlockedSignal, isOverrideCandidate, isOverrideTake, isStructureStop, sliceSignalBasis,
   washoutOverrideCopy, OVERRIDE_TAKE_QUALITY,
@@ -1323,5 +1323,49 @@ describe("retro projection — a counterfactual, never a call", () => {
     expect(v.retro).toBeFalsy();
     expect(v.note).not.toContain("Would have entered");
     expect(v.line2).toBeNull();
+  });
+});
+
+// ── THE RETRO LEGEND — the disclosure of record ────────────────────────────────────────────
+// This block exists because of a specific, documented trade: the retro marker is drawn
+// identically to a live waived entry, and the marker tooltip that was meant to carry the
+// difference cannot render (the signal layer is `pointer-events:none`, measured). The legend
+// is therefore the ONLY surface that tells a reader some of those stars are counterfactuals.
+// Every assertion here is guarding that one job.
+describe("retro legend — the only surface that separates a counterfactual from a call", () => {
+  it("resolves the row label instead of merely repeating it", () => {
+    // a disclosure that says "(retro)" without saying what retro MEANS is a label, not a
+    // disclosure — so the legend must quote the suffix AND explain it in the same breath
+    const en = retroLegendCopy(false);
+    expect(en).toContain("(retro)");
+    expect(en).toContain("re-marked under the current rule");
+    expect(en).toContain("refused");
+    expect(en).toContain("not a call we made");
+  });
+
+  it("says the same thing in Chinese, in Chinese — not an English sentence in translation", () => {
+    const zh = retroLegendCopy(true);
+    expect(zh).toContain("（事后重标）");
+    expect(zh).toContain("按当前规则");
+    expect(zh).toContain("当时被系统拒绝");
+    expect(zh).not.toMatch(/[A-Za-z]{4,}/);          // no untranslated English left in it
+    expect(zh).not.toBe(retroLegendCopy(false));
+  });
+
+  it("carries no study name, no era slug and no refutation language", () => {
+    for (const copy of [retroLegendCopy(false), retroLegendCopy(true)]) {
+      for (const banned of ["gc_v2", "wo1", "wo2", "washout_override", "regime_blocked",
+        "validated", "falsifier", "refuted", "证伪", "Arm T", "prereg"]) {
+        expect(copy).not.toContain(banned);
+      }
+    }
+  });
+
+  it("never claims the entry happened — the whole point of the line", () => {
+    // "would have" / counterfactual mood only. If this line ever reads as a completed action
+    // the product is claiming a trade it did not make.
+    const en = retroLegendCopy(false).toLowerCase();
+    expect(en).not.toMatch(/\bwe (entered|bought)\b/);
+    expect(en).not.toMatch(/\bentry taken\b/);
   });
 });

@@ -3491,22 +3491,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             + " · the system refused this live, so it is not a call we made";
           g.appendChild(title);
         }
-        // ── the RETRO tag: glance tier, always drawn, never hover-only ──────────────
-        // A retro mark wears the entry star because the question is an entry question, and
-        // the two must be distinguishable WITHOUT a pointer: hover does not exist on touch,
-        // does not appear in a screenshot, and is not read by anyone skimming a chart. A
-        // counterfactual that is indistinguishable from a live call at a glance is a track
-        // record the product did not earn, so the tag is part of the marker, not of its
-        // tooltip. It is deliberately quiet — muted, 7px — not hidden.
-        if (retro) {
-          const tag = mk("text", {
-            x, y: up ? top - ptr - 3 : top + h + ptr + 8,
-            fill: AMBER, opacity: 0.85, "font-size": 7, "font-weight": 700,
-            "text-anchor": "middle", "font-family": "var(--font-ui)", "letter-spacing": ".06em",
-          });
-          tag.textContent = "RETRO";
-          g.appendChild(tag);
-        }
+        // ── WHY THE RETRO MARKER CARRIES NO TAG OF ITS OWN (operator order 2026-08-10) ──
+        // It is drawn exactly like a live waived entry: same star, same amber outline, no
+        // marker-level mark separating the two. That is deliberate, and it is a decision with
+        // a cost, so here is where the cost is accounted for.
+        //
+        // The disclosure is NOT this marker's `<title>` below. That tooltip cannot render:
+        // the whole signal layer is `pointer-events:none` (see the sigSvg construction), so
+        // no descendant is hit-testable and the browser never shows a native SVG title —
+        // measured in Chromium, and true of all seven titles in this layer today. The title
+        // stays only because a follow-up PR makes markers hit-testable and revives them all.
+        //
+        // The disclosure of record is the CARD LEGEND (OracleDash `.sd-sig-legend`): a
+        // persistent line, rendered whenever a re-marked fire sits in the visible signal
+        // list, that resolves the "(retro)" row label in full. It needs no hover and no tap
+        // and it survives a screenshot, which is what makes a clean chart face affordable.
+        // If you are here to remove or weaken that legend: it is load-bearing, not decoration.
         // tier badge ("A+"/"Q") as a small superscript pill to the top-right of the marker (taken entries only).
         if (badge) {
           const bx = x + w / 2 + 1, by = top - 1;

@@ -360,6 +360,26 @@ export function retroOverrideCopy(
   };
 }
 
+/** THE RETRO LEGEND — the disclosure of record for the retro projection.
+ *
+ *  Load-bearing, and worth knowing why before editing it. On the chart, a re-marked fire is
+ *  drawn IDENTICALLY to a live waived entry (operator order 2026-08-10): same star, same
+ *  amber, no marker-level tag. The marker's `<title>` cannot carry the difference either —
+ *  the signal layer is `pointer-events:none`, so no native SVG tooltip on it has ever
+ *  rendered. That leaves this line as the only place the product tells a reader that some of
+ *  those stars are counterfactuals rather than calls it made.
+ *
+ *  So it is built to need nothing from the reader: no hover, no tap, no zoom. It renders
+ *  whenever a re-marked fire is in the visible signal list, and it RESOLVES THE LABEL — it
+ *  quotes the "(retro)" suffix the rows carry and says what it means, because a label a
+ *  reader cannot resolve is not a disclosure. Plain words, no study names, no era slugs. */
+export function retroLegendCopy(zh: boolean): string {
+  return zh
+    ? "（事后重标）— 按当前规则重新标注；这笔入场当时被系统拒绝，因此不是我们当时的判断。"
+    : "(retro) — re-marked under the current rule; the system refused this entry when it "
+      + "fired, so it is not a call we made.";
+}
+
 /** HK-O1: every SELL the SLICE emits is the ARM→CONFIRM structure break — a TRAILING STOP on
  *  a swing-low break, not a momentum/oracle exit (the MACD-RSI cross-down has not been emitted
  *  to this stream since the GC v2 unification). Surfaces must say so.

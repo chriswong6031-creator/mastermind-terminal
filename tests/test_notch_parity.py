@@ -80,3 +80,39 @@ def test_neither_entry_class_is_in_the_clients_softening_set():
     assert members == {"pending", "block", "regime_blocked"}
     assert OVERRIDE_TAKE_QUALITY not in members
     assert RECLAIM_OVERRIDE_TAKE_QUALITY not in members
+
+
+ORACLE_DASH = ROOT / "terminal" / "components" / "fin" / "OracleDash.tsx"
+CHART_PANEL = ROOT / "terminal" / "components" / "ChartPanel.tsx"
+
+
+def test_the_retro_legend_is_wired_and_stays_the_disclosure_of_record():
+    """The retro marker is drawn identically to a live entry, so the legend is the ONLY
+    surface separating a counterfactual from a call the product made.
+
+    Two ways it could silently stop doing that job: someone narrows the condition that
+    renders it, or someone inlines a literal in place of the shared copy and lets the two
+    drift. A grep in the lane every reviewer already runs catches both. This guard is not
+    about style — it is the compensating control for a deliberate display trade
+    (operator order 2026-08-10), and it costs one regex.
+    """
+    src = ORACLE_DASH.read_text()
+    assert "sd-sig-legend" in src, "the retro legend element is gone"
+    # rendered on ANY re-marked fire in the visible list — not on the newest, not on a subset
+    assert re.search(r"sigs\.some\(isRetroOverride\)\s*&&", src), \
+        "the legend must render whenever ANY visible signal is re-marked"
+    # text comes from the shared bilingual copy, never an inlined literal
+    assert re.search(r"sd-sig-legend[^>]*>\s*\{retroLegendCopy\(zh\)\}", src), \
+        "the legend must render retroLegendCopy(zh), so copy and test cannot drift"
+
+
+def test_the_retro_marker_carries_no_marker_level_tag():
+    """The other half of that trade, pinned so it cannot be half-reverted.
+
+    If a tag comes back to the marker, the legend stops being the only disclosure and the
+    reasoning in both places goes stale. Re-adding one is fine — but it is a decision, and
+    it should have to come through this test rather than past it.
+    """
+    src = CHART_PANEL.read_text()
+    assert 'tag.textContent = "RETRO"' not in src
+    assert not re.search(r'textContent\s*=\s*["\']RETRO["\']', src)
