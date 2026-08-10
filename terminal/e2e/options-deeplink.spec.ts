@@ -15,16 +15,18 @@ import { test, expect } from "@playwright/test";
  *  2. the hydrated page must keep it, with the URL preserved.
  */
 
-// `prism` exercises the §5.3 retired-tab alias: HUB_KEY maps it onto the
+// `prism` exercises the §5.3 retired-tab alias: ROUTE_VIEW maps it onto the
 // Exposure desk (page key `gex`), and the URL keeps the original ?tab=prism
-// (GexDeskView reads it to open on the matrix view).
+// (GexDeskView reads it to open on the matrix view). Each case also pins the
+// R5 category that must own the existing view.
 const CASES = [
-  { query: "volatility", pill: "volatility" },
-  { query: "levels", pill: "levels" },
-  { query: "prism", pill: "gex" },
+  { query: "vol", pill: "vol", category: "flow" },
+  { query: "volatility", pill: "volatility", category: "volatility" },
+  { query: "levels", pill: "levels", category: "exposure" },
+  { query: "prism", pill: "gex", category: "exposure" },
 ] as const;
 
-for (const { query, pill } of CASES) {
+for (const { query, pill, category } of CASES) {
   test(`/options?tab=${query} activates the ${pill} tab on cold load`, async ({ page }, testInfo) => {
     test.setTimeout(60_000); // first hit may pay the dev-server route compile
 
@@ -40,12 +42,15 @@ for (const { query, pill } of CASES) {
       return m![0];
     };
     expect(pillTag(pill)).toContain('aria-selected="true"');
-    expect(pillTag("tape")).toContain('aria-selected="false"');
+    expect(pillTag(`cat-${category}`)).toContain('aria-selected="true"');
+    expect(pillTag("cat-flow")).toContain(
+      category === "flow" ? 'aria-selected="true"' : 'aria-selected="false"',
+    );
 
-    // 2) Hydrated cold load: the requested pill is (and stays) the active one.
+    // 2) Hydrated cold load: both category and requested child view stay active.
     await page.goto(`/options?tab=${query}`);
     await expect(page.locator(`#wtab-${pill}`)).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
-    await expect(page.locator("#wtab-tape")).toHaveAttribute("aria-selected", "false");
+    await expect(page.locator(`#wtab-cat-${category}`)).toHaveAttribute("aria-selected", "true");
     await expect(page).toHaveURL(new RegExp(`/options\\?tab=${query}$`));
     await page.screenshot({
       path: testInfo.outputPath(`${testInfo.project.name}-options-deeplink-${query}.png`),
@@ -53,3 +58,23 @@ for (const { query, pill } of CASES) {
     });
   });
 }
+
+test("/options?tab=statistics cold-loads the gated Statistics category", async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
+
+  const res = await page.request.get("/options?tab=statistics");
+  expect(res.ok()).toBe(true);
+  const html = await res.text();
+  const category = html.match(/<button[^>]*id="wtab-cat-statistics"[^>]*>/)?.[0];
+  expect(category).toContain('aria-selected="true"');
+  expect(html).toContain('data-options-ia-state="statistics-pending"');
+
+  await page.goto("/options?tab=statistics");
+  await expect(page.locator("#wtab-cat-statistics")).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator('[data-options-ia-state="statistics-pending"]')).toBeVisible();
+  await expect(page).toHaveURL(/\/options\?tab=statistics$/);
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-options-deeplink-statistics.png`),
+    fullPage: false,
+  });
+});
