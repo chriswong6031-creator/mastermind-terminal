@@ -178,6 +178,82 @@ test("the canonical Terminal shell works at its supported responsive widths", as
   });
 });
 
+test("the search watchlist shows the regular-session price and change", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "desktop", "the watchlist-home state is mobile Terminal navigation");
+  const zh = testInfo.project.name === "tablet";
+  if (zh) {
+    await page.addInitScript(() => {
+      localStorage.setItem("mm.lang", "zh");
+      document.documentElement.setAttribute("data-lang", "zh");
+      document.documentElement.setAttribute("lang", "zh-CN");
+    });
+  }
+
+  await page.route("**/api/quote?**", async (route) => {
+    const url = new URL(route.request().url());
+    const syms = (url.searchParams.get("syms") || "NVDA").split(",").filter(Boolean);
+    const quotes = Object.fromEntries(syms.map((sym) => [sym, sym === "NVDA" ? {
+      sym,
+      last: 192.34,
+      chg: 1.27,
+      regularPrice: 192.34,
+      regularChg: 1.27,
+      basis: "DELAYED_15M",
+      marketSession: "closed",
+    } : sym === "AAPL" ? {
+      sym,
+      last: 281.42,
+      chg: -0.83,
+      regularPrice: 281.42,
+      regularChg: -0.83,
+      basis: "DELAYED_15M",
+      marketSession: "closed",
+    } : null]));
+    await route.fulfill({ json: { quotes } });
+  });
+
+  await armTerminalVisualReady(page);
+  await page.goto("/terminal?symbol=NVDA");
+  await waitForTerminalVisualReady(page);
+
+  await page.locator(".m-symbar").click();
+
+  const hub = page.locator(testInfo.project.name === "mobile" ? ".msheet-search" : ".smodal-hub");
+  await expect(hub).toBeVisible();
+  if (zh) await expect(hub).toContainText("代码搜索");
+
+  const nvda = hub.locator(".s-home .r").filter({ has: page.locator(".tk", { hasText: /^NVDA$/ }) }).first();
+  await expect(nvda).toBeVisible();
+  await expect(nvda.locator(".s-row-id .mkt")).toHaveText("Equities");
+  await expect(nvda.locator(".s-row-quote")).toHaveAttribute("data-quote-source", "quote");
+  await expect(nvda.locator(".s-row-price")).toHaveText("192.34");
+  await expect(nvda.locator(".s-row-change")).toHaveText("+1.27%");
+  await expect(nvda.locator(".s-row-change")).toHaveClass(/up/);
+  await expect(nvda.locator(".vr > .mkt")).toHaveCount(0);
+  await expect(nvda.locator(".verd")).toHaveCount(0);
+
+  const aapl = hub.locator(".s-home .r").filter({ has: page.locator(".tk", { hasText: /^AAPL$/ }) }).first();
+  await expect(aapl.locator(".s-row-price")).toHaveText("281.42");
+  await expect(aapl.locator(".s-row-change")).toHaveText("-0.83%");
+  await expect(aapl.locator(".s-row-change")).toHaveClass(/down/);
+
+  const geometry = await nvda.evaluate((row) => {
+    const identity = row.querySelector<HTMLElement>(".meta")?.getBoundingClientRect();
+    const quote = row.querySelector<HTMLElement>(".s-row-quote")?.getBoundingClientRect();
+    const root = row.getBoundingClientRect();
+    return {
+      separated: Boolean(identity && quote && identity.right <= quote.left),
+      contained: Boolean(quote && quote.right <= root.right + 0.5),
+    };
+  });
+  expect(geometry).toEqual({ separated: true, contained: true });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+
+  await hub.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-search-watchlist-live-quotes${zh ? "-zh" : ""}.png`),
+  });
+});
+
 test("Discover loads company logos in symbol rows", async ({ page }, testInfo) => {
   const logoRequests: string[] = [];
   await page.route("https://img.logo.dev/**", async (route) => {
