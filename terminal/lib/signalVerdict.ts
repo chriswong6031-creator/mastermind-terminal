@@ -192,11 +192,11 @@ export const RECLAIM_OVERRIDE_TAKE_QUALITY = "reclaim_override_take";
  *  here it is only ever a mirror of that move. */
 export const WASHOUT_NOTCH: number = 20;
 
-/** The notch the published per-trade evidence was measured at (blocked-entry ratification
- *  packet §2/§3.5). NOT the same thing as the live notch, and deliberately so: a dial move
- *  does not re-measure a result. The disclosure copy prints those figures only while the two
- *  are equal — see `washoutOverrideCopy`. */
-export const WASHOUT_MEASURED_NOTCH: number = 25;
+/** The notch the published per-trade evidence was measured at. NOT the same thing as the live
+ *  notch, and deliberately a separate constant: a dial move does not re-measure a result, so
+ *  the two are free to diverge and the copy goes quiet when they do (see `washoutOverrideCopy`).
+ *  They are equal today because the 20% row was re-graded and published for this build. */
+export const WASHOUT_MEASURED_NOTCH: number = 20;
 
 /** The washout-override ENTRY: a regime-refused fire the live enter mask TOOK because the
  *  name's thematic-basket peers sat at/below the ratified notch on the day it fired
@@ -284,7 +284,7 @@ export function washoutOverrideCopy(
   const dd = fmtPeerDd(ctx?.peer_dd);
   const group = (zh ? ctx?.name_zh || ctx?.name : ctx?.name) || null;
   const head = kind === "reclaim"
-    ? (zh ? "放宽回补条件入场" : "Reclaim waived — entry")
+    ? (zh ? "免收复200日线入场" : "Reclaim waived — entry")
     : kind === "entry"
       ? (zh ? "深度洗盘例外入场" : "Washout override entry")
       : (zh ? "深度洗盘例外候选" : "Washout override candidate");
@@ -298,7 +298,7 @@ export function washoutOverrideCopy(
       : zh ? `${who}板块距高点 ${dd}` : `${who} ${dd} from highs`;
   const lead = kind === "reclaim"
     ? (zh
-      ? "守门条件本会拦截 — 次根K线站稳了，只差收复 200 日线；同类深度洗盘是放行的唯一理由"
+      ? "确认条件本会拦截 — 次根K线已站稳，只差收复200日线；同类深度洗盘是放行的唯一理由"
       : "the keeper would refuse this — it held the next bar but never reclaimed the 200-day; "
         + "the deep group washout is the one reason it stands")
     : kind === "entry"
@@ -310,14 +310,20 @@ export function washoutOverrideCopy(
         : "still a refused entry — the washout flag is context, not a green light");
 
   const notes = [lead];
-  // THE MEASURED FIGURES ARE PINNED TO THE NOTCH THEY WERE MEASURED AT. The dial is an
-  // operator setting; the result is a measurement. While the two differ, this line simply
-  // does not print — the alternative is attaching a 25%-notch result to a 20%-notch rule,
-  // which is a claim nobody made. Publish notch-20 figures to bring it back.
+  // THE MEASURED FIGURES ARE PINNED TO THE NOTCH THEY WERE MEASURED AT, and the guard below
+  // is what keeps them there. The dial is an operator setting; the result is a measurement,
+  // and a dial move does not re-measure anything. When the two constants diverge this line
+  // goes SILENT rather than attach one notch's result to another notch's rule.
+  //
+  // Currently both are 20, so it prints the 20% row: equal-notional +21.97% inside qualifying
+  // windows vs +3.05% outside, held-out 2019+, production-basis Gate B re-grade. Receipt:
+  // macro repo research/blocked_entry_study/regrade_receipts.json →
+  // gate_table["20"].B_PROD.{eq_notional_cell, eq_notional_complement}. (The +27%/+3% this
+  // line carried before wo2 was the 25% row and is NOT interchangeable with it.)
   if (WASHOUT_NOTCH === WASHOUT_MEASURED_NOTCH) {
     notes.push(zh
-      ? "同类深度洗盘中，这些被拦截信号每笔平均 +27%，其他情形 +3%（2019-2026，始终执行止损）"
-      : "in deep group washouts like this, these blocked signals averaged +27% per trade vs +3% otherwise (2019-2026, stop always honored)");
+      ? "同类深度洗盘中，这些被拦截信号每笔平均 +22%，其他情形 +3%（2019-2026，始终执行止损）"
+      : "in deep group washouts like this, these blocked signals averaged +22% per trade vs +3% otherwise (2019-2026, stop always honored)");
   }
   notes.push(zh
     ? "多数仍会止损离场 — 止损才是保护"

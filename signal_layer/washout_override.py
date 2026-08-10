@@ -118,13 +118,18 @@ STATE_PATH = ROOT / "terminal" / "public" / "data" / "washout_state.json"
 # different rules and pooling them measures neither.
 WASHOUT_OVERRIDE_NOTCH = 20
 
-# The notch the PUBLISHED per-trade evidence was measured at (blocked-entry ratification
-# packet §2/§3.5, held-out 2019+: cell +26.5% vs complement +3.45%). It is deliberately NOT
-# tied to the live notch: the numbers are a measurement at a setting, and a dial move does
-# not re-measure them. Every surface that prints those figures gates on the two being equal
-# (terminal/lib/signalVerdict.ts ``washoutOverrideCopy``) so the product can never attach a
-# 25%-notch result to a 20%-notch rule. Publish notch-20 figures to re-enable that line.
-WASHOUT_MEASURED_NOTCH = 25
+# The notch the PUBLISHED per-trade evidence was measured at. Deliberately NOT tied to the
+# live notch: the numbers are a measurement at a setting, and a dial move does not re-measure
+# them. Every surface that prints those figures gates on the two being equal
+# (terminal/lib/signalVerdict.ts ``washoutOverrideCopy``) so the product can never attach one
+# notch's result to another notch's rule — the copy goes silent instead.
+#
+# They are equal today because the 20% row was re-graded and published for this build:
+# equal-notional +21.97% inside qualifying windows vs +3.05% outside, held-out 2019+,
+# production-basis Gate B. Receipt (macro repo, committed on main):
+# research/blocked_entry_study/regrade_receipts.json ->
+# gate_table["20"].B_PROD.{eq_notional_cell, eq_notional_complement}.
+WASHOUT_MEASURED_NOTCH = 20
 
 # The single place the notch is written; the artifact-facing threshold derives from it so
 # the DISPLAY class and the ENTRY gate can never drift to different numbers (a name wearing

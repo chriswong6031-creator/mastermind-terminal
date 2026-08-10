@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { pick, fmtPct, fmtDate } from "../../lib/finFormat"
 import { LineSeries } from "./FinCharts"
 import { getJSON } from "../../lib/dataCache"
-import { oracleVerdict, deskVerdict, signalKnownTs, isBlockedSignal, isRetroOverride, isStructureStop, sliceSignalBasis } from "../../lib/signalVerdict"
+import { oracleVerdict, deskVerdict, signalKnownTs, isBlockedSignal, isRetroOverride, isStructureStop, retroOverrideCopy, sliceSignalBasis } from "../../lib/signalVerdict"
 import { computeTrendState } from "../../lib/trend"
 import { computeRatings, verdictFromScore } from "../../lib/techRating"
 import type { Bar } from "../../lib/fund"
@@ -230,7 +230,7 @@ function qualityLabel(q: string | null | undefined, zh: boolean): string {
   // The KEEPER's waived entry (era gc_v2_wo2, Arm T). Its own label, because it is its own
   // rule with its own forward ledger — and because it names a DIFFERENT relaxation: the
   // 200-reclaim leg, not the regime veto. The next-bar hold still had to pass.
-  if (v === "reclaim_override_take") return pick(zh, "Reclaim waived", "放宽回补条件")
+  if (v === "reclaim_override_take") return pick(zh, "Reclaim waived", "免收复200日线")
   return ""
 }
 function qualityColor(q: string | null | undefined): string {
@@ -890,6 +890,19 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                       </button>
                     )
                   })}
+                  {/* ── THE RETRO LEGEND: the disclosure that needs no hover and no tap ──
+                      A "(retro)" suffix is a label, and a label the reader cannot resolve is
+                      not a disclosure. The sentence behind it used to live only in the row's
+                      `title`, which is a desktop-hover affordance — invisible on touch, in a
+                      screenshot, and to anyone skimming. So when the visible list contains a
+                      re-marked fire, the card states the meaning in full, once, in place.
+                      Rendered only when such a row is on screen, so it costs nothing on the
+                      overwhelming majority of names that have none. */}
+                  {sigs.some(isRetroOverride) && (
+                    <div className="sd-sig-legend">
+                      {retroOverrideCopy(null, zh).notes[0]}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

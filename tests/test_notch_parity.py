@@ -49,12 +49,13 @@ def test_the_live_notch_agrees_across_the_wire():
 
 
 def test_the_measured_notch_is_tracked_apart_from_the_live_dial():
-    """The published +27%/+3% figures were cut at 25%. Moving the dial does not move them.
+    """A dial move does not re-measure a result — so the two constants stay separate.
 
-    Keeping the two constants distinct is what lets the disclosure copy go quiet instead of
-    attaching a 25%-notch result to whatever notch happens to be live.
+    They are EQUAL today (both 20): the 20% row was re-graded and published for this build,
+    so the copy prints it. Keeping them as two constants is what lets the copy go quiet on
+    the next dial move instead of attaching one notch's result to another notch's rule.
     """
-    assert int(ts_const("WASHOUT_MEASURED_NOTCH")) == WASHOUT_MEASURED_NOTCH == 25
+    assert int(ts_const("WASHOUT_MEASURED_NOTCH")) == WASHOUT_MEASURED_NOTCH == 20
 
 
 def test_both_entry_quality_strings_agree_across_the_wire():
