@@ -1,84 +1,127 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  clampAxisZoom,
-  axisZoomMargins,
-  wheelDeltaToZoomStep,
-  type AxisMargins,
+  axisLogFormulaForRange,
+  axisRangeFromLog,
+  axisRangeToLog,
+  axisValueAtCoordinate,
+  wheelDeltaPixels,
+  wheelDeltaToZoomFactor,
+  zoomAxisRange,
+  type AxisRange,
 } from "@/lib/chart-engine/axisZoom";
 
-// Pure-math tests for the axis-wheel squash/stretch (extracted from ChartPanel). The
-// price pane's default margins; subpanes pass their own base, so tests vary it.
-const PRICE: AxisMargins = { top: 0.1, bottom: 0.08 };
-
-describe("clampAxisZoom", () => {
-  it("clamps the lower bound to -base.bottom (bottom margin can reach 0, no further)", () => {
-    expect(clampAxisZoom(PRICE, -1)).toBe(-PRICE.bottom);
-    // a different base moves the floor with it
-    expect(clampAxisZoom({ top: 0.2, bottom: 0.3 }, -5)).toBe(-0.3);
+describe("logarithmic price-axis domain", () => {
+  it("round-trips ordinary and sub-unit ranges", () => {
+    for (const range of [{ from: 100, to: 200 }, { from: 0.0012, to: 0.0018 }]) {
+      const formula = axisLogFormulaForRange(range);
+      const restored = axisRangeFromLog(axisRangeToLog(range, formula), formula);
+      expect(restored.from).toBeCloseTo(range.from, 12);
+      expect(restored.to).toBeCloseTo(range.to, 12);
+    }
   });
 
-  it("clamps the upper bound to 0.4", () => {
-    expect(clampAxisZoom(PRICE, 10)).toBe(0.4);
-  });
-
-  it("passes through values already in range", () => {
-    expect(clampAxisZoom(PRICE, 0.15)).toBe(0.15);
+  it("matches the renderer's adaptive formula for narrow ranges", () => {
+    expect(axisLogFormulaForRange({ from: 10, to: 10.05 })).toEqual({
+      logicalOffset: 6,
+      coordinateOffset: 0.000001,
+    });
   });
 });
 
-describe("axisZoomMargins", () => {
-  it("adds zoom to both margins", () => {
-    expect(axisZoomMargins(PRICE, 0.1)).toEqual({ top: 0.2, bottom: 0.18 });
+describe("axisValueAtCoordinate", () => {
+  const RANGE: AxisRange = { from: 100, to: 200 };
+  const MARGINS = { top: 0.1, bottom: 0.1 };
+
+  it("maps the usable axis band into the scale's displayed domain", () => {
+    expect(axisValueAtCoordinate(RANGE, 10, 100, MARGINS)).toBeCloseTo(200, 10);
+    expect(axisValueAtCoordinate(RANGE, 89, 100, MARGINS)).toBeCloseTo(100, 10);
+    expect(axisValueAtCoordinate(RANGE, 49.5, 100, MARGINS)).toBeCloseTo(150, 10);
   });
 
-  it("clamps each margin to [0, 0.49]", () => {
-    // upper: base.top 0.1 + 0.5 would be 0.6 → clamped to 0.49
-    expect(axisZoomMargins(PRICE, 0.5)).toEqual({ top: 0.49, bottom: 0.49 });
-    // lower: base.bottom 0.08 - 0.2 would be negative → clamped to 0
-    expect(axisZoomMargins(PRICE, -0.2)).toEqual({ top: 0, bottom: 0 });
+  it("respects inverted price scales", () => {
+    expect(axisValueAtCoordinate(RANGE, 10, 100, MARGINS, true)).toBeCloseTo(100, 10);
+    expect(axisValueAtCoordinate(RANGE, 89, 100, MARGINS, true)).toBeCloseTo(200, 10);
   });
 
-  it("is the identity at zoom 0 (unchanged base margins)", () => {
-    expect(axisZoomMargins(PRICE, 0)).toEqual(PRICE);
-  });
-
-  it("reaches bottom exactly 0 at the negative clamp floor (no overshoot)", () => {
-    const floor = clampAxisZoom(PRICE, -1); // = -0.08
-    expect(axisZoomMargins(PRICE, floor).bottom).toBe(0);
-  });
-});
-
-describe("wheelDeltaToZoomStep", () => {
-  it("scales pixel-mode delta by 0.0004", () => {
-    expect(wheelDeltaToZoomStep(100, 0)).toBeCloseTo(0.04, 10);
-  });
-
-  it("multiplies line-mode (deltaMode 1) delta by 16 before scaling", () => {
-    // one line ≈ 16px, so line-mode 1 must equal pixel-mode 16
-    expect(wheelDeltaToZoomStep(1, 1)).toBeCloseTo(wheelDeltaToZoomStep(16, 0), 10);
-    expect(wheelDeltaToZoomStep(1, 1)).toBeCloseTo(16 * 0.0004, 10);
-  });
-
-  it("preserves sign (scroll up vs down)", () => {
-    expect(wheelDeltaToZoomStep(-50, 0)).toBeCloseTo(-wheelDeltaToZoomStep(50, 0), 10);
+  it("falls back safely for unusable geometry", () => {
+    expect(axisValueAtCoordinate(RANGE, 50, 1, MARGINS)).toBe(150);
+    expect(axisValueAtCoordinate(RANGE, 50, 100, { top: 0.6, bottom: 0.6 })).toBe(150);
   });
 });
 
-describe("accumulate + clamp (as ChartPanel drives it)", () => {
-  // ChartPanel keeps a running zoom, adds each notch's step, then clamps.
-  const step = (zoom: number, deltaY: number, deltaMode = 0) =>
-    clampAxisZoom(PRICE, zoom + wheelDeltaToZoomStep(deltaY, deltaMode));
+describe("wheelDeltaPixels", () => {
+  it("normalizes pixel, line, and page-mode wheel events", () => {
+    expect(wheelDeltaPixels(12, 0)).toBe(12);
+    expect(wheelDeltaPixels(1, 1)).toBe(16);
+    expect(wheelDeltaPixels(1, 2, 640)).toBe(640);
+  });
 
-  it("returns to the start within float epsilon after equal up/down steps", () => {
-    let z = 0;
-    z = step(z, 120); // scroll down
-    z = step(z, -120); // scroll back up
-    expect(z).toBeCloseTo(0, 10);
-    expect(axisZoomMargins(PRICE, z)).toEqual(
-      expect.objectContaining({
-        top: expect.closeTo(PRICE.top, 10),
-        bottom: expect.closeTo(PRICE.bottom, 10),
-      }),
-    );
+  it("neutralizes non-finite device input", () => {
+    expect(wheelDeltaPixels(Number.NaN, 0)).toBe(0);
+  });
+});
+
+describe("wheelDeltaToZoomFactor", () => {
+  it("maps a conventional notch to a smooth multiplicative step", () => {
+    expect(wheelDeltaToZoomFactor(120, 0)).toBeCloseTo(Math.exp(120 * 0.0012), 10);
+  });
+
+  it("makes equal opposite deltas reciprocal", () => {
+    const out = wheelDeltaToZoomFactor(80, 0);
+    const into = wheelDeltaToZoomFactor(-80, 0);
+    expect(out * into).toBeCloseTo(1, 12);
+  });
+
+  it("bounds one accelerated frame without imposing a cumulative limit", () => {
+    expect(wheelDeltaToZoomFactor(100_000, 0)).toBeCloseTo(Math.exp(0.35), 12);
+    expect(wheelDeltaToZoomFactor(-100_000, 0)).toBeCloseTo(Math.exp(-0.35), 12);
+  });
+});
+
+describe("zoomAxisRange", () => {
+  const RANGE: AxisRange = { from: 100, to: 200 };
+
+  it("keeps the price under the pointer stationary", () => {
+    expect(zoomAxisRange(RANGE, 125, 0.5)).toEqual({ from: 112.5, to: 162.5 });
+    expect(zoomAxisRange(RANGE, 125, 2)).toEqual({ from: 75, to: 275 });
+  });
+
+  it("is reversible for reciprocal factors", () => {
+    const factor = wheelDeltaToZoomFactor(120, 0);
+    const expanded = zoomAxisRange(RANGE, 140, factor);
+    const restored = zoomAxisRange(expanded, 140, 1 / factor);
+    expect(restored.from).toBeCloseTo(RANGE.from, 10);
+    expect(restored.to).toBeCloseTo(RANGE.to, 10);
+  });
+
+  it("keeps compounding far beyond the former fixed clamp", () => {
+    const factor = wheelDeltaToZoomFactor(-120, 0);
+    let range = RANGE;
+    let spanAt40 = 0;
+    for (let i = 1; i <= 80; i += 1) {
+      range = zoomAxisRange(range, 150, factor);
+      if (i === 40) spanAt40 = range.to - range.from;
+    }
+    const spanAt80 = range.to - range.from;
+    expect(spanAt40).toBeGreaterThan(0);
+    expect(spanAt80).toBeGreaterThan(0);
+    expect(spanAt80).toBeLessThan(spanAt40 * 0.01);
+  });
+
+  it("keeps expanding across many gestures without saturating", () => {
+    const factor = wheelDeltaToZoomFactor(120, 0);
+    let range = RANGE;
+    let spanAt20 = 0;
+    for (let i = 1; i <= 40; i += 1) {
+      range = zoomAxisRange(range, 150, factor);
+      if (i === 20) spanAt20 = range.to - range.from;
+    }
+    expect(range.to - range.from).toBeGreaterThan(spanAt20 * 10);
+  });
+
+  it("keeps the last valid range at numerical boundaries", () => {
+    expect(zoomAxisRange(RANGE, 150, Number.NaN)).toBe(RANGE);
+    expect(zoomAxisRange({ from: 1, to: 1 }, 1, 2)).toEqual({ from: 1, to: 1 });
+    expect(zoomAxisRange(RANGE, Number.MAX_VALUE, 2)).toBe(RANGE);
   });
 });
