@@ -1,0 +1,315 @@
+{
+  "schema": "options.prophet_shadow/v1",
+  "as_of": "2026-08-07",
+  "built_at": "2026-08-07T21:20:00Z",
+  "decision_at": null,
+  "available_at": "2026-08-07T21:20:00.123456Z",
+  "pit_provenance": {
+    "clock": "UTC",
+    "decision_at_required_for_issued_portfolio": true,
+    "decision_at_status": "not_available_in_current_pick_lab_contract",
+    "available_at_status": "exact_projection_publication_time",
+    "source_available_at": {
+      "flow_leaders": "2026-08-07T21:18:00Z",
+      "pick_lab": "2026-08-07T21:19:00Z"
+    },
+    "promotion_ready": false,
+    "reason": "Exact decision clocks are not available for the current fires."
+  },
+  "authority": "display_only",
+  "mode": "shadow",
+  "selection_policy": {
+    "style": "abstention_first",
+    "stage": "future_model_portfolio_policy_not_implemented",
+    "target_batch_size": { "min": 3, "max": 4 },
+    "cadence": "event_driven_every_few_sessions",
+    "abstention_allowed": true,
+    "capacity_enforced_by_projection": false,
+    "capacity_breach": false,
+    "reason": "Wave 0 preserves every governed research fire and may abstain."
+  },
+  "portfolio_boundary": {
+    "current_stage": "research_fire",
+    "operator_reviewed_issue_desk": false,
+    "issued_model_portfolio": false,
+    "managed_positions": false,
+    "reason": "A research fire is not an issued or managed portfolio position."
+  },
+  "opportunities": [
+    {
+      "symbol": "NVDA",
+      "lane": "flow_leader",
+      "engine_id": "plab_flow_leader",
+      "source_rank": 1,
+      "fire_date": "2026-08-07",
+      "decision_at": null,
+      "available_at": "2026-08-07T21:19:00Z",
+      "sector": "Information Technology",
+      "close_at_fire": 184.86,
+      "why": [
+        "Recurring premium concentration cleared the frozen Flow Leader fire rule.",
+        "Prior-session open interest confirmed the dominant strike."
+      ],
+      "signing_source": "tape",
+      "source_signing_reliable": false,
+      "authority": "display_only",
+      "direction_reliable": false,
+      "execution": {
+        "status": "withheld",
+        "executable": false,
+        "contract": { "occ_symbol": null, "right": null, "strike": null, "expiry": null },
+        "entry": { "type": null, "price": null, "quote_at": null },
+        "stop": null,
+        "targets": [],
+        "take_profit_management": null,
+        "reason": "No point-in-time contract selection, executable quote, or managed exit lifecycle is attached."
+      }
+    }
+  ],
+  "watchlist": [
+    {
+      "order": 1,
+      "symbol": "AMD",
+      "decision_at": null,
+      "available_at": "2026-08-07T21:18:00Z",
+      "lanes": ["flow_leader"],
+      "source_positions": { "board_a": 2 },
+      "fire_lanes": [],
+      "signing_source": "tape",
+      "source_signing_reliable": false,
+      "direction_reliable": false,
+      "observations": {
+        "recurrence_count": 4,
+        "net_prem_norm_abs": 0.0184,
+        "flow_z": 2.31,
+        "days_since_inflection": 1,
+        "oi_confirmed": null,
+        "zerodte_dominated": false,
+        "gamma_regime": "long",
+        "K_a": 3,
+        "n_avail_a": 4,
+        "K_b": 2,
+        "n_avail_b": 4
+      },
+      "de_escalation": {
+        "earnings_window": false,
+        "vol_trade": false,
+        "protective_put": false,
+        "gamma_caution": true
+      }
+    },
+    {
+      "order": 2,
+      "symbol": "TSLA",
+      "decision_at": null,
+      "available_at": "2026-08-07T21:18:00Z",
+      "lanes": ["flow_leader", "flow_washout"],
+      "source_positions": { "board_a": 5, "board_b": 2 },
+      "fire_lanes": [],
+      "signing_source": "minute_tick",
+      "source_signing_reliable": true,
+      "direction_reliable": false,
+      "observations": {
+        "recurrence_count": 3,
+        "net_prem_norm_abs": 0.0101,
+        "flow_z": 1.87,
+        "days_since_inflection": 2,
+        "oi_confirmed": false,
+        "zerodte_dominated": true,
+        "gamma_regime": "short",
+        "K_a": 2,
+        "n_avail_a": 4,
+        "K_b": 2,
+        "n_avail_b": 3
+      },
+      "de_escalation": {
+        "earnings_window": false,
+        "vol_trade": true,
+        "protective_put": false,
+        "gamma_caution": true
+      }
+    }
+  ],
+  "readiness": {
+    "components": {
+      "information": {
+        "ready": false,
+        "context_available": true,
+        "promotion_ready": false,
+        "reason": "At least one represented signing source has not passed its production direction gate; magnitude and positioning may still be displayed."
+      },
+      "positioning": {
+        "ready": false,
+        "context_available": true,
+        "promotion_ready": false,
+        "reason": "Positioning context is present, but current gates confer zero authority."
+      },
+      "execution": {
+        "ready": false,
+        "context_available": false,
+        "promotion_ready": false,
+        "reason": "No executable contract, quote, fill, lifecycle, or mark ledger is attached."
+      },
+      "flow_leaders": {
+        "ready": true,
+        "reason": null
+      },
+      "pick_lab": {
+        "ready": true,
+        "reason": null
+      },
+      "signed_flow": {
+        "ready": false,
+        "reason": "Directional signing remains mixed across bar and tape sources."
+      },
+      "flow_forward_ledgers": {
+        "ready": true,
+        "sample_ready": false,
+        "reason": null
+      }
+    },
+    "gates": {
+      "source_freshness": { "pass": true, "scope": "flow_leaders_freshness_and_pick_lab_contract" },
+      "source_alignment": { "pass": true, "scope": "flow_leaders_and_pick_lab_only" },
+      "signing": { "pass": false, "reason": "Directional signing remains mixed across bar and tape sources." },
+      "forward_sample": { "pass": false, "reason": "Both flow books are still accruing." },
+      "trajectory_calibration": { "pass": false, "reason": "No registered path calibration is attached." }
+    }
+  },
+  "direction": {
+    "reliable": false,
+    "value": null,
+    "bar_sources_reliable": false,
+    "tape_sources_reliable": false,
+    "reason": "Direction is withheld because tape signing has not passed its reliability gate."
+  },
+  "trajectory": {
+    "status": "withheld",
+    "take_profit": null,
+    "time_to_target": null,
+    "exit_window": null,
+    "reason": "No take-profit time or exit window is published before prospective calibration."
+  },
+  "forward_ledgers": {
+    "source_artifact": "site/labdata/pick_lab.json",
+    "books": [
+      {
+        "engine_id": "plab_flow_leader",
+        "name_en": "Flow Leader",
+        "name_zh": "资金流领先",
+        "ruler": "21d_spy_excess",
+        "n_fires": 1,
+        "n_open": 1,
+        "n_distinct_fire_dates": 1,
+        "months_span": 1,
+        "horizons": {
+          "h5": { "n": 0 },
+          "h10": { "n": 0 },
+          "h21": { "n": 0 },
+          "h63": { "n": 0 }
+        },
+        "status": "ACCRUING",
+        "authority": "display_only",
+        "paths": { "path25": null, "path63": null }
+      },
+      {
+        "engine_id": "plab_flow_washout",
+        "name_en": "Flow Washout",
+        "name_zh": "资金流洗盘",
+        "ruler": "21d_abs_reversion_capture_mfe_mae",
+        "n_fires": 0,
+        "n_open": 0,
+        "n_distinct_fire_dates": 0,
+        "months_span": 0,
+        "horizons": {
+          "h5": { "n": 0 },
+          "h10": { "n": 0 },
+          "h21": { "n": 0 },
+          "h63": { "n": 0 }
+        },
+        "status": "ACCRUING",
+        "authority": "display_only",
+        "paths": { "path25": null, "path63": null }
+      }
+    ],
+    "incremental_options_attribution": {
+      "available": false,
+      "reason": "The matched Macro-versus-options attribution cohort is not yet large enough."
+    }
+  },
+  "accrual": {
+    "events": {
+      "unit": "immutable_options_originated_fire",
+      "books": [
+        { "engine_id": "plab_flow_leader", "n_fires": 1, "n_open": 1, "n_distinct_fire_dates": 1 },
+        { "engine_id": "plab_flow_washout", "n_fires": 0, "n_open": 0, "n_distinct_fire_dates": 0 }
+      ],
+      "published_now": 1,
+      "timestamp_coverage": {
+        "n_published": 1,
+        "n_exact_decision_at": 0,
+        "n_exact_available_at": 1
+      },
+      "authority": "display_only"
+    },
+    "outcomes": {
+      "unit": "fire_x_horizon",
+      "separate_from_event_accrual": true,
+      "horizons": {
+        "1h": { "instrumented": false, "status": "not_instrumented", "authority": "none", "books": [], "reason": "No immutable PIT outcome book exists." },
+        "eod": { "instrumented": false, "status": "not_instrumented", "authority": "none", "books": [], "reason": "No immutable PIT outcome book exists." },
+        "1d": { "instrumented": false, "status": "not_instrumented", "authority": "none", "books": [], "reason": "No immutable PIT outcome book exists." },
+        "3d": { "instrumented": false, "status": "not_instrumented", "authority": "none", "books": [], "reason": "No immutable PIT outcome book exists." },
+        "5d": {
+          "instrumented": true,
+          "status": "accruing",
+          "authority": "descriptive_only",
+          "books": [
+            { "engine_id": "plab_flow_leader", "n": 0, "status": "ACCRUING" },
+            { "engine_id": "plab_flow_washout", "n": 0, "status": "ACCRUING" }
+          ],
+          "pit_exact": false,
+          "reason": "Legacy session outcomes do not have exact clocks."
+        },
+        "10d": {
+          "instrumented": true,
+          "status": "accruing",
+          "authority": "descriptive_only",
+          "books": [
+            { "engine_id": "plab_flow_leader", "n": 0, "status": "ACCRUING" },
+            { "engine_id": "plab_flow_washout", "n": 0, "status": "ACCRUING" }
+          ],
+          "pit_exact": false,
+          "reason": "Legacy session outcomes do not have exact clocks."
+        },
+        "expiry": { "instrumented": false, "status": "not_instrumented", "authority": "none", "books": [], "reason": "No immutable PIT outcome book exists." }
+      }
+    }
+  },
+  "context_inputs": {
+    "konseki_market_memory": {
+      "expected_schema": "konseki.market_memory/v1",
+      "connected": false,
+      "authority": "context_only",
+      "weight": 0,
+      "may_rank": false,
+      "may_gate": false,
+      "may_size": false,
+      "decision_at": null,
+      "available_at": null,
+      "receipt": null,
+      "reason": "No governed Konseki Market Memory receipt is connected."
+    }
+  },
+  "macro_feedback": {
+    "enabled": false,
+    "weight": 0,
+    "mode": "shadow_only",
+    "reason": "Options Alpha cannot rank, gate, size, or originate Macro Prophet plans."
+  },
+  "provenance": {
+    "origin": "options",
+    "sources": ["flow_leaders", "pick_lab", "signed_flow", "options_positioning"]
+  },
+  "method_note": "Fixture evidence exercises true-fire, watchlist, readiness, and forward-ledger states without granting trading authority."
+}

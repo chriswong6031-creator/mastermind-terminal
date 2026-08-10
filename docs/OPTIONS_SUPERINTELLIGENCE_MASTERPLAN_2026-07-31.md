@@ -50,7 +50,7 @@ are fair game; claimed lanes are not.
 | R4 Filter Groups + alert generalization + page/global filter bus | 🔓 OPEN — design pinned §4-R4; enriched schema (R1) is its vocabulary, but the engine + Supabase persistence can start against existing fields |
 | R5 IA restructure (7 categories) + blind-spot surfaces (0DTE dash, largest-trades, chain browser, P/C history, exp-vs-realized, export) | 🔓 OPEN — first slice IN FLIGHT 08-03: §5.3 PRISM→Exposure merge (branch `claude/prism-exposure-merge-20260803`; retire PRISM tab, shared sign-correct matrix renderer, port Confluence + HeatSeeker, `?tab=prism` alias). **PR #164 RESOLVED 08-03: closed as superseded** — master already ships its flat-sidebar intent (AppNav 7-item, next.config redirects) and resolves the one design conflict (Leaders/Radar → Discover) in R5's direction; nothing to re-implement; salvage check pending: multi-watchlist pill switcher on PortfolioView |
 | 2026-08-03 continuation session (this session's claims) | IN FLIGHT — P0 Tickers-drill crash hotfix; Volatility/Structure card-height equalization (branch `claude/vol-structure-layout-20260802`); Surface granularity upgrade (gradient + msc-consuming signal overlays, spec from census lane); Exposure/PRISM adjudication executed per §5.3 (see R5 row) |
-| R6 Prophet superintelligence (spine, multi-lane origination, live re-score, distribution) | 🔓 OPEN — co-design with MSC's signal layer (see sibling note above); R0.7 prerequisites landed |
+| R6 Prophet superintelligence (spine, multi-lane origination, live re-score, distribution) | 🟡 WAVE 0 BUILT 08-08 — system audit + separate Options Alpha shadow pane + governed `options.prophet_shadow/v1` projection. Wave-0 snapshot: no options direction/trajectory/Macro weight and zero Pick Lab fires/outcomes; source/session history exists, but Options Alpha event/outcome accrual remains zero. Immediate next delivery is the separate operator-reviewed `options.issue_desk/v1`; automatic `options.model_portfolio/v1` follows PIT outcome/campaign evidence. R6.1+ remains gated on signing, exact PIT execution, paired attribution and forward calibration |
 | R7 dark pool / equities feed | ⛔ GATED — owner spend decision (Polygon TRF vs Databento) still open |
 | R8 composability (My-Pages) | ⛔ GATED — after R5 |
 
@@ -327,6 +327,11 @@ options-structure-aware geometry (walls/flip/expected-move), live intraday manag
 signals mid-session), option-contract optimization + graded option outcomes, ledger surfaced (PERF tab real),
 Prophet on charts/ticker pages/screener, bear-side lane behind its own pre-registration.
 
+**Canonical R6 delivery order (2026-08-08; this is the QuantData overlay, not a parallel roadmap):** PIT
+candidate/episode ledger → H+60 and multi-horizon outcomes → campaign aggregation → sparse selector with explicit
+abstention → exact executable-contract optimizer → staged position lifecycle → Today/Pulse operator workflow.
+Later stages may be scaffolded, but they cannot claim authority ahead of the evidence stage that precedes them.
+
 ### R7 — Dark pool & equities lane (owner spending decision required)
 Decision gate: **Polygon TRF** (cheap, prints+levels) vs **Databento** (licensed depth, per
 `docs/DATABENTO_INTEGRATION_DESIGN.md`, incl. pro/non-pro classification duty). Until decided, the honest FINRA
@@ -369,12 +374,22 @@ Design doctrine unchanged: v5/v7 tokens, LEX i18n, `--up/--down` law, svgChart l
 
 ## 6. Prophet superintelligence — architecture
 
-**Principle**: Prophet stops being a repackager of one upstream list and becomes the estate's **fusion desk**:
-every signal source in §2 flows into one scored, provenance-tagged, live-managed plan surface. Score-not-gate,
-display-tier, ledger-graded, "validated" stays CI-forbidden.
+**Principle (amended 2026-08-08)**: Prophet stops being a repackager of one upstream list and becomes the
+estate's **governed evidence desk**. It is not one fused score. Macro-originated plans and options-originated
+opportunities remain separate lanes with separate books, timestamps, provenance, calibration and authority.
+Information, positioning and execution evidence may be displayed together but is never averaged into an opaque
+"options confidence" number. Score-not-gate, display-tier, ledger-graded, and "validated" stays CI-forbidden.
 
-### 6.1 The spine artifact
-New versioned doc `prophet.spine/v1` per candidate symbol (macro nightly + intraday patcher):
+### 6.1 The spine artifacts
+
+Wave 0 ships `options.prophet_shadow/v1` as a fail-closed projection over the existing Flow Leaders and Pick Lab
+books. Its `opportunities` are only actual same-session Pick Lab fires; its watchlist preserves source order and
+never becomes a buy list. Direction and trajectory are withheld, Macro feedback is disabled with weight zero,
+and the information/positioning/execution readiness receipts remain separate. This creates the independent
+Options Alpha product surface and forward-measurement seam without manufacturing a model.
+
+The later cross-estate document remains a versioned `prophet.spine/v1` per candidate symbol (macro nightly +
+intraday patcher):
 ```
 {sym, asof, sources:{
   oracle:   {verdict, quality_tier, keeper, reclaim, known_ts},        # GC-v2 scored lane
@@ -390,43 +405,115 @@ New versioned doc `prophet.spine/v1` per candidate symbol (macro nightly + intra
   seasonal: {bucket_tilt}, market: {risk_verdict, regime},              # seasonal/market_risk
 }, staleness per source, grammar tag per source}
 ```
-Composed **from existing artifacts** over the R2 bus — no new math in v1, so it ships fast and honestly. Each
-source carries its own `known_ts` + bar-grammar tag (the three-confluence-grammars problem is disclosed, not
-hidden).
+Composed **from existing artifacts** over the R2 bus. Each source carries its own `known_ts`, source authority,
+coverage/signing uncertainty and bar-grammar tag. The spine is an evidence envelope, not permission to score or
+fuse a source. A consumer must honor each component's own promotion receipt.
 
 ### 6.2 Origination (multi-lane, provenance-tagged)
 Lanes, each pre-registered with its own pick rule (macro `research/` prereg discipline):
 - **L1 Standout** (today's lane, unchanged — continuity of the ledger).
 - **L2 Confluence-of-confluences**: GC-v2 A+/quality BUY ∧ cascade T1/T2-fresh ∧ subsector tailwind.
-- **L3 Flow-trigger** (the operator's "sudden bullish shift" ask): intraday — repeat golden-sweep bias + tide
-  inflection + OI-confirm on a name whose spine shows non-bearish structure (dist-to-flip, walls) → intraday
-  candidate, published to the Prophet desk as `provisional` (marked; converts or expires at close). This is the
-  continuation-catcher Golden Oracle misses by design.
+- **O1 Flow-leader** (Wave 0 shadow): a `plab_flow_leader` Pick Lab fire, independently ledgered. A raw Board A
+  member or `fire_a` flag is only a watch candidate.
+- **O2 Flow-washout** (Wave 0 shadow): a `plab_flow_washout` Pick Lab fire, independently ledgered. A raw Board B
+  member or `fire_b` flag is only a watch candidate.
+- **L3 Flow-trigger research lane** (the operator's "sudden bullish shift" ask): buyer-initiated opening flow,
+  delta/vega-weighted imbalance, acceleration/persistence and OI confirmation. Public gross volume/OI and
+  conventional GEX do not satisfy this definition. The lane stays withheld until signing/open-close identity,
+  PIT data and a prospective rule pass their own gate.
 - **L4 Washout-reclaim**: rubber-band extreme + reclaim lane + flow confirmation.
-Each plan records `origin_lane` + the spine snapshot at origination (auditable forever). Selection stays BULL-only
-until a bear-lane prereg passes review (bear branches exist in the geometry code already).
+Each plan records `origin_lane` + the immutable spine snapshot at origination (auditable forever). Lanes are
+reported and graded separately; no cross-lane composite is created. Selection stays BULL-only until a bear-lane
+prereg passes review (bear branches exist in the geometry code already).
+
+#### 6.2.0 Canonical evidence-to-product sequence
+
+This section is the single R6/QuantData execution overlay. Do not create a competing Options Alpha roadmap.
+
+1. **PIT candidate and episode ledger:** one immutable candidate event with exact `decision_at`, `available_at`,
+   source receipt IDs and episode identity. Repeated prints belonging to one thesis are not extra picks.
+2. **H+60 and multi-horizon outcomes:** accrue H+60 first, then EOD/1d/3d/5d/10d/expiry in a separate outcome
+   ledger. Outcome rows never inflate the candidate count.
+3. **Campaign aggregation:** join related contract/root flow into point-in-time campaigns with recurrence,
+   opening/closing evidence, persistence and decay; keep raw prints addressable.
+4. **Sparse selection and abstention:** pre-register portfolio fit, regime, correlation/sleeve, cash, cooldown,
+   minimum-hold and maximum-new-position rules. Zero is a valid answer.
+5. **Exact contract optimizer:** choose a real OCC contract only from contemporaneous NBBO, spread, liquidity,
+   IV/Greeks, capacity and cost receipts; keep underlying and option objectives distinct.
+6. **Staged lifecycle management:** append-only issue, accumulation permission, trigger, fill, trim/roll/trail,
+   invalidation and close events; never mutate the original issue receipt.
+7. **Today/Pulse workflow:** only after the prior contracts are honest, expose the operator queue, active portfolio,
+   management changes, abstentions and performance attribution as one workflow.
+
+Macro owns the PIT/campaign/outcome/selection/optimizer builders and ledgers. Terminal owns the responsive
+Today/Pulse, Issue Desk and managed-position views. Neither side may promote options evidence into Macro rank until
+the paired incremental-attribution gate is separately reviewed and promoted.
+
+#### 6.2.1 Operator-reviewed Issue Desk (R6.2 speed path; next)
+
+User value must not wait for automatic options-model promotion. A separate `options.issue_desk/v1` workflow takes
+current Macro candidates plus frozen options, regime and execution receipts into an explicit human approve/reject
+decision, then a sparse Research Portfolio. The operator may add **0–4 positions per rolling three sessions**;
+zero is valid. Every proposal, rejection and issued research plan records reviewer, exact `decision_at` and
+`available_at`, reason codes, immutable inputs and resulting portfolio state. The desk evaluates allocation fit,
+not four independent top scores. It cannot change Macro rank, cannot masquerade as automatic Options Alpha, and
+does not waive executable-contract/risk disclosure.
+
+The transport state machine is explicit: `ISSUED → PARTIAL_ALLOWED` (optional;
+only when a frozen starter policy permits it) `→ ARMED → TRIGGERED → MANAGED →
+CLOSED/CANCELLED/INVALIDATED`. Every issue freezes the underlying
+trigger, no-chase and add rules, entry/reference, stop, T1/T2 partial-exit
+fractions, minimum hold and horizon, plus OCC contract/strike/expiry, premium,
+quote and fills. Dynamic validity/progress/pace/overlay readings are management
+receipts, never a retroactive origination score or silent Macro-rank edit.
+
+Acceptance fixture (transport completeness only, not a recommendation): an LMT issue can preserve a 582.74
+underlying reference, separate 595 trigger, 525 stop, 700 T1, a 600-strike September 18 call and a 30-day minimum
+hold without flattening those facts into one nightly Prophet row. The issue/partial permission/armed/triggered/
+managed events and the option marks remain separately timestamped.
+
+#### 6.2.2 Automatic sparse issued-model-portfolio slice (after evidence accrues)
+
+The product sequence is **Research Watchlist → sparse Issued Model Portfolio → managed positions**. A Pick Lab
+fire is not automatically an issued position. The later automatic slice owns a separate `options.model_portfolio/v1` artifact
+and append-only portfolio decision/position/outcome ledgers. Portfolio construction must jointly enforce regime
+alignment, correlation and sleeve caps, cash/abstention, maximum new picks, symbol/refire cooldown and a minimum-
+hold policy. Its target is roughly three to four issued calls every few sessions when the environment permits,
+never a mandatory quota or naive top-K truncation. Every issue, suppression and management action records exact
+`decision_at` and `available_at`; outcome accrual is separate at 1h/EOD/1d/3d/5d/10d/expiry. Konseki Market Memory
+may enter only as `context_only`, weight zero, with no rank/gate/size permission.
+
+Underlying-plan P&L, option-contract P&L and allocation-weighted portfolio P&L
+remain separate. `sum_of_trade_returns` is a descriptive aggregate and may never
+be labelled portfolio return; the latter requires actual sizing, cash, overlap,
+fills/costs and a time-indexed equity curve.
 
 ### 6.3 Geometry (options-structure-aware)
-Stops/targets stop being blind R-multiples: invalidation snaps below the nearest of (swing low, 2×ATR, put wall /
-flip when between); T1/T2 respect call walls + expected move for the horizon (targets inside the reachable cone get
-flagged `structure_fit:true`; outside, the current honest "geometry, not forecast" warning). Levels provenance =
-gex_state (one source; the sealed-levels lane grades them daily already).
+Macro-plan stops/targets may display walls, flip and expected-move context, but they do not automatically snap to
+those levels until the paired path ledger shows incremental value. Gross-volume-derived GEX/vanna/charm are
+labelled estimates and begin as volatility/trajectory-regime features, not directional alpha. Options Alpha keeps
+target, time-to-target and exit window null until a PIT competing-risk/path model passes walk-forward and
+prospective calibration. Exact take-profit clocks are prohibited; eventual output is calibrated first-passage
+probability plus a time band.
 
 ### 6.4 Management (live, both directions)
-- Nightly engine unchanged as the anchor; add the **intraday re-scorer** (M1, 5-min with prophet-marks loop):
-  recompute confidence deltas from live spine inputs — flow bias flip against the plan, wall break, tide reversal,
-  vol-regime jump ⇒ `live_adjustment` field (bounded ±10, decays to 0 at close, never crosses phase boundaries —
-  the nightly engine remains the authority). UI: live delta chip + reason string on SignalCard.
+- Nightly Macro engine remains the anchor. A future **intraday options re-scorer** may emit a bounded shadow delta
+  only after the exact live feature pipeline passes signing, freshness and paired incremental-attribution gates.
+  Until then Options Alpha cannot alter Macro admission, phase, rank, target or size.
 - Intraday touch detection from the intraday store closes the "close-only scan misses T1/stop touches" gap.
 - `macro_stance`/`futures_chg` wired (R0.7). Earnings-blackout veto joins management (no "Hold" through a report
   silently — chip + confidence haircut).
-- **Option overlay graded**: `option_result_pct` computed from marks history; contract choice upgraded (spread-cost
-  vs delta vs IV-rank aware; still display-tier).
+- **Option overlay graded**: add a point-in-time contract/quote/fill/lifecycle ledger before computing
+  `option_result_pct`; separately freeze `macro_base`, `macro_plus_options`, and `options_originated` books so the
+  added value of options evidence is measured rather than inferred from the stock outcome.
 - **PERF tab goes real**: the ledger (already accruing, PIT-safe) renders as the desk's track record with the same
   delayed-winners law as the landing.
 
 ### 6.5 Distribution (Prophet everywhere it's relevant)
-Chart: plan levels (entry/stop/T1/T2) + phase chip as an opt-in overlay (ChartPanel already draws level rails).
+The Options workspace Prophet view begins with distinct **Macro Plans** and **Options Alpha** panes. Empty true-fire
+states, source/gate readiness, stale state and forward-book accrual are first-class; watch candidates are capped for
+scanning but preserve source order and are never relabelled as signals. Chart: Macro plan levels (entry/stop/T1/T2)
+and a phase chip as an opt-in overlay (ChartPanel already draws level rails).
 Ticker page: Prophet receipt block in StockAnalysis (plan state or "no active plan — nearest lane distance").
 Screener: `prophet_phase`, `management_confidence`, `origin_lane` manifest columns. Watchlist rail: phase dot.
 All read the same index — no second pipeline.
