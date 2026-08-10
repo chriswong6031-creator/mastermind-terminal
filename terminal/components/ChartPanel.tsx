@@ -58,7 +58,7 @@ import {
 import type { SuiteRenderBundle, SuiteTier, SuiteColors, CoordMapper, TableSpec } from "@/lib/indicator-canvas/types";
 import ChartTables from "@/components/ChartTables";
 import { crossUps, crossDowns, crossUpsBelow, crossDownsAbove } from "@/lib/crossSignals";
-import { SOFT_Q, anchorSignal, isBlockedSignal, isStructureStop, sliceSignalBasis } from "@/lib/signalVerdict";
+import { SOFT_Q, anchorSignal, isBlockedSignal, isOverrideCandidate, isStructureStop, sliceSignalBasis } from "@/lib/signalVerdict";
 import { makeNearestBarIndex } from "@/lib/barSnap";
 import { ichimoku, supertrend, avwap as computeAvwap, rollingVwap, weekAnchoredVwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
@@ -413,8 +413,8 @@ const shellAxisFontSize = () => (shellAxis() && shellWide() ? 13 : 12);
 // ── color-token snapshot (re-read on mount and on the up/down color flip, Effect 5) ──
 // `axis`/`grid` resolve through the --chart-axis-text / --chart-grid indirection whose :root
 // defaults reproduce --muted / --grid exactly; only the native shell retunes them (D6).
-type Tokens = { up: string; down: string; grid: string; axis: string; line: string; p3: string; link: string; warn: string; buy: string; sell: string; mut: string; brand2: string };
-const readTokens = (): Tokens => ({ up: css("--up"), down: css("--down"), grid: css("--chart-grid") || css("--grid"), axis: css("--chart-axis-text") || css("--muted"), line: css("--line"), p3: css("--panel-3"), link: css("--link"), warn: css("--warn"), buy: css("--buy"), sell: css("--sell"), mut: css("--muted"), brand2: css("--brand-2") });
+type Tokens = { up: string; down: string; grid: string; axis: string; line: string; p3: string; link: string; warn: string; signal: string; buy: string; sell: string; mut: string; brand2: string };
+const readTokens = (): Tokens => ({ up: css("--up"), down: css("--down"), grid: css("--chart-grid") || css("--grid"), axis: css("--chart-axis-text") || css("--muted"), line: css("--line"), p3: css("--panel-3"), link: css("--link"), warn: css("--warn"), signal: css("--signal"), buy: css("--buy"), sell: css("--sell"), mut: css("--muted"), brand2: css("--brand-2") });
 
 // Directional tint. LWC paints to canvas and cannot resolve var(--up)/var(--down), so every shaded
 // directional band has to be built in JS from the LIVE token — hardcoding the green/red rgba is what
@@ -550,7 +550,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // regime_blocked BUY is a refused setup that must never wear buy geometry). Both are stamped
   // only on the slice path, where provenance is known — the client-Pine fallback leaves them
   // undefined so its genuinely momentum-sourced SELL is not relabelled a stop.
-  type SigMark = { t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null; reason?: string; basis?: string; blocked?: boolean; stopLevel?: number | null };
+  type SigMark = { t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null; reason?: string; basis?: string; blocked?: boolean; stopLevel?: number | null; overrideCandidate?: boolean; overrideGroup?: string | null; overrideDd?: number | null };
   const sigMarksRef = useRef<SigMark[]>([]);
   // Client-Pine FALLBACK: when a symbol ships no slice signal history, marks come from ORACLE_V1_PINE
   // run client-side on the daily bars, memoized per (symbol · daily length · last daily date) so the
@@ -572,7 +572,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const viewSavedRef = useRef<{ from: number; to: number } | null>(null);
   // SSR-safe: seed with empty tokens (this client component still renders on the server for initial
   // HTML, where getComputedStyle/document are unavailable). Effect 1 populates real tokens on mount.
-  const tokensRef = useRef<Tokens>({ up: "", down: "", grid: "", axis: "", line: "", p3: "", link: "", warn: "", buy: "", sell: "", mut: "", brand2: "" });
+  const tokensRef = useRef<Tokens>({ up: "", down: "", grid: "", axis: "", line: "", p3: "", link: "", warn: "", signal: "", buy: "", sell: "", mut: "", brand2: "" });
   const chartTypeRef = useRef<string>(chartType);
   const timeframeRef = useRef<string>(timeframe);
   const compareRef = useRef<string[]>(compare || []);
@@ -2264,6 +2264,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const m = snap(s.ts, s.type); if (!m) continue;
         m.quality = s.quality; m.tier = s.tier; m.reason = s.quality_reason;
         m.basis = sliceSignalBasis(s); m.blocked = isBlockedSignal(s); m.stopLevel = s.stop_level ?? null;
+        // display-tier washout-override class (emitter-stamped, never re-derived here)
+        m.overrideCandidate = isOverrideCandidate(s);
+        if (m.overrideCandidate) {
+          m.overrideGroup = s.override_ctx?.name ?? s.override_ctx?.group_id ?? null;
+          m.overrideDd = typeof s.override_ctx?.peer_dd === "number" ? s.override_ctx.peer_dd : null;
+        }
         marks.push(m);
       }
       // slice signals are chronological; snapping preserves order (the chip's fallback relies on it)
@@ -3022,7 +3028,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const indSvg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:2;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(indSvg); indSvgRef.current = indSvg;
     // signal-marker layer (below the user-drawing layer); custom TradingView-style badges
-    const sigSvg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none" }) as SVGSVGElement;
+    // `data-sig-layer` mirrors the drawing layer's own hook below: the marker geometry is
+    // otherwise only addressable by its z-index inline style, which no test should depend on.
+    const sigSvg = mk("svg", { "data-sig-layer": "1", style: "position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(sigSvg); sigRef.current = sigSvg;
     const svg = mk("svg", { class: "drawing-layer", "data-drawing-layer": "1", style: "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(svg); svgRef.current = svg;
@@ -3209,6 +3217,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // GC v2 tier → marker badge glyph (aplus="A+", quality="Q", base/none → no badge).
       const tierBadge = (tier?: string | null) => (tier === "aplus" ? "A+" : tier === "quality" ? "Q" : "");
       const SLATE = "#7c8aa0";   // regime_blocked dim slate (no matching CSS token — inline hex)
+      // washout-override amber. `--signal` (#e8b339) resolved through the token reader rather
+      // than written as a literal, so the marker tracks the token the rail card uses.
+      const AMBER = t2.signal || "#e8b339";
       while (layer.firstChild) layer.removeChild(layer.firstChild);
       if (priceProjHidden()) return;   // sub-pane maximized → price-anchored markers stay cleared
 
@@ -3351,11 +3362,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (m.blocked || m.quality === "regime_blocked") {
           const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
           const cy = y + 15, r = 5.4, k = r * 0.707;
-          const g = mk("g", { opacity: 0.62 });
-          g.appendChild(mk("circle", { cx: x, cy, r, fill: "none", stroke: SLATE, "stroke-width": 1.3 }));
-          g.appendChild(mk("line", { x1: x - k, y1: cy + k, x2: x + k, y2: cy - k, stroke: SLATE, "stroke-width": 1.3 }));
+          // ── washout-override candidate: the SAME ring-slash, promoted in weight only ──
+          // Ratified 2026-08-10 (25% notch). It is still a refusal, so it keeps the ring and
+          // the slash — no star, no pill, no pointer, nothing borrowed from entry geometry.
+          // What changes is that it stops being background: amber at full opacity instead of
+          // slate at 0.62, plus a small amber dot above the ring so a ⊘ worth reading is
+          // findable in a dense marker field without zooming.
+          const ovr = !!m.overrideCandidate;
+          const stroke = ovr ? AMBER : SLATE;
+          const g = mk("g", { opacity: ovr ? 1 : 0.62 });
+          g.appendChild(mk("circle", { cx: x, cy, r, fill: "none", stroke, "stroke-width": 1.3 }));
+          g.appendChild(mk("line", { x1: x - k, y1: cy + k, x2: x + k, y2: cy - k, stroke, "stroke-width": 1.3 }));
+          if (ovr) g.appendChild(mk("circle", { cx: x, cy: cy - r - 4, r: 1.5, fill: AMBER }));
           const title = mk("title", {});
-          title.textContent = `${m.t} · ${m.type} blocked by the regime gate — not an entry${m.reason ? ` — ${m.reason}` : ""}`;
+          const dd = typeof m.overrideDd === "number" ? `−${Math.trunc(Math.abs(m.overrideDd) * 100)}%` : "";
+          title.textContent = `${m.t} · ${m.type} blocked by the regime gate — not an entry${m.reason ? ` — ${m.reason}` : ""}`
+            + (ovr ? ` · washout override candidate${m.overrideGroup ? ` — ${m.overrideGroup}` : ""}${dd ? ` ${dd} from highs` : ""}` : "");
           g.appendChild(title);
           layer.appendChild(g);
           continue;

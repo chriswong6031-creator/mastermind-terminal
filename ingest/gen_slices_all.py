@@ -33,6 +33,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from signal_layer import confluence, contracts, confluence_v2  # noqa: E402
+from signal_layer.washout_override import DailyBars, WashoutStamper  # noqa: E402
 from ingest.build_polygon_universe import DEFAULT as FLAGSHIP  # the ~37 with rich slices  # noqa: E402
 from ingest.v2_cohort_cache import build_cohort_cache  # noqa: E402
 
@@ -80,6 +81,11 @@ def main() -> None:
     # security names for the reclaim symbol-class rule (decay instruments emit no reclaims)
     _names = {s: (r or {}).get("name") for s, r in _man.get("symbols", {}).items()}
     print(f"  cohort cache built ({time.time() - t0:.0f}s)", flush=True)
+    # ── washout-override display stamp (ratified 2026-08-10, threshold 25%) ──
+    # Loaded ONCE for the run: the artifact + the forward ledger. Absent/stale artifact ⇒
+    # a no-op stamper, so every ⊘ renders exactly as it does today. This is the NIGHTLY
+    # lane, so it accrues ledger rows; it changes no signal, score, tier, or entry.
+    stamper = WashoutStamper.create()
     for jf in files:
         name = jf.name
         if name == "manifest.json" or "staging" in name or name.endswith((".slice.json", ".intel.json", ".backtest.json")):
@@ -139,6 +145,12 @@ def main() -> None:
                 reclaims_enabled=confluence_v2.reclaim_eligible(_names.get(sym), sym))
             ind = contracts.indicator_contract(
                 sym, "3D", sig, bar_quality="real_ohlc", src_text="", honest_read=HONEST, v2=v2)
+            # display-tier washout-override stamp on already-emitted regime_blocked events
+            # (additive optional fields only; a non-qualifying blocked fire is untouched)
+            stamper.stamp(sym, ind.get("signals"), daily=DailyBars(
+                bar_opens=[d.strftime("%Y-%m-%d") for d in sig.index],
+                dates=[d.strftime("%Y-%m-%d") for d in idx],
+                high=high.to_list(), low=low.to_list(), close=close.to_list()))
             # the chart only consumes indicator.signals + indicator.state — drop the heavy arrays
             for heavy in ("series", "gates", "bars"):
                 ind.pop(heavy, None)
@@ -152,6 +164,7 @@ def main() -> None:
             n_err += 1
             if n_err <= 20:
                 print(f"  ERR {sym}: {e}", flush=True)
+    stamper.flush()
     if changed_only:
         mode = "changed-only"
     elif only_missing:

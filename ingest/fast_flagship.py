@@ -44,6 +44,7 @@ sys.path.insert(0, str(ROOT))
 
 from ingest.build_polygon_universe import DEFAULT  # noqa: E402  — the 37 flagship syms
 from signal_layer import confluence, contracts, confluence_v2  # noqa: E402
+from signal_layer.washout_override import WashoutStamper  # noqa: E402
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 OUT        = ROOT / "terminal" / "public" / "data"
@@ -310,6 +311,12 @@ def _main_locked(limit: int, syms_override: list[str] | None, dry_run: bool) -> 
     patched: dict = {}
     t0 = time.time()
     n_ok = n_skip = 0
+    # ── washout-override stamp: REPLAY ONLY on this lane ──
+    # This 5-minute RTH loop rewrites the flagship slices, so without re-applying the stamp a
+    # marker would drop back to plain slate the first tick after the nightly set it. accrue=False
+    # keeps the nightly the sole advancer of the forward ledger (house law) — an intraday pass
+    # sees a partial session and must never mint a row from it.
+    stamper = WashoutStamper.create()
 
     for sym in work:
         if time.time() - t0 > BUDGET_SECS:
@@ -400,6 +407,7 @@ def _main_locked(limit: int, syms_override: list[str] | None, dry_run: bool) -> 
             for _k in ("early_dots", "warnings"):
                 if _k in ind_full:
                     ind[_k] = ind_full[_k]
+            stamper.stamp(sym, ind["signals"], accrue=False)
         except Exception as exc:
             print(f"[fast_flagship] {sym}: contract build failed: {exc}", flush=True)
             n_skip += 1
