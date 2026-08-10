@@ -23,11 +23,12 @@ describe("Options seven-category IA", () => {
   });
 
   it("places every existing Options workspace pane exactly once", () => {
-    expect(OPTIONS_HUB_WORKSPACE_VIEWS).toHaveLength(12);
-    expect(new Set(OPTIONS_HUB_WORKSPACE_VIEWS).size).toBe(12);
+    expect(OPTIONS_HUB_WORKSPACE_VIEWS).toHaveLength(14);
+    expect(new Set(OPTIONS_HUB_WORKSPACE_VIEWS).size).toBe(14);
     expect([...OPTIONS_HUB_WORKSPACE_VIEWS].sort()).toEqual([
       "desk",
       "gex",
+      "largest",
       "levels",
       "positioning",
       "prophet",
@@ -38,6 +39,7 @@ describe("Options seven-category IA", () => {
       "tickers",
       "tide",
       "volatility",
+      "zero_dte",
     ]);
   });
 
@@ -52,7 +54,11 @@ describe("Options seven-category IA", () => {
     }
 
     expect(OPTIONS_IA_BY_CATEGORY.flow.defaultView).toBe("tape");
+    expect(OPTIONS_IA_VIEW_BY_KEY.zero_dte.pageKey).toBe("0dte");
+    expect(OPTIONS_IA_VIEW_BY_KEY.largest.pageKey).toBe("largest");
     expect(OPTIONS_IA_VIEW_BY_KEY.screener.pageKey).toBe("vol");
+    expect(optionsCategoryForView("zero_dte")).toBe("flow");
+    expect(optionsCategoryForView("largest")).toBe("flow");
     expect(optionsCategoryForView("surface")).toBe("flow");
     expect(optionsCategoryForView("positioning")).toBe("exposure");
     expect(optionsCategoryForView("statistics")).toBe("statistics");

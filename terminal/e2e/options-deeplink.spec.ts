@@ -21,6 +21,8 @@ import { test, expect } from "@playwright/test";
 // R5 category that must own the existing view.
 const CASES = [
   { query: "vol", pill: "vol", category: "flow" },
+  { query: "0dte", pill: "0dte", category: "flow" },
+  { query: "largest", pill: "largest", category: "flow" },
   { query: "volatility", pill: "volatility", category: "volatility" },
   { query: "levels", pill: "levels", category: "exposure" },
   { query: "prism", pill: "gex", category: "exposure" },
