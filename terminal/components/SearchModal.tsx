@@ -16,10 +16,26 @@ import { categoryBrowse, tabOf } from "@/lib/searchCategory";
 import { FLAG_COLORS, FLAG_DEFAULT } from "@/lib/flagPalette";
 import { useIsPhone } from "@/lib/useMediaQuery";
 import MobileSheet from "@/components/ui/MobileSheet";
+import {
+  formatWatchlistChange,
+  formatWatchlistPrice,
+  resolveWatchlistQuote,
+  type WatchlistLiveQuote,
+} from "@/lib/watchlistQuote";
 
 export { FLAG_COLORS, FLAG_DEFAULT } from "@/lib/flagPalette";
 
-type Row = { name: string; col: string; verdict: string | null; vts?: string | null; mkt?: string; zh?: string; sec?: string };
+type Row = {
+  name: string;
+  col: string;
+  verdict: string | null;
+  vts?: string | null;
+  mkt?: string;
+  zh?: string;
+  sec?: string;
+  last?: number | null;
+  chg?: number | null;
+};
 type ListInfo = { name: string; count: number; symbols: { symbol: string; section: string }[] };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY" || v === "RECLAIM";
 
@@ -47,6 +63,7 @@ const CATS: { id: string; key: string }[] = [
 // "add"     = Add Symbol dialog (per S5): has remove-from-watchlist + go-to-symbol instead of +.
 export default function SearchModal({
   open, seed, manifest, inWatchlist, mode = "go", compare = [], active = "",
+  quotes = {},
   flags = {}, lastFlagColor = FLAG_DEFAULT,
   email, lists = [], activeList = "", onSwitchList, onCreateList, onAddToList,
   marketPrefs = DEFAULT_PREFS, prefsReady = false, onShowAllMarkets,
@@ -54,6 +71,7 @@ export default function SearchModal({
 }: {
   open: boolean; seed: string; manifest: Record<string, Row>; inWatchlist: Set<string>;
   mode?: "go" | "compare" | "add"; compare?: string[]; active?: string;
+  quotes?: Record<string, WatchlistLiveQuote | null>;
   flags?: Record<string, string>;       // sym → flag color (empty = no flag)
   lastFlagColor?: string;
   email?: string;                        // "" = anonymous guest; non-empty = signed in
@@ -377,11 +395,16 @@ export default function SearchModal({
 
   // Render one symbol row with the shared `.r` anatomy (used by SEARCH results, Recent, and the
   // HOME active-list body). `withAdd` shows the + / confirm button (SEARCH only).
-  function symRow(s: string, r: Row | undefined, rowSel: number, withAdd: boolean) {
+  function symRow(s: string, r: Row | undefined, rowSel: number, withAdd: boolean, watchlistQuote = false) {
     const buy = r ? isBuy(r.verdict) : false;
     const inWl = inWatchlist.has(s);
     const flagColor = flags[s];
     const confirming = justAdded?.sym === s;
+    const snapshot = watchlistQuote ? resolveWatchlistQuote(r, quotes[s]) : null;
+    const priceText = snapshot ? formatWatchlistPrice(snapshot.price) : "";
+    const changeText = snapshot ? formatWatchlistChange(snapshot.change) : "";
+    const quoteUp = (snapshot?.change ?? 0) >= 0;
+    const marketLabel = r?.mkt || r?.sec;
     return (
       <div
         key={s}
@@ -401,7 +424,10 @@ export default function SearchModal({
           <span className="ic ic-plain">{s[0]}</span>
         )}
         <div className="meta">
-          <div className="tk">{s}</div>
+          <div className="s-row-id">
+            <div className="tk">{s}</div>
+            {watchlistQuote && marketLabel && <span className="mkt">{marketLabel}</span>}
+          </div>
           {/* ONE language, never both. This used to render `name · zh`, so an English user read
               "Dogecoin · 狗狗币" and "Palladium · 钯金" — the last surface still doing it after
               displayName() landed (reported 2026-07-27). Chinese stays SEARCHABLE either way:
@@ -409,15 +435,30 @@ export default function SearchModal({
           <div className="nm">{r ? displayName(r, lang) || s : s}</div>
         </div>
         <div className="vr">
-          {r?.mkt && <span className="mkt">{r.mkt}</span>}
-          {r?.verdict && (
-            <span
-              className={"verd" + (verdictIsStale(r.vts) ? " stale" : "")}
-              title={r.vts ? `${r.verdict} · ${r.vts}` : undefined}
-              style={{ color: buy ? "var(--buy)" : "var(--sell)", background: `color-mix(in srgb, ${buy ? "var(--buy)" : "var(--sell)"} 13%, transparent)` }}
+          {watchlistQuote && snapshot ? (
+            <div
+              className="s-row-quote"
+              data-quote-source={snapshot.source}
+              data-quote-price={snapshot.price ?? ""}
+              data-quote-change={snapshot.change ?? ""}
+              aria-label={`${t("colLast")} ${priceText}, ${t("colChangePct")} ${changeText}`}
             >
-              {r.verdict}
-            </span>
+              <span className="s-row-price num">{priceText}</span>
+              <span className={`s-row-change num ${quoteUp ? "up" : "down"}`}>{changeText}</span>
+            </div>
+          ) : (
+            <>
+              {r?.mkt && <span className="mkt">{r.mkt}</span>}
+              {r?.verdict && (
+                <span
+                  className={"verd" + (verdictIsStale(r.vts) ? " stale" : "")}
+                  title={r.vts ? `${r.verdict} · ${r.vts}` : undefined}
+                  style={{ color: buy ? "var(--buy)" : "var(--sell)", background: `color-mix(in srgb, ${buy ? "var(--buy)" : "var(--sell)"} 13%, transparent)` }}
+                >
+                  {r.verdict}
+                </span>
+              )}
+            </>
           )}
           {withAdd && (
             confirming
@@ -608,7 +649,7 @@ export default function SearchModal({
                 <button className="s-empty-nudge" onClick={() => inputRef.current?.focus()}>{t("emptyListNudge")}</button>
               </div>
             ) : (
-              activeListSyms.map((it, i) => symRow(it.symbol, manifest[it.symbol], i, false))
+              activeListSyms.map((it, i) => symRow(it.symbol, manifest[it.symbol], i, false, true))
             )}
           </div>
         ) : (

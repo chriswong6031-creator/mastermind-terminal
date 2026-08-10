@@ -668,6 +668,9 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .sres .r.sel,.sres .r:hover{background:var(--panel-2)}
 .sres .r .ic{width:26px;height:26px;border-radius:50%;flex:none;display:grid;place-items:center;font:800 10px/1 var(--font-ui);color:#04130a}
 .sres .r .meta{min-width:0;flex:1} .sres .r .tk{font-weight:600;font-size:13.5px} .sres .r .nm{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sres .r .s-row-id{display:flex;align-items:center;gap:7px;min-width:0}
+.sres .r .s-row-id .tk{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sres .r .s-row-id .mkt{flex:none;padding:1px 5px;border-color:var(--line-2);background:color-mix(in srgb,var(--panel-3) 72%,transparent);color:var(--text-dim);font-size:8px;letter-spacing:.045em}
 .sres .r .vr{margin-left:auto;display:flex;align-items:center;gap:8px}
 .sres .r .mkt{font:600 9.5px/1.4 var(--font-ui);color:var(--text-2);letter-spacing:.05em;border:1px solid var(--line);border-radius:var(--r);padding:2px 6px;white-space:nowrap;text-transform:uppercase}
 .sres .r .verd{font:700 10px/1.4 var(--font-ui);padding:2px 7px;border-radius:var(--r)}
@@ -1125,6 +1128,12 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .s-home-eyebrow{display:flex;align-items:center;gap:8px;padding:11px 8px 6px}
 .s-home-name{font:600 9.5px/1 var(--font-ui);letter-spacing:.11em;text-transform:uppercase;color:var(--text-dim)}
 .s-home-count{font:600 9.5px/1 var(--font-num,var(--font-ui));color:var(--text-dim);background:var(--panel-2);border-radius:var(--r-pill);padding:2px 6px}
+/* HOME rows are compact quote instruments: identity left, live regular-session tape right. */
+.s-row-quote{display:flex;min-width:74px;flex-direction:column;align-items:flex-end;gap:3px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.s-row-price{color:var(--text);font:650 13px/1 var(--font-num)}
+.s-row-change{font:650 11px/1 var(--font-num)}
+.s-row-change.up{color:var(--buy)}
+.s-row-change.down{color:var(--sell)}
 /* placeholder icon for symbols not in the manifest (never dropped silently) */
 .sres .r .ic.ic-plain{background:var(--panel-3);color:var(--text-2);border:1px solid var(--line-3)}
 /* empty-list state + focus-search nudge */
@@ -4036,6 +4045,8 @@ html[data-shell="app"] .mm-brandbug{
 .msheet-search .sres .r .ic{width:30px;height:30px}
 .msheet-search .sres .r .tk{font-size:15px}
 .msheet-search .sres .r .nm{font-size:12px}
+.msheet-search .s-row-price{font-size:15px}
+.msheet-search .s-row-change{font-size:12px}
 .msheet-search .sres .r .add{width:36px;height:36px}
 
 /* ── Drawings sheet (IMG_2366-68) ─────────────────────────────────────────────

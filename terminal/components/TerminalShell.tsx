@@ -3556,6 +3556,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
 
       {searchOpen && (
         <SearchModal open seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} compareCfg={compareCfg} active={active}
+          quotes={quotes}
           flags={flags} lastFlagColor={lastFlagColor}
           email={email}
           lists={Object.entries(lists).map(([name, syms]) => ({ name, count: syms.length, symbols: syms }))}
