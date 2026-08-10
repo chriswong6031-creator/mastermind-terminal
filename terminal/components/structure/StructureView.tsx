@@ -8,7 +8,7 @@
  *             + "Nightly EOD · as of {date}" chip (warn tone past 3 sessions)
  *             + the "OI = t-1" law chip (Tip discloses OPRA arrears reporting).
  *   Panels  — OI by strike (diverging ladder) · OI by expiration ·
- *             OI over time (18-month calls/puts lines) ·
+ *             OI over time (18-month calls/puts lines) · put/call OI history ·
  *             Max pain (intrinsic-value curve) · Max pain by expiration ·
  *             OI change (sortable table, root/all-roots scope).
  *
@@ -35,6 +35,7 @@ import { NEUTRAL_CHIP, oiLadderHeight } from "./structureShared";
 import { OiLadderPanel } from "./OiLadderPanel";
 import { OiExpiryPanel } from "./OiExpiryPanel";
 import { OiTimePanel } from "./OiTimePanel";
+import { PutCallHistoryPanel } from "./PutCallHistoryPanel";
 import { MaxPainPanel } from "./MaxPainPanel";
 import { MaxPainTimePanel } from "./MaxPainTimePanel";
 import { OiChangePanel } from "./OiChangePanel";
@@ -250,6 +251,14 @@ export function StructureView() {
             />
             <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
               <OiTimePanel history={oiTime?.history} lang={lang} />
+            </div>
+            <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+              <PutCallHistoryPanel
+                history={oiTime?.history}
+                lang={lang}
+                sourceSchema={oiTime?.schema}
+                oiDate={oiTime?.oi_date}
+              />
             </div>
             <MaxPainPanel
               expiries={maxPain?.expiries}
