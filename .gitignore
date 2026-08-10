@@ -22,6 +22,8 @@ ingest/.polygon_*.json
 data/cache/
 data/backtests/*.parquet
 data/publish_staging/
+# forward accrual ledger — nightly runtime state on the VPS, never a committed artifact
+data/blocked_override_ledger.jsonl
 
 # generated chart OHLC (regenerate via ingest/sample_from_macro.py)
 web/ohlc/*.json

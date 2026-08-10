@@ -35,6 +35,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from signal_layer import backtest, confluence, contracts, confluence_v2  # noqa: E402
+from signal_layer.washout_override import DailyBars, WashoutStamper  # noqa: E402
 from ingest.build_polygon_universe import DEFAULT as FLAGSHIP, write_backtest_artifact  # noqa: E402
 from ingest.v2_cohort_cache import build_cohort_cache  # noqa: E402
 
@@ -64,7 +65,8 @@ def _load_manifest() -> dict:
     return _MANIFEST_MEMO
 
 
-def regen(sym: str, write: bool = True, cache=None, patches: dict | None = None) -> str:
+def regen(sym: str, write: bool = True, cache=None, patches: dict | None = None,
+          stamper: WashoutStamper | None = None) -> str:
     jf = OUT / f"{sym}.json"
     sf = OUT / f"{sym}.slice.json"
     if not jf.exists():
@@ -100,6 +102,15 @@ def regen(sym: str, write: bool = True, cache=None, patches: dict | None = None)
                                 reclaims_enabled=eligible)
     ind = contracts.indicator_contract(
         sym, "3D", sig, bar_quality="real_ohlc", src_text=SRC, honest_read=HONEST, v2=v2)
+    # ── washout-override display stamp (ratified 2026-08-10, threshold 25%) ──
+    # This script is the nightly's LAST writer of the flagship slices (terminal-data phase 1
+    # runs it right after build_polygon_universe), so without the stamp here every flagship
+    # ⊘ would lose its override class the moment the rewrite lands. Additive optional fields
+    # only; no signal, score, tier, or entry changes. `--check` builds a stamper lazily.
+    (stamper or WashoutStamper.create()).stamp(sym, ind.get("signals"), daily=DailyBars(
+        bar_opens=[d.strftime("%Y-%m-%d") for d in sig.index],
+        dates=[d.strftime("%Y-%m-%d") for d in idx],
+        high=high.to_list(), low=low.to_list(), close=close.to_list()))
     for heavy in ("series", "gates", "bars"):
         ind.pop(heavy, None)
     sigs = ind.get("signals", [])
@@ -163,12 +174,15 @@ def main() -> None:
     # build the sector-cohort cache ONCE, reuse across all flagship names (bounded overhead).
     cache = build_cohort_cache(OUT, _load_manifest())
     patches: dict[str, dict] = {}
+    # one artifact + ledger load for the whole run; rows append once at the end
+    stamper = WashoutStamper.create()
     for sym in FLAGSHIP:
         try:
-            print(" ", regen(sym, write=True, cache=cache, patches=patches), flush=True)
+            print(" ", regen(sym, write=True, cache=cache, patches=patches, stamper=stamper), flush=True)
             ok += 1
         except Exception as e:  # noqa: BLE001
             print(f"  ERR {sym}: {e}", flush=True)
+    stamper.flush()
     # lane-guard manifest patch: keep the published wr/pf/cagr + verdict/vts in lockstep with
     # any recomputed slice backtests. Read-modify-write of the EXISTING rows only — never
     # adds/removes symbols (the 2026-07-11 clobber lesson: this script must be structurally

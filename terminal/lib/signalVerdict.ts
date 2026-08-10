@@ -19,6 +19,12 @@ export interface Verdict {
    *  window) — true whether that refusal IS the primary read or rides under a fresher
    *  anchor, so the same engine state can never render as two different-looking cards. */
   blocked?: boolean;
+  /** the refused entry sits inside a deep group washout (ratified 2026-08-10, 25% notch) —
+   *  a DISPLAY class on the same refusal, never a permission to enter. */
+  overrideCandidate?: boolean;
+  /** second glance-tier line under the verdict. Today only the washout-override disclosure
+   *  uses it: the card says which group is washed out and by how much, in plain words. */
+  line2?: string | null;
 }
 
 // A verdict older than this many calendar days (≈5 of the engine's 3-day bars) is history,
@@ -92,6 +98,18 @@ interface OracleSlice {
       blocked?: boolean | null;
       /** SELL only: the confirmed swing low the daily close broke */
       stop_level?: number | null;
+      /** display-tier washout-override class (signal_layer/washout_override.py) */
+      override_candidate?: boolean | null;
+      override_ctx?: {
+        group_id?: string | null;
+        /** peer-median 252d drawdown as a NEGATIVE fraction (−0.388 = 38.8% off the high) */
+        peer_dd?: number | null;
+        basis?: string | null;
+        thresholds_hit?: number[] | null;
+        as_of?: string | null;
+        name?: string | null;
+        name_zh?: string | null;
+      } | null;
     }> | null;
   } | null;
 }
@@ -118,6 +136,75 @@ export function isBlockedSignal(
 ): boolean {
   if (!s) return false;
   return s.blocked === true || String(s.quality ?? "").toLowerCase() === "regime_blocked";
+}
+
+/** The display-tier washout-override class: a regime-refused entry whose thematic-basket peers
+ *  sat ≥25% below their 252d highs the day it fired. Ratified 2026-08-10 (Macro Dashboard
+ *  research/BLOCKED_ENTRY_RATIFICATION_PACKET_2026-08-10.md §2/§4, threshold 25%).
+ *
+ *  STRICT on the emitter's flag. The class is only ever minted point-in-time by
+ *  signal_layer/washout_override.py from the `quality:"regime_blocked"` cohort — a keeper
+ *  `block` (a different refusal) never carries it — so the client re-derives nothing. It
+ *  changes how a refusal LOOKS, never what it is: the entry is still refused. */
+export function isOverrideCandidate(
+  s?: { override_candidate?: unknown } | null,
+): boolean {
+  return !!s && s.override_candidate === true;
+}
+
+/** A peer-median 252d drawdown → the glance-tier figure. Truncated toward zero, not rounded:
+ *  understating a washout is the safe direction for a number that sits next to a refusal. */
+function fmtPeerDd(peerDd: number | null | undefined): string | null {
+  if (typeof peerDd !== "number" || !Number.isFinite(peerDd)) return null;
+  const pct = Math.trunc(Math.abs(peerDd) * 100);
+  return pct > 0 ? `−${pct}%` : null;
+}
+
+interface OverrideCtx {
+  group_id?: string | null;
+  peer_dd?: number | null;
+  name?: string | null;
+  name_zh?: string | null;
+}
+
+/** The washout-override disclosure: one glance line + the Tier-2 numbers behind it.
+ *
+ *  COPY LAW (docs/DESIGN_DOCTRINE.md + the terminal banned-vocabulary rule): plain words, no
+ *  study names, no refutation language, and never a verb that reads as permission. The lead
+ *  clause of the hover exists because the glance line alone could be misread as a green
+ *  light — the engine still refuses this entry and the panel has to say so before it says
+ *  anything encouraging. The numbers are the packet's equal-notional read at the 25% notch
+ *  (cell +26.5% vs complement +3.45%, held-out 2019+, stop honored on every trade); the
+ *  stop-out clause is §3.5 ("stop-outs dominate trade count at every setting"). */
+export function washoutOverrideCopy(
+  ctx: OverrideCtx | null | undefined,
+  zh: boolean,
+): { line: string; notes: string[] } | null {
+  const dd = fmtPeerDd(ctx?.peer_dd);
+  const group = (zh ? ctx?.name_zh || ctx?.name : ctx?.name) || null;
+  const head = zh ? "深度洗盘例外候选" : "Washout override candidate";
+  // Four honest shapes, because the artifact may ship a name, a number, both, or neither —
+  // and a disclosure line that prints an empty slot is worse than a shorter one.
+  const who = group ?? (dd ? (zh ? "同类" : "peer group") : null);
+  const where = who == null
+    ? null
+    : dd == null
+      ? who
+      : zh ? `${who}板块距高点 ${dd}` : `${who} ${dd} from highs`;
+  return {
+    line: where ? `${head} — ${where}` : head,
+    notes: [
+      zh
+        ? "仍是被拦截的入场 — 洗盘标记是背景，不是放行"
+        : "still a refused entry — the washout flag is context, not a green light",
+      zh
+        ? "同类深度洗盘中，这些被拦截信号每笔平均 +27%，其他情形 +3%（2019-2026，始终执行止损）"
+        : "in deep group washouts like this, these blocked signals averaged +27% per trade vs +3% otherwise (2019-2026, stop always honored)",
+      zh
+        ? "多数仍会止损离场 — 止损才是保护"
+        : "most still stop out — the stop is the protection",
+    ],
+  };
 }
 
 /** HK-O1: every SELL the SLICE emits is the ARM→CONFIRM structure break — a TRAILING STOP on
@@ -364,6 +451,13 @@ export function oracleVerdict(
     ];
     if (liveBlock.price != null) notes.push(`@ ${liveBlock.price}`);
     if (liveBlock.quality_reason) notes.push(String(liveBlock.quality_reason));
+    // ── the washout-override class rides ONLY where the refusal IS the primary read ──
+    // Deliberately not added to the fresh-anchor branch above: there the newest read is the
+    // anchor, and a second amber line under someone else's verdict is a different card.
+    const wash = isOverrideCandidate(liveBlock)
+      ? washoutOverrideCopy((liveBlock as { override_ctx?: OverrideCtx | null }).override_ctx, zh)
+      : null;
+    if (wash) notes.push(...wash.notes);
     const btStance = st && hasRegime ? computeStance(st, trend, zh) : null;
     if (btStance) notes.push(`${zh ? "当前姿态" : "current stance"}: ${btStance.label}`);
     const btEcho = effU ?? scored ?? mv;
@@ -382,6 +476,8 @@ export function oracleVerdict(
       dim: false,
       soft: true,
       blocked: true,
+      overrideCandidate: !!wash,
+      line2: wash?.line ?? null,
       note: notes.join(" · "),
     };
   }

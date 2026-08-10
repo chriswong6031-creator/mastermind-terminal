@@ -697,6 +697,13 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                   {ov.label !== "—" ? ov.label : (row?.verdict ?? "—")}
                 </div>
                 {ov.sub && <div className="od-vsub">{ov.sub}</div>}
+                {/* washout-override disclosure — a SECOND line on the same amber refusal card
+                    (ratified 2026-08-10, 25% notch). Tier-1 says which group is washed out and
+                    by how much; the numbers and the "still refused" clause live in the hover
+                    the rail button already carries (ov.note). */}
+                {ov.line2 && (
+                  <div className="od-vline2" title={ov.note || undefined}>{ov.line2}</div>
+                )}
                 <div className="od-stats">
                   <div className="od-stat">
                     <span className="od-stat-k">{pick(zh, "Win rate", "胜率")}</span>

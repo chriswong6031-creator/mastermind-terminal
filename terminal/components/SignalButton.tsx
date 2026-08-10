@@ -12,6 +12,11 @@ interface Half {
    *  label already says so; when it rides under a fresher sell anchor this is the only marker,
    *  so the same engine state can't render as two different-looking cards. */
   blocked?: boolean;
+  /** the refusal is a washout-override candidate. The compact rail keeps its two-line
+   *  geometry — the disclosure LINE renders on the Golden Oracle card (OracleDash), and the
+   *  numbers behind it are already in `note`, which is this button's tooltip. */
+  overrideCandidate?: boolean;
+  line2?: string | null;
 }
 
 interface Props {

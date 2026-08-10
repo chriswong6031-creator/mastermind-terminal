@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs, SOFT_Q,
-  isBlockedSignal, isStructureStop, sliceSignalBasis } from "../signalVerdict";
+  isBlockedSignal, isOverrideCandidate, isStructureStop, sliceSignalBasis,
+  washoutOverrideCopy } from "../signalVerdict";
 
 // Frozen "today" so ages are deterministic: 2026-07-14 (the NVDA/GOOGL stale-Sell incident date).
 const NOW = Date.parse("2026-07-14T21:00:00Z");
 
-type Sig = { ts: string; known_ts?: string | null; type?: string; price?: number | null; quality?: string | null; quality_reason?: string | null; scored?: boolean | null; basis?: string | null; blocked?: boolean | null; stop_level?: number | null };
+type Sig = { ts: string; known_ts?: string | null; type?: string; price?: number | null; quality?: string | null; quality_reason?: string | null; scored?: boolean | null; basis?: string | null; blocked?: boolean | null; stop_level?: number | null; override_candidate?: boolean | null; override_ctx?: Record<string, unknown> | null };
 
 function sliceOf(lastSignal: string, signals: Sig[]) {
   return { indicator: { signals, state: { last_signal: lastSignal } } };
@@ -664,5 +665,132 @@ describe("HK-O1 — the two `extended`s stay apart", () => {
     expect(hot.label).toBe("Extended — don't chase");
     expect(oracleVerdict("SELL", st({ position_hint: "flat", strong_bull: false, extended: false, overbought: true, above200: true, weeklyBull: true }), true, NOW).label)
       .toBe("过热 — 勿追高");
+  });
+});
+
+// ── washout override candidate (ratified 2026-08-10, 25% notch) ────────────────────────────
+// Receipts: Macro Dashboard research/BLOCKED_ENTRY_RATIFICATION_PACKET_2026-08-10.md §2/§4 +
+// research/BLOCKED_ENTRY_CONDITIONAL_PREREG.md §5/§7. Production-feed re-grade reproduced the
+// premium. DISPLAY TIER ONLY — the entry mask is unchanged, and every assertion below is about
+// how a refusal LOOKS, never about what the engine did.
+describe("washout override candidate — the display class on a refusal", () => {
+  const NOW2 = Date.parse("2026-08-10T21:00:00Z");
+  const stSlice = (state: Record<string, unknown>, signals: Sig[]) => ({ indicator: { state, signals } });
+  const CTX = {
+    group_id: "uranium_miners", peer_dd: -0.388, basis: "basket",
+    thresholds_hit: [20, 25, 30], as_of: "2026-08-10",
+    name: "Uranium miners", name_zh: "铀矿商",
+  };
+  const uecState = {
+    last_signal: "BUY", last_scored_signal: "SELL", last_scored_ts: "2026-05-12",
+    position_hint: "flat", strong_bull: false, overbought: false, weeklyBull: false, above200: false,
+  };
+  const fire = (over: Partial<Sig> = {}): Sig => ({
+    ts: "2026-08-03", known_ts: "2026-08-03", type: "BUY", price: 10.5,
+    quality: "regime_blocked", blocked: true,
+    quality_reason: "bear_block: monthly-bear & below-200 & 2W-not-bull",
+    override_candidate: true, override_ctx: CTX, ...over,
+  });
+  const verdict = (over: Partial<Sig> = {}, zh = false) => oracleVerdict(
+    "SELL",
+    stSlice(uecState, [{ ts: "2026-05-12", type: "SELL", price: 14.2 }, fire(over)]),
+    zh, NOW2, "DOWNTREND",
+  );
+
+  it("keeps the amber blocked-entry card and adds ONE disclosure line (UEC 2026-08-03 shape)", () => {
+    const v = verdict();
+    expect(v.label).toBe("Entry trigger — regime-blocked");   // the card is unchanged
+    expect(v.color).toBe("var(--signal)");
+    expect(v.blocked).toBe(true);
+    expect(v.overrideCandidate).toBe(true);
+    expect(v.line2).toBe("Washout override candidate — Uranium miners −38% from highs");
+  });
+
+  it("the Tier-2 hover carries the plain-word numbers AND leads with 'still refused'", () => {
+    const note = verdict().note ?? "";
+    expect(note).toContain("still a refused entry");
+    expect(note).toContain("not a green light");
+    expect(note).toContain("averaged +27% per trade vs +3% otherwise");
+    expect(note).toContain("2019-2026, stop always honored");
+    expect(note).toContain("most still stop out — the stop is the protection");
+  });
+
+  it("zh ships the whole disclosure, not an English-shaped translation", () => {
+    const v = verdict({}, true);
+    expect(v.label).toBe("买点触发 — 趋势闸拦截");
+    expect(v.line2).toBe("深度洗盘例外候选 — 铀矿商板块距高点 −38%");
+    const note = v.note ?? "";
+    expect(note).toContain("仍是被拦截的入场");
+    expect(note).toContain("每笔平均 +27%");
+    expect(note).toContain("止损才是保护");
+    // no untranslated English clause left behind IN THE NEW COPY (the engine's own
+    // `quality_reason` string rides the note in both languages — pre-existing contract)
+    for (const cell of washoutOverrideCopy(CTX, true)!.notes) expect(cell).not.toMatch(/[a-z]{4,}/);
+    expect(washoutOverrideCopy(CTX, true)!.line).not.toMatch(/[a-z]{4,}/);
+  });
+
+  it("a plain regime_blocked fire renders EXACTLY as before — no line, no flag", () => {
+    const v = verdict({ override_candidate: undefined, override_ctx: undefined });
+    expect(v.label).toBe("Entry trigger — regime-blocked");
+    expect(v.line2).toBeNull();
+    expect(v.overrideCandidate).toBe(false);
+    expect(v.note).not.toContain("washout");
+    expect(v.note).not.toContain("+27%");
+  });
+
+  it("a keeper `block` is a DIFFERENT refusal and can never reach this class", () => {
+    // HL 2026-06-16/06-25 shape: keeper block ("counter-trend, no 200-reclaim/hold"), outside
+    // the studied cohort even though silver_miners qualifies at every threshold. The emitter
+    // is what enforces this; the client must not resurrect it from quality/ctx alone.
+    expect(isOverrideCandidate({ quality: "block", override_ctx: CTX } as never)).toBe(false);
+    expect(isBlockedSignal({ quality: "block" })).toBe(false);
+    const v = oracleVerdict("SELL", stSlice(uecState, [
+      { ts: "2026-06-16", known_ts: "2026-06-16", type: "BUY", price: 6.1,
+        quality: "block", quality_reason: "counter-trend, no 200-reclaim/hold" },
+    ]), false, NOW2, "DOWNTREND");
+    expect(v.overrideCandidate).toBeFalsy();
+    expect(v.line2).toBeFalsy();
+  });
+
+  it("the flag alone is the key — a truthy-but-not-true value does not promote", () => {
+    expect(isOverrideCandidate({ override_candidate: 1 } as never)).toBe(false);
+    expect(isOverrideCandidate(null)).toBe(false);
+    expect(isOverrideCandidate({})).toBe(false);
+    expect(isOverrideCandidate({ override_candidate: true })).toBe(true);
+  });
+
+  it("degrades to the honest short form when the artifact shipped no basket name", () => {
+    expect(washoutOverrideCopy({ peer_dd: -0.31 }, false)!.line)
+      .toBe("Washout override candidate — peer group −31% from highs");
+    expect(washoutOverrideCopy({ name: "Silver miners" }, false)!.line)
+      .toBe("Washout override candidate — Silver miners");
+    expect(washoutOverrideCopy({}, false)!.line).toBe("Washout override candidate");
+    // zh falls back to the EN basket name rather than printing a raw slug
+    expect(washoutOverrideCopy({ name: "Silver miners", peer_dd: -0.4 }, true)!.line)
+      .toBe("深度洗盘例外候选 — Silver miners板块距高点 −40%");
+  });
+
+  it("the drawdown figure truncates toward zero — never overstates the washout", () => {
+    expect(washoutOverrideCopy({ peer_dd: -0.388 }, false)!.line).toContain("−38%");
+    expect(washoutOverrideCopy({ peer_dd: -0.2599 }, false)!.line).toContain("−25%");
+    expect(washoutOverrideCopy({ peer_dd: 0.388 }, false)!.line).toContain("−38%");  // sign-agnostic
+    expect(washoutOverrideCopy({ peer_dd: 0 }, false)!.line).toBe("Washout override candidate");
+    expect(washoutOverrideCopy({ peer_dd: Number.NaN }, false)!.line).toBe("Washout override candidate");
+  });
+
+  it("carries no banned vocabulary in either language", () => {
+    // Same list the washout-turn surface is held to (lib/__tests__/washoutTurn.test.ts):
+    // no authority words, no refutation language, no trade verbs on a glance surface.
+    const BANNED = [
+      "validated", "证伪", "falsifier", "falsif", "refuted", "refut",
+      "buy now", "act now", "buy", "sell", "target",
+    ];
+    for (const zh of [false, true]) {
+      const copy = washoutOverrideCopy(CTX, zh)!;
+      for (const cell of [copy.line, ...copy.notes]) {
+        const low = cell.toLowerCase();
+        for (const bad of BANNED) expect(low, `${cell} contains ${bad}`).not.toContain(bad);
+      }
+    }
   });
 });

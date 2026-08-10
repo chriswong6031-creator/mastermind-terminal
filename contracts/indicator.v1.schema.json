@@ -198,6 +198,17 @@
               "null"
             ],
             "description": "RECLAIM only: false = pre-promotion display-tier marker."
+          },
+          "override_candidate": {
+            "const": true,
+            "description": "DISPLAY TIER ONLY. Present (and true) only on a quality=\"regime_blocked\" fire whose thematic-basket peers were >=25% below their 252d highs on the day it fired (ratified 2026-08-10; Macro Dashboard research/BLOCKED_ENTRY_RATIFICATION_PACKET_2026-08-10.md). It changes the MARKER and the rail card only: the entry mask, keeper verdict, tier, score, and backtest are untouched, and the event stays a refusal. Never set on a keeper \"block\" (a different refusal, outside the studied cohort). Stamped point-in-time by signal_layer/washout_override.py from the basket state current at the fire, so it is never a backfill of today's state onto history."
+          },
+          "override_ctx": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Why the override class applied, as known at the fire: group_id (thematic basket or GICS sector fallback), peer_dd (peer-median 252d drawdown, NEGATIVE fraction), basis (\"basket\"|\"sector\"), thresholds_hit, as_of (the basket-state date), and the basket's display name/name_zh so the card needs no second fetch."
           }
         }
       }
