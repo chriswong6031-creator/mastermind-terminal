@@ -15,10 +15,20 @@ import {
   CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries, BaselineSeries,
   createSeriesMarkers, type ISeriesMarkersPluginApi,
   createTextWatermark,
-  CrosshairMode, ColorType, LineStyle, LineType, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
+  CrosshairMode, ColorType, LineStyle, LineType, PriceScaleMode, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
 } from "lightweight-charts";
 import { createEngine, type ChartEngine } from "@/lib/chart-engine";
-import { clampAxisZoom, axisZoomMargins, wheelDeltaToZoomStep, type AxisMargins } from "@/lib/chart-engine/axisZoom";
+import {
+  axisLogFormulaForRange,
+  axisRangeFromLog,
+  axisRangeToLog,
+  axisValueAtCoordinate,
+  wheelDeltaToZoomFactor,
+  zoomAxisRange,
+  type AxisLogFormula,
+  type AxisMargins,
+  type AxisRange,
+} from "@/lib/chart-engine/axisZoom";
 import { DEFAULT_CHART_RIGHT_OFFSET, normalizedChartLogicalRange } from "@/lib/chart-engine/viewReset";
 import { keepIndicatorPaneAxisLabelsOnly } from "@/lib/indicatorPaneSeries";
 import { runPine, type RunResult } from "@/lib/pine-engine";
@@ -2935,6 +2945,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           rowCount: barsRef.current.length,
           timeframe: timeframeRef.current,
           visibleRange: g(() => c.timeScale().getVisibleLogicalRange()),
+          priceVisibleRange: g(() => priceSeriesRef.current?.priceScale().getVisibleRange()),
           priceAutoScale: g(() => priceSeriesRef.current?.priceScale().options().autoScale) ?? null,
           lastBarX: g(() => {
             const last = barsRef.current[barsRef.current.length - 1];
@@ -5450,11 +5461,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (hk !== hoveredKeyRef.current) { hoveredKeyRef.current = hk; setHoveredKey(hk); }
     };
     onPaneLeave = () => { if (hoveredKeyRef.current !== null) { hoveredKeyRef.current = null; setHoveredKey(null); } };
-    // double-click on the price-axis band is the library's scale auto-fit gesture — exclude that
-    // X band from the pane maximize hit-test so axis-reset doesn't also flip the layout
+    // double-click on a visible price-axis band is the library's scale auto-fit gesture — exclude
+    // either X band from pane maximize so left-positioned scales keep the same interaction contract.
     const inAxisBand = (clientX: number, wr: DOMRect) => {
-      let axW = 0; try { axW = chartRef.current?.priceScale("right")?.width() ?? 0; } catch {}
-      return axW > 0 && clientX - wr.left > wr.width - axW;
+      let rightW = 0, leftW = 0;
+      try { rightW = chartRef.current?.priceScale("right")?.width() ?? 0; } catch {}
+      try { leftW = chartRef.current?.priceScale("left")?.width() ?? 0; } catch {}
+      return (rightW > 0 && wr.right - clientX < rightW)
+        || (leftW > 0 && clientX - wr.left < leftW);
     };
     onPaneDbl = (e: MouseEvent) => {
       // B1: guard against iOS-synthesized dblclick double-fire after a touch double-tap
@@ -5465,37 +5479,92 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const p = paneLayoutRef.current.find((q) => y >= q.top && y <= q.top + q.height); if (!p) return;
       doMaximize(p.paneIndex);
     };
-    // TV-style wheel-on-price-axis: scrolling over any pane's right axis band squashes/stretches
-    // THAT pane via its scale's margins (LWC exposes no price-range setter; margins move the pane's
-    // series coherently and leave overlays' own margins alone). The hit pane is resolved from the
-    // cursor y against paneLayoutRef, so price/StochRSI/MACD/any subpane all respond. Capture phase:
-    // LWC's wheel listener sits on inner elements and would time-zoom first in bubble. Dbl-click on
-    // the band restores that pane's captured margins alongside LWC's built-in autoscale reset.
+    // TV-style wheel-on-price-axis: scale THAT pane's real numeric range around the price under
+    // the pointer. The previous margin-based implementation had an unavoidable fixed ceiling;
+    // exponential range scaling compounds continuously, so mouse notches stay predictable and
+    // high-resolution trackpads remain smooth at any accumulated zoom. The hit pane is resolved
+    // from cursor y, so price/StochRSI/MACD/any subpane responds independently. Capture phase keeps
+    // LWC's inner wheel handler from spending the same gesture on the time axis.
     const AXIS_MARGINS_DEFAULT: AxisMargins = { top: 0.1, bottom: 0.08 };  // mirrors createEngine rightPriceScale
-    // per-pane zoom state, keyed by pane key. `base` is the pane's OWN margins captured on first
-    // interaction (subpane series carry their own), so reset restores exactly what they started with.
-    const axisZoomState = new Map<string, { base: AxisMargins; zoom: number }>();
-    // resolve the price scale for a pane: the price series for "__price__", else the pane's first series.
-    const paneScale = (key: string, paneIndex: number) => {
-      if (key === "__price__") return priceSeriesRef.current?.priceScale() ?? null;
-      try { return chartRef.current?.panes()[paneIndex]?.getSeries()?.[0]?.priceScale() ?? null; } catch { return null; }
+    // Per-pane state only remembers the pane's own starting margins for reset; unlike the removed
+    // zoom accumulator, it has no min/max product clamp.
+    const axisZoomState = new Map<string, {
+      base: AxisMargins;
+      mode?: PriceScaleMode;
+      logFormula?: AxisLogFormula;
+      logRange?: AxisRange;
+    }>();
+    const paneSeries = (key: string, paneIndex: number): ISeriesApi<any> | null => {
+      if (key === "__price__") return priceSeriesRef.current ?? null;
+      try { return chartRef.current?.panes()[paneIndex]?.getSeries()?.[0] ?? null; } catch { return null; }
     };
+    const paneScale = (key: string, paneIndex: number) => paneSeries(key, paneIndex)?.priceScale() ?? null;
     const onAxisWheel = (e: WheelEvent) => {
       const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect();
       if (!inAxisBand(e.clientX, wr)) return;
       const y = e.clientY - wr.top;
       const pane = paneLayoutRef.current.find((q) => y >= q.top && y <= q.top + q.height);
       if (!pane) return;
-      const scale = paneScale(pane.key, pane.paneIndex); if (!scale) return;  // no series on the pane → no-op
-      e.preventDefault(); e.stopPropagation();
+      const series = paneSeries(pane.key, pane.paneIndex);
+      const scale = series?.priceScale() ?? null; if (!series || !scale) return;  // no series on the pane → no-op
+      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX; if (delta === 0) return;
+      const scaleOptions = (() => { try { return scale.options(); } catch { return null; } })();
+      if (!scaleOptions) return;
       let st = axisZoomState.get(pane.key);
       if (!st) {  // first touch: capture the pane's current margins BEFORE changing anything
-        const base = (() => { try { return scale.options().scaleMargins ?? AXIS_MARGINS_DEFAULT; } catch { return AXIS_MARGINS_DEFAULT; } })();
-        st = { base: { top: base.top, bottom: base.bottom }, zoom: 0 };
+        const base = scaleOptions.scaleMargins ?? AXIS_MARGINS_DEFAULT;
+        st = { base: { top: base.top, bottom: base.bottom } };
         axisZoomState.set(pane.key, st);
       }
-      st.zoom = clampAxisZoom(st.base, st.zoom + wheelDeltaToZoomStep(e.deltaY, e.deltaMode));
-      scale.applyOptions({ scaleMargins: axisZoomMargins(st.base, st.zoom) });
+      e.preventDefault(); e.stopPropagation();
+      const localY = Math.max(0, Math.min(pane.height, y - pane.top));
+      // LWC 5.2's public price-range getter converts log values back to raw prices, but its setter
+      // consumes the hidden logarithmic domain. Preserve that domain locally after the first
+      // wheel frame: this both bridges the asymmetric API and avoids its min-move rounding from
+      // imposing a second, subtler deep-zoom ceiling. Percent/Indexed modes already expose their
+      // displayed domain and can use the public range directly.
+      const mode = scaleOptions.mode;
+      if (st.mode !== mode) {
+        st.mode = mode;
+        st.logFormula = undefined;
+        st.logRange = undefined;
+      }
+      const publicRange = (() => { try { return scale.getVisibleRange(); } catch { return null; } })();
+      const publicRangeValid = publicRange && Number.isFinite(publicRange.from)
+        && Number.isFinite(publicRange.to) && publicRange.to > publicRange.from;
+      let range: AxisRange | null = publicRangeValid ? publicRange : null;
+      if (mode === PriceScaleMode.Logarithmic) {
+        const minMove = Number((series.options() as any)?.priceFormat?.minMove) || 0;
+        if (st.logFormula && st.logRange && publicRangeValid) {
+          // A native axis drag, symbol switch or timeframe change can replace our custom range.
+          // Refresh only when the public range differs beyond its documented min-move rounding.
+          const cachedRaw = axisRangeFromLog(st.logRange, st.logFormula);
+          const tolerance = Math.max(minMove * 1.5, Math.max(Math.abs(publicRange.from), Math.abs(publicRange.to), 1) * Number.EPSILON * 32);
+          if (Math.abs(cachedRaw.from - publicRange.from) > tolerance
+            || Math.abs(cachedRaw.to - publicRange.to) > tolerance) {
+            st.logFormula = undefined;
+            st.logRange = undefined;
+          }
+        }
+        if (!st.logRange) {
+          if (!publicRangeValid) return;
+          st.logFormula = axisLogFormulaForRange(publicRange);
+          st.logRange = axisRangeToLog(publicRange, st.logFormula);
+        }
+        range = st.logRange;
+      }
+      if (!range) return;
+      const anchor = axisValueAtCoordinate(
+        range,
+        localY,
+        pane.height,
+        scaleOptions.scaleMargins ?? AXIS_MARGINS_DEFAULT,
+        scaleOptions.invertScale,
+      );
+      const next = zoomAxisRange(range, anchor, wheelDeltaToZoomFactor(delta, e.deltaMode, pane.height));
+      if (next === range) return;
+      scale.setVisibleRange(next);
+      if (mode === PriceScaleMode.Logarithmic) st.logRange = next;
       scheduleRender();
     };
     const onAxisDbl = (e: MouseEvent) => {
@@ -5504,8 +5573,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const y = e.clientY - wr.top;
       const pane = paneLayoutRef.current.find((q) => y >= q.top && y <= q.top + q.height); if (!pane) return;
       const st = axisZoomState.get(pane.key); if (!st) return;  // never wheel-scaled → nothing to reset
-      st.zoom = 0;
-      try { paneScale(pane.key, pane.paneIndex)?.applyOptions({ scaleMargins: { ...st.base } }); } catch {}
+      try {
+        const scale = paneScale(pane.key, pane.paneIndex);
+        scale?.applyOptions({ scaleMargins: { ...st.base } });
+        scale?.setAutoScale(true);
+      } catch {}
+      axisZoomState.delete(pane.key);
       scheduleRender();
     };
     function normalizeChartView() {
