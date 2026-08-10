@@ -3421,7 +3421,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // keep the dashed-hollow re-entry law. A soft mark must never wear the scored style.
         // (regime_blocked no longer reaches here at all — HK-O1 gives it its own annotation glyph
         // above, because dimming a BUY star still leaves a BUY star.)
-        const q = m.quality != null && SOFT_Q.has(m.quality) ? m.quality : undefined;
+        // A RETRO fire is exempt from softening, and this is the line that makes the class
+        // coherent. Its `quality` is still its REFUSAL quality — mark_retro never rewrites it,
+        // deliberately, so it can never enter the scored lane — and both refusal strings live
+        // in SOFT_Q. Left alone, the two halves of one display class rendered as two different
+        // things: a `regime_blocked` retro came out solid (SOFT_Q's regime_blocked branch
+        // changes no fill), while a KEEPER-block retro hit `hollow = q === "block"` and came
+        // out as an unfilled outline — the subordinate treatment the order specifically says a
+        // re-mark must not wear. Excluding retro here draws both as the entry the projection
+        // says they would have been.
+        const q = !m.retro && m.quality != null && SOFT_Q.has(m.quality) ? m.quality : undefined;
         const hollow = q === "block" || !!cfg.hollow;
         const dim = q === "pending";
         const fill = q === "pending" ? t2.mut : cfg.fill;
@@ -3485,6 +3494,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
               : " · the regime gate would refuse this; most still stop out");
           g.appendChild(title);
         } else if (retro) {
+          // Reachable only because retro is excluded from `q` above — before that, SOFT_Q's
+          // branch always won and this copy could never emit. It still renders to nobody: the
+          // whole title layer is `pointer-events:none` (see below). Both halves come alive
+          // together in the marker-interactivity PR.
           const title = mk("title", {});
           title.textContent = `${m.t} · ${m.type} — re-marked under the current rule `
             + `(${RETRO_RULE_DATE})${m.overrideGroup ? ` — ${m.overrideGroup}` : ""}`

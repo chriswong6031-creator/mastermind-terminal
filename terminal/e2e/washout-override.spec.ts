@@ -210,7 +210,9 @@ test("a qualifying ⊘ wears the amber override class on card, hover and chart",
   );
   await expect(signalButton).toHaveAttribute(
     "title",
-    zh ? /每笔平均 \+27%，其他情形 \+3%/ : /averaged \+27% per trade vs \+3% otherwise/,
+    // the notch-20 re-grade (era gc_v2_wo2) republished this row at +22%/+3%; the +27% these
+    // regexes carried before was the 25% row and is NOT interchangeable with it
+    zh ? /每笔平均 \+22%，其他情形 \+3%/ : /averaged \+22% per trade vs \+3% otherwise/,
   );
   await signalButton.screenshot({
     path: testInfo.outputPath(`${testInfo.project.name}-washout-override-rail.png`),
@@ -286,7 +288,7 @@ test("a non-qualifying ⊘ renders exactly as it does today", async ({ page }, t
   const title = await signalButton.getAttribute("title");
   expect(title).not.toContain("washout");
   expect(title).not.toContain("洗盘");
-  expect(title).not.toContain("+27%");
+  expect(title).not.toContain("+22%");
 
   const marker = await page.locator("[data-sig-layer]").first().evaluate((svg) => {
     const g = [...svg.querySelectorAll("g")]

@@ -116,3 +116,20 @@ def test_the_retro_marker_carries_no_marker_level_tag():
     src = CHART_PANEL.read_text()
     assert 'tag.textContent = "RETRO"' not in src
     assert not re.search(r'textContent\s*=\s*["\']RETRO["\']', src)
+
+
+def test_both_retro_cohorts_are_drawn_as_entries_not_as_soft_refusals():
+    """The retro class has TWO halves and they must render as one thing.
+
+    A re-marked fire keeps its refusal ``quality`` on purpose — that is what keeps it out of
+    the scored lane — and BOTH refusal strings (``regime_blocked`` and the keeper's ``block``)
+    are in the client's SOFT_Q set. So the marker's soft-quality read has to exclude retro
+    explicitly, or the halves diverge: the regime-veto half comes out solid (SOFT_Q's
+    regime_blocked branch changes no fill) while the keeper half hits ``hollow = q === "block"``
+    and renders as an unfilled outline — the subordinate treatment a re-mark must not wear.
+
+    Caught only because the keeper half had no crop; the visual receipt covered the other one.
+    """
+    src = CHART_PANEL.read_text()
+    assert re.search(r"const q = !m\.retro && m\.quality != null && SOFT_Q\.has\(m\.quality\)", src), \
+        "retro must be excluded from the marker's soft-quality read, or its two halves diverge"
