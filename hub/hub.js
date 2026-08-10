@@ -8,8 +8,9 @@
 //
 // Feeds v1:
 //   (a) crypto: Coinbase exchange ws-feed (keyless) primary, OKX fallback (one writer at a time)
-//   (b) US: Polygon AM.* dynamic per-symbol subs (delayed cluster by default; HUB_POLYGON_CLUSTER=live
-//       when RT-entitled, auto-demotes back on denial), LRU 500, chg vs session anchor
+//   (b) US: Polygon aggregate dynamic per-symbol subs — delayed AM.* by default, live A.*
+//       when HUB_POLYGON_CLUSTER=live and RT-entitled (auto-demotes on denial), LRU 500,
+//       chg vs session anchor
 //   (c) macro: futures / caret indices / FX / DX-Y.NYB via lib/macrofeed.js — Sina global-futures
 //       snapshot (near-live, basis LIVE) with a Yahoo-spark leg (DELAYED_15M) for what Sina does
 //       not carry. Macro symbols bypass the Store, Polygon and the AnchorCache entirely.
@@ -66,14 +67,20 @@ const extFeed = new ExtFeed({
 // Kill-switch: MACRO_FEED_DISABLE=1 (read inside the constructor).
 const macroFeed = new MacroFeed();
 
-// REST snapshot leg — today's session for US symbols the AM.* stream is not carrying.
+// REST snapshot leg — today's session for US symbols the aggregate stream is not carrying.
 // The stream idle-sweeps subscriptions after 30 minutes, so this is the normal state for
 // anything outside the flagship 37; without this leg those symbols fall back to the
 // NIGHTLY manifest and display the previous session's close. Kill-switch:
 // HUB_DISABLE_SNAPSHOT=1 (reverts to exactly the pre-2026-08-07 behaviour).
+//
+// HUB_REALTIME_QUOTES=1 additionally puts the leg in real-time mode: an 8s poll and a
+// last-trade parse. It does NOT make the output claim to be real-time — snapshot.verdict()
+// measures print age against the wall clock and the store stamps the basis from that. With the
+// flag off, this file behaves exactly as it did before 2026-08-08.
 const snapshotFeed = new SnapshotFeed({
   apiKey: process.env.POLYGON_API_KEY || process.env.MASSIVE_API_KEY || "",
   disabled: process.env.HUB_DISABLE_SNAPSHOT === "1",
+  realtime: process.env.HUB_REALTIME_QUOTES === "1",
 });
 
 const MAX_SYMS_PER_REQUEST = 200;

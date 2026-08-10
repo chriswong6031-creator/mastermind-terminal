@@ -19,8 +19,9 @@ import { type DetectCmd } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
 import ChartConductor from "@/components/ChartConductor";
 import { intradayCapable } from "@/components/ChartPanel";
-import { classify } from "@/lib/intradaySources";
+import { classify, SECOND_TFS, isSecondTf } from "@/lib/intradaySources";
 import { isMacroSymbol } from "@/lib/macroSymbols";
+import { freshnessLabel } from "@/lib/feedFreshness";
 import { flowGet } from "@/lib/flowClientCache";
 // R3.2 glance layer: the rail block's per-root gexstate read. Entitlement-gated at
 // /api/flow — a 403 nulls out and the rail renders exactly as before (free UX unchanged).
@@ -141,12 +142,18 @@ const chgStr = (c: number | null | undefined) => (c == null || !isFinite(c) ? "�
 // shape varies by asset class — last/chg/basis/vol/ts/prevClose/…). Returns true only when every
 // field is identical, so setQuotes can keep the prior object reference and let React bail out
 // on a no-op 6s poll. `null`/`undefined` are treated as "no quote".
+// `lagMs` is excluded on purpose. It is a STOPWATCH READING of `asOfMs` taken when the response
+// was assembled, so it advances on every 6s poll even when the tape has not moved — comparing it
+// would defeat this bail-out entirely for any snapshot-served symbol during a quiet session.
+// `asOfMs` (the print instant) IS compared, so a genuinely new print still re-renders, and the
+// badge derives its displayed age from asOfMs at render time rather than from the retained lagMs.
+const QUOTE_EQ_IGNORE = new Set(["lagMs"]);
 function quoteEq(a: any, b: any): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
   const ka = Object.keys(a), kb = Object.keys(b);
   if (ka.length !== kb.length) return false;
-  for (const k of ka) if (a[k] !== b[k]) return false;
+  for (const k of ka) if (!QUOTE_EQ_IGNORE.has(k) && a[k] !== b[k]) return false;
   return true;
 }
 
@@ -267,17 +274,27 @@ function ChartTypeIcon({ kind }: { kind: string }) {
   if (kind === "area" || kind === "baseline") return <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 12l6-5 5 3 6-7 7 3v8H2z" className="ct-fill" /><path d="M2 12l6-5 5 3 6-7 7 3" />{kind === "baseline" && <path d="M2 9h24" className="ct-base" />}</svg>;
   return <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 12l6-5 5 3 6-7 7 3" />{kind === "line-markers" && <><circle cx="8" cy="7" r="1.4" /><circle cx="19" cy="3" r="1.4" /><circle cx="26" cy="6" r="1.4" /></>}</svg>;
 }
-const TF_GROUPS: [string, string[]][] = [["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "2D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
+const TF_GROUPS: [string, string[]][] = [["Seconds", ["1s", "5s", "15s", "30s"]], ["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "2D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
 // Daily-derived TFs are always functional. Intraday TFs (R12) go live for intraday-capable markets
 // (us/crypto/cn/hk); .TO (ca) stays daily-only — its picker entries render disabled.
 const DAILY_FUNCTIONAL = new Set(["D", "2D", "3D", "W", "2W", "1M", "3M"]);
 const INTRADAY_FUNCTIONAL = ["1m", "5m", "15m", "30m", "1h", "2h", "4h"];
+// Second-resolution aggregates are a US-STOCKS-ONLY entitlement on the current Massive plan —
+// no crypto, no index/futures/FX. Rendering them disabled for every other market is how the
+// boundary reaches the user: the band is visible and honestly unavailable, rather than silently
+// missing on some symbols and present on others.
+const SECOND_FUNCTIONAL = [...SECOND_TFS];
 // Sorts the top-bar favourites tray into chronological order. TF_CANONICAL_ORDER lives in
 // lib/startTf, which also feeds the Settings → Terminal startup-timeframe picker.
 const tfSortKey = (tf: string) => { const i = TF_CANONICAL_ORDER.indexOf(tf); return i < 0 ? 999 : i; };
-function functionalSet(sym: string): Set<string> {
+// `secondsEnabled` mirrors the server's HUB_REALTIME_QUOTES lever (threaded as a prop — the
+// flag is server-side and must not become a NEXT_PUBLIC_ twin). With the lever off the route
+// refuses the second band, so offering it here would hand the user a timeframe that renders
+// empty; the picker shows the group disabled with the honest reason instead.
+function functionalSet(sym: string, secondsEnabled: boolean): Set<string> {
   const s = new Set(DAILY_FUNCTIONAL);
   if (intradayCapable(classify(sym))) for (const t of INTRADAY_FUNCTIONAL) s.add(t);
+  if (secondsEnabled && classify(sym) === "us" && !isMacroSymbol(sym)) for (const t of SECOND_FUNCTIONAL) s.add(t);
   return s;
 }
 // valid ?pane= deep-link targets (the MegaPane pages; "analyst" is an alias for forecast).
@@ -306,7 +323,7 @@ const DETECTORS: [NonNullable<DetectCmd>["kind"], string][] = [
 ];
 // translation key maps for the (otherwise hard-coded) toolbar/tool labels
 const CT_TKEY: Record<string, string> = { candles: "ctCandles", hollow: "ctHollow", heikin: "ctHeikin", bars: "ctBars", line: "ctLine", "line-markers": "ctLineMarkers", step: "ctStepLine", area: "ctArea", baseline: "ctBaseline" };
-const TFG_TKEY: Record<string, string> = { Minutes: "tfMinutes", Hours: "tfHours", Days: "tfDays", Weeks: "tfWeeks", Months: "tfMonths" };
+const TFG_TKEY: Record<string, string> = { Seconds: "tfSecondsGroup", Minutes: "tfMinutes", Hours: "tfHours", Days: "tfDays", Weeks: "tfWeeks", Months: "tfMonths" };
 const DET_TKEY: Record<string, string> = { trendlines: "autoTrendlines", fib: "autoFib", sr: "srHeatmap", mtfa: "mtfSR", clear: "clearDetected" };
 
 // watchlist column widths (px). The symbol column + every visible data column is user-resizable.
@@ -329,7 +346,7 @@ function btMark(name: string) {
   console.log(`[boottrace] ${name} +${(now - _btStart).toFixed(1)}ms`);
 }
 
-export default function TerminalShell({ symbols, email, initialSymbol, shellMode = false, shellTray = false, shellDossier = false }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string; shellMode?: boolean; shellTray?: boolean; shellDossier?: boolean }) {
+export default function TerminalShell({ symbols, email, initialSymbol, shellMode = false, shellTray = false, shellDossier = false, secondBarsEnabled = false }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string; shellMode?: boolean; shellTray?: boolean; shellDossier?: boolean; secondBarsEnabled?: boolean }) {
   const [man, setMan] = useState<Manifest | null>(null);
   // named watchlists — client-side + localStorage-backed so switching / creating lists works for guests
   // (no auth needed). The server-provided `symbols` seed becomes the "Default" list.
@@ -434,7 +451,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const tf = paneTfs[activePane] ?? paneTfs[0] ?? "D";        // the active pane's timeframe drives the toolbar
   const setTf = (t: string) => setPaneTfs((a) => { const n = [...a]; n[activePane] = t; return n; });
   // per-market functional TF set: daily-derived always; intraday TFs only for intraday-capable markets (R12)
-  const FUNCTIONAL = useMemo(() => functionalSet(active), [active]);
+  const FUNCTIONAL = useMemo(() => functionalSet(active, secondBarsEnabled), [active, secondBarsEnabled]);
   const [chartType, setChartType] = useState("candles");
   // Default-on indicators for new users: Moving Averages + Volume + MACD-RSI (TH_RSIMACD+) + Stochastic (CM_Stochastic_MTF).
   // item-28: Golden Oracle is OFF by default. A user's explicit saved indicator set (mm.inds)
@@ -631,6 +648,12 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const nonce = useRef(0);
   const wsMounted = useRef(false);
   const t = useT();
+  // Why a disabled timeframe is disabled. Three distinct reasons, and naming the wrong one sends
+  // the user hunting for a setting: the second band is off for the whole deployment ("not
+  // enabled"), or on but unentitled for this symbol ("US stocks only"); everything else in the
+  // intraday band is a market without a live feed.
+  const tfDisabledReason = (tfi: string) =>
+    isSecondTf(tfi) ? (secondBarsEnabled ? t("usOnlyFeed") : t("secondsOffFeed")) : t("liveFeed");
   const { lang } = useLang();
   const { ref: chartToolbarRef, mode: chartToolbarMode } = useAdaptiveToolbar(
     `${lang}|${favTfOrder.join(",")}|${panes.length}|${tf}`,
@@ -880,7 +903,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     // Settings → Terminal → Default timeframe (3D unless changed). Resolved against the landing
     // symbol's functional set, since the workspace restore below can land on a symbol other than seed0.
     const savedStartTf = readStartTf();
-    const startTf = resolveStartTf(savedStartTf, functionalSet(seed0));
+    const startTf = resolveStartTf(savedStartTf, functionalSet(seed0, secondBarsEnabled));
     { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); for (const k of Object.keys(savedP)) if (isSuiteKey(k)) base[k] = { ...suiteDefaults(k), ...savedP[k] }; setIndParams(base); } setPaneTfs([startTf]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); {
       const savedSet = load(WATCHLIST_SETTINGS_KEY, {});
       const savedVersion = Number(localStorage.getItem(WATCHLIST_SETTINGS_VERSION_KEY) || 0);
@@ -900,7 +923,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           const pairs = ws.panes.map((s: string, i: number) => [s, ws.paneTfs?.[i] ?? startTf]).filter(([s]: any) => symbols.some((x) => x.symbol === s));
           if (pairs.length) {
             // a single chart always opens on the startup default; genuine multi-pane layouts (e.g. MTF) keep their saved per-pane timeframes
-            setPanes(pairs.map((p: any) => p[0])); setPaneTfs(pairs.length === 1 ? [resolveStartTf(savedStartTf, functionalSet(pairs[0][0]))] : pairs.map((p: any) => p[1]));
+            setPanes(pairs.map((p: any) => p[0])); setPaneTfs(pairs.length === 1 ? [resolveStartTf(savedStartTf, functionalSet(pairs[0][0], secondBarsEnabled))] : pairs.map((p: any) => p[1]));
             setSplit([1, 2, 4].includes(ws.split) ? ws.split : (pairs.length >= 4 ? 4 : pairs.length >= 2 ? 2 : 1));
             setActivePane(Math.min(ws.activePane || 0, pairs.length - 1));
             if (typeof ws.sync === "boolean") setSync(ws.sync);
@@ -1347,6 +1370,60 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     const id = setTimeout(pollQuotes, 250);
     return () => clearTimeout(id);
   }, [quoteSymsKey, pollQuotes]);
+
+  // Visible-chart fast lane. The wide watchlist/movers batch stays on its inexpensive 6s cadence;
+  // only the (at most four) U.S. symbols actually painted in panes may poll the localhost hub once
+  // per second. A normal timeframe joins after the first quote proves `basis:REALTIME`; selecting a
+  // second timeframe may probe immediately so a newly opened chart does not wait for the slow poll.
+  // When the verdict demotes or the tab hides, this lane turns itself off automatically.
+  const chartQuoteSymsKey = useMemo(() => {
+    const syms: string[] = [];
+    for (let i = 0; i < panes.length; i++) {
+      const sym = panes[i];
+      if (!sym || isComposite(sym) || isMacroSymbol(sym) || classify(sym) !== "us") continue;
+      if (isSecondTf(paneTfs[i] ?? "D") || quotes[sym]?.basis === "REALTIME") syms.push(sym);
+    }
+    return Array.from(new Set(syms)).slice(0, 8).join(",");
+  }, [panes, paneTfs, quotes]);
+  const chartQuoteSymsKeyRef = useRef(chartQuoteSymsKey);
+  chartQuoteSymsKeyRef.current = chartQuoteSymsKey;
+  const chartQuoteAliveRef = useRef(true);
+  const pollChartQuotes = useCallback(() => {
+    if (typeof document !== "undefined" && document.hidden) return;
+    const key = chartQuoteSymsKeyRef.current;
+    if (!key) return;
+    fetch(`/api/quote?cadence=chart&syms=${encodeURIComponent(key)}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!chartQuoteAliveRef.current || !d?.quotes) return;
+        setQuotes((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const [sym, quote] of Object.entries<any>(d.quotes)) {
+            // A transient fast-lane miss must not erase the slower lane's last-known quote.
+            if (quote && !quoteEq(prev[sym], quote)) { next[sym] = quote; changed = true; }
+          }
+          return changed ? next : prev;
+        });
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    chartQuoteAliveRef.current = true;
+    const id = setInterval(pollChartQuotes, 1_000);
+    const onVis = () => { if (!document.hidden) pollChartQuotes(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      chartQuoteAliveRef.current = false;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [pollChartQuotes]);
+  useEffect(() => {
+    if (!chartQuoteSymsKey) return;
+    const id = setTimeout(pollChartQuotes, 120);
+    return () => clearTimeout(id);
+  }, [chartQuoteSymsKey, pollChartQuotes]);
 
   // item-26/27: extended/overnight poll — US equities only. Always includes the active symbol
   // (pane-card secondary block, item-25) plus all watchlist US singles when the Ext column is on.
@@ -2716,10 +2793,14 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           <DayRange low={liveQuote?.low ?? m?.low} high={liveQuote?.high ?? m?.high} last={lastPx} open={liveQuote?.open ?? m?.open} variant="bar" />
         </div>
         {(() => {
+          // The verdict lives in lib/feedFreshness so the rule is unit-testable and so a
+          // "real-time" label can only ever come from the hub's MEASURED lag (see that file).
           const basis = liveQuote?.basis ?? (liveStatus === "live" ? "LIVE" : "EOD");
-          const badgeCls = basis === "LIVE" ? "livebadge live" : basis === "DELAYED_15M" ? "livebadge delayed" : "livebadge";
-          const badgeLbl = basis === "LIVE" ? t("live") : basis === "DELAYED_15M" ? t("delayed15m") : t("historical");
-          return <span className={`${badgeCls} topbar-livebadge`} title={t("liveTip")}><i />{badgeLbl}</span>;
+          const { cls, label, tip } = freshnessLabel(
+            { basis, lagMs: liveQuote?.lagMs, asOfMs: liveQuote?.asOfMs, marketSession: liveQuote?.marketSession }, t);
+          // `topbar-livebadge` (not an inline margin) so #367's width-aware dense
+          // chrome still owns the spacing and the narrow-viewport icon-only collapse.
+          return <span className={`${cls} topbar-livebadge`} title={tip}><i />{label}</span>;
         })()}
         <div className="spacer" />
         <button className="ai" onClick={() => (window as any).MMBrain?.toggle()}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
@@ -2785,7 +2866,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
               <div className={`tfgrid${tfOpen ? " show" : ""}`} onClick={(e) => e.stopPropagation()}>
                 {TF_GROUPS.map(([g, items]) => (<div key={g}><div className="g">{t(TFG_TKEY[g])}</div>{items.map((tfi) => { const fn = FUNCTIONAL.has(tfi); const fav = favTF.includes(tfi);
                   return <div key={tfi} className={`it${tf === tfi ? " on" : ""}${fn ? "" : " dis"}`} onClick={() => { if (fn) { setTf(tfi); setTfOpen(false); } }}>
-                    <span>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 10 }}>{t("liveFeed")}</span>}</span>
+                    {/* A disabled entry must say WHY. For the second band the reason is the
+                        plan's entitlement boundary (US stocks only), not a missing live feed —
+                        labelling it "live feed" would send a user hunting for a setting that
+                        cannot exist for their symbol. */}
+                    <span>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 10 }}>{tfDisabledReason(tfi)}</span>}</span>
                     <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(tfi) ? f.filter((x) => x !== tfi) : [...f, tfi]); }}><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
                   </div>; })}</div>))}
               </div>
@@ -2800,7 +2885,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                         const fav = favTF.includes(tfi);
                         return (
                           <div key={tfi} className={`msheet-row${tf === tfi ? " on" : ""}${fn ? "" : ""}`} style={fn ? {} : { opacity: 0.45 }} onClick={() => { if (fn) { setTf(tfi); setTfOpen(false); } }}>
-                            <span style={{ flex: 1 }}>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 8, fontSize: 11 }}>{t("liveFeed")}</span>}</span>
+                            <span style={{ flex: 1 }}>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 8, fontSize: 11 }}>{tfDisabledReason(tfi)}</span>}</span>
                             <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(tfi) ? f.filter((x) => x !== tfi) : [...f, tfi]); }} style={{ padding: "0 4px" }}><svg viewBox="0 0 24 24" width={16} height={16}><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
                           </div>
                         );

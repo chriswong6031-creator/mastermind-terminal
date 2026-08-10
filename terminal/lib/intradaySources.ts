@@ -14,13 +14,13 @@
 // can be imported by both this module (client-shared) and intradayStore (server-only, node:fs).
 export type { Bar6, Market } from "./intradayShared";
 export {
-  INTRADAY_TFS, isIntradayTf, tfMinutes, classify, resample,
+  INTRADAY_TFS, SECOND_TFS, isIntradayTf, isSecondTf, tfMinutes, tfSeconds, classify, resample,
   filterUsEquitySession, resampleUsEquitySession,
   resampleSessionSegments, HK_SESSION_SEGMENTS,
 } from "./intradayShared";
 import type { Bar6, Market } from "./intradayShared";
 import {
-  isIntradayTf, tfMinutes, classify, resample,
+  isIntradayTf, isSecondTf, tfMinutes, tfSeconds, classify, resample,
   filterUsEquitySession, resampleUsEquitySession,
   resampleSessionSegments, HK_SESSION_SEGMENTS,
 } from "./intradayShared";
@@ -60,6 +60,44 @@ export function localDisplay(ms: number, tz: string): { epoch: number; minOfDay:
 /** The ET specialization — what the US-axis providers (Polygon, US macro rows) emit. */
 export function etDisplay(ms: number): { epoch: number; minOfDay: number } {
   return localDisplay(ms, "America/New_York");
+}
+
+// ── Second-precision display epoch ───────────────────────────────────────────
+// `localDisplay` above deliberately truncates to the MINUTE — every caller in the
+// minute/hour band wants the bar's opening minute. Second bars cannot use it: all 60 bars
+// inside a minute would collapse onto one epoch and `fetchIntraday`'s ascending-unique pass
+// would keep exactly ONE of them. Its own formatter (with `second`) rather than a parameter
+// on the shared one, so the hot minute path keeps formatting exactly the fields it needs.
+const TZ_FMT_SEC = new Map<string, Intl.DateTimeFormat>();
+function tzFmtSec(tz: string): Intl.DateTimeFormat {
+  let f = TZ_FMT_SEC.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, hourCycle: "h23",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    TZ_FMT_SEC.set(tz, f);
+  }
+  return f;
+}
+
+/** Display epoch at SECOND precision — the same convention, one order of magnitude finer. */
+export function etDisplaySec(ms: number): { epoch: number; minOfDay: number } {
+  const p: Record<string, string> = {};
+  for (const part of tzFmtSec("America/New_York").formatToParts(ms)) p[part.type] = part.value;
+  const hh = +p.hour % 24;
+  return {
+    epoch: Date.UTC(+p.year, +p.month - 1, +p.day, hh, +p.minute, +p.second) / 1000,
+    minOfDay: hh * 60 + +p.minute,
+  };
+}
+
+/** ET calendar date ("YYYY-MM-DD") for an instant — the session-date key for US bars. */
+export function etDateOf(ms: number): string {
+  const p: Record<string, string> = {};
+  for (const part of tzFmt("America/New_York").formatToParts(ms)) p[part.type] = part.value;
+  return `${p.year}-${p.month}-${p.day}`;
 }
 
 /**
@@ -128,6 +166,106 @@ async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolea
       : resampleUsEquitySession(selected, minutes, session);
   }
   return out;
+}
+
+// ── Second-resolution aggregates (US equities only) ──────────────────────────
+//
+// ENTITLEMENT. `…/range/<n>/second/…` is a Stocks-Advanced feature and the plan covers US
+// STOCKS ONLY. Crypto, index, futures and FX are NOT entitled on this key, so this leg refuses
+// anything that is not a US equity rather than emitting a request that would 403 or, worse,
+// return an empty set the chart would render as "no data" for a market that simply is not sold
+// to us. `SECOND_TFS` is likewise offered in the picker only for US symbols (TerminalShell).
+//
+// WINDOW BOUND (measured, 2026-08-08 — this is the whole reason the leg is shaped this way):
+//   A naive `sort=desc` request over a 4-day span returned 96,642 bars / 9.7 MB for AAPL and
+//   IGNORED `limit=50000` outright. One session alone is 23,297 bars (~2.3 MB from the vendor).
+//   Neither is an acceptable chart payload, so the window is bounded TWICE:
+//     1. to a SINGLE ET session date, and
+//     2. to the most recent SECOND_MAX_BARS bars within it.
+//   The upstream request is cut to the same window, so we never pull bars we intend to discard.
+//   At 1s that is the last 2 hours of the session; at 5s the whole extended session; at
+//   15s/30s the whole session with room to spare.
+const SECOND_MAX_BARS = 7200;
+// How far back to look for the most recent session when none is named. Covers a Friday close
+// seen from Monday plus a long holiday weekend. Each miss is an empty 200 (~80 ms measured).
+const SECOND_SESSION_WALK_DAYS = 5;
+// ET session bounds, minutes from midnight. Regular unless the caller opted into extended.
+const US_RTH = { start: 9 * 60 + 30, end: 16 * 60 };
+const US_EXT = { start: 4 * 60, end: 20 * 60 };
+
+/**
+ * An ET wall-clock time on a calendar date → the true UTC instant (ms).
+ *
+ * DST-safe without a timezone table: read the ET clock at the naive instant, and the difference
+ * IS that date's UTC offset. All four session boundaries (04:00/09:30/16:00/20:00) sit far from
+ * the 02:00 DST switch, so there is no ambiguous-hour case to resolve.
+ */
+export function etWallToUtcMs(dateStr: string, minuteOfDay: number): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (!m) return NaN;
+  const naive = Date.UTC(+m[1], +m[2] - 1, +m[3], Math.floor(minuteOfDay / 60), minuteOfDay % 60);
+  const offset = localDisplay(naive, "America/New_York").epoch * 1000 - naive;
+  return naive - offset;
+}
+
+/** Second-resolution bars for ONE session date, or [] when that date did not trade. */
+async function fetchPolygonSecondsForDate(
+  sym: string, tf: string, ext: boolean, dateStr: string, nowMs: number,
+): Promise<Bar6[]> {
+  const key = process.env.POLYGON_API_KEY || process.env.MASSIVE_API_KEY;
+  if (!key) throw new Error("POLYGON_API_KEY not set");
+  const step = tfSeconds(tf);
+  if (step <= 0) return [];
+  const bounds = ext ? US_EXT : US_RTH;
+  const sessionStart = etWallToUtcMs(dateStr, bounds.start);
+  const sessionEnd = etWallToUtcMs(dateStr, bounds.end);
+  if (!Number.isFinite(sessionStart) || !Number.isFinite(sessionEnd)) return [];
+  // A live session is bounded by NOW, not by the closing bell that has not rung yet.
+  const to = Math.min(sessionEnd, nowMs);
+  if (to <= sessionStart) return []; // session has not opened yet on this date
+  const from = Math.max(sessionStart, to - SECOND_MAX_BARS * step * 1000);
+
+  const mult = Math.max(1, Math.round(step));
+  const url =
+    `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(sym.toUpperCase())}` +
+    `/range/${mult}/second/${from}/${to}?adjusted=true&sort=asc&limit=50000&apiKey=${key}`;
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) {
+    if (r.status === 429) throw new Error("polygon rate-limited");
+    throw new Error("polygon " + r.status);
+  }
+  const j: { results?: Array<{ t: number; o: number; h: number; l: number; c: number; v: number }> } =
+    await r.json();
+  const res = j?.results || [];
+  const out: Bar6[] = [];
+  for (const b of res) {
+    // Second precision — etDisplay would truncate every bar in a minute onto one epoch.
+    const { epoch } = etDisplaySec(b.t);
+    out.push([epoch, b.o, b.h, b.l, b.c, b.v]);
+  }
+  // The session filter is minute-granular and the request window is already inside the session,
+  // so this only trims a boundary bar the vendor stamps at the closing minute.
+  return filterUsEquitySession(out, ext ? "extended" : "regular");
+}
+
+/**
+ * Second-resolution bars for `sym`, for the named session date or the most recent one that traded.
+ *
+ * With no `date` this walks BACK from today — the honest answer on a Saturday is Friday's session,
+ * and there is no holiday calendar in this app to consult instead. The walk stops at the first
+ * date that returns bars, so it costs exactly one upstream call during a live session.
+ */
+export async function fetchPolygonSeconds(
+  sym: string, tf: string, ext: boolean, date?: string, nowMs: number = Date.now(),
+): Promise<Bar6[]> {
+  if (classify(sym) !== "us" || isMacroSymbol(sym) || isDailyOnlySymbol(sym)) return [];
+  if (date) return fetchPolygonSecondsForDate(sym, tf, ext, date, nowMs);
+  for (let back = 0; back < SECOND_SESSION_WALK_DAYS; back++) {
+    const probe = etDateOf(nowMs - back * 86400000);
+    const bars = await fetchPolygonSecondsForDate(sym, tf, ext, probe, nowMs);
+    if (bars.length) return bars;
+  }
+  return [];
 }
 
 // ── Macro (indices / rates / FX / futures) → Yahoo v8 chart ──
@@ -301,8 +439,20 @@ async function fetchTencentHK(sym: string, tf: string): Promise<Bar6[]> {
   return minutes <= 1 ? base : resampleSessionSegments(base, minutes, HK_SESSION_SEGMENTS);
 }
 
-export async function fetchIntraday(sym: string, tf: string, ext: boolean): Promise<Bar6[]> {
+export async function fetchIntraday(
+  sym: string, tf: string, ext: boolean, date?: string,
+): Promise<Bar6[]> {
   if (!isIntradayTf(tf)) return [];
+  // Second band: its own single-session leg, its own cap. Returned BEFORE the 1200-bar tail
+  // slice below — that cap is a minute-band depth limit and at 1s it would leave 20 minutes.
+  if (isSecondTf(tf)) {
+    const secs = await fetchPolygonSeconds(sym, tf, ext, date);
+    secs.sort((a, b) => a[0] - b[0]);
+    const uniq: Bar6[] = [];
+    let prev = -1;
+    for (const b of secs) { if (b[0] !== prev) { uniq.push(b); prev = b[0]; } }
+    return uniq;
+  }
   // FRED daily series (DFII10, T10YIE, …) print once a day and have no intraday leg anywhere.
   // Returned empty BEFORE any fetch: the honest "No intraday data" is the correct answer, and
   // there is no upstream to ask — a bare series id would otherwise fall through classify()'s
@@ -344,7 +494,17 @@ export type Quote = {
   open: number | null; high: number | null; low: number | null;
   vol: number | null; amount: number | null; ts: number | null;
   live: boolean; source: string; market: Market;
-  basis: "LIVE" | "DELAYED_15M" | "EOD";
+  // REALTIME is claimed ONLY by a leg that MEASURED the print's age against the wall clock on
+  // this very poll (hub/lib/snapshot.js). It is never set from configuration — an env flag can
+  // enable the real-time leg, but only the measurement can label its output real-time.
+  basis: "REALTIME" | "LIVE" | "DELAYED_15M" | "EOD";
+  /** Measured age of the underlying print at serve time, in ms. Present only when measured. */
+  lagMs?: number | null;
+  /** Epoch-ms of the print itself — the stable half of the pair (see lib/feedFreshness). */
+  asOfMs?: number | null;
+  /** Latest completed/updated one-second aggregate from the U.S. live WebSocket lane. */
+  tickOpen?: number | null; tickHigh?: number | null; tickLow?: number | null; tickClose?: number | null;
+  tickVol?: number | null; tickStartMs?: number | null; tickEndMs?: number | null;
   // Extended/overnight fields (item-25/26). Populated by the ext-quote route.
   // extPrice: the most recent ext print; extChg: % vs close; extTs: epoch-sec of that print.
   // Absent (undefined) when no ext data is available (keyless or no print).

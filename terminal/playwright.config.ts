@@ -66,6 +66,9 @@ export default defineConfig({
       TERMINAL_E2E_FIXTURE: "1",
       TERMINAL_E2E_EMAIL: "responsive@example.com",
       TERMINAL_E2E_ENTITLEMENT: "unlimited",
+      // Exercise the second-resolution UI in deterministic route fixtures. Production remains
+      // controlled by the server-only operator flag; this value exists only in the test process.
+      HUB_REALTIME_QUOTES: "1",
       FLOW_FIXTURE: "1",
       NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
       NEXT_PUBLIC_SUPABASE_ANON_KEY: "fixture-anon-key",

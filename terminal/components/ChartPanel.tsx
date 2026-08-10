@@ -36,7 +36,8 @@ import { setActivePaneCoords, getActivePaneCoords } from "@/lib/paneCoords";
 import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataCache";
 import { parseComposite, alignAndSum } from "@/lib/composite";
 import { CMP_PALETTE, type CmpCfg, defaultCmpCfg, cmpKey } from "@/lib/compare";
-import { isIntradayTf, classify, tfMinutes, type Market } from "@/lib/intradaySources";
+import { isIntradayTf, isSecondTf, classify, tfMinutes, type Market } from "@/lib/intradaySources";
+import { liveDisplayEpoch, mutateLiveCandle } from "@/lib/liveCandle";
 import { isMacroSymbol, macroOnEtAxis } from "@/lib/macroSymbols";
 import { sessionVwap, openingRange, sessionLevels, pivotLevels, rvolSeries, ttmSqueeze, adx as calcAdx, cvdApprox, type Bar as IMBar, type DailyBar } from "@/lib/intradayMath";
 import { attachSessionShading, detachSessionShading, type SessionShadingPrimitive } from "@/lib/sessionShading";
@@ -159,6 +160,18 @@ export type LiveQuote = {
   extSession?: "pre" | "post" | "overnight";
   extSource?: string;
   extBasis?: string;
+  live?: boolean;
+  lagMs?: number | null;
+  asOfMs?: number | null;
+  // Latest one-second aggregate from the live Massive WebSocket lane. Kept distinct from
+  // day open/high/low/volume so a 1s candle never mistakes the session open for its own open.
+  tickOpen?: number | null;
+  tickHigh?: number | null;
+  tickLow?: number | null;
+  tickClose?: number | null;
+  tickVol?: number | null;
+  tickStartMs?: number | null;
+  tickEndMs?: number | null;
 } | null | undefined;
 
 // Which markets can show intraday TFs (R12): everyone but Canadian `.TO` (no Polygon intraday leg).
@@ -424,7 +437,7 @@ const withAlpha = (col: string, a: number): string => {
 const SUBPANE_ORDER = ["rsi", "stochrsi", "macd", "rsistack", "accum", "rvol", "ttmsq", "adx", "cvd"] as const;
 
 // Bases that carry a fresher-than-EOD price we can splice onto the last daily bar.
-const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
+const SPLICE_BASES = new Set(["REALTIME", "LIVE", "DELAYED_15M"]);
 
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, toolActivation = 0, drawingSticky = false, drawingCreationDisabled = false, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = "off", compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
@@ -568,6 +581,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const syncIdRef = useRef<number | null>(syncId);
   const replayIdxRef = useRef<number | null>(replayIdx);   // live replayIdx so Effect 2 doesn't build against a stale closure if replay starts mid-fetch
   const liveQuoteRef = useRef<LiveQuote>(liveQuote);       // latest live quote, so Effect 2's tail can re-apply the splice after setData
+  const extHoursRef = useRef(extHours);
+  const liveTickKeyRef = useRef("");                        // rejects a repeated one-second packet without repainting
+  const livePulseSeqRef = useRef(0);                         // alternates CSS animation names so every tick can pulse
   const renderRef = useRef<() => void>(() => {});
   const cancelPendingDrawingRef = useRef<() => void>(() => {});
   const cancelMediaToolRef = useRef<(activeTool?: DrawKind | null) => void>(() => {});
@@ -829,7 +845,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   if (!drawingTransactionRef.current) drawRef.current = drawings;
   toolRef.current = tool; toolActivationRef.current = toolActivation; drawingStickyRef.current = drawingSticky; drawingCreationDisabledRef.current = drawingCreationDisabled; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
-  chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol; companyNameRef.current = companyName;
+  chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; extHoursRef.current = extHours; symbolRef.current = symbol; companyNameRef.current = companyName;
   lastValueVisibleRef.current = chartSettings?.lastValueVisible !== false;
   countdownVisibleRef.current = chartSettings?.countdownVisible !== false;
   chartSettingsRef.current = chartSettings ?? {};
@@ -2395,6 +2411,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (chart) for (const s of cmpSeriesRef.current.values()) { try { chart.removeSeries(s); } catch {} }
     cmpSeriesRef.current.clear();
     try { priceSeriesRef.current?.setData([]); } catch {}
+    liveTickKeyRef.current = "";
+    const liveWrap = wrapElRef.current;
+    if (liveWrap) {
+      delete liveWrap.dataset.liveDirection;
+      delete liveWrap.dataset.liveKind;
+      delete liveWrap.dataset.livePulse;
+      delete liveWrap.dataset.livePrice;
+      delete liveWrap.dataset.liveRevision;
+      delete liveWrap.dataset.liveOpen;
+      delete liveWrap.dataset.liveHigh;
+      delete liveWrap.dataset.liveLow;
+      delete liveWrap.dataset.liveClose;
+      delete liveWrap.dataset.liveTime;
+      liveWrap.style.removeProperty("--mm-live-y");
+      liveWrap.style.removeProperty("--mm-live-color");
+    }
     rebuildPaneMeta();             // the legend must not advertise studies that are no longer drawn
     if (onMeta) onMeta({ total: 0 });
     renderTagRef.current?.();      // no bars → the last-price badge hides itself
@@ -2402,12 +2434,78 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     renderRef.current();
   };
 
+  const applyIntradayLiveCandle = () => {
+    const priceS = priceSeriesRef.current;
+    if (!priceS || !isIntradayRef.current || replayIdxRef.current != null) return;
+    if (chartDataSymRef.current !== symbolRef.current) return;
+    const current = fullBarsRef.current;
+    if (!current.length) return;
+    const mutation = mutateLiveCandle(
+      current as unknown as import("@/lib/liveCandle").LiveCandleBar[],
+      liveQuoteRef.current,
+      timeframeRef.current,
+      classify(symbolRef.current),
+      extHoursRef.current,
+    );
+    if (!mutation || mutation.tickKey === liveTickKeyRef.current) return;
+
+    const bar = mutation.bar as unknown as Bar;
+    try {
+      priceS.update(isValueChartType(chartTypeRef.current)
+        ? { time: bar.time, value: bar.c }
+        : { time: bar.time, open: bar.o, high: bar.h, low: bar.l, close: bar.c });
+    } catch { return; }
+
+    liveTickKeyRef.current = mutation.tickKey;
+    fullBarsRef.current = mutation.bars as unknown as Bar[];
+    barsRef.current = fullBarsRef.current; // replay is guarded above, so the visible set is the full set
+    closesRef.current = barsRef.current.map((r) => r.c);
+    barIdxRef.current = { src: null, map: new Map() };
+    if (mutation.kind === "new-bar" && onMeta) onMeta({ total: barsRef.current.length });
+
+    // Existing built-ins already have an in-place update path. Running it here keeps the default
+    // EMA/volume/MACD/Stoch stack breathing with the candle without removing/recreating panes.
+    updateAllIndicators(barsRef.current, closesRef.current);
+    buildIndDataMap(barsRef.current, closesRef.current);
+    paintStatus(barsRef.current, null);
+    renderSignalsRef.current();
+    renderRef.current();
+    renderTagRef.current?.();
+    if (dayModeRef.current) setStripBars([...barsRef.current]);
+    reRegisterSync();
+
+    // Canvas pixels change through series.update(); this small DOM tracer makes that mutation
+    // perceptible at a glance without repainting the candle ourselves. Alternating a/b restarts
+    // the finite pulse without a forced layout; reduced-motion CSS disables the animation.
+    const wrap = wrapElRef.current;
+    if (wrap) {
+      const color = mutation.direction === "up"
+        ? tokensRef.current.up
+        : mutation.direction === "down" ? tokensRef.current.down : tokensRef.current.brand2;
+      let y: number | null = null;
+      try { y = priceS.priceToCoordinate(bar.c) as number | null; } catch {}
+      wrap.dataset.liveDirection = mutation.direction;
+      wrap.dataset.liveKind = mutation.kind;
+      wrap.dataset.livePrice = String(bar.c);
+      wrap.dataset.liveOpen = String(bar.o);
+      wrap.dataset.liveHigh = String(bar.h);
+      wrap.dataset.liveLow = String(bar.l);
+      wrap.dataset.liveClose = String(bar.c);
+      wrap.dataset.liveTime = String(bar.time);
+      wrap.dataset.liveRevision = String(++livePulseSeqRef.current);
+      wrap.dataset.livePulse = livePulseSeqRef.current % 2 ? "a" : "b";
+      wrap.style.setProperty("--mm-live-color", color || tokensRef.current.brand2);
+      if (y != null && Number.isFinite(y)) wrap.style.setProperty("--mm-live-y", `${Math.round(y)}px`);
+      priceTagRef.current?.setAttribute("data-live-direction", mutation.direction);
+    }
+  };
+
   const applyLiveSplice = () => {
     const priceS = priceSeriesRef.current; if (!priceS) return;
     // The bars on the canvas must belong to THIS symbol (see clearChartData) — a quote must never
     // be spliced onto another symbol's series.
     if (chartDataSymRef.current !== symbolRef.current) return;
-    if (isIntradayRef.current) return;                     // intraday is already live
+    if (isIntradayRef.current) { applyIntradayLiveCandle(); return; }
     if (replayIdxRef.current != null) return;              // never splice under replay
     const q = liveQuoteRef.current;
     if (!q || q.last == null || !isFinite(q.last)) return;
@@ -3009,7 +3107,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const nowSec = Date.now() / 1000; let rem: number | null = null;
         if (isIntradayRef.current) {
           const mins = tfMinutes(timeframeRef.current); const openTs = Number(last.time);
-          if (mins > 0 && isFinite(openTs)) rem = openTs + mins * 60 - nowSec;
+          const displayNow = liveDisplayEpoch(Date.now(), classify(symbolRef.current));
+          if (mins > 0 && isFinite(openTs) && displayNow != null) rem = openTs + mins * 60 - displayNow;
         } else {
           rem = periodCloseTs(timeframeRef.current, nowSec, classify(symbolRef.current)) - nowSec;
         }
@@ -6304,6 +6403,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   useEffect(() => {
     const chart = chartRef.current; if (!chart) return;
     cpMark(`chart-effect2-start[${symbol}]`);
+    liveTickKeyRef.current = "";
+    const liveWrap = wrapElRef.current;
+    if (liveWrap) {
+      delete liveWrap.dataset.liveDirection;
+      delete liveWrap.dataset.liveKind;
+      delete liveWrap.dataset.livePulse;
+      delete liveWrap.dataset.livePrice;
+      delete liveWrap.dataset.liveRevision;
+      delete liveWrap.dataset.liveOpen;
+      delete liveWrap.dataset.liveHigh;
+      delete liveWrap.dataset.liveLow;
+      delete liveWrap.dataset.liveClose;
+      delete liveWrap.dataset.liveTime;
+      liveWrap.style.removeProperty("--mm-live-y");
+      liveWrap.style.removeProperty("--mm-live-color");
+    }
     const epoch = ++epochRef.current;
     let cancelled = false;
     const intraday = isIntradayTf(timeframe);
@@ -6346,7 +6461,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           return;
         }
         hideEmptyRef.current();                   // data arrived → clear any prior dead-end overlay
-        chart.applyOptions({ timeScale: { timeVisible: true, secondsVisible: false } });   // HH:MM on the intraday axis (no repeated dates)
+        chart.applyOptions({ timeScale: { timeVisible: true, secondsVisible: isSecondTf(timeframe) } });
         // epoch-second Bar6 [t,o,h,l,c,v] → Bar with a NUMERIC time (lightweight-charts accepts UTCTimestamp)
         const rows: Bar[] = bars.map((b: any[]) => ({ time: b[0] as any, o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
         if (onMeta) onMeta({ total: rows.length });
@@ -6410,6 +6525,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         }
         renderSignalsRef.current(); renderRef.current();
         reRegisterSync();
+        // A quote can win the race while the REST window is loading. Apply it only after setData so
+        // the streamed candle is not immediately erased by the initial payload.
+        applyLiveSplice();
         return;
       }
 
@@ -6949,12 +7067,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   }, [replayIdx]);
 
   // ────────────────────────────────────────────────────────────────────────────
-  // EFFECT 7 — live-bar splice [liveQuote]. R11: patch/append the live quote onto the last bar.
-  //   Keyed on a stable signature so it fires on each new snapshot from the 6s poll. All guards
-  //   (intraday / replay / EOD basis / no-quote) live inside applyLiveSplice.
+  // EFFECT 7 — live-bar splice [liveQuote]. Daily-derived bars take the regular quote; intraday
+  //   bars consume the one-second aggregate packet. The signature includes packet time + OHLC so
+  //   two prints inside one candle still reshape its body/wicks without remounting the chart.
   // ────────────────────────────────────────────────────────────────────────────
   const liveSig = liveQuote
-    ? `${liveQuote.last ?? ""}|${liveQuote.ts ?? ""}|${liveQuote.basis ?? ""}|${liveQuote.extPrice ?? ""}|${liveQuote.extTs ?? ""}|${liveQuote.extSession ?? ""}`
+    ? `${liveQuote.last ?? ""}|${liveQuote.ts ?? ""}|${liveQuote.asOfMs ?? ""}|${liveQuote.basis ?? ""}|${liveQuote.tickStartMs ?? ""}|${liveQuote.tickEndMs ?? ""}|${liveQuote.tickOpen ?? ""}|${liveQuote.tickHigh ?? ""}|${liveQuote.tickLow ?? ""}|${liveQuote.tickClose ?? ""}|${liveQuote.tickVol ?? ""}|${liveQuote.extPrice ?? ""}|${liveQuote.extTs ?? ""}|${liveQuote.extSession ?? ""}`
     : "";
   useEffect(() => {
     if (!chartRef.current || !priceSeriesRef.current) return;

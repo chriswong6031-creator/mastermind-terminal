@@ -4,7 +4,8 @@
 // Contract §1 quote shape:
 //   { sym, last, chg, prevClose?, close?, open?, high?, low?, vol?, amount?,
 //     ts, live, source, market, basis, marketSession?, regularSessionDate?,
-//     extPrice?, extChg?, extTs?, extSession?, extSource?, extBasis? }
+//     extPrice?, extChg?, extTs?, extSession?, extSource?, extBasis?,
+//     tickOpen?, tickHigh?, tickLow?, tickClose?, tickVol?, tickStartMs?, tickEndMs? }
 //
 // prevClose derivation (session-keyed, not manifest-derived):
 //   US:     prevClose comes from AnchorCache — daily file → Polygon REST → manifest fallback.
@@ -21,6 +22,7 @@
 const fs = require("fs");
 const log = require("./log");
 const { classifySession, etDate } = require("./usSession");
+const { NAME_REALTIME_MAX_LAG_MS } = require("./snapshot");
 
 const STALE_EVICT_MS = 45 * 60 * 1000; // 45 min
 const MANIFEST_CHECK_MIN_INTERVAL = 30 * 1000; // ≤1 stat/reparse per 30 s
@@ -229,7 +231,7 @@ class Store {
     }
 
     // ── REST snapshot: adopt today's session when the tape never delivered one ──
-    // The streaming AM.* feed is idle-swept after 30 minutes, so outside the flagship 37
+    // The streaming aggregate feed is idle-swept after 30 minutes, so outside the flagship 37
     // the normal state for a symbol is "no live subscription". Without this leg the only
     // fallback was `manifest.last` — a NIGHTLY artifact carrying the PREVIOUS session's
     // close — which is how SKY read 91.52 after closing at 94.66 (operator, 2026-08-07).
@@ -239,21 +241,72 @@ class Store {
     // No-op when the feed is absent/disabled, and it never overrides a symbol the tape
     // IS carrying for today — the stream stays authoritative whenever it has data.
     if (snapshotFeed) {
+      // ── Freshness verdict, measured (lib/snapshot.js verdict()) ──
+      // "The stream stays authoritative" was the right rule while the ONLY streaming leg and the
+      // ONLY REST leg were both 15 minutes behind. It is the wrong rule once the REST leg is
+      // real-time: the WebSocket cluster is still `delayed` unless HUB_POLYGON_CLUSTER=live, so
+      // deferring to it would pin a 15-minute-old AM bar over a print from three seconds ago.
+      // The rule is therefore FRESHEST-PRINT-WINS, and only when the feed has MEASURED itself
+      // real-time — never on the strength of the env flag that merely enabled the leg.
+      const rtVerdict = typeof snapshotFeed.verdict === "function" ? snapshotFeed.verdict(now) : null;
+      const realtimeTier = !!rtVerdict && rtVerdict.tier === "realtime";
       for (const sym of symList) {
         const q = out[sym];
         if (!q || q.market !== "us") continue;
-        if (q.regularSessionDate != null && q.regularSessionDate === etDate(now)) continue;
         const snap = snapshotFeed.get(sym, now);
         if (!snap) continue;
 
+        const hasTodayPrint = q.regularSessionDate != null && q.regularSessionDate === etDate(now);
+        // ── PER-NAME freshness, checked before adopting anything as real-time ──
+        // The verdict above grades the FEED — the floor across every symbol — which is the right
+        // shape for a feed-level claim but the wrong one for THIS row's badge. Two guards, and
+        // the second is the one that bites:
+        //   • printDate: the print must belong to today's ET session, the same rule _flush
+        //     applies to the floor. Defence in depth — get() already refuses a snapshot whose
+        //     own date is not today, so this rarely fires on its own.
+        //   • age: the print must be younger than NAME_REALTIME_MAX_LAG_MS. This is the one that
+        //     catches the measured failure — a same-session print can be hours old while a
+        //     liquid sibling holds the floor at 3s, and nothing downstream capped it.
+        // A row failing either keeps the delayed basis and labels; only its price is stale, and
+        // saying "15-min delayed" about a stale price is far closer to true than "Live".
+        const printFresh =
+          snap.printMs != null &&
+          snap.printDate === etDate(now) &&
+          now - snap.printMs <= NAME_REALTIME_MAX_LAG_MS;
+        // Real-time price for this row: the last TRADE, which is fresher than day.c.
+        const rtPrice =
+          realtimeTier && printFresh && snap.printPrice != null && snap.printPrice > 0
+            ? snap.printPrice : null;
+        const printTs = snap.printMs != null ? Math.floor(snap.printMs / 1000) : snap.ts;
+        if (hasTodayPrint) {
+          // The tape is carrying this symbol today. Override ONLY when measured real-time AND
+          // strictly newer than what the tape gave us — a tie keeps the stream, so a quiet
+          // symbol never flaps between two legs reporting the same instant.
+          if (!realtimeTier || rtPrice == null) continue;
+          if (!(typeof q.ts === "number") || !(printTs > q.ts)) continue;
+        }
+
         const fresh = { ...q };
-        fresh.last = snap.close;
+        fresh.last = rtPrice != null ? rtPrice : snap.close;
+        // A newer REST lastTrade may briefly outrun the completed A.* second aggregate. Do not
+        // leave the older tick OHLC attached to the newer `last`: the client prioritises tick*
+        // when shaping a candle, so that mismatch would visibly move backwards until the next A.
+        if (rtPrice != null && snap.printMs != null && snap.printMs > Number(q.tickEndMs || 0)) {
+          delete fresh.tickOpen; delete fresh.tickHigh; delete fresh.tickLow; delete fresh.tickClose;
+          delete fresh.tickVol; delete fresh.tickStartMs; delete fresh.tickEndMs;
+        }
         if (snap.open != null) fresh.open = snap.open;
         if (snap.high != null) fresh.high = snap.high;
         if (snap.low != null) fresh.low = snap.low;
         if (snap.vol != null) fresh.vol = snap.vol;
         if (snap.prevClose != null) fresh.prevClose = snap.prevClose;
-        if (snap.chg != null) fresh.chg = snap.chg;
+        // ONE chg formula. With a real-time last trade the vendor's day-close percentage is
+        // already a bar behind, so recompute against the price we are actually publishing.
+        if (rtPrice != null && snap.prevClose != null && snap.prevClose > 0) {
+          fresh.chg = ((rtPrice - snap.prevClose) / snap.prevClose) * 100;
+        } else if (snap.chg != null) {
+          fresh.chg = snap.chg;
+        }
         // `close` means "today's OFFICIAL close" — only true once the bell has rung.
         // During RTH day.c is merely the latest print, so it stays in `last` alone.
         const session = classifySession(now);
@@ -264,10 +317,26 @@ class Store {
         fresh.regularSessionDate = snap.date;
         fresh.regularSession = "rth";
         fresh.marketSession = session;
-        fresh.ts = snap.ts;
-        fresh.live = false;
-        fresh.source = "polygon-snapshot";
-        fresh.basis = "DELAYED_15M";
+        fresh.ts = rtPrice != null ? printTs : snap.ts;
+        // The label is the MEASUREMENT's output, never the config's. `lagMs` rides along in both
+        // tiers so the UI can print the number it was graded on instead of a bare adjective.
+        if (rtPrice != null) {
+          fresh.live = true;
+          fresh.source = "polygon-snapshot-rt";
+          fresh.basis = "REALTIME";
+        } else {
+          fresh.live = false;
+          fresh.source = "polygon-snapshot";
+          fresh.basis = "DELAYED_15M";
+        }
+        // `asOfMs` is the STATE (the instant of the print); `lagMs` is a stopwatch reading of it.
+        // Both are published because they answer different questions — but only asOfMs is stable
+        // between polls, which is what lets the client bail out of a re-render on a quiet symbol
+        // and still render a correct age (see terminal/lib/feedFreshness.ts).
+        if (snap.printMs != null) fresh.asOfMs = snap.printMs;
+        else delete fresh.asOfMs;
+        if (snap.lagMs != null) fresh.lagMs = snap.lagMs;
+        else delete fresh.lagMs;
         fresh.anchor_source = "snapshot";
         delete fresh.stale_anchor;
         this.quotes.set(sym, fresh); // persist so /health + later reads agree
