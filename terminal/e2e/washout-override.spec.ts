@@ -77,18 +77,31 @@ const OVERRIDE_CTX = {
   name_zh: "铀矿商",
 };
 
-function sliceFixture(opts: { override: boolean }) {
+/** The TAKEN entry, as the emitter ships it since the gc_v2_wo1 fence: its own quality
+ *  string, a recipe tier, override_ctx for the disclosure — and NO `blocked` flag, because
+ *  it is not a refusal. `signal_era` rides the slice so a reader can tell the two apart. */
+const TAKEN_SIGNAL = {
+  ts: BLOCKED_TS, known_ts: BLOCKED_TS, bar_index: 424, type: "BUY", price: 10.5,
+  quality: "override_take", tier: "quality", score: 71,
+  quality_reason: "washout override: uranium_miners −38.8% ≤ −25% (era gc_v2_wo1)",
+  override_ctx: OVERRIDE_CTX,
+};
+
+function sliceFixture(opts: { override: boolean; taken?: boolean }) {
   const sellTs = SELL_TS;
   const blockedTs = BLOCKED_TS;
+  const taken = !!opts.taken;
   return {
     slice: {
       indicator: {
+        signal_era: taken ? "gc_v2_wo1" : "gc_v2",
         state: {
-          position_hint: "flat",
+          // a taken override IS an entry, so the scored lane walks to it
+          position_hint: taken ? "long" : "flat",
           last_signal: "BUY",
-          last_scored_signal: "SELL",
-          last_scored_ts: sellTs,
-          last_scored_basis: "structure_stop",
+          last_scored_signal: taken ? "BUY" : "SELL",
+          last_scored_ts: taken ? blockedTs : sellTs,
+          last_scored_basis: taken ? null : "structure_stop",
           strong_bull: false,
           overbought: false,
           weeklyBull: false,
@@ -100,7 +113,7 @@ function sliceFixture(opts: { override: boolean }) {
             basis: "structure_stop", stop_level: 15.05,
             reasons: ["distribution_confirmed", "structure_break"],
           },
-          {
+          taken ? TAKEN_SIGNAL : {
             // still typed BUY on purpose — `blocked`/`quality` are the render keys
             ts: blockedTs, known_ts: blockedTs, bar_index: 424, type: "BUY", price: 10.5,
             quality: "regime_blocked", blocked: true, tier: null, score: null,
@@ -117,8 +130,30 @@ function sliceFixture(opts: { override: boolean }) {
   };
 }
 
-async function openTerminal(page: Page, opts: { override: boolean; zh: boolean }) {
-  const { slice, blockedTs } = sliceFixture({ override: opts.override });
+/** Flip the Terminal to Chinese through the real settings flow (no fixture shortcut —
+ *  a language the user cannot actually reach is not a language the product ships).
+ *
+ *  Viewport-bound: the entry point is the mobilebar avatar, which only exists on the
+ *  tablet/mobile chrome. Desktop reaches zh the other real way — `zhPreseed` below, which is
+ *  the RETURNING user's path (app/layout.tsx boots the language out of `mm.lang`). */
+async function applyZh(page: Page) {
+  await page.locator(".mobilebar button.avatar").click();
+  const settings = page.locator(".acs-card");
+  await settings.getByRole("tab", { name: "Preferences" }).click();
+  const zhButton = settings.getByRole("button", { name: "中文" });
+  await zhButton.click();
+  await expect(zhButton).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+  await expect(settings).toBeHidden();
+}
+
+async function openTerminal(page: Page, opts: {
+  override: boolean; zh: boolean; taken?: boolean; zhPreseed?: boolean;
+}) {
+  const { slice, blockedTs } = sliceFixture({ override: opts.override, taken: opts.taken });
+  if (opts.zhPreseed) {
+    await page.addInitScript(() => { localStorage.setItem("mm.lang", "zh"); });
+  }
   await page.route(/\/data\/COST\.json(?:\?.*)?$/, async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(OHLC) });
   });
@@ -134,16 +169,8 @@ async function openTerminal(page: Page, opts: { override: boolean; zh: boolean }
   await page.goto("/terminal?symbol=COST");
   await expect(page.locator(".workspace")).toBeVisible();
   await waitForTerminalVisualReady(page);
-  if (opts.zh) {
-    await page.locator(".mobilebar button.avatar").click();
-    const settings = page.locator(".acs-card");
-    await settings.getByRole("tab", { name: "Preferences" }).click();
-    const zhButton = settings.getByRole("button", { name: "中文" });
-    await zhButton.click();
-    await expect(zhButton).toHaveAttribute("aria-pressed", "true");
-    await page.keyboard.press("Escape");
-    await expect(settings).toBeHidden();
-  }
+  if (opts.zh && !opts.zhPreseed) await applyZh(page);
+  if (opts.zhPreseed) await expect(page.locator("html")).toHaveAttribute("data-lang", "zh");
   return { blockedTs };
 }
 
@@ -287,4 +314,124 @@ test("a non-qualifying ⊘ renders exactly as it does today", async ({ page }, t
   await dialog.locator(".sd-go").screenshot({
     path: testInfo.outputPath(`${testInfo.project.name}-washout-plain-card.png`),
   });
+});
+
+// ── the TAKEN class: washout override ENTRY (signal era gc_v2_wo1) ─────────────────────────
+//
+// The other side of the same mechanism. Since the era fence a qualifying bear_block-vetoed
+// fire is TAKEN by the live enter mask (Macro Dashboard research/BLOCKED_ENTRY_CONDITIONAL_
+// PREREG.md §5 RATIFIED @ 25% + GATE B PASSED; packet §2/§4). It is a real entry, so it must
+// render as one — ordinary star, ordinary green verdict, tier badge — with the washout
+// context beside it and NOTHING borrowed from the refusal's geometry. The two states of one
+// mechanism share only their amber.
+//
+// This test carries the PR's visual receipt for the new state: desktop, EN and ZH.
+
+/** Crop tight around the ENTRY marker (an amber-outlined pill, not a ring-slash). */
+async function cropEntryMarker(page: Page, path: string) {
+  const box = await page.locator("[data-sig-layer]").first().evaluate((svg) => {
+    // find it by what it SAYS, not by shape: every marker rect carries a `stroke`
+    // attribute (often "none"), so a shape selector would happily return the SELL pill.
+    const g = [...svg.querySelectorAll("g")]
+      .find((el) => (el.querySelector("title")?.textContent ?? "").includes("washout override entry"));
+    if (!g) return null;
+    const r = (g as SVGGElement).getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  if (!box) return;
+  await page.screenshot({
+    path,
+    clip: { x: Math.max(0, box.x - 44), y: Math.max(0, box.y - 34), width: 88, height: 68 },
+  });
+}
+
+/** Everything the taken class must be true of, in one language. */
+async function assertTakenEntry(page: Page, zh: boolean, label: string, testInfo: import("@playwright/test").TestInfo) {
+  const tag = `${testInfo.project.name}-${label}`;
+
+  // ── the rail: the ORDINARY entry verdict, not the amber refusal card ──
+  const signalButton = page.locator(".sig-btn");
+  await signalButton.scrollIntoViewIfNeeded();
+  await expect(signalButton.locator(".sig-btn-go .sig-btn-vd")).toHaveText(zh ? "买入" : "Buy");
+  await expect(signalButton.locator(".sig-btn-go .sig-btn-vd"))
+    .not.toHaveText(zh ? "买点触发 — 趋势闸拦截" : "Entry trigger — regime-blocked");
+  await expect(signalButton).toHaveAttribute(
+    "title",
+    zh ? /趋势闸本会拦截 — 同类深度洗盘是放行的唯一理由/
+       : /the regime gate would refuse this — the deep group washout is the one reason it stands/,
+  );
+  await expect(signalButton).toHaveAttribute(
+    "title", zh ? /多数仍会止损离场 — 止损才是保护/ : /most still stop out — the stop is the protection/,
+  );
+  // the refusal's own lead must NOT be here — this entry was taken
+  const railTitle = (await signalButton.getAttribute("title")) ?? "";
+  expect(railTitle).not.toContain(zh ? "仍是被拦截的入场" : "still a refused entry");
+  await signalButton.screenshot({ path: testInfo.outputPath(`${tag}-rail.png`) });
+
+  // ── the chart marker: entry geometry, outlined amber ──
+  const sigLayer = page.locator("[data-sig-layer]").first();
+  await expect(sigLayer.locator("title", { hasText: "washout override entry" }).first()).toBeAttached();
+  const marker = await sigLayer.evaluate((svg) => {
+    const g = [...svg.querySelectorAll("g")]
+      .find((el) => (el.querySelector("title")?.textContent ?? "").includes("washout override entry"));
+    if (!g) return null;
+    const rect = g.querySelector<SVGRectElement>("rect")!;
+    return {
+      opacity: g.getAttribute("opacity"),
+      outline: getComputedStyle(rect).stroke,
+      fill: getComputedStyle(rect).fill,
+      strokeWidth: rect.getAttribute("stroke-width"),
+      ringSlashes: g.querySelectorAll('circle[fill="none"]').length,
+      star: [...g.querySelectorAll("text")].map((t) => t.textContent).join(""),
+      title: g.querySelector("title")?.textContent ?? "",
+    };
+  });
+  expect(marker).not.toBeNull();
+  expect(marker!.outline).toBe(AMBER_RGB);              // the washout signature
+  expect(marker!.fill).not.toBe("none");                // solid — the engine stands behind it
+  expect(marker!.ringSlashes).toBe(0);                  // no ⊘ anywhere: this is not a refusal
+  expect(marker!.star).toContain("★");                  // ordinary entry star (+ its tier badge)
+  expect(marker!.title).toContain("washout override entry");
+  expect(marker!.title).toContain("Uranium miners −38% from highs");
+  expect(marker!.title).not.toContain("not an entry");
+  await page.locator(".chart-wrap, .workspace").first().screenshot({
+    path: testInfo.outputPath(`${tag}-chart.png`),
+  });
+  await cropEntryMarker(page, testInfo.outputPath(`${tag}-marker.png`));
+
+  // ── the card: the entry verdict PLUS the one disclosure line ──
+  await signalButton.click();
+  const dialog = page.locator(".sd-scrim");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".sd-go .od-verdict")).toHaveText(zh ? "买入" : "Buy");
+  const line2 = dialog.locator(".sd-go .od-vline2");
+  await expect(line2).toHaveText(
+    zh ? "深度洗盘例外入场 — 铀矿商板块距高点 −38%"
+       : "Washout override entry — Uranium miners −38% from highs",
+  );
+  await expect(line2).toHaveCSS("color", AMBER_RGB);
+  // the quality chip names the class and wears the same amber, so the exception is findable
+  // from the card body too — and the TIER beside it proves the recipe graded this entry
+  // (a null tier there would mean the fire took the refused path after all).
+  const quality = dialog.locator(".sd-go .sig-dim-v").first();
+  await expect(quality).toHaveText(zh ? "深度洗盘例外" : "Washout override");
+  await expect(quality).toHaveCSS("color", AMBER_RGB);
+  await expect(dialog.locator(".sd-go .sig-dims")).toBeVisible();
+  await dialog.locator(".sd-go").screenshot({ path: testInfo.outputPath(`${tag}-card.png`) });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+}
+
+test("a TAKEN washout override renders as an ordinary entry, outlined amber", async ({ page }, testInfo) => {
+  const desktop = testInfo.project.name === "desktop";
+  // Desktop carries the PR's visual receipt in BOTH languages — a second load with the
+  // language already saved, which is what a returning zh user actually gets. The other
+  // viewports keep the suite's one-language-per-project convention (zh rides tablet).
+  const zhFirst = !desktop && testInfo.project.name === "tablet";
+  await openTerminal(page, { override: true, taken: true, zh: zhFirst });
+  await assertTakenEntry(page, zhFirst, zhFirst ? "washout-take-zh" : "washout-take-en", testInfo);
+  if (desktop) {
+    await openTerminal(page, { override: true, taken: true, zh: true, zhPreseed: true });
+    await assertTakenEntry(page, true, "washout-take-zh", testInfo);
+  }
 });

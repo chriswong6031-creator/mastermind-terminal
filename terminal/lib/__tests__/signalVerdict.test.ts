@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs, SOFT_Q,
-  isBlockedSignal, isOverrideCandidate, isStructureStop, sliceSignalBasis,
-  washoutOverrideCopy } from "../signalVerdict";
+  isBlockedSignal, isOverrideCandidate, isOverrideTake, isStructureStop, sliceSignalBasis,
+  washoutOverrideCopy, OVERRIDE_TAKE_QUALITY } from "../signalVerdict";
 
 // Frozen "today" so ages are deterministic: 2026-07-14 (the NVDA/GOOGL stale-Sell incident date).
 const NOW = Date.parse("2026-07-14T21:00:00Z");
@@ -787,6 +787,138 @@ describe("washout override candidate — the display class on a refusal", () => 
     ];
     for (const zh of [false, true]) {
       const copy = washoutOverrideCopy(CTX, zh)!;
+      for (const cell of [copy.line, ...copy.notes]) {
+        const low = cell.toLowerCase();
+        for (const bad of BANNED) expect(low, `${cell} contains ${bad}`).not.toContain(bad);
+      }
+    }
+  });
+});
+
+// ── washout override ENTRY (signal era gc_v2_wo1) ──────────────────────────────────────────
+// Receipts: Macro Dashboard research/BLOCKED_ENTRY_CONDITIONAL_PREREG.md §5 (RATIFIED at the
+// 25% notch, GATE B PASSED) + research/BLOCKED_ENTRY_RATIFICATION_PACKET_2026-08-10.md §2/§4.
+// The other side of the mechanism above: since the era fence a qualifying bear_block-vetoed
+// fire is TAKEN, and arrives with quality:"override_take". Every assertion here is about the
+// difference between an entry and a decorated refusal — the two must never render alike.
+describe("washout override entry — the taken class", () => {
+  const NOW3 = Date.parse("2026-08-10T21:00:00Z");
+  const stSlice = (state: Record<string, unknown>, signals: Sig[]) => ({ indicator: { state, signals } });
+  const CTX = {
+    group_id: "uranium_miners", peer_dd: -0.388, basis: "basket",
+    thresholds_hit: [20, 25, 30], as_of: "2026-08-10",
+    name: "Uranium miners", name_zh: "铀矿商",
+  };
+  const state = {
+    last_signal: "BUY", last_scored_signal: "BUY", last_scored_ts: "2026-08-03",
+    position_hint: "long", strong_bull: false, overbought: false, weeklyBull: false, above200: false,
+  };
+  const taken = (over: Partial<Sig> = {}): Sig => ({
+    ts: "2026-08-03", known_ts: "2026-08-03", type: "BUY", price: 10.5,
+    quality: OVERRIDE_TAKE_QUALITY,
+    quality_reason: "washout override: uranium_miners −38.8% ≤ −25% (era gc_v2_wo1)",
+    override_ctx: CTX, ...over,
+  });
+  const verdict = (over: Partial<Sig> = {}, zh = false) => oracleVerdict(
+    "BUY", stSlice(state, [{ ts: "2026-05-12", type: "SELL", price: 14.2 }, taken(over)]),
+    zh, NOW3, "DOWNTREND",
+  );
+
+  it("renders as an ORDINARY entry — the mask took it, so the card says what it took", () => {
+    const v = verdict();
+    expect(v.label).toBe("Buy");              // the existing entry verdict language
+    expect(v.color).toBe("var(--buy)");
+    expect(v.raw).toBe("BUY");
+    expect(v.blocked).toBeFalsy();            // it is not a refusal
+    expect(v.soft).toBe(false);               // and not a subordinate marker
+    expect(v.stance).toBeFalsy();
+    expect(v.dim).toBe(false);
+  });
+
+  it("carries the washout disclosure on the SAME line the refused class uses", () => {
+    const v = verdict();
+    expect(v.overrideTake).toBe(true);
+    expect(v.overrideCandidate).toBeFalsy();  // the two classes are mutually exclusive
+    expect(v.line2).toBe("Washout override entry — Uranium miners −38% from highs");
+  });
+
+  it("the hover leads with what was overridden, then the numbers and the stop", () => {
+    const note = verdict().note ?? "";
+    expect(note).toContain("the regime gate would refuse this");
+    expect(note).toContain("the deep group washout is the one reason it stands");
+    expect(note).toContain("averaged +27% per trade vs +3% otherwise");
+    expect(note).toContain("most still stop out — the stop is the protection");
+    // it never claims the refusal is still standing — that is the OTHER class's lead
+    expect(note).not.toContain("still a refused entry");
+  });
+
+  it("zh ships the whole disclosure, not an English-shaped translation", () => {
+    const v = verdict({}, true);
+    expect(v.label).toBe("买入");
+    expect(v.line2).toBe("深度洗盘例外入场 — 铀矿商板块距高点 −38%");
+    const note = v.note ?? "";
+    expect(note).toContain("趋势闸本会拦截");
+    expect(note).toContain("每笔平均 +27%");
+    expect(note).toContain("止损才是保护");
+    const copy = washoutOverrideCopy(CTX, true, true)!;
+    for (const cell of copy.notes) expect(cell).not.toMatch(/[a-z]{4,}/);
+    expect(copy.line).not.toMatch(/[a-z]{4,}/);
+  });
+
+  it("anchors the verdict and is never softened", () => {
+    // the refused class can NEVER anchor (isBlockedSignal); this one always can
+    expect(isBlockedSignal(taken())).toBe(false);
+    expect(SOFT_Q.has(OVERRIDE_TAKE_QUALITY)).toBe(false);
+    const { anchor, blockedTail } = anchorSignal([{ ts: "2026-05-12", type: "SELL" }, taken()]);
+    expect(anchor?.quality).toBe(OVERRIDE_TAKE_QUALITY);
+    expect(blockedTail).toBeNull();
+  });
+
+  it("is strict on the emitter's string — the client re-derives nothing", () => {
+    expect(isOverrideTake(taken())).toBe(true);
+    expect(isOverrideTake({ quality: "OVERRIDE_TAKE" })).toBe(true);   // case-insensitive
+    expect(isOverrideTake({ quality: "take" })).toBe(false);
+    expect(isOverrideTake({ quality: "regime_blocked", override_ctx: CTX } as never)).toBe(false);
+    expect(isOverrideTake({ override_candidate: true } as never)).toBe(false);
+    expect(isOverrideTake(null)).toBe(false);
+    expect(isOverrideTake({})).toBe(false);
+    // and a taken fire is not a candidate — one mechanism, two states, never both at once
+    expect(isOverrideCandidate(taken())).toBe(false);
+  });
+
+  it("an ordinary keeper `take` gains no disclosure line", () => {
+    const v = verdict({ quality: "take", quality_reason: "held confirmation", override_ctx: null });
+    expect(v.label).toBe("Buy");
+    expect(v.overrideTake).toBe(false);
+    expect(v.line2).toBeNull();
+    expect(v.note).not.toContain("washout");
+  });
+
+  it("the candidate copy is untouched — the default is still the refusal shape", () => {
+    expect(washoutOverrideCopy(CTX, false)!.line)
+      .toBe("Washout override candidate — Uranium miners −38% from highs");
+    expect(washoutOverrideCopy(CTX, false, false)!.notes[0]).toContain("still a refused entry");
+    expect(washoutOverrideCopy(CTX, false, true)!.notes[0]).toContain("would refuse this");
+    // the two shapes share their evidence — only the lead clause differs
+    expect(washoutOverrideCopy(CTX, false, true)!.notes.slice(1))
+      .toEqual(washoutOverrideCopy(CTX, false, false)!.notes.slice(1));
+  });
+
+  it("degrades to the honest short form when the artifact shipped no basket name", () => {
+    expect(washoutOverrideCopy({ peer_dd: -0.31 }, false, true)!.line)
+      .toBe("Washout override entry — peer group −31% from highs");
+    expect(washoutOverrideCopy({}, false, true)!.line).toBe("Washout override entry");
+    expect(washoutOverrideCopy({ name: "Silver miners", peer_dd: -0.4 }, true, true)!.line)
+      .toBe("深度洗盘例外入场 — Silver miners板块距高点 −40%");
+  });
+
+  it("carries no banned vocabulary in either language", () => {
+    const BANNED = [
+      "validated", "证伪", "falsifier", "falsif", "refuted", "refut",
+      "buy now", "act now", "buy", "sell", "target",
+    ];
+    for (const zh of [false, true]) {
+      const copy = washoutOverrideCopy(CTX, zh, true)!;
       for (const cell of [copy.line, ...copy.notes]) {
         const low = cell.toLowerCase();
         for (const bad of BANNED) expect(low, `${cell} contains ${bad}`).not.toContain(bad);

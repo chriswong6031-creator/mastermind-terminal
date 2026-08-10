@@ -81,10 +81,12 @@ def main() -> None:
     # security names for the reclaim symbol-class rule (decay instruments emit no reclaims)
     _names = {s: (r or {}).get("name") for s, r in _man.get("symbols", {}).items()}
     print(f"  cohort cache built ({time.time() - t0:.0f}s)", flush=True)
-    # ── washout-override display stamp (ratified 2026-08-10, threshold 25%) ──
-    # Loaded ONCE for the run: the artifact + the forward ledger. Absent/stale artifact ⇒
-    # a no-op stamper, so every ⊘ renders exactly as it does today. This is the NIGHTLY
-    # lane, so it accrues ledger rows; it changes no signal, score, tier, or entry.
+    # ── washout override (ratified 2026-08-10, notch 25%) ──
+    # Loaded ONCE for the run: the artifact + the forward ledger. It is both the live ENTRY
+    # gate build_v2 consults (era gc_v2_wo1) and the display stamp for qualifying fires that
+    # stay refused. Absent/stale artifact ⇒ the gate answers None to everything and the
+    # stamp is a no-op, so the whole lane emits exactly what it did pre-fence. This is the
+    # NIGHTLY lane, so it accrues forward-ledger rows.
     stamper = WashoutStamper.create()
     for jf in files:
         name = jf.name
@@ -142,11 +144,15 @@ def main() -> None:
                 sig, close, high=high, low=low, volume=volume,
                 sector_basket=sec_basket, panel_basket=panel_basket,
                 cohort_frac_daily=cohort,
-                reclaims_enabled=confluence_v2.reclaim_eligible(_names.get(sym), sym))
+                reclaims_enabled=confluence_v2.reclaim_eligible(_names.get(sym), sym),
+                # the live washout-override enter mask (era gc_v2_wo1) — the same object
+                # that stamps the display class below, so one artifact load answers both
+                symbol=sym, override_gate=stamper)
             ind = contracts.indicator_contract(
                 sym, "3D", sig, bar_quality="real_ohlc", src_text="", honest_read=HONEST, v2=v2)
-            # display-tier washout-override stamp on already-emitted regime_blocked events
-            # (additive optional fields only; a non-qualifying blocked fire is untouched)
+            # washout-override pass over the emitted events: the display class on refused
+            # fires that qualified, and the forward-ledger row for every stamped or TAKEN
+            # fire (a taken one needs no stamp — build_v2 already emitted its context)
             stamper.stamp(sym, ind.get("signals"), daily=DailyBars(
                 bar_opens=[d.strftime("%Y-%m-%d") for d in sig.index],
                 dates=[d.strftime("%Y-%m-%d") for d in idx],

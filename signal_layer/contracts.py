@@ -22,6 +22,9 @@ import json
 import numpy as np
 import pandas as pd
 
+from . import SIGNAL_ERA, SIGNAL_ERA_PRE
+from .washout_override import OVERRIDE_TAKE_QUALITY, WASHOUT_OVERRIDE_NOTCH
+
 SCHEMA_INDICATOR = "mastermind.indicator/v1"
 SCHEMA_BACKTEST = "backtest_result/v1"
 
@@ -68,6 +71,44 @@ BASIS_STRUCTURE_STOP = "structure_stop"
 # the legacy ``quality='regime_blocked'`` string — the flag is the render key, the
 # string stays for every existing reader (HK-O1 item 2 is additive-only).
 BLOCKED_QUALITY = "regime_blocked"
+
+# ── the washout-override entry class (signal era gc_v2_wo1) ─────────────────────
+# ``OVERRIDE_TAKE_QUALITY`` is imported from ``washout_override`` (which owns the notch and
+# the gate and must stay pandas-free) and re-exported here, so a consumer reading the
+# emission has one place to import every quality string from.
+#
+# Its OWN quality string, not a keeper verdict, because it is not a keeper verdict: the
+# ratified construction (Macro Dashboard research/BLOCKED_ENTRY_RATIFICATION_PACKET_
+# 2026-08-10.md §2, prereg §5 @ the 25% notch) takes the `bear_block`-vetoed fire ITSELF,
+# so the fire bypasses the keeper's counter-trend reclaim-and-hold leg — which, `bear_block`
+# requiring below-200, would otherwise re-refuse nearly every one of them and silently ship
+# a much stricter rule than the one three rounds of gates cleared. A consumer that treats
+# this like `take` is correct about the entry; a consumer that treats it like a keeper
+# verdict is reading a machine that never ran.
+#
+# It is a REAL scored BUY: it walks `position_hint`, anchors the rail verdict, and fires
+# alerts. `blocked` is never set on it, and it is NOT in the client's SOFT_Q set.
+
+
+def override_quality_reason(ctx: dict | None) -> str:
+    """The one-line WHY behind a taken override, stamped on the event.
+
+    ``washout override: <group_id> <peer_dd> ≤ −25% (era gc_v2_wo1)`` — the group whose
+    peers were washed out, how far below their 252d highs the peer median sat, the notch it
+    cleared, and the era the decision was made under. Everything a later reader needs to
+    re-derive the call without the artifact. Degrades field by field: an artifact that ships
+    no group, or no number, yields a shorter line, never an empty slot.
+    """
+    ctx = ctx or {}
+    bits = []
+    group = ctx.get("group_id")
+    if group:
+        bits.append(str(group))
+    dd = ctx.get("peer_dd")
+    if isinstance(dd, (int, float)) and not isinstance(dd, bool) and np.isfinite(dd):
+        bits.append(f"−{abs(float(dd)) * 100:.1f}%")
+    bits.append(f"≤ −{WASHOUT_OVERRIDE_NOTCH}%")
+    return f"washout override: {' '.join(bits)} (era {SIGNAL_ERA})"
 
 
 def source_hash(source_text: str, params: dict) -> str:
@@ -141,6 +182,13 @@ def indicator_contract(
         "timeframe": timeframe,
         "as_of": as_of or (bars[-1] + "T00:00:00Z" if bars else None),
         "bar_quality": bar_quality,
+        # ── the signal-era fence (signal_layer/__init__.py) ──────────────────────────
+        # WHICH RULE emitted these signals. Stamped unconditionally, including on emissions
+        # that grant no override, because the fence's job is to make every artifact say
+        # which era it belongs to — an emission that only declared its era when the new
+        # behaviour fired would leave the quiet majority unattributable. A slice carrying no
+        # ``signal_era`` at all is pre-fence (read it as SIGNAL_ERA_PRE); never pool the two.
+        "signal_era": SIGNAL_ERA,
         # ── CHART-ONLY ARRAYS — never projected to the model (model_slice strips) ──
         "bars": bars,
         "series": series,
@@ -184,10 +232,16 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
     GC v2 (``v2`` = confluence_v2.build_v2 output):
       * BUY / REBUY gain ``quality`` (keeper take/block/pending) + ``tier`` (recipe
         aplus/quality/base) + ``score`` (0..100) at their positional ``bar_index`` (the
-        index into the non-NaN signal rows, which is what ``keeper``/``recipe`` key on)."""
+        index into the non-NaN signal rows, which is what ``keeper``/``recipe`` key on).
+      * a fire in ``v2["override"]`` is the washout-override ENTRY (era gc_v2_wo1): it was
+        ``bear_block``-vetoed and the live gate took it, so it is emitted with
+        ``quality="override_take"`` + ``override_ctx``, a recipe tier, and no ``blocked``
+        flag. The three cohorts are disjoint by construction (override ⊂ bear_block, keeper
+        ⊂ ~bear_block), so the branch order below cannot mask one with another."""
     v2 = v2 or {}
     keeper = v2.get("keeper", {})       # {positional_bar_index: {verdict, reason, shift}}
     recipe = v2.get("recipe", {})       # {positional_bar_index: {score, tier}}
+    override = v2.get("override", {})   # {positional_bar_index: override_ctx} — taken fires
     # bar_index here counts POSITIONAL non-NaN rows (keeper/recipe key on the same index).
     # Guard the empty/columnless frame (dropna(subset=...) would KeyError otherwise).
     if len(sig) and {"macd", "sig", "k", "d", "rsi14"}.issubset(sig.columns):
@@ -222,7 +276,25 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
                        "monthlyBull": bool(row.get("mo_bull"))},
         }
         p = pos_of.get(ts)
-        if p is not None and p in keeper:
+        ovr = override.get(p) if p is not None else None
+        if ovr is not None:
+            # ── THE WASHOUT-OVERRIDE ENTRY (era gc_v2_wo1) ──────────────────────────
+            # A bear_block-vetoed fire the live gate TOOK. It is a real entry: no
+            # ``blocked`` flag, its own quality string, and a tier from the standard recipe
+            # scoring — which carries no counter-trend leg, so the tier is the same one an
+            # unvetoed fire on this bar would have had. It is deliberately NOT keeper-graded
+            # (see confluence_v2.keeper_quality_map): the gauntleted construction enters on
+            # the fire, and the keeper's counter-trend reclaim-and-hold leg would re-refuse
+            # it. ``override_ctx`` rides along so the marker and the card can say WHY
+            # without a second fetch, and so an archived slice stays self-describing.
+            ev["quality"] = OVERRIDE_TAKE_QUALITY
+            ev["quality_reason"] = override_quality_reason(ovr)
+            ev["override_ctx"] = dict(ovr)
+            r = recipe.get(p)
+            if r is not None:
+                ev["tier"] = r["tier"]
+                ev["score"] = r["score"]
+        elif p is not None and p in keeper:
             ev["quality"] = keeper[p]["verdict"]           # take / block / pending
             ev["quality_reason"] = keeper[p]["reason"]
             r = recipe.get(p)
@@ -349,6 +421,12 @@ def _state(sig: pd.DataFrame, signals: list[dict]) -> dict:
     coordinate (``ts``). The scored fields diverge from ``last_signal`` exactly when the
     stream tail is a blocked marker.
 
+    A ``quality='override_take'`` BUY/REBUY is the OPPOSITE case and walks the position
+    normally: the live mask entered it (era gc_v2_wo1), so it is a scored entry in every
+    sense. The exclusion below is written against ``blocked``/``regime_blocked`` by name
+    precisely so a new entry class cannot be swept up in it — an override fire carries
+    neither key, and the walk needs no clause of its own to let it through.
+
     ``last_scored_basis`` mirrors the anchoring signal's ``basis`` so the demotion to flat
     is READABLE (HK-O1 item 1): a SELL here flips ``position_hint`` to flat off a trailing
     structure stop, never off an oracle-momentum exit, and a consumer that reads only the
@@ -457,6 +535,9 @@ def model_slice(contract: dict) -> dict:
             "schema": s, "indicator_id": contract["indicator"]["id"],
             "symbol": contract["symbol"], "timeframe": contract["timeframe"],
             "as_of": contract.get("as_of"), "bar_quality": contract.get("bar_quality"),
+            # the era rides into the model surface too: a reader pooling slices needs to
+            # know which rule produced each one, and this is the only place it can see it.
+            "signal_era": contract.get("signal_era", SIGNAL_ERA_PRE),
             "macd_kind": contract["indicator"].get("macd_kind"),
             "signals": contract.get("signals", [])[-12:],   # cap the history sent to the model
             "state": contract.get("state", {}),

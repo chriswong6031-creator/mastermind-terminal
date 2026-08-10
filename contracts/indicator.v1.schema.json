@@ -82,6 +82,10 @@
         "unknown"
       ]
     },
+    "signal_era": {
+      "type": "string",
+      "description": "THE SIGNAL-ERA FENCE. Which entry rule produced these signals, so pre- and post-change events are never pooled into one track record. \"gc_v2\" = the pre-fence rule (enter = (CB|revBuy) & ~bear_block). \"gc_v2_wo1\" = that rule plus the ratified washout-override conditional (enter = (CB|revBuy) & (~bear_block | override_ok); Macro Dashboard research/BLOCKED_ENTRY_CONDITIONAL_PREREG.md §4/§5 at the 25% notch). ADDITIVE: a doc carrying no signal_era at all predates the fence and must be read as \"gc_v2\" — never default a missing era to the current one. Changing the notch is itself an era event."
+    },
     "bars": {
       "type": "array",
       "items": {
@@ -171,7 +175,7 @@
               "string",
               "null"
             ],
-            "description": "keeper verdict: take | block | pending | regime_blocked (see blocked)."
+            "description": "keeper verdict: take | block | pending | regime_blocked (see blocked) | override_take. \"override_take\" is NOT a keeper verdict: it is the washout-override ENTRY class (signal_era gc_v2_wo1) — a bear_block-vetoed fire the live enter mask took because the name's thematic-basket peers sat at/below the ratified notch on the day it fired. It bypasses the keeper's counter-trend reclaim-and-hold leg by design (the gauntleted construction enters on the fire itself), carries override_ctx and a recipe tier, never carries the blocked flag, and is a REAL scored entry: it walks position_hint, anchors the verdict, and fires alerts."
           },
           "quality_reason": {
             "type": [
@@ -184,7 +188,7 @@
               "string",
               "null"
             ],
-            "description": "recipe tier: aplus | quality | base; null on a blocked entry."
+            "description": "recipe tier: aplus | quality | base; null on a blocked entry. Present on an override_take fire — the recipe score carries no counter-trend leg, so it is the same tier an unvetoed fire on that bar would have had."
           },
           "score": {
             "type": [
@@ -208,7 +212,7 @@
               "object",
               "null"
             ],
-            "description": "Why the override class applied, as known at the fire: group_id (thematic basket or GICS sector fallback), peer_dd (peer-median 252d drawdown, NEGATIVE fraction), basis (\"basket\"|\"sector\"), thresholds_hit, as_of (the basket-state date), and the basket's display name/name_zh so the card needs no second fetch."
+            "description": "Why the override applied, as known at the fire: group_id (thematic basket or GICS sector fallback), peer_dd (peer-median 252d drawdown, NEGATIVE fraction, leave-one-out basis), basis (\"basket\"|\"sector\"), thresholds_hit, as_of (the basket-state date), and the basket's display name/name_zh so the card needs no second fetch. Rides BOTH classes: the display-tier override_candidate refusal, and the override_take entry."
           }
         }
       }

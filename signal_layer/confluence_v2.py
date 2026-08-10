@@ -32,10 +32,14 @@ Reference implementations reproduced (see the pre-reg lab, /tmp/gc-lab):
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
 from . import confluence as C
+
+_log = logging.getLogger(__name__)
 
 # ── graded-tier thresholds (pre-reg locked; e_factors SCORE_THRESH + §9 A+ bar) ──
 TIER_QUALITY = 65      # Quality tier: score >= 65
@@ -115,18 +119,93 @@ def reclaim_eligible(name: str | None, sym: str | None = None) -> bool:
 
 
 # ════════════════════════════════════════════════ v2 exit / entry streams ═══
-def v2_streams(sig: pd.DataFrame) -> dict:
+def _override_series(rows: pd.DataFrame, override_ok) -> pd.Series:
+    """Normalize the override input to a bool Series on ``rows``. Absent ⇒ all-False.
+
+    Accepts the ``{positional row index: ctx}`` map ``override_entries`` returns (the
+    production shape), any bool array/Series of the right length, or None.
+    """
+    if override_ok is None:
+        return pd.Series(False, index=rows.index)
+    if isinstance(override_ok, dict):
+        arr = np.zeros(len(rows), dtype=bool)
+        for pos in override_ok:
+            i = int(pos)
+            if 0 <= i < len(arr):
+                arr[i] = True
+        return pd.Series(arr, index=rows.index)
+    if isinstance(override_ok, pd.Series):
+        return override_ok.reindex(rows.index).fillna(False).astype(bool)
+    return pd.Series(np.asarray(override_ok, dtype=bool), index=rows.index)
+
+
+def v2_streams(sig: pd.DataFrame, override_ok=None) -> dict:
     """The GC v2 SCORED entry/exit event streams on the 3D-row grid.
 
-    ENTER  = (CB | revBuy) & ~bear_block          (== confluence.simulate fixed enter)
+    ENTER  = (CB | revBuy) & (~bear_block | override_ok)   (era gc_v2_wo1)
     EXIT   = (CS & ~strong_bull)                  (revSell DROPPED — the no-cut change)
 
+    ``override_ok`` is the washout-override grant per row (``override_entries``): the
+    ratified conditional that a ``bear_block``-vetoed CB/revBuy IS taken when the name's
+    thematic-basket peers sit at or below the notch (packet §2, 25%). It is EXACTLY one
+    logical condition wide — pre-fence the enter mask read ``& ~bear_block``, and with no
+    grant (``override_ok=None``, the artifact-absent fallback) it still does, bit for bit.
+
     Returns bool Series aligned to the non-NaN signal rows (matching the sim contract).
-    This is the exact stream the X1FULL / X6 lab exits used, minus revSell on exit."""
+    This is the exact stream the X1FULL / X6 lab exits used, minus revSell on exit.
+
+    Note the ASYMMETRY with ``keeper_quality_map`` below, which is the whole fidelity
+    ruling: a granted fire enters HERE but is never keeper-graded, because the keeper's
+    counter-trend leg would re-refuse it (see that function's docstring)."""
     rows = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"])
-    enter = ((rows["CB"] | rows["revBuy"]) & ~rows["bear_block"]).astype(bool)
+    ovr = _override_series(rows, override_ok)
+    enter = ((rows["CB"] | rows["revBuy"]) & (~rows["bear_block"] | ovr)).astype(bool)
     exit_ = (rows["CS"] & ~rows["strong_bull"]).astype(bool)
     return {"enter": enter, "exit": exit_}
+
+
+def override_entries(sig: pd.DataFrame, symbol: str | None, gate) -> dict:
+    """Ask the live washout gate about every ``bear_block``-vetoed raw buy in this name.
+
+    Returns ``{positional row index (non-NaN grid): override_ctx}`` — the fires the gate
+    TAKES. ``gate`` is any object with ``override_for(ticker, ts, known_ts) -> ctx | None``
+    (production: ``washout_override.WashoutStamper``); None ⇒ ``{}``, which is the
+    artifact-absent fallback and leaves the emission identical to the pre-fence era.
+
+    Both coordinates are passed because they answer different questions: ``ts`` (the 3D bar
+    OPEN) is the ledger's identity for this fire, and ``known_ts`` (the session it became
+    observable) is what the point-in-time rule compares against the basket state's date.
+    """
+    if gate is None or not symbol:
+        return {}
+    need = {"macd", "sig", "k", "d", "rsi14"}
+    if not len(sig) or not need.issubset(sig.columns) or "bear_block" not in sig.columns:
+        return {}
+    rows = sig.dropna(subset=list(need))
+    if not len(rows):
+        return {}
+    cand = ((rows["CB"] | rows["revBuy"]) & rows["bear_block"]).to_numpy(dtype=bool)
+    if not cand.any():
+        return {}
+    known = rows["known_ts"] if "known_ts" in rows.columns else None
+    out: dict[int, dict] = {}
+    for pos in np.flatnonzero(cand):
+        pos = int(pos)
+        ts = rows.index[pos].strftime("%Y-%m-%d")
+        kts = ts
+        if known is not None:
+            kv = known.iloc[pos]
+            if kv is not None and not pd.isna(kv):
+                kts = pd.Timestamp(kv).strftime("%Y-%m-%d")
+        try:
+            ctx = gate.override_for(symbol, ts, kts)
+        except Exception as e:  # noqa: BLE001 — a gate fault refuses, it never breaks a slice
+            _log.warning("washout override gate failed for %s %s (%s) — fire stays refused",
+                         symbol, ts, e)
+            continue
+        if isinstance(ctx, dict) and ctx:
+            out[pos] = ctx
+    return out
 
 
 # ════════════════════════════════════════════════ keeper quality (display) ══
@@ -181,7 +260,18 @@ def keeper_quality_map(sig: pd.DataFrame) -> dict:
     Returns ``{bar_index(int, positional in the non-NaN rows): (verdict, reason)}``.
     The counter-trend fill shift (used for MARKER placement, not for the verdict) is
     ``2 if below200 & ~w_bull else 1`` — mirrored in ``build_v2`` when it stamps quality
-    onto the emitted signal. Only bars where a raw buy fired are graded (KEEPER contract)."""
+    onto the emitted signal. Only bars where a raw buy fired are graded (KEEPER contract).
+
+    THE OVERRIDE IS DELIBERATELY ABSENT FROM THIS MASK — do not "fix" it.
+    ``& ~bear_block`` here is not a duplicate of the enter mask; it is the KEEPER's cohort,
+    and a washout-override fire must never enter it. ``bear_block`` requires below-200, so
+    every override fire is by construction counter-trend, and ``_reclaim_and_hold``'s
+    counter-trend leg ("counter-trend, no 200-reclaim/hold") would re-refuse nearly all of
+    them. Routing override fires through here would ship a far stricter rule than the one
+    the packet gauntleted — a silent substitution nothing downstream could detect. The
+    gauntleted construction enters on the fire itself, so a granted fire bypasses the
+    keeper entirely and is emitted as its own class (``contracts.OVERRIDE_TAKE_QUALITY``)
+    with a tier from the standard non-counter-trend recipe scoring only."""
     rows = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"]).reset_index(drop=True)
     if len(rows) < 3:
         return {}
@@ -632,7 +722,9 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
              sector_basket: pd.Series | None = None,
              panel_basket: pd.Series | None = None,
              cohort_frac_daily: pd.Series | None = None,
-             reclaims_enabled: bool = True) -> dict:
+             reclaims_enabled: bool = True,
+             symbol: str | None = None,
+             override_gate=None) -> dict:
     """Compute the full v2 emission for one symbol from its oracle ``sig`` frame + close.
 
     ``high``/``low``/``volume`` optional (CN/HK close-only names pass none): the recipe
@@ -640,8 +732,14 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
     ``sector_basket``/``panel_basket``/``cohort_frac_daily`` are the sector-cohort inputs
     the ingest layer precomputes once per nightly run (None ⇒ cohort legs 0, partial).
 
+    ``symbol`` + ``override_gate`` wire the ratified washout-override enter-mask conditional
+    (era ``gc_v2_wo1``, see ``v2_streams``). BOTH must be present for any fire to be taken;
+    either absent — and the artifact-absent fallback, where the gate answers None to
+    everything — leaves this emission bit-identical to the pre-fence era.
+
     Returns a dict the contracts layer folds into the indicator doc:
       { keeper: {bar_index:{verdict,reason,shift}}, recipe: {bar_index:{score,tier}},
+        override: {bar_index: override_ctx},
         score_basis: "full"|"partial", early_dots: [ts...], warnings: [{ts,kind}...],
         sell_confirms: [{ts,kind}...] }
 
@@ -651,17 +749,24 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
     history spans the full chart, whereas ``warnings`` is the last-40 DISPLAY side channel
     OracleDash reads. Both derive from the SAME ``warn_events`` pass (computed once)."""
     if not len(sig) or not {"macd", "sig", "k", "d", "rsi14"}.issubset(sig.columns):
-        return {"keeper": {}, "recipe": {}, "score_basis": "partial",
+        return {"keeper": {}, "recipe": {}, "override": {}, "score_basis": "partial",
                 "early_dots": [], "warnings": [], "sell_confirms": [], "reclaims": []}
     rows = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"])
     if len(rows) < 20:
-        return {"keeper": {}, "recipe": {}, "score_basis": "partial",
+        return {"keeper": {}, "recipe": {}, "override": {}, "score_basis": "partial",
                 "early_dots": [], "warnings": [], "sell_confirms": [], "reclaims": []}
 
     have_volume = volume is not None and volume.notna().any()
     hi = high if high is not None else close
     lo = low if low is not None else close
     vol = volume if volume is not None else pd.Series(np.nan, index=close.index)
+
+    # ── the washout-override grants: which bear_block-vetoed fires the mask TAKES ──
+    # Asked before the keeper so the two cohorts are visibly disjoint: the keeper grades
+    # (CB|revBuy) & ~bear_block, these are (CB|revBuy) & bear_block & override_ok, and a
+    # granted fire is scored by the recipe below but never keeper-graded (fidelity ruling —
+    # see keeper_quality_map's docstring for why that is the whole ballgame).
+    override = override_entries(sig, symbol, override_gate)
 
     # keeper verdict + counter-trend fill shift per raw-buy bar
     kmap = keeper_quality_map(sig)
@@ -683,7 +788,11 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
     tier_al = tier_s.reindex(rows.index)
     recipe = {}
     for pos, (sc, ti) in enumerate(zip(score_al.to_numpy(), tier_al.to_numpy())):
-        if pos in keeper:                     # only stamp graded tiers on graded (buy) bars
+        # graded (buy) bars only — the keeper's cohort plus the override's. The recipe is
+        # the §9 bottom-signal score and carries NO counter-trend leg, so an override fire
+        # gets the standard tier off the standard scoring: the same number a non-blocked
+        # fire on that bar would have carried.
+        if pos in keeper or pos in override:
             recipe[pos] = {"score": None if not np.isfinite(sc) else int(round(float(sc))),
                            "tier": str(ti)}
 
@@ -694,6 +803,9 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
     return {
         "keeper": keeper,
         "recipe": recipe,
+        # {positional bar index: override_ctx} — the taken washout-override fires. Empty on
+        # every name, every night, until a qualifying basket meets a bear_block-vetoed fire.
+        "override": override,
         "score_basis": "partial" if partial else "full",
         "early_dots": early_dots(sig, close)[-SIDE_CHANNEL_CAP:],
         "warnings": warns_all[-SIDE_CHANNEL_CAP:],

@@ -96,18 +96,24 @@ def regen(sym: str, write: bool = True, cache=None, patches: dict | None = None,
     # never emit RE-ENTRY reclaims — the name comes from the manifest row.
     mrow = _load_manifest().get("symbols", {}).get(sym) or {}
     eligible = confluence_v2.reclaim_eligible(mrow.get("name"), sym)
+    # ONE stamper for the run: it is the live washout-override ENTRY gate here (era
+    # gc_v2_wo1) and the display stamp below, so a single artifact + ledger load answers
+    # both. `--check` on a single symbol builds it lazily, exactly as the stamp does.
+    gate = stamper if stamper is not None else WashoutStamper.create()
     v2 = confluence_v2.build_v2(sig, close, high=high, low=low, volume=volume,
                                 sector_basket=sec_basket, panel_basket=panel_basket,
                                 cohort_frac_daily=cohort,
-                                reclaims_enabled=eligible)
+                                reclaims_enabled=eligible,
+                                symbol=sym, override_gate=gate)
     ind = contracts.indicator_contract(
         sym, "3D", sig, bar_quality="real_ohlc", src_text=SRC, honest_read=HONEST, v2=v2)
-    # ── washout-override display stamp (ratified 2026-08-10, threshold 25%) ──
+    # ── washout-override pass (ratified 2026-08-10, notch 25%) ──
     # This script is the nightly's LAST writer of the flagship slices (terminal-data phase 1
-    # runs it right after build_polygon_universe), so without the stamp here every flagship
-    # ⊘ would lose its override class the moment the rewrite lands. Additive optional fields
-    # only; no signal, score, tier, or entry changes. `--check` builds a stamper lazily.
-    (stamper or WashoutStamper.create()).stamp(sym, ind.get("signals"), daily=DailyBars(
+    # runs it right after build_polygon_universe), so without this pass every flagship ⊘
+    # would lose its override class the moment the rewrite lands. Display stamp + the
+    # forward-ledger row for stamped and TAKEN fires alike; the entry decision itself was
+    # made above, by the same object, inside build_v2.
+    gate.stamp(sym, ind.get("signals"), daily=DailyBars(
         bar_opens=[d.strftime("%Y-%m-%d") for d in sig.index],
         dates=[d.strftime("%Y-%m-%d") for d in idx],
         high=high.to_list(), low=low.to_list(), close=close.to_list()))
