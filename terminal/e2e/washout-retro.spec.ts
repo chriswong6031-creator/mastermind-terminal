@@ -353,6 +353,20 @@ async function assertThreeStates(page: Page, zh: boolean, tag: string, testInfo:
   // its hover must never claim the entry happened, whatever else it says
   expect(m.retro!.title).not.toContain("reclaim waived — entry");
   expect(m.retro!.title).not.toContain("washout override entry");
+  // …and it must say the INTENDED thing, verbatim. Until #378 this branch was unreachable (SOFT_Q
+  // always won), and until the marker-tooltip repair the string it emitted displayed to nobody —
+  // so for the whole of this class's history the copy was only ever pinned by the two negatives
+  // above, which any wrong-but-different sentence would also have satisfied. The tooltip renders
+  // now, so the assertion is the whole sentence. The rule date is the one variable: it is a
+  // constant in ChartPanel that moves when the rule does, so it is validated for SHAPE and then
+  // substituted, which pins every word around it without scheduling a red for the day it changes.
+  const ruleDate = m.retro!.title.match(/\((\d{4}-\d{2}-\d{2})\)/)?.[1];
+  expect(ruleDate, "the retro tooltip must name WHICH rule the counterfactual is measured against")
+    .toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  expect(m.retro!.title).toBe(
+    `${RETRO_TS} · BUY — re-marked under the current rule (${ruleDate}) — Uranium miners`
+    + " · the system refused this live, so it is not a call we made",
+  );
 
   // 3. the live waived entry: the SAME pill, and no tag — this one really happened
   expect(m.waived!.rect).not.toBeNull();
@@ -362,11 +376,13 @@ async function assertThreeStates(page: Page, zh: boolean, tag: string, testInfo:
   expect(m.waived!.ringSlashes).toBe(0);
   expect(m.waived!.texts).toContain("★");
   expect(m.waived!.texts).toContain("Q");              // recipe tier: the keeper graded this one
-  // NOTE — the `<title>` assertions below check that the COPY is present and correct, not that
-  // a user can read it: the signal layer is created `pointer-events:none` and no marker
-  // re-enables it, so no marker here is hit-testable and its native SVG tooltip never displays,
-  // on desktop hover either. Titles are asserted as DOM content for that reason alone; the
-  // disclosure this suite actually holds the product to is the card legend further down.
+  // NOTE — the `<title>` assertions here and above check the COPY. That a reader can now actually
+  // SEE it is a separate claim, proved in `marker-tooltip.spec.ts`: the layer is still created
+  // `pointer-events:none` and no marker re-enables it (which is what keeps chart drags intact), so
+  // the tooltip is driven by a JS hit test instead, and that suite is where the rendered surface
+  // and its drag-safety are pinned. Either way the disclosure this suite holds the product to is
+  // the card legend further down — a hover is invisible on touch, in a screenshot, and to anyone
+  // skimming, so it is a bonus tier and never the disclosure.
   expect(m.waived!.title).toContain("reclaim waived — entry");
   expect(m.waived!.title).toContain("Uranium miners −38% from highs");
   expect(m.waived!.title).toContain("it held the next bar but never reclaimed the 200-day");
@@ -473,9 +489,11 @@ async function assertThreeStates(page: Page, zh: boolean, tag: string, testInfo:
     : /the system refused this live/);
 
   // ── THE DISCLOSURE TIER OF RECORD ──────────────────────────────────────────────────────
-  // The chart markers are deliberately identical and the layer is pointer-events:none, so this
-  // legend is not one disclosure among several — it is the ONLY place a reader is told that a
-  // star on the tape is a counterfactual. Asserted as RENDERED TEXT (never an attribute), and
+  // The chart markers are deliberately identical, so this legend is not one disclosure among
+  // several — it is the only place a reader is told, WITHOUT ASKING, that a star on the tape is a
+  // counterfactual. The marker tooltip now renders and says so too, and that changes nothing here:
+  // it costs a hover or a tap, and it is gone from any screenshot. Asserted as RENDERED TEXT
+  // (never an attribute), and
   // compared against the exported copy itself so the assertion cannot drift from the product.
   const legend = go.locator(".sd-sig-legend");
   await expect(legend).toHaveCount(1);

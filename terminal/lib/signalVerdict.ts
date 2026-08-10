@@ -364,9 +364,12 @@ export function retroOverrideCopy(
  *
  *  Load-bearing, and worth knowing why before editing it. On the chart, a re-marked fire is
  *  drawn IDENTICALLY to a live waived entry (operator order 2026-08-10): same star, same
- *  amber, no marker-level tag. The marker's `<title>` cannot carry the difference either —
- *  the signal layer is `pointer-events:none`, so no native SVG tooltip on it has ever
- *  rendered. That leaves this line as the only place the product tells a reader that some of
+ *  amber, no marker-level tag. The marker's `<title>` does not carry the difference either.
+ *  For the whole of this class's history it COULD not — the signal layer is
+ *  `pointer-events:none`, so no native SVG tooltip on it had ever rendered — and since the
+ *  marker-tooltip repair made it visible on hover and tap it still does not, because a hover
+ *  is invisible on touch until tapped, invisible in a screenshot, and invisible to anyone
+ *  skimming. That leaves this line as the only place the product tells a reader that some of
  *  those stars are counterfactuals rather than calls it made.
  *
  *  So it is built to need nothing from the reader: no hover, no tap, no zoom. It renders
