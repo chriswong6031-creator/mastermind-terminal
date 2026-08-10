@@ -1392,7 +1392,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     if (typeof document !== "undefined" && document.hidden) return;
     const key = chartQuoteSymsKeyRef.current;
     if (!key) return;
-    fetch(`/api/quote?cadence=chart&syms=${encodeURIComponent(key)}`)
+    fetch(`/api/quote?cadence=chart&syms=${encodeURIComponent(key)}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!chartQuoteAliveRef.current || !d?.quotes) return;

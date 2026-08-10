@@ -20,6 +20,7 @@ async function armVisualReady(page: Page) {
 
 test("measured one-second packets reshape and roll the live candle at every supported width", async ({ page }, testInfo) => {
   let chartPoll = 0;
+  let streamArmed = false;
   const ticks = [
     { second: 1, open: 100, high: 100.6, low: 99.9, close: 100.4, vol: 18 },
     { second: 2, open: 100.4, high: 100.5, low: 99.5, close: 99.7, vol: 24 },
@@ -50,8 +51,13 @@ test("measured one-second packets reshape and roll the live candle at every supp
   await page.route("**/api/quote?**", async (route) => {
     const url = new URL(route.request().url());
     const fast = url.searchParams.get("cadence") === "chart";
-    if (fast) chartPoll++;
-    const index = fast ? Math.min(chartPoll - 1, ticks.length - 1) : -1;
+    // A cold CI worker can spend several seconds compiling /terminal after the
+    // quote interval has started. Do not consume the finite packet sequence
+    // until the canvas has announced that its initial REST bars are painted;
+    // otherwise all three packets may pass before series.update() can observe
+    // them and the test would measure compiler speed instead of candle motion.
+    if (fast && streamArmed) chartPoll++;
+    const index = fast && streamArmed ? Math.min(chartPoll - 1, ticks.length - 1) : -1;
     const tick = index >= 0 ? ticks[index] : null;
     const syms = (url.searchParams.get("syms") || "NVDA").split(",").filter(Boolean);
     const quotes = Object.fromEntries(syms.map((sym) => [sym, sym === "NVDA" ? {
@@ -92,6 +98,8 @@ test("measured one-second packets reshape and roll the live candle at every supp
   await expect.poll(() => page.evaluate(() =>
     Boolean((window as Window & { __mmLiveCandleReady?: boolean }).__mmLiveCandleReady),
   ), { timeout: 15_000 }).toBe(true);
+  chartPoll = 0;
+  streamArmed = true;
 
   const chart = page.locator(".chart-wrap").first();
   await expect(chart.locator("canvas").first()).toBeVisible();
