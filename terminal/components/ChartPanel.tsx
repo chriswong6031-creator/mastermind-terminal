@@ -58,7 +58,7 @@ import {
 import type { SuiteRenderBundle, SuiteTier, SuiteColors, CoordMapper, TableSpec } from "@/lib/indicator-canvas/types";
 import ChartTables from "@/components/ChartTables";
 import { crossUps, crossDowns, crossUpsBelow, crossDownsAbove } from "@/lib/crossSignals";
-import { SOFT_Q, anchorSignal, isBlockedSignal, isOverrideCandidate, isStructureStop, sliceSignalBasis } from "@/lib/signalVerdict";
+import { SOFT_Q, anchorSignal, isBlockedSignal, isOverrideCandidate, isOverrideTake, isStructureStop, sliceSignalBasis } from "@/lib/signalVerdict";
 import { makeNearestBarIndex } from "@/lib/barSnap";
 import { ichimoku, supertrend, avwap as computeAvwap, rollingVwap, weekAnchoredVwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
@@ -550,7 +550,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // regime_blocked BUY is a refused setup that must never wear buy geometry). Both are stamped
   // only on the slice path, where provenance is known — the client-Pine fallback leaves them
   // undefined so its genuinely momentum-sourced SELL is not relabelled a stop.
-  type SigMark = { t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null; reason?: string; basis?: string; blocked?: boolean; stopLevel?: number | null; overrideCandidate?: boolean; overrideGroup?: string | null; overrideDd?: number | null };
+  type SigMark = { t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null; reason?: string; basis?: string; blocked?: boolean; stopLevel?: number | null; overrideCandidate?: boolean; overrideTake?: boolean; overrideGroup?: string | null; overrideDd?: number | null };
   const sigMarksRef = useRef<SigMark[]>([]);
   // Client-Pine FALLBACK: when a symbol ships no slice signal history, marks come from ORACLE_V1_PINE
   // run client-side on the daily bars, memoized per (symbol · daily length · last daily date) so the
@@ -2264,9 +2264,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const m = snap(s.ts, s.type); if (!m) continue;
         m.quality = s.quality; m.tier = s.tier; m.reason = s.quality_reason;
         m.basis = sliceSignalBasis(s); m.blocked = isBlockedSignal(s); m.stopLevel = s.stop_level ?? null;
-        // display-tier washout-override class (emitter-stamped, never re-derived here)
+        // the two washout-override classes (emitter-stamped, never re-derived here): the
+        // display-tier candidate — still a refusal — and the TAKEN entry (era gc_v2_wo1).
+        // Mutually exclusive by construction; both carry the same context.
         m.overrideCandidate = isOverrideCandidate(s);
-        if (m.overrideCandidate) {
+        m.overrideTake = isOverrideTake(s);
+        if (m.overrideCandidate || m.overrideTake) {
           m.overrideGroup = s.override_ctx?.name ?? s.override_ctx?.group_id ?? null;
           m.overrideDd = typeof s.override_ctx?.peer_dd === "number" ? s.override_ctx.peer_dd : null;
         }
@@ -3410,11 +3413,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           ring.appendChild(mk("animate", { attributeName: "opacity", values: "0.9;0", dur: "0.9s", repeatCount: "indefinite" }));
           g.appendChild(ring);
         }
+        // ── washout-override ENTRY (era gc_v2_wo1): the ordinary star, outlined amber ──
+        // It IS an entry, so it keeps entry geometry and the full buy fill — dimming or
+        // hollowing it would say the engine hedged, and the engine did not. The delta is
+        // the smallest one that still reads at a glance: the amber the ⊘ class already
+        // owns, drawn as an outline around the pill and its pointer, so the two states of
+        // one mechanism share a colour across the chart.
+        const ovrTake = !!m.overrideTake;
+        const outline = ovrTake ? { stroke: AMBER, "stroke-width": 1.6 } : null;
         // block → hollow (fill:none + colored stroke); take/pending/regime_blocked → solid (possibly dimmed) fill.
         // RECLAIM additionally DASHES the outline so a re-entry pill never reads as a keeper-blocked entry.
         const dash = m.type === "RECLAIM" ? "3 2" : undefined;
-        g.appendChild(mk("rect", { x: x - w / 2, y: top, width: w, height: h, rx: r, ry: r, fill: hollow ? "none" : fill, stroke: hollow ? fill : "none", "stroke-width": hollow ? 1.4 : 0, ...(dash ? { "stroke-dasharray": dash } : {}) }));
-        g.appendChild(mk("path", { d: up ? `M${x - ptr} ${top} L${x + ptr} ${top} L${x} ${top - ptr} Z` : `M${x - ptr} ${top + h} L${x + ptr} ${top + h} L${x} ${top + h + ptr} Z`, fill: hollow ? "none" : fill, stroke: hollow ? fill : "none", "stroke-width": hollow ? 1.4 : 0 }));
+        g.appendChild(mk("rect", { x: x - w / 2, y: top, width: w, height: h, rx: r, ry: r, fill: hollow ? "none" : fill, stroke: hollow ? fill : "none", "stroke-width": hollow ? 1.4 : 0, ...(dash ? { "stroke-dasharray": dash } : {}), ...(outline || {}) }));
+        g.appendChild(mk("path", { d: up ? `M${x - ptr} ${top} L${x + ptr} ${top} L${x} ${top - ptr} Z` : `M${x - ptr} ${top + h} L${x + ptr} ${top + h} L${x} ${top + h + ptr} Z`, fill: hollow ? "none" : fill, stroke: hollow ? fill : "none", "stroke-width": hollow ? 1.4 : 0, ...(outline || {}) }));
         const tEl = mk("text", { x, y: top + h / 2 + (star ? 4.3 : 3.4), fill: hollow ? fill : cfg.tc, "font-size": star ? 11.5 : 9, "font-weight": 800, "text-anchor": "middle", "font-family": star ? "Georgia,serif" : "var(--font-ui)", "letter-spacing": star ? "0" : ".02em" });
         tEl.textContent = cfg.txt;
         g.appendChild(tEl);
@@ -3433,6 +3444,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           // soft marks name their veto (the engine's quality_reason) — the dim pill alone can't say WHY
           const title = mk("title", {});
           title.textContent = `${m.t} · ${m.type} (${q === "pending" ? "pending" : "blocked"})${m.reason ? ` — ${m.reason}` : ""}`;
+          g.appendChild(title);
+        } else if (ovrTake) {
+          // the amber outline says "this one is different"; the hover says how. Same
+          // context the rail card's disclosure line carries, so hover and card agree.
+          const title = mk("title", {});
+          const dd = typeof m.overrideDd === "number" ? `−${Math.trunc(Math.abs(m.overrideDd) * 100)}%` : "";
+          title.textContent = `${m.t} · ${m.type} — washout override entry`
+            + `${m.overrideGroup ? ` — ${m.overrideGroup}` : ""}${dd ? ` ${dd} from highs` : ""}`
+            + " · the regime gate would refuse this; most still stop out";
           g.appendChild(title);
         }
         // tier badge ("A+"/"Q") as a small superscript pill to the top-right of the marker (taken entries only).

@@ -16,6 +16,9 @@ interface Half {
    *  geometry — the disclosure LINE renders on the Golden Oracle card (OracleDash), and the
    *  numbers behind it are already in `note`, which is this button's tooltip. */
   overrideCandidate?: boolean;
+  /** the verdict IS a washout-override entry. Same geometry as any entry — the disclosure
+   *  LINE renders on the Golden Oracle card (OracleDash) and the numbers ride `note`. */
+  overrideTake?: boolean;
   line2?: string | null;
 }
 

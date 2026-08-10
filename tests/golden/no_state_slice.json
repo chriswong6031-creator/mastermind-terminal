@@ -1,0 +1,260 @@
+{
+ "signals": [
+  {
+   "bar_index": 47,
+   "blocked": true,
+   "known_ts": "2021-07-20",
+   "price": 72.544736,
+   "quality": "regime_blocked",
+   "quality_reason": "bear_block: monthly-bear & below-200 & 2W-not-bull",
+   "reasons": [
+    "macd_bull_cross",
+    "recent_b1",
+    "confirm_bull",
+    "rsi<65"
+   ],
+   "regime": {
+    "above200": false,
+    "monthlyBull": false,
+    "weeklyBull": false
+   },
+   "score": null,
+   "strength": 0.45,
+   "tier": null,
+   "ts": "2021-07-16",
+   "type": "BUY"
+  },
+  {
+   "bar_index": 52,
+   "known_ts": "2021-08-06",
+   "price": 86.50861,
+   "quality": "block_repair",
+   "quality_reason": "bear-block legs repaired after the 2021-07-16 blocked entry",
+   "reasons": [
+    "bear_block_cleared",
+    "macd_cross_still_live"
+   ],
+   "regime": {
+    "above200": false,
+    "monthlyBull": false,
+    "weeklyBull": true
+   },
+   "scored": true,
+   "strength": 0.725,
+   "ts": "2021-08-06",
+   "type": "RECLAIM"
+  },
+  {
+   "bar_index": 88,
+   "basis": "structure_stop",
+   "known_ts": "2022-01-06",
+   "price": 121.678952,
+   "reasons": [
+    "distribution_confirmed",
+    "structure_break"
+   ],
+   "regime": {
+    "above200": true,
+    "monthlyBull": false,
+    "weeklyBull": false
+   },
+   "stop_level": 122.29942,
+   "strength": 0.725,
+   "ts": "2022-01-06",
+   "type": "SELL"
+  },
+  {
+   "bar_index": 110,
+   "blocked": true,
+   "known_ts": "2022-04-11",
+   "price": 82.91159,
+   "quality": "regime_blocked",
+   "quality_reason": "bear_block: monthly-bear & below-200 & 2W-not-bull",
+   "reasons": [
+    "macd_bull_cross",
+    "recent_b1",
+    "confirm_bull",
+    "rsi<65"
+   ],
+   "regime": {
+    "above200": false,
+    "monthlyBull": false,
+    "weeklyBull": false
+   },
+   "score": null,
+   "strength": 0.45,
+   "tier": null,
+   "ts": "2022-04-07",
+   "type": "BUY"
+  },
+  {
+   "bar_index": 116,
+   "known_ts": "2022-05-03",
+   "price": 95.845363,
+   "quality": "block_repair",
+   "quality_reason": "bear-block legs repaired after the 2022-04-07 blocked entry",
+   "reasons": [
+    "bear_block_cleared",
+    "macd_cross_still_live"
+   ],
+   "regime": {
+    "above200": false,
+    "monthlyBull": true,
+    "weeklyBull": true
+   },
+   "scored": true,
+   "strength": 0.725,
+   "ts": "2022-05-03",
+   "type": "RECLAIM"
+  },
+  {
+   "bar_index": 140,
+   "known_ts": "2022-08-15",
+   "price": 155.512449,
+   "quality": "take",
+   "quality_reason": "held confirmation",
+   "reasons": [
+    "fast_reversal_up",
+    "sell_failed"
+   ],
+   "regime": {
+    "above200": true,
+    "monthlyBull": true,
+    "weeklyBull": true
+   },
+   "score": 0,
+   "strength": 1.0,
+   "tier": "base",
+   "ts": "2022-08-11",
+   "type": "REBUY"
+  },
+  {
+   "bar_index": 173,
+   "known_ts": "2022-12-30",
+   "price": 89.344408,
+   "quality": "block",
+   "quality_reason": "counter-trend, no 200-reclaim/hold",
+   "reasons": [
+    "macd_bull_cross",
+    "recent_b1",
+    "confirm_bull",
+    "rsi<65"
+   ],
+   "regime": {
+    "above200": false,
+    "monthlyBull": true,
+    "weeklyBull": false
+   },
+   "score": 15,
+   "strength": 0.588,
+   "tier": "base",
+   "ts": "2022-12-28",
+   "type": "BUY"
+  },
+  {
+   "bar_index": 236,
+   "known_ts": "2023-09-21",
+   "price": 106.904151,
+   "quality": "block",
+   "quality_reason": "counter-trend, no 200-reclaim/hold",
+   "reasons": [
+    "macd_bull_cross",
+    "recent_b1",
+    "confirm_bull",
+    "rsi<65"
+   ],
+   "regime": {
+    "above200": false,
+    "monthlyBull": true,
+    "weeklyBull": false
+   },
+   "score": 15,
+   "strength": 0.588,
+   "tier": "base",
+   "ts": "2023-09-19",
+   "type": "BUY"
+  },
+  {
+   "bar_index": 264,
+   "known_ts": "2024-01-17",
+   "price": 173.763143,
+   "quality": "take",
+   "quality_reason": "held confirmation",
+   "reasons": [
+    "fast_reversal_up",
+    "sell_failed"
+   ],
+   "regime": {
+    "above200": true,
+    "monthlyBull": false,
+    "weeklyBull": true
+   },
+   "score": 10,
+   "strength": 0.863,
+   "tier": "base",
+   "ts": "2024-01-15",
+   "type": "REBUY"
+  },
+  {
+   "bar_index": 298,
+   "blocked": true,
+   "known_ts": "2024-06-07",
+   "price": 115.164353,
+   "quality": "regime_blocked",
+   "quality_reason": "bear_block: monthly-bear & below-200 & 2W-not-bull",
+   "reasons": [
+    "macd_bull_cross",
+    "recent_b1",
+    "confirm_bull",
+    "rsi<65"
+   ],
+   "regime": {
+    "above200": false,
+    "monthlyBull": false,
+    "weeklyBull": false
+   },
+   "score": null,
+   "strength": 0.45,
+   "tier": null,
+   "ts": "2024-06-05",
+   "type": "BUY"
+  },
+  {
+   "bar_index": 362,
+   "blocked": true,
+   "known_ts": "2025-03-04",
+   "price": 148.656095,
+   "quality": "regime_blocked",
+   "quality_reason": "bear_block: monthly-bear & below-200 & 2W-not-bull",
+   "reasons": [
+    "macd_bull_cross",
+    "recent_b1",
+    "confirm_bull",
+    "rsi<65"
+   ],
+   "regime": {
+    "above200": false,
+    "monthlyBull": false,
+    "weeklyBull": false
+   },
+   "score": null,
+   "strength": 0.45,
+   "tier": null,
+   "ts": "2025-02-28",
+   "type": "BUY"
+  }
+ ],
+ "state": {
+  "above200": true,
+  "bars_since_signal": 38,
+  "extended": true,
+  "last_scored_basis": null,
+  "last_scored_signal": "REBUY",
+  "last_scored_ts": "2024-01-17",
+  "last_signal": "BUY",
+  "overbought": false,
+  "position_hint": "long",
+  "strong_bull": true,
+  "weeklyBull": true
+ }
+}

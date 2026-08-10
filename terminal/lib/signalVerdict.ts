@@ -22,6 +22,10 @@ export interface Verdict {
   /** the refused entry sits inside a deep group washout (ratified 2026-08-10, 25% notch) —
    *  a DISPLAY class on the same refusal, never a permission to enter. */
   overrideCandidate?: boolean;
+  /** the anchor IS a washout-override entry (signal era gc_v2_wo1): the regime gate refused
+   *  it and the ratified washout conditional took it anyway. A REAL entry — the verdict
+   *  keeps the ordinary entry label and color — carrying the washout context beside it. */
+  overrideTake?: boolean;
   /** second glance-tier line under the verdict. Today only the washout-override disclosure
    *  uses it: the card says which group is washed out and by how much, in plain words. */
   line2?: string | null;
@@ -98,7 +102,9 @@ interface OracleSlice {
       blocked?: boolean | null;
       /** SELL only: the confirmed swing low the daily close broke */
       stop_level?: number | null;
-      /** display-tier washout-override class (signal_layer/washout_override.py) */
+      /** display-tier washout-override class (signal_layer/washout_override.py). Set only on
+       *  a refusal that qualified — a TAKEN override carries `quality:"override_take"` and
+       *  no flag, because it is an entry, not a decorated refusal. */
       override_candidate?: boolean | null;
       override_ctx?: {
         group_id?: string | null;
@@ -123,6 +129,11 @@ const SELLISH = ["SELL", "CUT", "TRIM"];
 // "the engine refused this entry" — it must never anchor the verdict (contracts.py contract).
 // Exported: ChartPanel.renderSignals gates marker softness on this SAME set, so a new
 // engine quality string lands on both surfaces at once (add it here, nowhere else).
+//
+// "override_take" is DELIBERATELY ABSENT and must stay absent: it is an entry the mask took,
+// not a refusal the engine flagged, so softening it would subordinate a marker the engine
+// stands behind. Its distinctness is carried by the amber outline and the disclosure line,
+// never by demoting the entry.
 export const SOFT_Q: ReadonlySet<string> = new Set(["pending", "block", "regime_blocked"]);
 
 /** HK-O1: the v2 regime gate REFUSED this entry. The emitter keeps `type` at BUY/REBUY so
@@ -152,6 +163,25 @@ export function isOverrideCandidate(
   return !!s && s.override_candidate === true;
 }
 
+/** The engine quality string of a TAKEN washout override (signal_layer/contracts.py
+ *  OVERRIDE_TAKE_QUALITY). Its own class, not a keeper verdict — see below. */
+export const OVERRIDE_TAKE_QUALITY = "override_take";
+
+/** The washout-override ENTRY: a regime-refused fire the live enter mask TOOK because the
+ *  name's thematic-basket peers sat at/below the ratified notch on the day it fired
+ *  (signal era gc_v2_wo1; Macro Dashboard research/BLOCKED_ENTRY_CONDITIONAL_PREREG.md §4/§5).
+ *
+ *  This is NOT `isOverrideCandidate`'s class and the two can never both be true. A candidate
+ *  is a refusal wearing extra weight; this is an entry. Concretely, for a fire that reads
+ *  true here: `isBlockedSignal` is false, it is absent from SOFT_Q, it anchors the verdict,
+ *  it walks position_hint, and it fires alerts. Strict on the emitter's string for the same
+ *  reason the candidate class is strict on its flag — the client re-derives nothing. */
+export function isOverrideTake(
+  s?: { quality?: unknown } | null,
+): boolean {
+  return !!s && String(s.quality ?? "").toLowerCase() === OVERRIDE_TAKE_QUALITY;
+}
+
 /** A peer-median 252d drawdown → the glance-tier figure. Truncated toward zero, not rounded:
  *  understating a washout is the safe direction for a number that sits next to a refusal. */
 function fmtPeerDd(peerDd: number | null | undefined): string | null {
@@ -169,20 +199,30 @@ interface OverrideCtx {
 
 /** The washout-override disclosure: one glance line + the Tier-2 numbers behind it.
  *
+ *  TWO SHAPES, ONE VOICE. `taken=false` (the default, and every pre-fence historical fire)
+ *  is the DISPLAY class: the engine refused this entry and the washout is context. Since the
+ *  gc_v2_wo1 era fence, `taken=true` is the ENTRY: the same washout is now the reason the
+ *  engine took it. Only the lead clause differs — the two numbers behind it are the same
+ *  evidence, and the stop clause matters MORE once the fire is a real entry, not less.
+ *
  *  COPY LAW (docs/DESIGN_DOCTRINE.md + the terminal banned-vocabulary rule): plain words, no
  *  study names, no refutation language, and never a verb that reads as permission. The lead
- *  clause of the hover exists because the glance line alone could be misread as a green
- *  light — the engine still refuses this entry and the panel has to say so before it says
- *  anything encouraging. The numbers are the packet's equal-notional read at the 25% notch
- *  (cell +26.5% vs complement +3.45%, held-out 2019+, stop honored on every trade); the
- *  stop-out clause is §3.5 ("stop-outs dominate trade count at every setting"). */
+ *  clause exists because the glance line alone is ambiguous in BOTH directions — a candidate
+ *  could be misread as a green light, and an entry could be misread as an ordinary one when
+ *  it is the one class that entered against the regime gate. Say which, first. The numbers
+ *  are the packet's equal-notional read at the 25% notch (cell +26.5% vs complement +3.45%,
+ *  held-out 2019+, stop honored on every trade); the stop-out clause is §3.5 ("stop-outs
+ *  dominate trade count at every setting"). */
 export function washoutOverrideCopy(
   ctx: OverrideCtx | null | undefined,
   zh: boolean,
+  taken = false,
 ): { line: string; notes: string[] } | null {
   const dd = fmtPeerDd(ctx?.peer_dd);
   const group = (zh ? ctx?.name_zh || ctx?.name : ctx?.name) || null;
-  const head = zh ? "深度洗盘例外候选" : "Washout override candidate";
+  const head = taken
+    ? (zh ? "深度洗盘例外入场" : "Washout override entry")
+    : (zh ? "深度洗盘例外候选" : "Washout override candidate");
   // Four honest shapes, because the artifact may ship a name, a number, both, or neither —
   // and a disclosure line that prints an empty slot is worse than a shorter one.
   const who = group ?? (dd ? (zh ? "同类" : "peer group") : null);
@@ -194,9 +234,13 @@ export function washoutOverrideCopy(
   return {
     line: where ? `${head} — ${where}` : head,
     notes: [
-      zh
-        ? "仍是被拦截的入场 — 洗盘标记是背景，不是放行"
-        : "still a refused entry — the washout flag is context, not a green light",
+      taken
+        ? (zh
+          ? "趋势闸本会拦截 — 同类深度洗盘是放行的唯一理由"
+          : "the regime gate would refuse this — the deep group washout is the one reason it stands")
+        : (zh
+          ? "仍是被拦截的入场 — 洗盘标记是背景，不是放行"
+          : "still a refused entry — the washout flag is context, not a green light"),
       zh
         ? "同类深度洗盘中，这些被拦截信号每笔平均 +27%，其他情形 +3%（2019-2026，始终执行止损）"
         : "in deep group washouts like this, these blocked signals averaged +27% per trade vs +3% otherwise (2019-2026, stop always honored)",
@@ -399,6 +443,16 @@ export function oracleVerdict(
     }
     if (SOFT_Q.has(q) && !soft) notes.push(String(eff.quality_reason || q));
     else if (soft && eff.quality_reason) notes.push(String(eff.quality_reason));
+    // ── the washout-override ENTRY (era gc_v2_wo1) ──────────────────────────────────
+    // It anchors like any entry, so the label and color below are the ordinary entry
+    // language — that is the point: the mask took it, so the card says what it took. What
+    // it must NOT do is arrive unexplained, because this is the one entry class that fired
+    // against the regime gate. The disclosure rides the same line2 the refused class uses,
+    // so the two states of one mechanism read as one mechanism.
+    const took = isOverrideTake(eff)
+      ? washoutOverrideCopy((eff as { override_ctx?: OverrideCtx | null }).override_ctx, zh, true)
+      : null;
+    if (took) notes.push(...took.notes);
     // lane-disagreement note only between the two SCORED lanes (a RECLAIM primary is
     // EXPECTED to differ from the scored manifest verdict — not a data fault).
     if (!soft && mv && mv !== effU) notes.push(zh ? `数据通道不一致（清单通道：${mv}）` : `data lanes disagree (screener lane: ${mv})`);
@@ -427,6 +481,8 @@ export function oracleVerdict(
       dim: false,
       soft,
       blocked: !!freshBlock,
+      overrideTake: !!took,
+      line2: took?.line ?? null,
       note: notes.join(" · "),
     };
   }

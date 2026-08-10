@@ -311,11 +311,14 @@ def _main_locked(limit: int, syms_override: list[str] | None, dry_run: bool) -> 
     patched: dict = {}
     t0 = time.time()
     n_ok = n_skip = 0
-    # ── washout-override stamp: REPLAY ONLY on this lane ──
-    # This 5-minute RTH loop rewrites the flagship slices, so without re-applying the stamp a
-    # marker would drop back to plain slate the first tick after the nightly set it. accrue=False
-    # keeps the nightly the sole advancer of the forward ledger (house law) — an intraday pass
-    # sees a partial session and must never mint a row from it.
+    # ── washout override on this lane: full gate, LEDGER replay only ──
+    # This 5-minute RTH loop rewrites the flagship slices, so it must reach the same verdicts
+    # the nightly did — otherwise a marker drops back to plain slate, or worse, an entry the
+    # nightly TOOK disappears on the first tick. So the gate runs in full (build_v2 below) and
+    # the stamp re-applies. What does NOT run is accrual: accrue=False keeps the nightly the
+    # sole advancer of the forward ledger (house law) — an intraday pass sees a partial
+    # session and must never mint a row from it. A ledger row already written is still
+    # REPLAYED here, which is what makes the two lanes agree.
     stamper = WashoutStamper.create()
 
     for sym in work:
@@ -383,7 +386,11 @@ def _main_locked(limit: int, syms_override: list[str] | None, dry_run: bool) -> 
         try:
             v2 = confluence_v2.build_v2(
                 sig, close,
-                reclaims_enabled=confluence_v2.reclaim_eligible(_names.get(sym), sym))
+                reclaims_enabled=confluence_v2.reclaim_eligible(_names.get(sym), sym),
+                # the same enter mask the nightly runs — an entry the nightly took must not
+                # vanish on the next 5-minute tick. Only the LEDGER is nightly-only here
+                # (accrue=False below); the mask itself is deterministic from the artifact.
+                symbol=sym, override_gate=stamper)
         except Exception as exc:
             print(f"[fast_flagship] {sym}: build_v2 failed: {exc}", flush=True)
             v2 = None

@@ -71,8 +71,10 @@ interface Signal {
   price?: number | null
   reasons?: string[]
   regime?: Record<string, boolean>
-  // GC v2 keeper/recipe grading (BUY|REBUY only; absent on v1 slices, null tier/score for regime_blocked)
-  quality?: "take" | "block" | "pending" | "regime_blocked" | string | null
+  // GC v2 keeper/recipe grading (BUY|REBUY only; absent on v1 slices, null tier/score for
+  // regime_blocked). "override_take" is not a keeper verdict at all — it is the washout-
+  // override ENTRY class (signal era gc_v2_wo1), which bypasses the keeper by design.
+  quality?: "take" | "block" | "pending" | "regime_blocked" | "override_take" | string | null
   quality_reason?: string | null
   tier?: "aplus" | "quality" | "base" | string | null
   score?: number | null
@@ -215,6 +217,9 @@ function qualityLabel(q: string | null | undefined, zh: boolean): string {
   // the structure-stop SELL and the ⛔ structure-break warning below. A 200d/regime veto is a
   // different machine entirely, so it takes the regime gate's own name (matching signalVerdict).
   if (v === "regime_blocked") return pick(zh, "Regime-blocked", "趋势闸拦截")
+  // The washout-override ENTRY (era gc_v2_wo1) — a taken entry, not a keeper verdict. It
+  // names the exception rather than the gate, because the gate is what it went past.
+  if (v === "override_take") return pick(zh, "Washout override", "深度洗盘例外")
   return ""
 }
 function qualityColor(q: string | null | undefined): string {
@@ -223,6 +228,10 @@ function qualityColor(q: string | null | undefined): string {
   if (v === "block") return "var(--sell)"
   if (v === "pending") return "var(--signal)"
   if (v === "regime_blocked") return "var(--muted)"
+  // amber, matching the ⊘ class and the chart outline: the verdict above already carries
+  // the ordinary entry green, so this chip's job is to make the exception FINDABLE, not to
+  // grade it. One colour for one mechanism, in both of its states.
+  if (v === "override_take") return "var(--signal)"
   return "var(--muted)"
 }
 
