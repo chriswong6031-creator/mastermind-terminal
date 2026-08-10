@@ -532,6 +532,16 @@ class WashoutHistory:
     let yesterday's basket take today's fire; this one only ever describes days that are
     already over, so age costs coverage at the recent edge (the safe direction) and nothing
     else. It IS notch-gated: windows cut at 25% must never paint a 20%-notch claim.
+
+    INTEGRATION REQUIREMENT — SAME BASIS AS THE LIVE STATE. The windows must be cut on the
+    same LOO peer-median construction and the same ``qualifies`` rule as
+    ``basket_washout_state.v1``. Not a style preference: a fire the live mask refuses TODAY
+    (post-fence, so no retro mark) becomes PRE-FENCE tomorrow, when ``as_of`` advances past
+    it. If the two artifacts agree, that fire is absent from the windows too and nothing
+    happens — the flicker case is empty by construction. If they disagree, the product
+    refuses a fire on Monday and paints "would have entered" on the same bar on Tuesday.
+    Both artifacts come off the macro side's ``r3_axes.py``, which is what makes them agree;
+    a future history publisher that re-derives the basis independently breaks it silently.
     """
 
     as_of: str | None
