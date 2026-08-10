@@ -316,3 +316,40 @@ def test_the_projection_is_wired_into_every_lane_that_writes_a_slice():
         src = (ROOT / "ingest" / f"{lane}.py").read_text()
         assert ".retro(" in src, lane
         assert "keeper_relievable" in src, lane
+
+
+# ══════════════════════════════════════════════════════ 5. THE BRIDGE ═════════
+def test_the_bridge_trims_to_names_with_windows_and_stays_loadable(tmp_path):
+    """``ingest/pull_macro_washout_history.py`` output must be readable by this module.
+
+    The two halves of a bridge drift silently: the puller keeps working, the reader keeps
+    returning None, and the feature is quietly off. Round-trip them in one test.
+    """
+    from ingest.pull_macro_washout_history import build_washout_history
+
+    src = {
+        "schema": "basket_washout_history.v1",
+        "as_of": LIVE_AS_OF,
+        "names": {
+            SYM: {"group_id": GROUP, "name": "Uranium miners", "name_zh": "铀矿商",
+                  # the accepted input shapes, mixed on purpose
+                  "intervals": {"20": [["2026-04-01", "2026-06-30"],
+                                       {"start": "2026-07-10", "end": None}],
+                                "25": [["2026-05-01", "2026-06-01"]]}},
+            "NOWINDOWS": {"group_id": "software_infra", "intervals": {"20": []}},
+        },
+    }
+    out = build_washout_history(src)
+    assert out["is_display_only"] is True
+    assert set(out["names"]) == {SYM}                 # the census majority is dropped
+    assert out["names"][SYM]["intervals"]["20"] == [["2026-04-01", "2026-06-30"],
+                                                    ["2026-07-10", None]]
+
+    p = tmp_path / "washout_history.json"
+    p.write_text(json.dumps(out))
+    h = load_history(p)
+    assert h is not None and h.notch == WASHOUT_OVERRIDE_NOTCH
+    ev = blocked_ev("2026-05-04")
+    assert mark_retro(SYM, [ev], history=h, live_as_of=LIVE_AS_OF) == 1
+    open_ended = blocked_ev("2026-07-20")
+    assert mark_retro(SYM, [open_ended], history=h, live_as_of=LIVE_AS_OF) == 1
