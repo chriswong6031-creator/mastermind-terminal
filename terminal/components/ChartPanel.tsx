@@ -72,7 +72,7 @@ import {
 import type { SuiteRenderBundle, SuiteTier, SuiteColors, CoordMapper, TableSpec } from "@/lib/indicator-canvas/types";
 import ChartTables from "@/components/ChartTables";
 import { crossUps, crossDowns, crossUpsBelow, crossDownsAbove } from "@/lib/crossSignals";
-import { SOFT_Q, anchorSignal, isBlockedSignal, isOverrideCandidate, isReclaimOverrideTake, isRetroOverride, isStructureStop, isWaivedEntry, sliceSignalBasis } from "@/lib/signalVerdict";
+import { SOFT_Q, anchorSignal, isBlockedSignal, isOverrideCandidate, isReclaimOverrideTake, isRetroOverride, isStructureStop, isWaivedEntry, markerTooltipCopy, sliceSignalBasis } from "@/lib/signalVerdict";
 import { makeNearestBarIndex } from "@/lib/barSnap";
 import { ichimoku, supertrend, avwap as computeAvwap, rollingVwap, weekAnchoredVwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
@@ -568,7 +568,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // the entry's waived leg was the KEEPER's 200-reclaim (era gc_v2_wo2), not the regime veto
     reclaimWaived?: boolean;
     // display-only RETRO PROJECTION: today's rule would have entered this pre-fence refusal
-    retro?: boolean };
+    retro?: boolean;
+    // The emitter's context objects, kept WHOLE alongside the flattened `overrideGroup` the
+    // marker geometry uses. The tooltip copy needs them intact: `name_zh` lives only here, so a
+    // flattened English `overrideGroup` is all a zh reader could ever have been shown.
+    overrideCtx?: { group_id?: string | null; peer_dd?: number | null; name?: string | null; name_zh?: string | null } | null;
+    retroCtx?: { group_id?: string | null; name?: string | null; name_zh?: string | null } | null };
   const sigMarksRef = useRef<SigMark[]>([]);
   // Client-Pine FALLBACK: when a symbol ships no slice signal history, marks come from ORACLE_V1_PINE
   // run client-side on the daily bars, memoized per (symbol · daily length · last daily date) so the
@@ -2293,8 +2298,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (m.overrideCandidate || m.overrideTake) {
           m.overrideGroup = s.override_ctx?.name ?? s.override_ctx?.group_id ?? null;
           m.overrideDd = typeof s.override_ctx?.peer_dd === "number" ? s.override_ctx.peer_dd : null;
+          m.overrideCtx = s.override_ctx ?? null;
         }
-        if (m.retro) m.overrideGroup = s.retro_ctx?.name ?? s.retro_ctx?.group_id ?? null;
+        if (m.retro) { m.overrideGroup = s.retro_ctx?.name ?? s.retro_ctx?.group_id ?? null; m.retroCtx = s.retro_ctx ?? null; }
         marks.push(m);
       }
       // slice signals are chronological; snapping preserves order (the chip's fallback relies on it)
@@ -3293,9 +3299,25 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // washout-override amber. `--signal` (#e8b339) resolved through the token reader rather
       // than written as a literal, so the marker tracks the token the rail card uses.
       const AMBER = t2.signal || "#e8b339";
-      // The date the current rule took effect — named in every retro tooltip so the reader
-      // can see WHICH rule the counterfactual is measured against, not just that there is one.
-      const RETRO_RULE_DATE = "2026-08-10";
+      // ── the marker's hover/tap tooltip ──────────────────────────────────────────────────────
+      // The WORDING is not here: `markerTooltipCopy` owns every class's sentence, bilingual, built
+      // from the reviewed copy the rail card already prints. These strings were hand-rolled English
+      // literals in this loop for as long as they existed, which was invisible under the bilingual
+      // -UI law only because `pointer-events:none` meant nobody could read them. Reviving them made
+      // that a live regression for zh readers, so the copy moved to the copy module.
+      //
+      // The language is read per RENDER, not captured once: `tPlain`'s own contract in i18n.tsx is
+      // that imperative callers refresh on their own rebuild paths, and this is that path — the
+      // `mm:lang` listener in EFFECT 8b re-renders the markers, so a language toggle re-titles them.
+      const zhNow = typeof document !== "undefined"
+        && document.documentElement.getAttribute("data-lang") === "zh";
+      const addMarkerTitle = (g: SVGElement, m: SigMark) => {
+        const text = markerTooltipCopy(m, zhNow);
+        if (!text) return;
+        const title = mk("title", {});
+        title.textContent = text;
+        g.appendChild(title);
+      };
       while (layer.firstChild) layer.removeChild(layer.firstChild);
       if (priceProjHidden()) return;   // sub-pane maximized → price-anchored markers stay cleared
 
@@ -3454,11 +3476,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           g.appendChild(mk("circle", { cx: x, cy, r, fill: "none", stroke, "stroke-width": 1.3 }));
           g.appendChild(mk("line", { x1: x - k, y1: cy + k, x2: x + k, y2: cy - k, stroke, "stroke-width": 1.3 }));
           if (ovr) g.appendChild(mk("circle", { cx: x, cy: cy - r - 4, r: 1.5, fill: AMBER }));
-          const title = mk("title", {});
-          const dd = typeof m.overrideDd === "number" ? `−${Math.trunc(Math.abs(m.overrideDd) * 100)}%` : "";
-          title.textContent = `${m.t} · ${m.type} blocked by the regime gate — not an entry${m.reason ? ` — ${m.reason}` : ""}`
-            + (ovr ? ` · washout override candidate${m.overrideGroup ? ` — ${m.overrideGroup}` : ""}${dd ? ` ${dd} from highs` : ""}` : "");
-          g.appendChild(title);
+          addMarkerTitle(g, m);
           layer.appendChild(g);
           continue;
         }
@@ -3516,46 +3534,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const tEl = mk("text", { x, y: top + h / 2 + (star ? 4.3 : 3.4), fill: hollow ? fill : cfg.tc, "font-size": star ? 11.5 : 9, "font-weight": 800, "text-anchor": "middle", "font-family": star ? "Georgia,serif" : "var(--font-ui)", "letter-spacing": star ? "0" : ".02em" });
         tEl.textContent = cfg.txt;
         g.appendChild(tEl);
-        // native tooltip for re-entry pills: date + kind (the marker text alone can't carry it)
-        if (stop) {
-          // the pill says STOP; the hover says WHY it is a stop and what it broke
-          const title = mk("title", {});
-          title.textContent = `${m.t} · structure stop — the daily close broke the prior swing low`
-            + `${m.stopLevel != null ? ` at ${m.stopLevel}` : ""}, not a momentum exit`;
-          g.appendChild(title);
-        } else if (m.type === "RECLAIM") {
-          const title = mk("title", {});
-          title.textContent = `${m.t} · re-entry (${m.quality === "block_repair" ? "bear-block repaired" : "trend reclaim"}) — scored reclaim lane`;
-          g.appendChild(title);
-        } else if (q) {
-          // soft marks name their veto (the engine's quality_reason) — the dim pill alone can't say WHY
-          const title = mk("title", {});
-          title.textContent = `${m.t} · ${m.type} (${q === "pending" ? "pending" : "blocked"})${m.reason ? ` — ${m.reason}` : ""}`;
-          g.appendChild(title);
-        } else if (ovrTake) {
-          // the amber outline says "this one is different"; the hover says how. Same
-          // context the rail card's disclosure line carries, so hover and card agree.
-          const title = mk("title", {});
-          const dd = typeof m.overrideDd === "number" ? `−${Math.trunc(Math.abs(m.overrideDd) * 100)}%` : "";
-          title.textContent = `${m.t} · ${m.type} — `
-            + (m.reclaimWaived ? "reclaim waived — entry" : "washout override entry")
-            + `${m.overrideGroup ? ` — ${m.overrideGroup}` : ""}${dd ? ` ${dd} from highs` : ""}`
-            + (m.reclaimWaived
-              ? " · it held the next bar but never reclaimed the 200-day; most still stop out"
-              : " · the regime gate would refuse this; most still stop out");
-          g.appendChild(title);
-        } else if (retro) {
-          // Reachable only because retro is excluded from `q` above — before that, SOFT_Q's
-          // branch always won and this copy could never emit. It reached a READER only with the
-          // marker-tooltip repair (the hover path wired at `ensureTooltipHost` above): until then
-          // the title existed, was correct, and displayed to nobody. It is a BONUS tier — the
-          // card legend below remains the disclosure of record.
-          const title = mk("title", {});
-          title.textContent = `${m.t} · ${m.type} — re-marked under the current rule `
-            + `(${RETRO_RULE_DATE})${m.overrideGroup ? ` — ${m.overrideGroup}` : ""}`
-            + " · the system refused this live, so it is not a call we made";
-          g.appendChild(title);
-        }
+        // The hover/tap tooltip. Every class's wording lives in signalVerdict.markerTooltipCopy —
+        // bilingual, and composed from the same reviewed copy the rail card prints, so hover and
+        // card agree and neither can drift. The RETRO branch in particular reached a reader only
+        // with the marker-tooltip repair: #378 made it reachable, but the layer is
+        // `pointer-events:none`, so until the hover path was wired the string existed, was
+        // correct, and displayed to nobody. It is a BONUS tier — the card legend below remains
+        // the disclosure of record.
+        addMarkerTitle(g, m);
         // ── WHY THE RETRO MARKER CARRIES NO TAG OF ITS OWN (operator order 2026-08-10) ──
         // It is drawn exactly like a live waived entry: same star, same amber outline, no
         // marker-level mark separating the two. That is deliberate, and it is a decision with
@@ -7450,6 +7436,18 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return () => { window.removeEventListener("mm:chart-jump", onJump as EventListener); if (highlightTimerRef.current) { clearTimeout(highlightTimerRef.current); highlightTimerRef.current = null; } };
     // eslint-disable-next-line
   }, [symbol]);
+
+  // ── EFFECT 8b — re-title the markers on a language switch [mount] ──────────────────────────
+  // The marker tooltips are built imperatively inside renderSignals, so they are not re-rendered
+  // by React when the language changes — `applyLang` flips `<html data-lang>` and fires `mm:lang`,
+  // and nothing in this canvas-and-SVG path listens to it. Without this, a reader who switches to
+  // 中文 keeps every marker's English hover until an unrelated pan happens to repaint the layer.
+  // Only the titles depend on language, so a repaint is the whole fix.
+  useEffect(() => {
+    const onLang = () => renderSignalsRef.current();
+    window.addEventListener("mm:lang", onLang);
+    return () => window.removeEventListener("mm:lang", onLang);
+  }, []);
 
   // A symbol change no longer unmounts this renderer, so the teardown that used to end an
   // in-flight drawing transaction never runs. End it here instead: a half-drawn trendline, an

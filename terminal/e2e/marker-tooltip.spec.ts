@@ -1,4 +1,8 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
+// The tooltip wording is owned by the copy module and imported, never transcribed — the same
+// reason washout-retro.spec.ts imports `retroLegendCopy`. Sentence-level copy contracts live in
+// lib/__tests__/markerTooltipCopy.test.ts; this suite pins that they RENDER, and render wired.
+import { markerTooltipCopy } from "../lib/signalVerdict";
 
 // ── THE TOOLTIPS THAT SHIPPED TO NOBODY ────────────────────────────────────────────────────
 //
@@ -231,26 +235,6 @@ async function hoverMarker(page: Page, m: Marker) {
   await expect(tip(page)).toBeVisible();
 }
 
-/** The marker's own bar date, checked to be a REAL bar of the fixture series before it is used to
- *  build an expected sentence. Which bar a fire snaps to is the product's decision, so the test
- *  reads it back — but it must still be a bar that exists, not whatever the marker felt like
- *  printing, or the date prefix would be asserted against itself and pin nothing. */
-function barDate(m: Marker): string {
-  expect(BAR_DATES, "the marker's date prefix should be a real bar of the series").toContain(m.t);
-  return m.t;
-}
-
-/** The rule date is a constant in ChartPanel that moves when the rule does. Pinned for SHAPE and
- *  then substituted into the expected sentence, so every word around it is verbatim without
- *  scheduling a red for the day the rule changes. */
-function retroSentence(m: Marker): string {
-  const d = m.title.match(/\((\d{4}-\d{2}-\d{2})\)/)?.[1];
-  expect(d, "the retro tooltip must name WHICH rule the counterfactual is measured against")
-    .toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  return `${barDate(m)} · BUY — re-marked under the current rule (${d}) — Uranium miners`
-    + " · the system refused this live, so it is not a call we made";
-}
-
 // ── 1. DISPLAY: five classes, five tooltips, the right words in each ────────────────────────
 test("every marker class shows its own tooltip on hover", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "hover is a pointer-fine interaction");
@@ -260,48 +244,74 @@ test("every marker class shows its own tooltip on hover", async ({ page }, testI
   const plain = pick(list, PLAIN_TS), cand = pick(list, CAND_TS), retro = pick(list, RETRO_TS);
   const ovr = pick(list, OVR_TS), recl = pick(list, RECL_TS);
 
-  // The tooltip is never re-authored: it renders the marker's OWN `<title>`, so the displayed
-  // string and the SVG title cannot drift into two different sentences. Asserted first, because
-  // every verbatim expectation below rides on it.
-  await hoverMarker(page, plain);
-  expect(await tip(page).textContent()).toBe(plain.title);
-  await tipShot(page, testInfo, "tooltip-1-blocked");
+  // TWO CLAIMS, kept apart on purpose.
+  //
+  //   (a) the RENDERED tooltip is the marker's own `<title>`, verbatim — so the visible surface and
+  //       the SVG title can never drift into two different sentences; and
+  //   (b) that title is what `markerTooltipCopy` says for this class in this language.
+  //
+  // (b) is not a tautology and it is not where the WORDING is pinned — the wording is asserted
+  // sentence by sentence, in both languages, in lib/__tests__/markerTooltipCopy.test.ts, which is
+  // where a copy contract belongs now that the copy lives in a module. What (b) pins is the FIELD
+  // WIRING: that ChartPanel hands the copy module the emitter context intact. That is a real bug
+  // class — the marker geometry flattens `override_ctx` to its ENGLISH name for its own use, so a
+  // zh reader sees 铀矿商 only because the whole ctx is threaded through as well.
+  const expected = (m: Marker, kind: "blocked" | "candidate" | "entry" | "reclaim" | "retro", zh = false) =>
+    markerTooltipCopy({
+      t: m.t,
+      type: "BUY",
+      ...(kind === "retro"
+        ? { quality: "regime_blocked", blocked: true, reason: BLOCK_REASON, retro: true, retroCtx: RETRO_CTX }
+        : kind === "blocked"
+          ? { quality: "regime_blocked", blocked: true, reason: BLOCK_REASON }
+          : kind === "candidate"
+            ? { quality: "regime_blocked", blocked: true, reason: BLOCK_REASON, overrideCandidate: true, overrideCtx: OVERRIDE_CTX }
+            : kind === "entry"
+              ? { quality: "override_take", overrideTake: true, overrideCtx: OVERRIDE_CTX }
+              : { quality: "reclaim_override_take", overrideTake: true, reclaimWaived: true, overrideCtx: OVERRIDE_CTX }),
+    }, zh);
 
   // ⊘ the plain refusal — the tooltip whose whole job is the words "not an entry"
-  expect(plain.title).toBe(
-    `${barDate(plain)} · BUY blocked by the regime gate — not an entry — ${BLOCK_REASON}`);
+  await hoverMarker(page, plain);
+  expect(await tip(page).textContent()).toBe(plain.title);          // (a)
+  expect(plain.title).toBe(expected(plain, "blocked"));             // (b)
+  await expect(tip(page)).toContainText("not an entry");
+  await tipShot(page, testInfo, "tooltip-1-blocked");
 
   // ⊘ the washout-override candidate — still a refusal, and it must still say so FIRST
   await hoverMarker(page, cand);
-  expect(await tip(page).textContent()).toBe(
-    `${barDate(cand)} · BUY blocked by the regime gate — not an entry — ${BLOCK_REASON}`
-    + " · washout override candidate — Uranium miners −38% from highs");
-  await expect(tip(page)).toContainText("not an entry");
+  const candTip = (await tip(page).textContent())!;
+  expect(candTip).toBe(cand.title);
+  expect(cand.title).toBe(expected(cand, "candidate"));
+  expect(candTip.indexOf("not an entry")).toBeLessThan(candTip.indexOf("Washout override candidate"));
   await tipShot(page, testInfo, "tooltip-2-override-candidate");
 
   // ★ the washout-override entry — an entry, and the hover is where "most still stop out" lives
   await hoverMarker(page, ovr);
-  expect(await tip(page).textContent()).toBe(
-    `${barDate(ovr)} · BUY — washout override entry — Uranium miners −38% from highs`
-    + " · the regime gate would refuse this; most still stop out");
+  expect(await tip(page).textContent()).toBe(ovr.title);
+  expect(ovr.title).toBe(expected(ovr, "entry"));
+  await expect(tip(page)).toContainText("most still stop out");
   await expect(tip(page)).not.toContainText("not an entry");
   await tipShot(page, testInfo, "tooltip-3-override-take");
 
   // ★ the keeper's waived entry — names the leg that was relieved, not the regime gate
   await hoverMarker(page, recl);
-  expect(await tip(page).textContent()).toBe(
-    `${barDate(recl)} · BUY — reclaim waived — entry — Uranium miners −38% from highs`
-    + " · it held the next bar but never reclaimed the 200-day; most still stop out");
+  expect(await tip(page).textContent()).toBe(recl.title);
+  expect(recl.title).toBe(expected(recl, "reclaim"));
+  await expect(tip(page)).toContainText("never reclaimed the 200-day");
   await tipShot(page, testInfo, "tooltip-4-reclaim-override-take");
 
   // ★ the RETRO re-mark — the branch #378 made reachable, rendered for the first time here.
   // It is drawn identically to the waived entry above, so this sentence is the only thing on the
   // chart that distinguishes them; it must be the retro copy and not either entry's.
   await hoverMarker(page, retro);
-  const retroTip = await tip(page).textContent();
-  expect(retroTip).toBe(retroSentence(retro));
-  expect(retroTip).not.toContain("washout override entry");
-  expect(retroTip).not.toContain("reclaim waived — entry");
+  const retroTip = (await tip(page).textContent())!;
+  expect(retroTip).toBe(retro.title);
+  expect(retro.title).toBe(expected(retro, "retro"));
+  expect(retroTip, "the retro tooltip must date the rule it is measured against").toMatch(/\d{4}-\d{2}-\d{2}/);
+  expect(retroTip).toContain("it is not a call we made");
+  expect(retroTip).not.toContain("Washout override entry");
+  expect(retroTip).not.toContain("Reclaim waived — entry");
   await tipShot(page, testInfo, "tooltip-5-retro");
 
   // the five sentences really are five different sentences — one marker class cannot be wearing
@@ -483,25 +493,36 @@ test("a touch press that travels is a pan, not a tooltip tap", async ({ page }, 
 });
 
 // ── 4. THE TOOLTIP IS THE MARKER'S OWN STRING, IN EVERY LANGUAGE ────────────────────────────
-test("the zh view renders the marker's own tooltip text", async ({ page }, testInfo) => {
+test("the zh view renders the markers in 中文, not English", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "hover is a pointer-fine interaction");
   await openTerminal(page, { zh: true, zhPreseed: true });
   const list = await settledMarkers(page);
 
-  // Deliberately asserted as an INVARIANT (rendered text === the marker's own `<title>`) rather
-  // than against a fixed sentence. ChartPanel's marker hovers are not routed through the LEX
-  // tuples, so today that string is English in both views — a real gap, reported with this PR
-  // rather than papered over here. Pinning the English text would make the localization pass red
-  // for doing the right thing; pinning the invariant keeps this suite correct either way.
+  // THE REGRESSION THIS SUITE EXISTS TO PREVENT. These tooltips were English literals inside
+  // ChartPanel's render loop for as long as they existed — invisible to the bilingual-UI law only
+  // because `pointer-events:none` meant no reader could reach them. Reviving them without moving
+  // the copy would have shipped English into a Chinese product; this asserts it did not.
   for (const ts of [PLAIN_TS, CAND_TS, RETRO_TS, OVR_TS, RECL_TS]) {
     const marker = pick(list, ts);
     await hoverMarker(page, marker);
-    expect(await tip(page).textContent()).toBe(marker.title);
+    expect(await tip(page).textContent()).toBe(marker.title);   // the render invariant, in zh too
+    // No English PROSE. `BUY` is the emitter's signal type and rides the glyph in both languages,
+    // and `quality_reason` is a raw latin diagnostic slug the product passes through untranslated
+    // in both — so the check is for lowercase RUNS outside that slug, the same shape signalVerdict's
+    // own zh assertions use.
+    const prose = marker.title.replace(BLOCK_REASON, "");
+    expect(prose, `${ts} still carries English prose in the zh view`).not.toMatch(/[a-z]{4,}/);
   }
-  // Two receipts, because the interesting one is the CONTRAST. The tight crop shows the tooltip
-  // rendering in the zh view; the viewport shot shows it sitting inside a Chinese product surface
-  // while itself being English — flag 1 in the PR body, shown rather than described.
+
+  // the group name comes from the ctx's OWN zh name — the marker geometry flattens it to English
+  expect(pick(list, CAND_TS).title).toContain("铀矿商");
+  expect(pick(list, RETRO_TS).title).toContain("铀矿商");
+  // and the two claims that matter most, in the reader's language
+  expect(pick(list, PLAIN_TS).title).toContain("非入场信号");
+  expect(pick(list, RETRO_TS).title).toContain("当时系统并未入场");
+
+  // Receipts: the tooltip in 中文, and the same tooltip inside the Chinese product surface.
   await hoverMarker(page, pick(list, RETRO_TS));
   await tipShot(page, testInfo, "tooltip-6-zh");
-  await page.screenshot({ path: testInfo.outputPath("tooltip-7-zh-english-copy-in-zh-ui.png") });
+  await page.screenshot({ path: testInfo.outputPath("tooltip-7-zh-in-zh-ui.png") });
 });
