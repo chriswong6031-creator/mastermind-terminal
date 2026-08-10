@@ -1,5 +1,5 @@
 /**
- * Deterministic CSV export for the Options Tape.
+ * Deterministic CSV export for the Options Tape and Screener.
  *
  * The caller owns filtering and sorting; this module deliberately preserves that
  * order and serializes every supplied row. The export is a display-only research
@@ -7,9 +7,16 @@
  * an issued position or execution instruction.
  */
 
+import type {
+  OptionsScreenerCsvRow,
+  ScreenerHotView,
+  ScreenerPreset,
+} from "@/lib/optionsScreener";
+
 export type CsvScalar = string | number | boolean | null | undefined;
 
 export const OPTIONS_TAPE_EXPORT_SCHEMA = "terminal.options_tape_csv/v1";
+export const OPTIONS_SCREENER_EXPORT_SCHEMA = "terminal.options_screener_csv/v1";
 
 export const OPTIONS_TAPE_CSV_COLUMNS = [
   "export_schema",
@@ -76,6 +83,69 @@ export interface OptionsTapeCsvMetadata {
   feedAsof?: string | null;
   displayStale: boolean;
 }
+
+export const OPTIONS_SCREENER_CSV_COLUMNS = [
+  "export_schema",
+  "authority",
+  "interpretation_basis",
+  "source_schema",
+  "source_cadence",
+  "source_asof",
+  "session_date",
+  "display_stale",
+  "preset",
+  "hot_view",
+  "root_filter",
+  "group_filter",
+  "sort_key",
+  "sort_direction",
+  "root",
+  "group",
+  "group_zh",
+  "right",
+  "expiration",
+  "strike",
+  "gross_premium_today",
+  "premium_z",
+  "baseline_source",
+  "n_obs",
+  "call_prem_share",
+  "fresh_hits",
+  "fresh_premium",
+  "oi",
+  "oi_prev",
+  "d_oi",
+  "mid",
+  "zerodte_premium",
+  "total_premium",
+  "zerodte_share",
+  "premium",
+  "volume",
+  "close",
+  "vol_gt_oi",
+] as const;
+
+export interface OptionsScreenerCsvMetadata {
+  preset: ScreenerPreset;
+  hotView?: ScreenerHotView | null;
+  sourceSchema?: string | null;
+  sourceAsof?: string | null;
+  sessionDate?: string | null;
+  displayStale?: boolean | null;
+  rootFilter?: string | null;
+  groupFilter?: string | null;
+  sortKey: string;
+  sortDirection: "asc" | "desc" | "source";
+}
+
+const SCREENER_INTERPRETATION_BASIS: Record<ScreenerPreset, string> = {
+  top_prem: "intraday_aggregated_flow",
+  unusual_z: "intraday_activity_baseline",
+  fresh: "vol_gt_oi_heuristic_not_confirmed",
+  doi: "oi_change_t1_minus_t2_non_directional",
+  zerodte: "intraday_aggregated_0dte_flow",
+  hot: "nightly_close_activity_non_directional",
+};
 
 const UTF8_BOM = "\uFEFF";
 
@@ -155,6 +225,77 @@ export function buildOptionsTapeCsv(
   return serializeCsv(rows);
 }
 
+function screenerRowCells(row: OptionsScreenerCsvRow): CsvScalar[] {
+  switch (row.preset) {
+    case "top_prem":
+    case "unusual_z":
+      return [
+        row.root, row.group, row.group_zh, null, null, null,
+        row.gross_premium_today, row.prem_z, row.baseline_source, row.n_obs,
+        row.call_prem_share, null, null, null, null, null, null, null, null,
+        null, null, null, null, null,
+      ];
+    case "fresh":
+      return [
+        row.root, row.group, row.group_zh, null, null, null,
+        null, null, null, null, null, row.n, row.prem, null, null, null, null,
+        null, null, null, null, null, null, null,
+      ];
+    case "doi":
+      return [
+        row.root, null, null, row.right, row.exp, row.strike,
+        null, null, null, null, null, null, null, row.oi, row.oi_prev, row.d_oi,
+        row.mid, null, null, null, null, null, null, null,
+      ];
+    case "zerodte":
+      return [
+        row.root, row.group, row.group_zh, null, null, null,
+        null, null, null, null, null, null, null, null, null, null, null,
+        row.zd_prem, row.total_prem, row.zd_share, null, null, null, null,
+      ];
+    case "hot":
+      return [
+        row.root, null, null, row.right, row.exp, row.strike,
+        null, null, null, null, null, null, null, null, row.oi_prev, null, null,
+        null, null, null, row.premium, row.vol, row.close, row.vol_gt_oi,
+      ];
+  }
+}
+
+/**
+ * Build the active Screener preset in the exact order shown by the UI. Fields
+ * that do not exist for a preset stay blank; absence is never rewritten as a
+ * zero or false observation.
+ */
+export function buildOptionsScreenerCsv(
+  rows: readonly OptionsScreenerCsvRow[],
+  metadata: OptionsScreenerCsvMetadata,
+): string {
+  const sourceCadence = metadata.preset === "doi" || metadata.preset === "hot"
+    ? "nightly_close"
+    : "intraday";
+  const prefix: CsvScalar[] = [
+    OPTIONS_SCREENER_EXPORT_SCHEMA,
+    "display_only",
+    SCREENER_INTERPRETATION_BASIS[metadata.preset],
+    metadata.sourceSchema,
+    sourceCadence,
+    metadata.sourceAsof,
+    metadata.sessionDate,
+    metadata.displayStale,
+    metadata.preset,
+    metadata.preset === "hot" ? metadata.hotView : null,
+    metadata.rootFilter,
+    metadata.groupFilter,
+    metadata.sortKey,
+    metadata.sortDirection,
+  ];
+  return serializeCsv([
+    [...OPTIONS_SCREENER_CSV_COLUMNS],
+    ...rows.map((row) => [...prefix, ...screenerRowCells(row)]),
+  ]);
+}
+
 function safeFilenameSegment(value: string | null | undefined, fallback: string): string {
   const safe = (value ?? "")
     .trim()
@@ -180,4 +321,16 @@ export function buildOptionsTapeCsvFilename(
   const session = safeFilenameSegment(metadata.sessionDate, "unknown-session");
   const asof = compactUtcTimestamp(metadata.feedAsof);
   return `mastermind-options-tape_${session}_${asof}.csv`;
+}
+
+/** Filename depends only on the active view and published source metadata. */
+export function buildOptionsScreenerCsvFilename(
+  metadata: Pick<OptionsScreenerCsvMetadata, "preset" | "hotView" | "sessionDate" | "sourceAsof">,
+): string {
+  const view = metadata.preset === "hot" && metadata.hotView
+    ? `${metadata.preset}-${metadata.hotView}`
+    : metadata.preset;
+  const session = safeFilenameSegment(metadata.sessionDate, "unknown-session");
+  const asof = compactUtcTimestamp(metadata.sourceAsof);
+  return `mastermind-options-screener_${view}_${session}_${asof}.csv`;
 }

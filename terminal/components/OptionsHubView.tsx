@@ -15,7 +15,25 @@ import { flowGet, flowInvalidate, flowPrefetch } from "@/lib/flowClientCache";
 import { useFlowStream } from "@/lib/flowStream";
 import { trackSearch } from "@/lib/searchTrack";
 import { normalizeVolUnits } from "@/lib/eodContext";
-import { buildOptionsTapeCsv, buildOptionsTapeCsvFilename } from "@/lib/optionsCsv";
+import {
+  OPTIONS_SCREENER_EXPORT_SCHEMA,
+  buildOptionsScreenerCsv,
+  buildOptionsScreenerCsvFilename,
+  buildOptionsTapeCsv,
+  buildOptionsTapeCsvFilename,
+} from "@/lib/optionsCsv";
+import {
+  resolveScreenerSort,
+  selectFreshRows,
+  selectHotRows,
+  selectOiRows,
+  selectTopPremiumRows,
+  selectUnusualRows,
+  selectZeroDteRows,
+  type OptionsScreenerCsvRow,
+  type ScreenerHotView,
+  type ScreenerPreset,
+} from "@/lib/optionsScreener";
 import { VolRegimeChip } from "@/components/eodcontext/VolRegimeChip";
 import { OptionsCsvExportButton } from "@/components/options/OptionsCsvExportButton";
 // Shared SVG chart primitives — measured 1:1 viewBox, nice ticks, pixel-gap label
@@ -1444,9 +1462,6 @@ const GexExpiryBars = memo(function GexExpiryBars({ rows, greek, lang }: { rows:
   );
 });
 
-// ─── Screener preset key ──────────────────────────────────────────────────────
-type ScreenerPreset = "top_prem" | "unusual_z" | "fresh" | "doi" | "zerodte" | "hot";
-
 // ─── Top-level component ─────────────────────────────────────────────────────
 
 /**
@@ -1867,7 +1882,7 @@ export default function OptionsHubView({
     if (activeTab === "screener") fetchScreener();
   }, [activeTab, fetchScreener]);
 
-  const [hotView, setHotView] = useState<"by_premium" | "by_volume">("by_premium");
+  const [hotView, setHotView] = useState<ScreenerHotView>("by_premium");
 
   // ── Screener preset view state ────────────────────────────────────────────
   const [screenerPreset, setScreenerPreset] = useState<ScreenerPreset>("top_prem");
@@ -1877,11 +1892,6 @@ export default function OptionsHubView({
   const [scrRoot, setScrRoot] = useState("");
   const [scrGroup, setScrGroup] = useState("");
   const scrHasGroups = ["top_prem", "unusual_z", "fresh", "zerodte"].includes(screenerPreset);
-  const scrFilter = useCallback(
-    <T extends { root: string; group?: string }>(rows: T[]): T[] =>
-      rows.filter((r) => (!scrRoot || r.root === scrRoot) && (!scrGroup || r.group === scrGroup)),
-    [scrRoot, scrGroup],
-  );
   const scrBeltOn = Boolean(scrRoot || scrGroup);
   /**
    * Empty-row copy for a belt-filtered table. Once a chip can empty a table, the old
@@ -1942,6 +1952,87 @@ export default function OptionsHubView({
     if (scrSortKey === key) setScrSortDir((d) => (d === -1 ? 1 : -1));
     else { setScrSortKey(key); setScrSortDir(-1); }
   }
+
+  // The table and CSV consume the same memoized collections. That makes the
+  // active preset's filters and ordering an executable contract instead of two
+  // implementations that can drift apart.
+  const screenerFilter = useMemo(() => ({ root: scrRoot, group: scrGroup }), [scrRoot, scrGroup]);
+  const topPremiumRows = useMemo(
+    () => selectTopPremiumRows(feed?.unusual_names ?? [], screenerFilter, scrSortKey, scrSortDir),
+    [feed?.unusual_names, screenerFilter, scrSortDir, scrSortKey],
+  );
+  const unusualRows = useMemo(
+    () => selectUnusualRows(feed?.unusual_names ?? [], screenerFilter, scrSortKey, scrSortDir),
+    [feed?.unusual_names, screenerFilter, scrSortDir, scrSortKey],
+  );
+  const freshRows = useMemo(
+    () => selectFreshRows(feed?.events ?? [], feed?.unusual_names ?? [], screenerFilter, scrSortKey, scrSortDir),
+    [feed?.events, feed?.unusual_names, screenerFilter, scrSortDir, scrSortKey],
+  );
+  const oiRows = useMemo(
+    () => selectOiRows(oiData?.movers ?? [], screenerFilter, scrSortKey, scrSortDir),
+    [oiData?.movers, screenerFilter, scrSortDir, scrSortKey],
+  );
+  const zeroDteRows = useMemo(
+    () => selectZeroDteRows(feed?.events ?? [], screenerFilter, scrSortKey, scrSortDir),
+    [feed?.events, screenerFilter, scrSortDir, scrSortKey],
+  );
+  const hotRows = useMemo(
+    () => selectHotRows(hotData?.[hotView] ?? [], screenerFilter),
+    [hotData, hotView, screenerFilter],
+  );
+  const activeScreenerRows = useMemo<OptionsScreenerCsvRow[]>(() => {
+    switch (screenerPreset) {
+      case "top_prem": return topPremiumRows;
+      case "unusual_z": return unusualRows;
+      case "fresh": return freshRows;
+      case "doi": return oiRows;
+      case "zerodte": return zeroDteRows;
+      case "hot": return hotRows;
+    }
+  }, [freshRows, hotRows, oiRows, screenerPreset, topPremiumRows, unusualRows, zeroDteRows]);
+  const activeScreenerSort = useMemo(
+    () => resolveScreenerSort(screenerPreset, scrSortKey, scrSortDir, hotView),
+    [hotView, scrSortDir, scrSortKey, screenerPreset],
+  );
+  const screenerSourceSchema = screenerPreset === "doi"
+    ? oiData?.schema
+    : screenerPreset === "hot"
+      ? hotData?.schema
+      : feed?.schema;
+  const screenerSourceAsof = screenerPreset === "doi"
+    ? oiData?.asof
+    : screenerPreset === "hot"
+      ? hotData?.asof
+      : feed?.asof;
+  const screenerSessionDate = screenerPreset === "doi" || screenerPreset === "hot"
+    ? screenerSourceAsof?.slice(0, 10)
+    : feed?.session_date;
+  const screenerDisplayStale = screenerPreset === "doi" || screenerPreset === "hot"
+    ? null
+    : Boolean(dataStale);
+  const buildScreenerCsvDownload = useCallback(() => {
+    const metadata = {
+      preset: screenerPreset,
+      hotView,
+      sourceSchema: screenerSourceSchema,
+      sourceAsof: screenerSourceAsof,
+      sessionDate: screenerSessionDate,
+      displayStale: screenerDisplayStale,
+      rootFilter: scrRoot,
+      groupFilter: scrGroup,
+      sortKey: activeScreenerSort.key,
+      sortDirection: activeScreenerSort.direction,
+    };
+    return {
+      csv: buildOptionsScreenerCsv(activeScreenerRows, metadata),
+      filename: buildOptionsScreenerCsvFilename(metadata),
+    };
+  }, [
+    activeScreenerRows, activeScreenerSort.direction, activeScreenerSort.key,
+    hotView, scrGroup, scrRoot, screenerDisplayStale, screenerPreset,
+    screenerSessionDate, screenerSourceAsof, screenerSourceSchema,
+  ]);
 
   // ── Vol fetch ─────────────────────────────────────────────────────────────
   const [selectedVolRoot, setSelectedVolRoot] = useState<string | null>(null);
@@ -3290,6 +3381,13 @@ export default function OptionsHubView({
                     <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-dim)" }}>
                       {lang === "zh" ? "ETF品种覆盖，个股扩展中" : "ETF universe · single names expanding"}
                     </span>
+                    <OptionsCsvExportButton
+                      label={t("exportCsv")}
+                      rowCount={activeScreenerRows.length}
+                      buildDownload={buildScreenerCsvDownload}
+                      exportId="screener-csv-v1"
+                      exportContract={OPTIONS_SCREENER_EXPORT_SCHEMA}
+                    />
                   </div>
                 );
               })()}
@@ -3395,13 +3493,7 @@ export default function OptionsHubView({
 
               {/* ── Top Premium view — unusual_names sorted by gross_premium_today ── */}
               {screenerPreset === "top_prem" && feed && (() => {
-                const rows = [...scrFilter(feed.unusual_names ?? [])].sort((a, b) => {
-                  if (scrSortKey === "gross") return (a.gross_premium_today - b.gross_premium_today) * scrSortDir;
-                  if (scrSortKey === "z") return ((a.prem_z ?? -999) - (b.prem_z ?? -999)) * scrSortDir;
-                  if (scrSortKey === "call_share") return (a.call_prem_share - b.call_prem_share) * scrSortDir;
-                  // default: by gross descending
-                  return b.gross_premium_today - a.gross_premium_today;
-                });
+                const rows = topPremiumRows;
                 const hdr = (key: string, en: string, zh: string, tip?: string) => (
                   <th
                     style={{ cursor: "pointer" }}
@@ -3461,14 +3553,7 @@ export default function OptionsHubView({
 
               {/* ── Unusual (z) view — sorted by prem_z descending ── */}
               {screenerPreset === "unusual_z" && feed && (() => {
-                const rows = [...scrFilter(feed.unusual_names ?? [])]
-                  .filter((u) => u.prem_z != null)
-                  .sort((a, b) => {
-                    if (scrSortKey === "gross") return (a.gross_premium_today - b.gross_premium_today) * scrSortDir;
-                    if (scrSortKey === "call_share") return (a.call_prem_share - b.call_prem_share) * scrSortDir;
-                    // default: by |z| descending
-                    return (Math.abs(b.prem_z ?? 0) - Math.abs(a.prem_z ?? 0)) * (scrSortKey === "z" ? scrSortDir : 1);
-                  });
+                const rows = unusualRows;
                 const warming = (feed.unusual_names ?? []).filter((u) => u.prem_z == null);
                 const hdr = (key: string, en: string, zh: string, tip?: string) => (
                   <th style={{ cursor: "pointer" }} className={scrSortKey === key ? "sorted" : ""} onClick={() => scrSort(key)} title={tip}>
@@ -3533,28 +3618,7 @@ export default function OptionsHubView({
 
               {/* ── Fresh Positioning view — unusual_names with vol>OI flow count ── */}
               {screenerPreset === "fresh" && feed && (() => {
-                // "Fresh" = vol>OI events per ticker today, from feed.events
-                const freshCounts: Record<string, number> = {};
-                const freshPrem: Record<string, number> = {};
-                for (const ev of scrFilter(feed.events ?? [])) {
-                  if (ev.vol_gt_oi) {
-                    freshCounts[ev.root] = (freshCounts[ev.root] ?? 0) + 1;
-                    freshPrem[ev.root] = (freshPrem[ev.root] ?? 0) + ev.premium;
-                  }
-                }
-                // Join with unusual_names for sector/group context
-                const nameMap: Record<string, { group: string; group_zh: string }> = {};
-                for (const u of feed.unusual_names ?? []) nameMap[u.root] = { group: u.group, group_zh: u.group_zh };
-
-                const rows = Object.entries(freshCounts).map(([root, n]) => ({
-                  root, n, prem: freshPrem[root] ?? 0,
-                  group: nameMap[root]?.group ?? "",
-                  group_zh: nameMap[root]?.group_zh ?? "",
-                })).sort((a, b) => {
-                  if (scrSortKey === "n") return (a.n - b.n) * scrSortDir;
-                  if (scrSortKey === "prem") return (a.prem - b.prem) * scrSortDir;
-                  return b.prem - a.prem;
-                });
+                const rows = freshRows;
                 const hdr = (key: string, en: string, zh: string, tip?: string) => (
                   <th style={{ cursor: "pointer" }} className={scrSortKey === key ? "sorted" : ""} onClick={() => scrSort(key)} title={tip}>
                     {lang === "zh" ? zh : en}{scrSortKey === key ? (scrSortDir === -1 ? " ↓" : " ↑") : ""}
@@ -3601,13 +3665,7 @@ export default function OptionsHubView({
 
               {/* ── ΔOI Builds view — oiData.movers ── */}
               {screenerPreset === "doi" && oiData && (() => {
-                const rows = [...scrFilter(oiData.movers)].sort((a, b) => {
-                  if (scrSortKey === "doi") return (Math.abs(a.d_oi) - Math.abs(b.d_oi)) * scrSortDir;
-                  if (scrSortKey === "oi") return (a.oi - b.oi) * scrSortDir;
-                  if (scrSortKey === "mid") return ((a.mid ?? 0) - (b.mid ?? 0)) * scrSortDir;
-                  // default: |ΔOI| desc
-                  return Math.abs(b.d_oi) - Math.abs(a.d_oi);
-                });
+                const rows = oiRows;
                 const hdr = (key: string, en: string, zh: string, tip?: string) => (
                   <th style={{ cursor: "pointer" }} className={scrSortKey === key ? "sorted" : ""} onClick={() => scrSort(key)} title={tip}>
                     {lang === "zh" ? zh : en}{scrSortKey === key ? (scrSortDir === -1 ? " ↓" : " ↑") : ""}
@@ -3669,26 +3727,7 @@ export default function OptionsHubView({
 
               {/* ── 0DTE Heavy view — aggregate 0DTE premium per ticker ── */}
               {screenerPreset === "zerodte" && feed && (() => {
-                // Aggregate 0DTE premium per ticker from feed events
-                const zdPrem: Record<string, number> = {};
-                const totalPrem: Record<string, number> = {};
-                const nameMap2: Record<string, { group: string; group_zh: string }> = {};
-                for (const ev of scrFilter(feed.events ?? [])) {
-                  totalPrem[ev.root] = (totalPrem[ev.root] ?? 0) + ev.premium;
-                  if (ev.zerodte) zdPrem[ev.root] = (zdPrem[ev.root] ?? 0) + ev.premium;
-                  nameMap2[ev.root] = { group: ev.group, group_zh: ev.group_zh };
-                }
-                const rows = Object.keys(zdPrem).map((root) => ({
-                  root,
-                  zd_prem: zdPrem[root],
-                  zd_share: zdPrem[root] / (totalPrem[root] || 1),
-                  group: nameMap2[root]?.group ?? "",
-                  group_zh: nameMap2[root]?.group_zh ?? "",
-                })).sort((a, b) => {
-                  if (scrSortKey === "share") return (a.zd_share - b.zd_share) * scrSortDir;
-                  if (scrSortKey === "prem") return (a.zd_prem - b.zd_prem) * scrSortDir;
-                  return b.zd_prem - a.zd_prem;
-                });
+                const rows = zeroDteRows;
                 const hdr = (key: string, en: string, zh: string, tip?: string) => (
                   <th style={{ cursor: "pointer" }} className={scrSortKey === key ? "sorted" : ""} onClick={() => scrSort(key)} title={tip}>
                     {lang === "zh" ? zh : en}{scrSortKey === key ? (scrSortDir === -1 ? " ↓" : " ↑") : ""}
@@ -3774,7 +3813,7 @@ export default function OptionsHubView({
                         </tr>
                       </thead>
                       <tbody>
-                        {scrFilter(hotData[hotView] ?? []).map((c, i) => (
+                        {hotRows.map((c, i) => (
                           <tr key={i} style={{ cursor: "pointer" }} onClick={() => { switchTab("tickers"); setSelectedTicker(c.root); }}>
                             <td style={{ textAlign: "left", fontWeight: 700 }}>{c.root}</td>
                             <td style={{ textAlign: "left" }}>
@@ -3792,7 +3831,7 @@ export default function OptionsHubView({
                             </td>
                           </tr>
                         ))}
-                        {scrFilter(hotData[hotView] ?? []).length === 0 &&
+                        {hotRows.length === 0 &&
                           scrEmptyRow(8, "No hot contracts to show", "暂无活跃合约", (hotData[hotView] ?? []).length)}
                       </tbody>
                     </table>
