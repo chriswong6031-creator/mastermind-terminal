@@ -15,7 +15,9 @@ import { flowGet, flowInvalidate, flowPrefetch } from "@/lib/flowClientCache";
 import { useFlowStream } from "@/lib/flowStream";
 import { trackSearch } from "@/lib/searchTrack";
 import { normalizeVolUnits } from "@/lib/eodContext";
+import { buildOptionsTapeCsv, buildOptionsTapeCsvFilename } from "@/lib/optionsCsv";
 import { VolRegimeChip } from "@/components/eodcontext/VolRegimeChip";
+import { OptionsCsvExportButton } from "@/components/options/OptionsCsvExportButton";
 // Shared SVG chart primitives — measured 1:1 viewBox, nice ticks, pixel-gap label
 // thinning, padded domains. The hygiene rules live in that module's header.
 import {
@@ -1770,6 +1772,18 @@ export default function OptionsHubView({
   }
   const dteMidOn = ["8_30d", "31_90d"].every((b) => dteBuckets.has(b as DteBucket));
   const dataStale = (feed?.stale) || (lastFeedTs ? isStale(lastFeedTs) : false);
+  const buildTapeCsvDownload = useCallback(() => {
+    const metadata = {
+      feedSchema: feed?.schema,
+      sessionDate: feed?.session_date,
+      feedAsof: feed?.asof,
+      displayStale: Boolean(dataStale),
+    };
+    return {
+      csv: buildOptionsTapeCsv(events, metadata),
+      filename: buildOptionsTapeCsvFilename(metadata),
+    };
+  }, [dataStale, events, feed?.asof, feed?.schema, feed?.session_date]);
   const heatGroups = heat?.groups ?? [];
   const unusualNames = feed?.unusual_names ?? [];
 
@@ -2394,6 +2408,12 @@ export default function OptionsHubView({
                     {t("tapeReset", "Reset")}
                   </button>
                 )}
+
+                <OptionsCsvExportButton
+                  label={t("exportCsv")}
+                  rowCount={events.length}
+                  buildDownload={buildTapeCsvDownload}
+                />
               </div>
 
               {/* Drill card */}
