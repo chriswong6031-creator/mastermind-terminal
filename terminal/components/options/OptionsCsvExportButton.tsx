@@ -9,6 +9,8 @@ export interface OptionsCsvExportButtonProps {
   label: string;
   rowCount: number;
   buildDownload: () => CsvDownload;
+  exportId?: string;
+  exportContract?: string;
 }
 
 /** Browser-only download control kept separate from the pure CSV contract. */
@@ -16,6 +18,8 @@ export function OptionsCsvExportButton({
   label,
   rowCount,
   buildDownload,
+  exportId = "tape-csv-v1",
+  exportContract = "terminal.options_tape_csv/v1",
 }: OptionsCsvExportButtonProps) {
   const download = () => {
     if (rowCount === 0) return;
@@ -43,8 +47,8 @@ export function OptionsCsvExportButton({
       onClick={download}
       aria-label={`${label}: ${rowCount}`}
       title={`${label} (${rowCount})`}
-      data-options-export="tape-csv-v1"
-      data-export-contract="terminal.options_tape_csv/v1"
+      data-options-export={exportId}
+      data-export-contract={exportContract}
       style={{
         height: 28,
         marginLeft: "auto",
