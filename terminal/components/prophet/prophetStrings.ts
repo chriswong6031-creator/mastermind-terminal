@@ -23,6 +23,8 @@ const PROPHET_LEX = {
   tabSubtitle:      ["Managed-pick desk", "主动选股台"],
   laneMacro:        ["Macro Plans", "宏观计划"],
   laneOptions:      ["Options Alpha", "期权阿尔法"],
+  laneIssueDesk:    ["Issue Desk", "发布台"],
+  laneIssueDeskCaption: ["operator reviewed", "人工审核"],
   laneNavAria:      ["Prophet signal lanes", "预言台信号分区"],
   // Reworded (D3 honesty pass): "Managed signal intelligence" implied options provenance
   // this desk does not have. The eyebrow now states what it is and how often it moves.

@@ -4,10 +4,11 @@ import { useState } from "react";
 import { flowPrefetch } from "@/lib/flowClientCache";
 import { useLang } from "@/lib/i18n";
 import { OptionsAlphaView } from "./OptionsAlphaView";
+import { OptionsIssueDeskView } from "./OptionsIssueDeskView";
 import { ProphetView as MacroPlansView } from "./ProphetView";
 import { makeProphetT } from "./prophetStrings";
 
-type ProphetLane = "macro" | "options";
+type ProphetLane = "macro" | "options" | "issue";
 
 export function ProphetLanesView() {
   const { lang } = useLang();
@@ -16,7 +17,7 @@ export function ProphetLanesView() {
 
   const selectLane = (next: ProphetLane) => {
     if (next === "options") flowPrefetch("options_prophet_idx");
-    else flowPrefetch("prophet_idx");
+    else if (next === "macro") flowPrefetch("prophet_idx");
     setLane(next);
   };
 
@@ -51,6 +52,18 @@ export function ProphetLanesView() {
           <span>{t("laneOptions")}</span>
           <small>{t("optionsAlphaSource")}</small>
         </button>
+        <button
+          id="prophet-lane-issue"
+          type="button"
+          role="tab"
+          aria-selected={lane === "issue"}
+          aria-controls="prophet-panel-issue"
+          className={lane === "issue" ? "on" : ""}
+          onClick={() => selectLane("issue")}
+        >
+          <span>{t("laneIssueDesk")}</span>
+          <small>{t("laneIssueDeskCaption")}</small>
+        </button>
       </nav>
 
       <div
@@ -70,6 +83,15 @@ export function ProphetLanesView() {
         hidden={lane !== "options"}
       >
         {lane === "options" && <OptionsAlphaView />}
+      </div>
+      <div
+        id="prophet-panel-issue"
+        role="tabpanel"
+        aria-labelledby="prophet-lane-issue"
+        className="obs-prophet-lane-panel"
+        hidden={lane !== "issue"}
+      >
+        {lane === "issue" && <OptionsIssueDeskView />}
       </div>
     </div>
   );

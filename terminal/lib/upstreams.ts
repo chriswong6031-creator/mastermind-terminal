@@ -11,5 +11,8 @@ export const R2_BASE = "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev";
 /** Python flow hub on this box (Quote-Hub sidecar); R2 is the fallback mirror. */
 export const FLOW_BACKEND = process.env.FLOW_API_BASE || "http://127.0.0.1:8000";
 
+/** Private Macro operator API. Never use the local flow sidecar or public R2 for decisions. */
+export const ISSUE_DESK_API_BASE = process.env.ISSUE_DESK_API_BASE || "https://www.mastermind-x.com";
+
 /** Neural Web display feeds (macro repo producer — market_plane.json etc.). */
 export const NW_BASE = process.env.NW_DATA_BASE || "https://mastermind-x.com/neuralwebdata";

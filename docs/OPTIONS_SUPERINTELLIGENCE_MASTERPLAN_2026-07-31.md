@@ -50,7 +50,7 @@ are fair game; claimed lanes are not.
 | R4 Filter Groups + alert generalization + page/global filter bus | 🔓 OPEN — design pinned §4-R4; enriched schema (R1) is its vocabulary, but the engine + Supabase persistence can start against existing fields |
 | R5 IA restructure (7 categories) + blind-spot surfaces (0DTE dash, largest-trades, chain browser, P/C history, exp-vs-realized, export) | 🔓 OPEN — first slice IN FLIGHT 08-03: §5.3 PRISM→Exposure merge (branch `claude/prism-exposure-merge-20260803`; retire PRISM tab, shared sign-correct matrix renderer, port Confluence + HeatSeeker, `?tab=prism` alias). **PR #164 RESOLVED 08-03: closed as superseded** — master already ships its flat-sidebar intent (AppNav 7-item, next.config redirects) and resolves the one design conflict (Leaders/Radar → Discover) in R5's direction; nothing to re-implement; salvage check pending: multi-watchlist pill switcher on PortfolioView |
 | 2026-08-03 continuation session (this session's claims) | IN FLIGHT — P0 Tickers-drill crash hotfix; Volatility/Structure card-height equalization (branch `claude/vol-structure-layout-20260802`); Surface granularity upgrade (gradient + msc-consuming signal overlays, spec from census lane); Exposure/PRISM adjudication executed per §5.3 (see R5 row) |
-| R6 Prophet superintelligence (spine, multi-lane origination, live re-score, distribution) | 🟡 WAVE 0 BUILT 08-08 — system audit + separate Options Alpha shadow pane + governed `options.prophet_shadow/v1` projection. Wave-0 snapshot: no options direction/trajectory/Macro weight and zero Pick Lab fires/outcomes; source/session history exists, but Options Alpha event/outcome accrual remains zero. Immediate next delivery is the separate operator-reviewed `options.issue_desk/v1`; automatic `options.model_portfolio/v1` follows PIT outcome/campaign evidence. R6.1+ remains gated on signing, exact PIT execution, paired attribution and forward calibration |
+| R6 Prophet superintelligence (spine, multi-lane origination, live re-score, distribution) | 🟡 WAVE 0 + R6.2-A BUILT 08-09 — governed `options.prophet_shadow/v1` research lane plus private operator-reviewed `options.issue_desk/v1`. Issue Desk proposals remain non-signals; only an authenticated human can append an ISSUED/REJECTED decision, and issuance fails closed without exact OCC/NBBO/risk/portfolio receipts. No public Issue Desk artifact, brokerage action, options direction/trajectory, Macro weight or automatic portfolio authority exists. `options.model_portfolio/v1` still follows PIT outcome/campaign evidence, sparse-selector validation and exact execution proof. |
 | R7 dark pool / equities feed | ⛔ GATED — owner spend decision (Polygon TRF vs Databento) still open |
 | R8 composability (My-Pages) | ⛔ GATED — after R5 |
 
@@ -449,7 +449,7 @@ Macro owns the PIT/campaign/outcome/selection/optimizer builders and ledgers. Te
 Today/Pulse, Issue Desk and managed-position views. Neither side may promote options evidence into Macro rank until
 the paired incremental-attribution gate is separately reviewed and promoted.
 
-#### 6.2.1 Operator-reviewed Issue Desk (R6.2 speed path; next)
+#### 6.2.1 Operator-reviewed Issue Desk (R6.2-A speed path; built 2026-08-09)
 
 User value must not wait for automatic options-model promotion. A separate `options.issue_desk/v1` workflow takes
 current Macro candidates plus frozen options, regime and execution receipts into an explicit human approve/reject
@@ -458,6 +458,19 @@ zero is valid. Every proposal, rejection and issued research plan records review
 `available_at`, reason codes, immutable inputs and resulting portfolio state. The desk evaluates allocation fit,
 not four independent top scores. It cannot change Macro rank, cannot masquerade as automatic Options Alpha, and
 does not waive executable-contract/risk disclosure.
+
+The implemented v1 is deliberately private and request-driven. Macro serves authenticated
+`GET /api/options/issue-desk` and `POST /api/options/issue-desk/reviews`; Terminal exposes operator-only same-origin
+proxies and never fetches the desk through `/api/flow` or public R2. Macro persists 0600 append-only proposal and
+decision JSONL beneath a 0700 API state directory, with a global process lock, fsync, strict duplicate-key/non-finite
+JSON rejection, stable proposal revisions and idempotent review keys. A private offline projection tool may write
+only below that state directory. There is intentionally no GitHub Actions producer, public `site/` artifact or R2
+mirror containing proposal, rejection, contract, risk or position data.
+
+V1 can append only `PENDING_REVIEW → ISSUED | REJECTED`; it does not expose a post-issue mutation actuator. The
+longer lifecycle below is the frozen transport boundary for a later version, after management inputs and exact
+marks exist. In the current version an ISSUED row is an operator-attested research plan, `brokerage_trade=false`,
+with all five rank/gate/size/trade/automatic authority flags false.
 
 The transport state machine is explicit: `ISSUED → PARTIAL_ALLOWED` (optional;
 only when a frozen starter policy permits it) `→ ARMED → TRIGGERED → MANAGED →
@@ -510,7 +523,10 @@ probability plus a time band.
   delayed-winners law as the landing.
 
 ### 6.5 Distribution (Prophet everywhere it's relevant)
-The Options workspace Prophet view begins with distinct **Macro Plans** and **Options Alpha** panes. Empty true-fire
+The Options workspace Prophet view begins with distinct **Macro Plans**, **Options Alpha**, and private **Issue Desk**
+panes. The third pane is available only through the verified operator entitlement and Macro bearer API; it renders
+pending reviews, immutable decisions and research-plan lifecycle receipts without reinterpreting a watch/fire row
+as an issued position. Empty true-fire
 states, source/gate readiness, stale state and forward-book accrual are first-class; watch candidates are capped for
 scanning but preserve source order and are never relabelled as signals. Chart: Macro plan levels (entry/stop/T1/T2)
 and a phase chip as an opt-in overlay (ChartPanel already draws level rails).

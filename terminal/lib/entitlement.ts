@@ -156,6 +156,23 @@ export async function hasLiveOptions(): Promise<boolean> {
 }
 
 /**
+ * Human research issuance is deliberately narrower than the paid options read
+ * surface.  A paid account may read options evidence; it may never turn a
+ * proposal into a research position unless the billing authority supplies this
+ * explicit operator capability (or its operator-only unlimited tier).
+ *
+ * This is a server-side convenience gate only.  The Macro operator endpoint
+ * rechecks the same authority before appending a review event.
+ */
+export async function hasIssueDeskOperator(): Promise<boolean> {
+  const e = await fetchEntitlement();
+  return !!e && (
+    e.tier.trim().toLowerCase() === "unlimited"
+    || e.features.includes("options_issue_desk_operator")
+  );
+}
+
+/**
  * Any PAID account (essential or pro, incl. 7-day trial). Used where the surface
  * isn't broken out as its own feature in config/plans.yml — e.g. Pine-script
  * save — matching the legacy `is_pro` boolean's "any paid" semantics. If a
