@@ -1,7 +1,7 @@
 import { test, expect, type Page, type TestInfo } from "@playwright/test";
 // The legend copy is imported, not transcribed: it is the single disclosure that carries the
 // counterfactual, so an assertion that could drift away from it is worse than no assertion.
-import { retroLegendCopy } from "../lib/signalVerdict";
+import { markerTooltipCopy, retroLegendCopy, washoutOverrideCopy } from "../lib/signalVerdict";
 
 // ── THREE STATES OF ONE MECHANISM, ON ONE CHART ───────────────────────────────────────────
 //
@@ -334,9 +334,11 @@ async function assertThreeStates(page: Page, zh: boolean, tag: string, testInfo:
   expect(m.plain!.opacity).toBe("0.62");
   expect(m.plain!.rect).toBeNull();                    // no pill: a refusal never wears one
   expect(m.plain!.texts).not.toContain("★");
-  // chart hovers are EN-only in ChartPanel (they are not routed through `pick`) — asserted
-  // unconditionally on purpose, so a future localization pass has to come through this suite
-  expect(m.plain!.title).toContain("blocked by the regime gate — not an entry");
+  // The marker hover is BILINGUAL since the marker-tooltip repair. It was English-only for as
+  // long as it existed, which no one could see because the layer is `pointer-events:none`;
+  // making it visible made that a live regression for zh readers, so the copy moved into the
+  // copy module and this assertion moved with it.
+  expect(m.plain!.title).toContain(zh ? "被趋势闸拦截 — 非入场信号" : "blocked by the regime gate — not an entry");
 
   // 2. the retro projection wears ENTRY geometry, and carries NO marker-level mark of its own
   // (operator order 2026-08-10). The star it wears is the entry star; the only thing that says
@@ -350,9 +352,26 @@ async function assertThreeStates(page: Page, zh: boolean, tag: string, testInfo:
   // the tier badge is absent — a counterfactual was never graded by the recipe
   expect(m.retro!.texts).not.toContain("Q");
   expect(m.retro!.texts).not.toContain("A+");
-  // its hover must never claim the entry happened, whatever else it says
-  expect(m.retro!.title).not.toContain("reclaim waived — entry");
-  expect(m.retro!.title).not.toContain("washout override entry");
+  // its hover must never claim the entry happened, whatever else it says — in either language
+  expect(m.retro!.title).not.toContain(washoutOverrideCopy(OVERRIDE_CTX, zh, "reclaim")!.line);
+  expect(m.retro!.title).not.toContain(washoutOverrideCopy(OVERRIDE_CTX, zh, "entry")!.line);
+  // …and it must say the INTENDED thing, verbatim. Until #378 this branch was unreachable (SOFT_Q
+  // always won), and until the marker-tooltip repair the string it emitted displayed to nobody —
+  // so for the whole of this class's history the copy was only ever pinned by the two negatives
+  // above, which any wrong-but-different sentence would also have satisfied. The tooltip renders
+  // now, so the assertion is the whole sentence. The rule date is the one variable: it is a
+  // constant in ChartPanel that moves when the rule does, so it is validated for SHAPE and then
+  // substituted, which pins every word around it without scheduling a red for the day it changes.
+  expect(m.retro!.title, "the retro tooltip must name WHICH rule the counterfactual is measured against")
+    .toMatch(/\d{4}-\d{2}-\d{2}/);
+  // The WHOLE sentence, in the language under test, from the same copy function the product
+  // calls. Not a tautology: it pins that ChartPanel hands the copy module the right FIELDS. The
+  // retro context is the one that matters — `name_zh` lives only there, and the marker geometry
+  // flattens the group to its ENGLISH name, so a zh reader sees 铀矿商 only if the ctx is threaded
+  // through intact. Reconstructing the mark from the fixture is what makes that checkable.
+  expect(m.retro!.title).toBe(markerTooltipCopy({
+    t: RETRO_TS, type: "BUY", quality: "regime_blocked", blocked: true, retro: true, retroCtx: RETRO_CTX,
+  }, zh));
 
   // 3. the live waived entry: the SAME pill, and no tag — this one really happened
   expect(m.waived!.rect).not.toBeNull();
@@ -362,15 +381,19 @@ async function assertThreeStates(page: Page, zh: boolean, tag: string, testInfo:
   expect(m.waived!.ringSlashes).toBe(0);
   expect(m.waived!.texts).toContain("★");
   expect(m.waived!.texts).toContain("Q");              // recipe tier: the keeper graded this one
-  // NOTE — the `<title>` assertions below check that the COPY is present and correct, not that
-  // a user can read it: the signal layer is created `pointer-events:none` and no marker
-  // re-enables it, so no marker here is hit-testable and its native SVG tooltip never displays,
-  // on desktop hover either. Titles are asserted as DOM content for that reason alone; the
-  // disclosure this suite actually holds the product to is the card legend further down.
-  expect(m.waived!.title).toContain("reclaim waived — entry");
-  expect(m.waived!.title).toContain("Uranium miners −38% from highs");
-  expect(m.waived!.title).toContain("it held the next bar but never reclaimed the 200-day");
-  expect(m.waived!.title).not.toContain("not an entry");
+  // NOTE — the `<title>` assertions here and above check the COPY. That a reader can now actually
+  // SEE it is a separate claim, proved in `marker-tooltip.spec.ts`: the layer is still created
+  // `pointer-events:none` and no marker re-enables it (which is what keeps chart drags intact), so
+  // the tooltip is driven by a JS hit test instead, and that suite is where the rendered surface
+  // and its drag-safety are pinned. Either way the disclosure this suite holds the product to is
+  // the card legend further down — a hover is invisible on touch, in a screenshot, and to anyone
+  // skimming, so it is a bonus tier and never the disclosure.
+  expect(m.waived!.title).toContain(washoutOverrideCopy(OVERRIDE_CTX, zh, "reclaim")!.line);
+  expect(m.waived!.title).toContain(zh ? "铀矿商" : "Uranium miners");
+  expect(m.waived!.title).toContain("−38%");
+  // the waived LEG, named — this class relieved the 200-reclaim, not the regime veto
+  expect(m.waived!.title).toContain(zh ? "只差收复200日线" : "never reclaimed the 200-day");
+  expect(m.waived!.title).not.toContain(zh ? "非入场信号" : "not an entry");
 
   // …and the two really are the same marker. This is the ASSERTED, INTENDED state after the
   // 2026-08-10 order, not an accident: identical pill geometry, identical amber outline,
@@ -473,9 +496,11 @@ async function assertThreeStates(page: Page, zh: boolean, tag: string, testInfo:
     : /the system refused this live/);
 
   // ── THE DISCLOSURE TIER OF RECORD ──────────────────────────────────────────────────────
-  // The chart markers are deliberately identical and the layer is pointer-events:none, so this
-  // legend is not one disclosure among several — it is the ONLY place a reader is told that a
-  // star on the tape is a counterfactual. Asserted as RENDERED TEXT (never an attribute), and
+  // The chart markers are deliberately identical, so this legend is not one disclosure among
+  // several — it is the only place a reader is told, WITHOUT ASKING, that a star on the tape is a
+  // counterfactual. The marker tooltip now renders and says so too, and that changes nothing here:
+  // it costs a hover or a tap, and it is gone from any screenshot. Asserted as RENDERED TEXT
+  // (never an attribute), and
   // compared against the exported copy itself so the assertion cannot drift from the product.
   const legend = go.locator(".sd-sig-legend");
   await expect(legend).toHaveCount(1);

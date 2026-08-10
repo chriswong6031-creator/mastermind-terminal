@@ -1,4 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
+// The marker hover is bilingual since the marker-tooltip repair, and its wording is owned by the
+// copy module — imported rather than transcribed so this suite cannot drift from what the product
+// says, in either language (same reason washout-retro.spec.ts imports `retroLegendCopy`).
+import { washoutOverrideCopy } from "../lib/signalVerdict";
 
 // Hydration gate, same shape as responsive.spec.ts (the helpers are per-spec there).
 async function armTerminalVisualReady(page: Page) {
@@ -244,8 +248,11 @@ test("a qualifying ⊘ wears the amber override class on card, hover and chart",
   expect(marker!.slashStroke).toBe(AMBER_RGB);           // still a ring-SLASH — never buy geometry
   expect(marker!.dotFill).toBe(AMBER_RGB);
   expect(marker!.dotAboveRing).toBe(true);
-  expect(marker!.title).toContain("blocked by the regime gate — not an entry");
-  expect(marker!.title).toContain("washout override candidate — Uranium miners −38% from highs");
+  // the refusal comes FIRST and the washout second — a candidate is still a refused entry
+  expect(marker!.title).toContain(zh ? "被趋势闸拦截 — 非入场信号" : "blocked by the regime gate — not an entry");
+  expect(marker!.title).toContain(washoutOverrideCopy(OVERRIDE_CTX, zh, "candidate")!.line);
+  expect(marker!.title.indexOf(zh ? "非入场信号" : "not an entry"))
+    .toBeLessThan(marker!.title.indexOf(washoutOverrideCopy(OVERRIDE_CTX, zh, "candidate")!.line));
   await page.locator(".chart-wrap, .workspace").first().screenshot({
     path: testInfo.outputPath(`${testInfo.project.name}-washout-override-chart.png`),
   });
@@ -330,16 +337,16 @@ test("a non-qualifying ⊘ renders exactly as it does today", async ({ page }, t
 // This test carries the PR's visual receipt for the new state: desktop, EN and ZH.
 
 /** Crop tight around the ENTRY marker (an amber-outlined pill, not a ring-slash). */
-async function cropEntryMarker(page: Page, path: string) {
-  const box = await page.locator("[data-sig-layer]").first().evaluate((svg) => {
+async function cropEntryMarker(page: Page, path: string, needle: string) {
+  const box = await page.locator("[data-sig-layer]").first().evaluate((svg, needle) => {
     // find it by what it SAYS, not by shape: every marker rect carries a `stroke`
     // attribute (often "none"), so a shape selector would happily return the SELL pill.
     const g = [...svg.querySelectorAll("g")]
-      .find((el) => (el.querySelector("title")?.textContent ?? "").includes("washout override entry"));
+      .find((el) => (el.querySelector("title")?.textContent ?? "").includes(needle));
     if (!g) return null;
     const r = (g as SVGGElement).getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-  });
+  }, needle);
   if (!box) return;
   await page.screenshot({
     path,
@@ -372,10 +379,13 @@ async function assertTakenEntry(page: Page, zh: boolean, label: string, testInfo
 
   // ── the chart marker: entry geometry, outlined amber ──
   const sigLayer = page.locator("[data-sig-layer]").first();
-  await expect(sigLayer.locator("title", { hasText: "washout override entry" }).first()).toBeAttached();
-  const marker = await sigLayer.evaluate((svg) => {
+  // keyed on the copy module's own line, so the selector follows the product into 中文 instead of
+  // pinning the suite to the English the tooltip used to be able to assume
+  const entryLine = washoutOverrideCopy(OVERRIDE_CTX, zh, "entry")!.line;
+  await expect(sigLayer.locator("title", { hasText: entryLine }).first()).toBeAttached();
+  const marker = await sigLayer.evaluate((svg, needle) => {
     const g = [...svg.querySelectorAll("g")]
-      .find((el) => (el.querySelector("title")?.textContent ?? "").includes("washout override entry"));
+      .find((el) => (el.querySelector("title")?.textContent ?? "").includes(needle));
     if (!g) return null;
     const rect = g.querySelector<SVGRectElement>("rect")!;
     return {
@@ -387,19 +397,22 @@ async function assertTakenEntry(page: Page, zh: boolean, label: string, testInfo
       star: [...g.querySelectorAll("text")].map((t) => t.textContent).join(""),
       title: g.querySelector("title")?.textContent ?? "",
     };
-  });
+  }, entryLine);
   expect(marker).not.toBeNull();
   expect(marker!.outline).toBe(AMBER_RGB);              // the washout signature
   expect(marker!.fill).not.toBe("none");                // solid — the engine stands behind it
   expect(marker!.ringSlashes).toBe(0);                  // no ⊘ anywhere: this is not a refusal
   expect(marker!.star).toContain("★");                  // ordinary entry star (+ its tier badge)
-  expect(marker!.title).toContain("washout override entry");
-  expect(marker!.title).toContain("Uranium miners −38% from highs");
-  expect(marker!.title).not.toContain("not an entry");
+  expect(marker!.title).toContain(entryLine);
+  expect(marker!.title).toContain(zh ? "铀矿商" : "Uranium miners");
+  expect(marker!.title).toContain("−38%");
+  expect(marker!.title).not.toContain(zh ? "非入场信号" : "not an entry");
+  // the stop-out clause is the one that matters most on a real entry, so it must survive here too
+  expect(marker!.title).toContain(washoutOverrideCopy(OVERRIDE_CTX, zh, "entry")!.notes.at(-1)!);
   await page.locator(".chart-wrap, .workspace").first().screenshot({
     path: testInfo.outputPath(`${tag}-chart.png`),
   });
-  await cropEntryMarker(page, testInfo.outputPath(`${tag}-marker.png`));
+  await cropEntryMarker(page, testInfo.outputPath(`${tag}-marker.png`), entryLine);
 
   // ── the card: the entry verdict PLUS the one disclosure line ──
   await signalButton.click();

@@ -56,6 +56,10 @@ import { flowGet } from "@/lib/flowClientCache";
 import { deriveOptLevels, sessionsOldEt, type OptLevelsResult } from "@/lib/optionsLevels";
 import { computeSuite, resolveSuiteColors } from "@/lib/indicator-canvas/host";
 import { renderPrims, ensureTooltipHost } from "@/lib/indicator-canvas/render";
+import {
+  hitTestMarkers, placeMarkerTip, isTapGesture,
+  MARKER_HOVER_SLACK, MARKER_TAP_SLACK, type MarkerHit,
+} from "@/lib/markerTooltip";
 import { paintCandleData } from "@/lib/indicator-canvas/candlePaint";
 import { paintSnapshotTables } from "@/lib/chartSnapshotTables";
 import { SUITE_DEFS, getSuiteDef, isSuiteKey as isSuiteKeyReg, paneSuiteKeys } from "@/lib/suites/registry";
@@ -68,7 +72,7 @@ import {
 import type { SuiteRenderBundle, SuiteTier, SuiteColors, CoordMapper, TableSpec } from "@/lib/indicator-canvas/types";
 import ChartTables from "@/components/ChartTables";
 import { crossUps, crossDowns, crossUpsBelow, crossDownsAbove } from "@/lib/crossSignals";
-import { SOFT_Q, anchorSignal, isBlockedSignal, isOverrideCandidate, isReclaimOverrideTake, isRetroOverride, isStructureStop, isWaivedEntry, sliceSignalBasis } from "@/lib/signalVerdict";
+import { SOFT_Q, anchorSignal, isBlockedSignal, isOverrideCandidate, isReclaimOverrideTake, isRetroOverride, isStructureStop, isWaivedEntry, markerTooltipCopy, sliceSignalBasis } from "@/lib/signalVerdict";
 import { makeNearestBarIndex } from "@/lib/barSnap";
 import { ichimoku, supertrend, avwap as computeAvwap, rollingVwap, weekAnchoredVwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
@@ -564,7 +568,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // the entry's waived leg was the KEEPER's 200-reclaim (era gc_v2_wo2), not the regime veto
     reclaimWaived?: boolean;
     // display-only RETRO PROJECTION: today's rule would have entered this pre-fence refusal
-    retro?: boolean };
+    retro?: boolean;
+    // The emitter's context objects, kept WHOLE alongside the flattened `overrideGroup` the
+    // marker geometry uses. The tooltip copy needs them intact: `name_zh` lives only here, so a
+    // flattened English `overrideGroup` is all a zh reader could ever have been shown.
+    overrideCtx?: { group_id?: string | null; peer_dd?: number | null; name?: string | null; name_zh?: string | null } | null;
+    retroCtx?: { group_id?: string | null; name?: string | null; name_zh?: string | null } | null };
   const sigMarksRef = useRef<SigMark[]>([]);
   // Client-Pine FALLBACK: when a symbol ships no slice signal history, marks come from ORACLE_V1_PINE
   // run client-side on the daily bars, memoized per (symbol · daily length · last daily date) so the
@@ -2289,8 +2298,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (m.overrideCandidate || m.overrideTake) {
           m.overrideGroup = s.override_ctx?.name ?? s.override_ctx?.group_id ?? null;
           m.overrideDd = typeof s.override_ctx?.peer_dd === "number" ? s.override_ctx.peer_dd : null;
+          m.overrideCtx = s.override_ctx ?? null;
         }
-        if (m.retro) m.overrideGroup = s.retro_ctx?.name ?? s.retro_ctx?.group_id ?? null;
+        if (m.retro) { m.overrideGroup = s.retro_ctx?.name ?? s.retro_ctx?.group_id ?? null; m.retroCtx = s.retro_ctx ?? null; }
         marks.push(m);
       }
       // slice signals are chronological; snapping preserves order (the chip's fallback relies on it)
@@ -2627,6 +2637,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     let onCtx: ((e: MouseEvent) => void) | null = null, winDown: ((e: PointerEvent) => void) | null = null, dragCleanup: (() => void) | null = null;
     let rafId: number | null = null, measRaf: number | null = null;
     let onPaneMove: ((e: MouseEvent) => void) | null = null, onPaneLeave: (() => void) | null = null, onPaneDbl: ((e: MouseEvent) => void) | null = null;
+    // signal-marker tooltip listeners (hover + tap); see the `sigTip` construction below
+    let onSigHover: ((e: PointerEvent) => void) | null = null, onSigDown: ((e: PointerEvent) => void) | null = null;
+    let onSigUp: ((e: PointerEvent) => void) | null = null, onSigCancel: (() => void) | null = null, onSigLeave: ((e: PointerEvent) => void) | null = null;
     // ── snapshot: composite the chart with per-pane labels + brand logo + timestamp ──
     // action = "download" | "copy" | "share" | "tab" (from event detail; default = "download")
     // Reads live refs so labels match the on-screen state.
@@ -3057,6 +3070,49 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const svg = mk("svg", { class: "drawing-layer", "data-drawing-layer": "1", style: "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(svg); svgRef.current = svg;
     ensureTooltipHost(wrap);   // shared hover tooltip for premium-suite prims (ic-tip)
+
+    // ── SIGNAL-MARKER TOOLTIP (the repair that made the layer's `<title>`s visible) ──────────
+    // Every marker below carries a `<title>`, and not one of them had ever rendered: `sigSvg` is
+    // `pointer-events:none`, so no descendant is hit-testable and the browser shows no native SVG
+    // tooltip. Four reviewed tooltip copies shipped to nobody.
+    //
+    // The layer STAYS `pointer-events:none`, and lib/markerTooltip.ts documents why at length: the
+    // lightweight-charts canvas is a sibling subtree, not an ancestor, so a hit-testable marker
+    // does not share the chart's gestures — it removes them over its own footprint (no pan, no
+    // wheel zoom, and the crosshair drops out as the cursor crosses it). Instead the hover/tap is
+    // resolved in JS from listeners on `wrap`, which already sees the canvas's bubbled events. Not
+    // one pixel of the app's hit-test geometry changes, so drag behaviour is byte-identical by
+    // construction rather than by tuning.
+    //
+    // A SEPARATE node from `.ic-tip` on purpose: that host belongs to the premium-suite prims, and
+    // an overlapping prim and marker sharing one node would race to hide each other's tooltip. It
+    // borrows `.ic-tip`'s styling wholesale so the two floating surfaces on this chart stay one
+    // visual language; the one deviation is `white-space:normal`, because these strings are
+    // sentences (the prim tooltip carries stat rows, which must not wrap).
+    let sigTip: HTMLDivElement | null = document.createElement("div");
+    sigTip.className = "mm-sig-tip";
+    sigTip.setAttribute("role", "tooltip");
+    sigTip.style.cssText =
+      "position:absolute;left:0;top:0;display:none;z-index:6;pointer-events:none;max-width:280px;"
+      + "background:var(--pop-bg,rgba(24,26,32,.96));border:1px solid var(--line-3);"
+      + "border-radius:var(--r-md);padding:7px 10px;font:11px/1.5 var(--font-ui);color:var(--text);"
+      + "white-space:normal;box-shadow:0 8px 24px rgba(0,0,0,.45)";
+    wrap.appendChild(sigTip);
+    // Hit boxes for the markers currently painted. `null` = stale: renderSignals clears it on every
+    // repaint and the next hover rebuilds it. Rebuilding is lazy because renderSignals runs on every
+    // pan/zoom frame while a hover is a much rarer event — and it is never rebuilt mid-drag.
+    let sigHits: MarkerHit[] | null = null;
+    // A tapped tooltip stays put until the next pointerdown; a hovered one follows the cursor.
+    let sigTipPinned = false;
+    // Suppresses the tooltip for the whole of a press-drag, so it can never chase a pan.
+    let sigPointerDown: { x: number; y: number; t: number; id: number } | null = null;
+    // Declared HERE, beside the state it owns, rather than down with the handlers: renderSignals
+    // calls it and runs synchronously during this effect's setup, which would put a
+    // handler-block declaration in the temporal dead zone.
+    const sigTipHide = () => {
+      sigTipPinned = false;
+      if (sigTip && sigTip.style.display !== "none") sigTip.style.display = "none";
+    };
     // C5 — shell brand bug. A DOM node, not the LWC watermark: the plugin has no offset field, so
     // it cannot be lifted clear of the volume overlay. Never created on web (zero DOM delta there);
     // all geometry lives in globals.css's .mm-brandbug rule.
@@ -3219,6 +3275,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // ── signal badges: BUY/SELL (★) + RE-BUY pill; GC v2 keeper quality/tier styling + CUT caution ──
     const renderSignals = () => {
       const layer = sigRef.current; if (!layer) return; const t2 = tokensRef.current;
+      sigHits = null;   // markers are about to be repainted → the hover hit boxes are stale
       type SigCfg = { dir: "up" | "down"; fill: string; tc: string; txt: string; star?: boolean; hollow?: boolean };
       const SIGCFG: Record<string, SigCfg> = {
         BUY:   { dir: "up",   fill: t2.buy,    tc: "#fff",     txt: "★",      star: true },
@@ -3242,9 +3299,25 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // washout-override amber. `--signal` (#e8b339) resolved through the token reader rather
       // than written as a literal, so the marker tracks the token the rail card uses.
       const AMBER = t2.signal || "#e8b339";
-      // The date the current rule took effect — named in every retro tooltip so the reader
-      // can see WHICH rule the counterfactual is measured against, not just that there is one.
-      const RETRO_RULE_DATE = "2026-08-10";
+      // ── the marker's hover/tap tooltip ──────────────────────────────────────────────────────
+      // The WORDING is not here: `markerTooltipCopy` owns every class's sentence, bilingual, built
+      // from the reviewed copy the rail card already prints. These strings were hand-rolled English
+      // literals in this loop for as long as they existed, which was invisible under the bilingual
+      // -UI law only because `pointer-events:none` meant nobody could read them. Reviving them made
+      // that a live regression for zh readers, so the copy moved to the copy module.
+      //
+      // The language is read per RENDER, not captured once: `tPlain`'s own contract in i18n.tsx is
+      // that imperative callers refresh on their own rebuild paths, and this is that path — the
+      // `mm:lang` listener in EFFECT 8b re-renders the markers, so a language toggle re-titles them.
+      const zhNow = typeof document !== "undefined"
+        && document.documentElement.getAttribute("data-lang") === "zh";
+      const addMarkerTitle = (g: SVGElement, m: SigMark) => {
+        const text = markerTooltipCopy(m, zhNow);
+        if (!text) return;
+        const title = mk("title", {});
+        title.textContent = text;
+        g.appendChild(title);
+      };
       while (layer.firstChild) layer.removeChild(layer.firstChild);
       if (priceProjHidden()) return;   // sub-pane maximized → price-anchored markers stay cleared
 
@@ -3403,11 +3476,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           g.appendChild(mk("circle", { cx: x, cy, r, fill: "none", stroke, "stroke-width": 1.3 }));
           g.appendChild(mk("line", { x1: x - k, y1: cy + k, x2: x + k, y2: cy - k, stroke, "stroke-width": 1.3 }));
           if (ovr) g.appendChild(mk("circle", { cx: x, cy: cy - r - 4, r: 1.5, fill: AMBER }));
-          const title = mk("title", {});
-          const dd = typeof m.overrideDd === "number" ? `−${Math.trunc(Math.abs(m.overrideDd) * 100)}%` : "";
-          title.textContent = `${m.t} · ${m.type} blocked by the regime gate — not an entry${m.reason ? ` — ${m.reason}` : ""}`
-            + (ovr ? ` · washout override candidate${m.overrideGroup ? ` — ${m.overrideGroup}` : ""}${dd ? ` ${dd} from highs` : ""}` : "");
-          g.appendChild(title);
+          addMarkerTitle(g, m);
           layer.appendChild(g);
           continue;
         }
@@ -3465,55 +3534,25 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const tEl = mk("text", { x, y: top + h / 2 + (star ? 4.3 : 3.4), fill: hollow ? fill : cfg.tc, "font-size": star ? 11.5 : 9, "font-weight": 800, "text-anchor": "middle", "font-family": star ? "Georgia,serif" : "var(--font-ui)", "letter-spacing": star ? "0" : ".02em" });
         tEl.textContent = cfg.txt;
         g.appendChild(tEl);
-        // native tooltip for re-entry pills: date + kind (the marker text alone can't carry it)
-        if (stop) {
-          // the pill says STOP; the hover says WHY it is a stop and what it broke
-          const title = mk("title", {});
-          title.textContent = `${m.t} · structure stop — the daily close broke the prior swing low`
-            + `${m.stopLevel != null ? ` at ${m.stopLevel}` : ""}, not a momentum exit`;
-          g.appendChild(title);
-        } else if (m.type === "RECLAIM") {
-          const title = mk("title", {});
-          title.textContent = `${m.t} · re-entry (${m.quality === "block_repair" ? "bear-block repaired" : "trend reclaim"}) — scored reclaim lane`;
-          g.appendChild(title);
-        } else if (q) {
-          // soft marks name their veto (the engine's quality_reason) — the dim pill alone can't say WHY
-          const title = mk("title", {});
-          title.textContent = `${m.t} · ${m.type} (${q === "pending" ? "pending" : "blocked"})${m.reason ? ` — ${m.reason}` : ""}`;
-          g.appendChild(title);
-        } else if (ovrTake) {
-          // the amber outline says "this one is different"; the hover says how. Same
-          // context the rail card's disclosure line carries, so hover and card agree.
-          const title = mk("title", {});
-          const dd = typeof m.overrideDd === "number" ? `−${Math.trunc(Math.abs(m.overrideDd) * 100)}%` : "";
-          title.textContent = `${m.t} · ${m.type} — `
-            + (m.reclaimWaived ? "reclaim waived — entry" : "washout override entry")
-            + `${m.overrideGroup ? ` — ${m.overrideGroup}` : ""}${dd ? ` ${dd} from highs` : ""}`
-            + (m.reclaimWaived
-              ? " · it held the next bar but never reclaimed the 200-day; most still stop out"
-              : " · the regime gate would refuse this; most still stop out");
-          g.appendChild(title);
-        } else if (retro) {
-          // Reachable only because retro is excluded from `q` above — before that, SOFT_Q's
-          // branch always won and this copy could never emit. It still renders to nobody: the
-          // whole title layer is `pointer-events:none` (see below). Both halves come alive
-          // together in the marker-interactivity PR.
-          const title = mk("title", {});
-          title.textContent = `${m.t} · ${m.type} — re-marked under the current rule `
-            + `(${RETRO_RULE_DATE})${m.overrideGroup ? ` — ${m.overrideGroup}` : ""}`
-            + " · the system refused this live, so it is not a call we made";
-          g.appendChild(title);
-        }
+        // The hover/tap tooltip. Every class's wording lives in signalVerdict.markerTooltipCopy —
+        // bilingual, and composed from the same reviewed copy the rail card prints, so hover and
+        // card agree and neither can drift. The RETRO branch in particular reached a reader only
+        // with the marker-tooltip repair: #378 made it reachable, but the layer is
+        // `pointer-events:none`, so until the hover path was wired the string existed, was
+        // correct, and displayed to nobody. It is a BONUS tier — the card legend below remains
+        // the disclosure of record.
+        addMarkerTitle(g, m);
         // ── WHY THE RETRO MARKER CARRIES NO TAG OF ITS OWN (operator order 2026-08-10) ──
         // It is drawn exactly like a live waived entry: same star, same amber outline, no
         // marker-level mark separating the two. That is deliberate, and it is a decision with
         // a cost, so here is where the cost is accounted for.
         //
-        // The disclosure is NOT this marker's `<title>` below. That tooltip cannot render:
-        // the whole signal layer is `pointer-events:none` (see the sigSvg construction), so
-        // no descendant is hit-testable and the browser never shows a native SVG title —
-        // measured in Chromium, and true of all seven titles in this layer today. The title
-        // stays only because a follow-up PR makes markers hit-testable and revives them all.
+        // The disclosure is NOT this marker's `<title>`. That tooltip DOES render now — the
+        // marker-tooltip repair drives it from a JS hit test on `wrap` (see the note at the
+        // `sigTip` construction; for the whole of this class's history before that it displayed
+        // to nobody, because the layer is `pointer-events:none`). Nothing about that promotes it
+        // to the disclosure: a hover is invisible on touch until tapped, invisible in a
+        // screenshot, and invisible to anyone skimming. It is a BONUS tier and nothing more.
         //
         // The disclosure of record is the CARD LEGEND (OracleDash `.sd-sig-legend`): a
         // persistent line, rendered whenever a re-marked fire sits in the visible signal
@@ -5701,6 +5740,108 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       scheduleMeasure();
     };
     mqlMobile?.addEventListener("change", onMqlChange);
+    // ── signal-marker tooltip: hover (mouse) + tap (touch/pen) ──────────────────────────────
+    // Read-only listeners on `wrap`. They never call preventDefault or stopPropagation, never
+    // capture, and never touch the chart — the canvas below is unaffected, which is the whole
+    // point (see the `sigTip` construction note). Registered on `wrap` because the canvas's
+    // events already bubble here: `onPaneMove`, `onTouchDown` and the scrub handlers have all
+    // relied on that for as long as they have existed.
+    /** Measure every currently-painted marker that carries a `<title>`.
+     *
+     *  Boxes are read in VIEWPORT coordinates (`getBoundingClientRect`) and compared against the
+     *  event's own `clientX/clientY`, so the hit test never has to reason about the overlay's SVG
+     *  user space versus the wrapper's border box — two spaces that coincide today and would
+     *  diverge silently the day anything grows a border or a viewBox.
+     *
+     *  Nothing here enumerates marker CLASSES: any marker that has a title is hoverable, so a
+     *  future class gets its tooltip for free and cannot be forgotten. */
+    const buildSigHits = (): MarkerHit[] => {
+      const layer = sigRef.current;
+      const out: MarkerHit[] = [];
+      if (!layer) return out;
+      for (const g of layer.querySelectorAll<SVGGElement>(":scope > g")) {
+        const title = g.querySelector(":scope > title")?.textContent;
+        if (!title) continue;
+        let b: DOMRect;
+        try { b = g.getBoundingClientRect(); } catch { continue; }
+        if (!(b.width > 0) || !(b.height > 0)) continue;
+        // every title is emitted as `${m.t} · …`, so the prefix is the marker's bar date
+        out.push({ x: b.x, y: b.y, w: b.width, h: b.height, title, t: title.split(" ·")[0] });
+      }
+      return out;
+    };
+    const sigHitAt = (clientX: number, clientY: number, slack: number): MarkerHit | null => {
+      if (sigHits == null) sigHits = buildSigHits();
+      return sigHits.length ? hitTestMarkers(sigHits, clientX, clientY, slack) : null;
+    };
+    const sigTipShow = (hit: MarkerHit, clientX: number, clientY: number) => {
+      const w = wrapElRef.current; if (!sigTip || !w) return;
+      // Only rewrite the node when the marker actually changed — this runs on every pointermove
+      // while the cursor sits on a marker, and re-setting textContent 60×/s rebuilds a text node
+      // for nothing. Keyed on the TITLE, not the date: two markers can share a bar.
+      if (sigTip.textContent !== hit.title) {
+        sigTip.textContent = hit.title;
+        sigTip.setAttribute("data-marker-at", hit.t);
+      }
+      if (sigTip.style.display === "none") sigTip.style.display = "block";
+      const wr = w.getBoundingClientRect();
+      const p = placeMarkerTip(
+        { x: clientX - wr.left, y: clientY - wr.top },
+        { w: sigTip.offsetWidth, h: sigTip.offsetHeight },
+        { w: wr.width, h: wr.height },
+      );
+      sigTip.style.left = `${p.left}px`;
+      sigTip.style.top = `${p.top}px`;
+    };
+    onSigHover = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse") return;                          // touch takes the tap path
+      if (performance.now() - lastTouchTsRef.current < 700) return;   // B1: synthetic post-touch move
+      if (sigTipPinned) return;                     // a tapped tooltip is not chased by the cursor
+      if (sigPointerDown) {
+        if (e.buttons !== 0) { sigTipHide(); return; }   // mid press-drag → never chase a pan
+        // A press whose release landed outside the window never reaches our `pointerup`, and a
+        // stuck flag would suppress hover for the rest of the session. A move with no button held
+        // is proof the gesture ended, so the flag heals itself instead of needing window listeners.
+        sigPointerDown = null;
+      }
+      const hit = sigHitAt(e.clientX, e.clientY, MARKER_HOVER_SLACK);
+      if (hit) sigTipShow(hit, e.clientX, e.clientY);
+      else if (sigTip && sigTip.style.display !== "none") sigTipHide();
+    };
+    onSigDown = (e: PointerEvent) => {
+      // Unconditional: a press anywhere dismisses an open tooltip BEFORE the gesture it starts.
+      // This is also what makes the pinned (tapped) tooltip dismissable by a tap elsewhere.
+      sigTipHide();
+      sigPointerDown = { x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId };
+    };
+    onSigUp = (e: PointerEvent) => {
+      const down = sigPointerDown;
+      sigPointerDown = null;
+      if (!down || down.id !== e.pointerId) return;
+      if (e.pointerType === "mouse") return;      // a mouse click is not a tooltip gesture
+      // TOUCH: a tap on a marker must not dead-end. The same thresholds the double-tap detector
+      // uses, so one gesture can never be a tap here and a drag for the chart.
+      if (!isTapGesture(down, { x: e.clientX, y: e.clientY, t: performance.now() })) return;
+      // Hit-tested at the DOWN point — where the finger actually landed — and with the larger
+      // touch slack, because a ⊘ ring is ~11px across and a fingertip has no hover to correct with.
+      const hit = sigHitAt(down.x, down.y, MARKER_TAP_SLACK);
+      if (!hit) return;
+      sigTipShow(hit, down.x, down.y);
+      sigTipPinned = true;   // stays until the next pointerdown; there is no hover to dismiss it
+    };
+    onSigCancel = () => { sigPointerDown = null; sigTipHide(); };
+    onSigLeave = (e: PointerEvent) => {
+      // Touch fires pointerleave immediately after pointerup, which would kill the pin the tap
+      // just set. Only a real cursor leaving the chart dismisses a tooltip.
+      if (e.pointerType && e.pointerType !== "mouse") return;
+      sigTipHide();
+    };
+    wrap.addEventListener("pointermove", onSigHover);
+    wrap.addEventListener("pointerdown", onSigDown);
+    wrap.addEventListener("pointerup", onSigUp);
+    wrap.addEventListener("pointercancel", onSigCancel);
+    wrap.addEventListener("pointerleave", onSigLeave);
+
     wrap.addEventListener("mousemove", onPaneMove); wrap.addEventListener("mouseleave", onPaneLeave); wrap.addEventListener("dblclick", onPaneDbl);
     wrap.addEventListener("pointerdown", onTouchDown);
     wrap.addEventListener("wheel", onAxisWheel, { passive: false, capture: true });
@@ -5711,7 +5852,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // changes the price pane's height (→ priceToCoordinate) WITHOUT resizing the chart container, so the
     // container `ro` below never fires — without this the BUY/SELL/CUT/REBUY badges lag at stale Y coords
     // until an unrelated pan/hover triggers a render.
-    paneRO = new ResizeObserver(() => { if (dead) return; captureNormal(); scheduleMeasure(); scheduleRender(); });
+    // A PINNED (tapped) tooltip has no cursor to dismiss it, so a RELAYOUT that moves its marker
+    // out from under it leaves litter pointing at nothing — the reachable case being a double-tap
+    // ON a marker, where the second tap re-pins while the same gesture maximizes the pane. Hooked
+    // to the pane observer and NOT to renderSignals: a repaint is far too broad a trigger. Markers
+    // repaint on every visible-range frame and, measurably, on something that lands right after a
+    // touch tap — hiding there dismissed the tooltip the tap had just opened, and took the tap
+    // tests red on both touch viewports. A pane resize/maximize is the event that actually
+    // invalidates the anchor, and a tap does not cause one.
+    paneRO = new ResizeObserver(() => { if (dead) return; sigTipHide(); captureNormal(); scheduleMeasure(); scheduleRender(); });
     paneRORef.current = paneRO;
 
     const rectXY = (ev: PointerEvent) => { const r = svg.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
@@ -6525,7 +6674,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       window.removeEventListener("pointercancel", onProjectionPointerEnd);
       const wEl = wrapElRef.current;
       if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx);
-      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onProjectionPointerDown, true); wEl.removeEventListener("pointerdown", onTouchDown); wEl.removeEventListener("pointerdown", onShiftMeasure, true); wEl.removeEventListener("wheel", onAxisWheel, true); wEl.removeEventListener("dblclick", onAxisDbl); wEl.removeEventListener("pointerenter", onScrubEnter); wEl.removeEventListener("pointermove", onScrubEnter); wEl.removeEventListener("pointerdown", onScrubEnter); wEl.removeEventListener("pointerleave", onScrubLeave); wEl.removeEventListener("pointercancel", onScrubLeave); }
+      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onProjectionPointerDown, true); wEl.removeEventListener("pointerdown", onTouchDown); wEl.removeEventListener("pointerdown", onShiftMeasure, true); wEl.removeEventListener("wheel", onAxisWheel, true); wEl.removeEventListener("dblclick", onAxisDbl); wEl.removeEventListener("pointerenter", onScrubEnter); wEl.removeEventListener("pointermove", onScrubEnter); wEl.removeEventListener("pointerdown", onScrubEnter); wEl.removeEventListener("pointerleave", onScrubLeave); wEl.removeEventListener("pointercancel", onScrubLeave);
+        if (onSigHover) wEl.removeEventListener("pointermove", onSigHover); if (onSigDown) wEl.removeEventListener("pointerdown", onSigDown); if (onSigUp) wEl.removeEventListener("pointerup", onSigUp); if (onSigCancel) wEl.removeEventListener("pointercancel", onSigCancel); if (onSigLeave) wEl.removeEventListener("pointerleave", onSigLeave); }
       mqlMobile?.removeEventListener("change", onMqlChange);
       paneRO?.disconnect(); paneRORef.current = null; wrapElRef.current = null;
       ro?.disconnect();
@@ -6548,6 +6698,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       clearDrawingSelectionRef.current = () => {};
       if (tagTimerRef.current != null) { clearInterval(tagTimerRef.current); tagTimerRef.current = null; }
       if (priceTagRef.current) { try { priceTagRef.current.remove(); } catch {} priceTagRef.current = null; }
+      if (sigTip) { try { sigTip.remove(); } catch {} sigTip = null; }
+      sigHits = null; sigPointerDown = null; sigTipPinned = false;
       renderTagRef.current = null;
       // DT teardown: countdown chip + shading primitive
       if (countdownTimerRef.current) { clearInterval(countdownTimerRef.current); countdownTimerRef.current = null; }
@@ -7284,6 +7436,18 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return () => { window.removeEventListener("mm:chart-jump", onJump as EventListener); if (highlightTimerRef.current) { clearTimeout(highlightTimerRef.current); highlightTimerRef.current = null; } };
     // eslint-disable-next-line
   }, [symbol]);
+
+  // ── EFFECT 8b — re-title the markers on a language switch [mount] ──────────────────────────
+  // The marker tooltips are built imperatively inside renderSignals, so they are not re-rendered
+  // by React when the language changes — `applyLang` flips `<html data-lang>` and fires `mm:lang`,
+  // and nothing in this canvas-and-SVG path listens to it. Without this, a reader who switches to
+  // 中文 keeps every marker's English hover until an unrelated pan happens to repaint the layer.
+  // Only the titles depend on language, so a repaint is the whole fix.
+  useEffect(() => {
+    const onLang = () => renderSignalsRef.current();
+    window.addEventListener("mm:lang", onLang);
+    return () => window.removeEventListener("mm:lang", onLang);
+  }, []);
 
   // A symbol change no longer unmounts this renderer, so the teardown that used to end an
   // in-flight drawing transaction never runs. End it here instead: a half-drawn trendline, an

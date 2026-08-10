@@ -346,27 +346,148 @@ export type WashoutCopyKind = "candidate" | "entry" | "reclaim";
 export function retroOverrideCopy(
   ctx: { group_id?: string | null; name?: string | null; name_zh?: string | null } | null | undefined,
   zh: boolean,
+  ruleDate?: string | null,
 ): { line: string; notes: string[] } {
   const group = (zh ? ctx?.name_zh || ctx?.name : ctx?.name) || ctx?.group_id || null;
   const head = zh ? "按当前规则本会入场" : "Would have entered under today's rule";
+  // WHICH rule the counterfactual is measured against, when the caller knows it. Optional so the
+  // shape is unchanged for callers that do not name a date (the card's Tier-2 notes); the chart
+  // marker names it, because a "current rule" a reader cannot date is a claim they cannot check.
+  // The em dash rides the head so the undated string stays BYTE-IDENTICAL to the one that
+  // shipped (spaces either side), while the dated zh form closes its full-width bracket straight
+  // onto the dash — 中文 does not put a space after `）`, and the card's own row title reads
+  // `按当前规则事后重标（2026-08-10）— …`.
+  const reHead = ruleDate
+    ? (zh ? `事后按当前规则重标（${ruleDate}）—` : `re-marked under the current rule (${ruleDate}) —`)
+    : (zh ? "事后按当前规则重标 —" : "re-marked under the current rule —");
   return {
     line: group ? `${head} — ${group}` : head,
     notes: [
       zh
-        ? "事后按当前规则重标 — 当时系统并未入场，这不是当时的判断"
-        : "re-marked under the current rule — the system refused this live, so it is not a call we made",
+        ? `${reHead} 当时系统并未入场，这不是当时的判断`
+        : `${reHead} the system refused this live, so it is not a call we made`,
       zh ? "仅供参考，不计入战绩" : "shown for context; it is not in the track record",
     ],
   };
+}
+
+/** The date the current washout rule took effect — named in every retro surface so a reader can
+ *  see WHICH rule the counterfactual is measured against, not merely that there is one. Lives
+ *  beside the copy that prints it; ChartPanel imports it rather than keeping its own literal. */
+export const RETRO_RULE_DATE = "2026-08-10";
+
+/** What a chart marker's hover/tap tooltip says, in the reader's language.
+ *
+ *  ── WHY THIS IS HERE AND NOT IN ChartPanel ────────────────────────────────────────────────
+ *
+ *  Until the marker-tooltip repair, none of these strings had ever rendered: the signal layer is
+ *  `pointer-events:none`, so no native SVG `<title>` on it displayed for anyone. They were
+ *  therefore written as hand-rolled ENGLISH literals inside ChartPanel's render loop — near
+ *  duplicates of the reviewed bilingual copy already in this module, and invisible to the
+ *  bilingual-UI law because nobody could see them. Making them visible made that a live
+ *  regression for zh readers, so they moved here and route through the reviewed copy.
+ *
+ *  Every clause below comes from copy that already shipped in both languages —
+ *  `washoutOverrideCopy` / `retroOverrideCopy` for the washout classes, the rail card's own
+ *  regime-gate and structure-stop sentences for the rest — so this function chooses COMPOSITION,
+ *  never wording. It is the single source of truth for what a marker says; ChartPanel formats
+ *  nothing and the rendered tooltip is this string verbatim.
+ *
+ *  Branch ORDER mirrors ChartPanel's draw order exactly and is load-bearing: a retro fire is
+ *  excluded from the refusal branch (it wears entry geometry), and a washout candidate is still a
+ *  REFUSAL, so it must say "not an entry" before it says anything about the washout. */
+export function markerTooltipCopy(
+  m: {
+    t: string;
+    type: string;
+    quality?: string | null;
+    reason?: string;
+    blocked?: boolean;
+    stopLevel?: number | null;
+    overrideCandidate?: boolean;
+    overrideTake?: boolean;
+    reclaimWaived?: boolean;
+    retro?: boolean;
+    overrideCtx?: OverrideCtx | null;
+    retroCtx?: { group_id?: string | null; name?: string | null; name_zh?: string | null } | null;
+    basis?: string;
+  },
+  zh: boolean,
+): string | null {
+  const at = `${m.t} · `;
+  // the engine's `quality_reason` is a raw diagnostic slug and is passed through untranslated,
+  // exactly as the rail card's own row hover does — parenthesised in zh, dashed in en.
+  const reason = m.reason
+    ? (zh ? `（${m.reason}）` : ` — ${m.reason}`)
+    : "";
+
+  // 1. a REFUSED entry (and its promoted washout-candidate flavour). Never a retro re-mark.
+  if ((m.blocked || m.quality === "regime_blocked") && !m.retro) {
+    const head = zh
+      ? `${at}${m.type} 被趋势闸拦截 — 非入场信号`
+      : `${at}${m.type} blocked by the regime gate — not an entry`;
+    if (!m.overrideCandidate) return `${head}${reason}`;
+    const w = washoutOverrideCopy(m.overrideCtx, zh, "candidate");
+    return `${head}${reason} · ${w ? w.line : ""}`;
+  }
+
+  // 2. the trailing structure stop — the rail card's sentence, verbatim.
+  if (isStructureStop({ type: m.type, basis: m.basis })) {
+    const lvl = m.stopLevel != null ? (zh ? ` ${m.stopLevel}` : ` at ${m.stopLevel}`) : "";
+    return zh
+      ? `${at}结构止损 — 日线收盘跌破前低${lvl}，非动量离场`
+      : `${at}structure stop — the daily close broke the prior swing low${lvl}, not a momentum exit`;
+  }
+
+  // 3. the scored re-entry lane.
+  if (m.type === "RECLAIM") {
+    const kind = m.quality === "block_repair"
+      ? (zh ? "空头拦截已修复" : "bear-block repaired")
+      : (zh ? "趋势重新收复" : "trend reclaim");
+    return zh
+      ? `${at}再入场（${kind}）— 计分再入场通道`
+      : `${at}re-entry (${kind}) — scored reclaim lane`;
+  }
+
+  // 4. a TAKEN washout entry, in either waived flavour. Line + lead + the stop-out clause, which
+  //    is the same three-part shape the rail card prints, so hover and card agree.
+  if (m.overrideTake) {
+    const w = washoutOverrideCopy(m.overrideCtx, zh, m.reclaimWaived ? "reclaim" : "entry");
+    if (w) return `${at}${m.type} — ${w.line} · ${w.notes[0]} · ${w.notes[w.notes.length - 1]}`;
+  }
+
+  // 5. the RETRO projection — the counterfactual, dated.
+  if (m.retro) {
+    const r = retroOverrideCopy(m.retroCtx, zh, RETRO_RULE_DATE);
+    return `${at}${m.type} — ${r.line} · ${r.notes[0]}`;
+  }
+
+  // 6. any other engine-refused mark: name the veto, since the dim pill alone cannot say why.
+  //    The qualifier is bracketed in en and dashed in zh — bracketing BOTH the qualifier and the
+  //    reason slug leaves 中文 reading `BUY（待定）（bear_block: …）`, two bracket groups running
+  //    together, which is the english-shaped-zh trap rather than a translation.
+  if (m.quality != null && SOFT_Q.has(m.quality)) {
+    const q = m.quality === "pending"
+      ? (zh ? "待定" : "pending")
+      : (zh ? "拦截" : "blocked");
+    return zh
+      ? `${at}${m.type} — ${q}${m.reason ? `（${m.reason}）` : ""}`
+      : `${at}${m.type} (${q})${reason}`;
+  }
+
+  return null;   // a plain scored entry — the pill says it; a tooltip would only repeat it
 }
 
 /** THE RETRO LEGEND — the disclosure of record for the retro projection.
  *
  *  Load-bearing, and worth knowing why before editing it. On the chart, a re-marked fire is
  *  drawn IDENTICALLY to a live waived entry (operator order 2026-08-10): same star, same
- *  amber, no marker-level tag. The marker's `<title>` cannot carry the difference either —
- *  the signal layer is `pointer-events:none`, so no native SVG tooltip on it has ever
- *  rendered. That leaves this line as the only place the product tells a reader that some of
+ *  amber, no marker-level tag. The marker's `<title>` does not carry the difference either.
+ *  For the whole of this class's history it COULD not — the signal layer is
+ *  `pointer-events:none`, so no native SVG tooltip on it had ever rendered — and since the
+ *  marker-tooltip repair made it visible on hover and tap it still does not, because a hover
+ *  is invisible on touch until tapped, invisible in a screenshot, and invisible to anyone
+ *  skimming. That leaves this line as the only place the product tells a reader that some of
  *  those stars are counterfactuals rather than calls it made.
  *
  *  So it is built to need nothing from the reader: no hover, no tap, no zoom. It renders
