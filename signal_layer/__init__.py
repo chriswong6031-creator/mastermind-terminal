@@ -33,10 +33,36 @@ golden_gate   Parity harness: diff any candidate indicator engine against the
 # Mirrors the macro repo's ``hk_prophet_v2`` BOARD_DEFINITION pattern: a module-level
 # constant, asserted in tests, changed only by a deliberate era bump.
 #
+# ``gc_v2_wo2`` (this build) bumps it again for the SECOND waiver in the same family —
+# Arm T of the reclaim-veto conditional (Macro Dashboard research/
+# RECLAIM_VETO_CONDITIONAL_PREREG.md §4/§5, RATIFIED 2026-08-10 at the 25% notch): the
+# KEEPER now waives its counter-trend RECLAIM leg for a fire whose name qualifies in the
+# washout state, emitting ``reclaim_override_take``. It again changes what the engine
+# ENTERS, so it is again a different rule and again a different track record. wo1 and wo2
+# trades are never pooled with each other or with gc_v2.
+#
+# RELIEVABLE ONLY (the adjudicated boundary, prereg §5): the waiver reaches a fire whose
+# next-bar HOLD leg PASSED and whose 200-reclaim leg failed. A hold-leg failure (the
+# HL 2026-06-16 shape) stays blocked — relaxing it is a DIFFERENT construction with its own
+# prereg, named here as the honest boundary rather than shipped around.
+#
 # READ RULE for artifacts already in the wild: the field is ADDITIVE, so an emission or
 # ledger row carrying NO era is pre-fence and reads as ``SIGNAL_ERA_PRE``. Never default
 # a missing era to the current one — that is exactly the pooling the fence exists to stop.
 SIGNAL_ERA_PRE = "gc_v2"        # every emission before the washout-override enter mask
-SIGNAL_ERA = "gc_v2_wo1"        # this build: the live washout-override enter-mask conditional
+SIGNAL_ERA = "gc_v2_wo2"        # this build: + the keeper's counter-trend reclaim waiver
 
-__all__ = ["SIGNAL_ERA", "SIGNAL_ERA_PRE"]
+# The eras in which the washout-override ENTER MASK was live. A ledger row minted under any
+# of them recorded a real entry made by a real rule, so it REPLAYS as the entry it was —
+# the fence forbids POOLING the eras' results, not honouring an entry a past era took. (A
+# pre-fence display row carries no era at all and still fails closed; see
+# ``washout_override.WashoutStamper.override_for``.) Grading reads each row's own ``era``.
+ERAS_WITH_ENTER_MASK = frozenset({"gc_v2_wo1", "gc_v2_wo2"})
+
+# The eras in which the KEEPER's reclaim waiver was live. Strictly narrower than the set
+# above: the class did not exist before wo2, so a row that predates it can never replay as
+# one no matter what else it carries.
+ERAS_WITH_RECLAIM_WAIVER = frozenset({"gc_v2_wo2"})
+
+__all__ = ["SIGNAL_ERA", "SIGNAL_ERA_PRE",
+           "ERAS_WITH_ENTER_MASK", "ERAS_WITH_RECLAIM_WAIVER"]

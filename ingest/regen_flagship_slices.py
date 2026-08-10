@@ -117,6 +117,9 @@ def regen(sym: str, write: bool = True, cache=None, patches: dict | None = None,
         bar_opens=[d.strftime("%Y-%m-%d") for d in sig.index],
         dates=[d.strftime("%Y-%m-%d") for d in idx],
         high=high.to_list(), low=low.to_list(), close=close.to_list()))
+    # retro projection: DISPLAY-ONLY re-marks of pre-fence refusals today's rule would
+    # have entered. Never scored, never alerted, never accrued.
+    gate.retro(sym, ind.get("signals"), relievable_ts=v2.get("keeper_relievable"))
     for heavy in ("series", "gates", "bars"):
         ind.pop(heavy, None)
     sigs = ind.get("signals", [])

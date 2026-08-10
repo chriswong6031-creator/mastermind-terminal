@@ -415,6 +415,10 @@ def _main_locked(limit: int, syms_override: list[str] | None, dry_run: bool) -> 
                 if _k in ind_full:
                     ind[_k] = ind_full[_k]
             stamper.stamp(sym, ind["signals"], accrue=False)
+            # retro projection: display-only, so the intraday lane may apply it freely —
+            # it mints nothing and the marks must match the nightly's exactly.
+            stamper.retro(sym, ind["signals"],
+                          relievable_ts=v2.get("keeper_relievable"))
         except Exception as exc:
             print(f"[fast_flagship] {sym}: contract build failed: {exc}", flush=True)
             n_skip += 1

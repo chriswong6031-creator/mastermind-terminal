@@ -38,6 +38,8 @@ import numpy as np
 import pandas as pd
 
 from . import confluence as C
+from .washout_override import (RECLAIM_OVERRIDE_TAKE_QUALITY,
+                               reclaim_override_quality_reason)
 
 _log = logging.getLogger(__name__)
 
@@ -226,60 +228,139 @@ def _bearish_divergence(i, close, macd, hi, look: int = 12) -> bool:
 
 
 def _reclaim_and_hold(i, sig, n):
+    """The keeper's two-leg confirmation. Returns ``(ok, reason, relievable)``.
+
+    THE MATH IS UNCHANGED — verbatim from the CHARTER §5 keeper. The third return value is
+    new and is pure BOOKKEEPING about which branch produced the answer: ``relievable`` is
+    True at exactly one place, the counter-trend leg where the next-bar HOLD PASSED and only
+    the 200-reclaim failed. That is the Arm-T waiver's cohort (Macro Dashboard
+    research/RECLAIM_VETO_CONDITIONAL_PREREG.md §5, RATIFIED 2026-08-10).
+
+    WHY A FLAG AND NOT THE REASON STRING (the whole point of the adjudication): the string
+    ``"counter-trend, no 200-reclaim/hold"`` is returned for BOTH ``held=False`` and
+    ``reclaim=False``. Selecting the waiver's cohort by that literal would sweep in hold-leg
+    failures — the mis-specification that had to be corrected pre-ratification, and the same
+    collapsed-literal trap the macro engine hit in #4583. The branch knows which leg failed;
+    the string does not. Read the flag.
+    """
     c, a = sig["close"], sig["above200"]
     if i + 1 >= n:
-        return None, "pending confirmation"
+        return None, "pending confirmation", False
     held = bool(c.iloc[i + 1] > c.iloc[i])
     below, wkdn = (not bool(a.iloc[i])), (not bool(sig["w_bull"].iloc[i]))
     if below and wkdn:                                   # counter-trend: raise the bar
         if i + 2 >= n:
-            return None, "pending confirmation"
+            return None, "pending confirmation", False
         reclaim = bool(a.iloc[i + 1]) or bool(a.iloc[i + 2])
         ok = held and reclaim
-        return ok, ("reclaimed 200 & held" if ok else "counter-trend, no 200-reclaim/hold")
-    return held, ("held confirmation" if held else "failed reclaim-and-hold")
+        # RELIEVABLE ⇔ the hold leg carried and only the reclaim leg did not. ``held and not
+        # reclaim`` — never ``not ok``, which would also be true when the hold leg failed.
+        return (ok,
+                ("reclaimed 200 & held" if ok else "counter-trend, no 200-reclaim/hold"),
+                bool(held and not reclaim))
+    return held, ("held confirmation" if held else "failed reclaim-and-hold"), False
+
+
+def _keeper_verdict_ex(i: int, sig_reset: pd.DataFrame, hi: list[int]) -> tuple[str, str, bool]:
+    """``keeper_verdict`` + the relievable flag. The form ``keeper_quality_map`` needs.
+
+    ``relievable`` is False on every bearish-divergence block by construction: that veto
+    returns before the reclaim legs are ever evaluated, so a bear-div block is not a
+    reclaim failure and the waiver must never see one (prereg §4 — bearish-divergence
+    keeper blocks are untouched by this family).
+    """
+    n = len(sig_reset)
+    if _bearish_divergence(i, sig_reset["close"], sig_reset["macd"], hi):
+        return "block", "veto: bearish divergence", False
+    ok, reason, relievable = _reclaim_and_hold(i, sig_reset, n)
+    if ok is None:
+        return "pending", reason, False
+    return ("take" if ok else "block"), reason, (relievable and not ok)
 
 
 def keeper_verdict(i: int, sig_reset: pd.DataFrame, hi: list[int]) -> tuple[str, str]:
     """Grade a raw confluence buy at *positional* row ``i`` of the reset-index frame
     ``sig_reset``. Returns ``(verdict, reason)`` with verdict in {take, block, pending}.
     ``hi`` = precomputed ``_swing_highs(sig_reset['close'])`` (compute once per name).
-    Order of operations identical to buy_filters.buy_filter_verdict / signal_quality."""
-    n = len(sig_reset)
-    if _bearish_divergence(i, sig_reset["close"], sig_reset["macd"], hi):
-        return "block", "veto: bearish divergence"
-    ok, reason = _reclaim_and_hold(i, sig_reset, n)
-    if ok is None:
-        return "pending", reason
-    return ("take" if ok else "block"), reason
+    Order of operations identical to buy_filters.buy_filter_verdict / signal_quality.
+
+    The PRE-WAIVER verdict, unchanged and unwaivable: this is the parity surface every
+    engine diff is taken against, so the washout waiver deliberately does not reach it.
+    ``keeper_quality_map`` is where the ratified conditional applies."""
+    verdict, reason, _ = _keeper_verdict_ex(i, sig_reset, hi)
+    return verdict, reason
 
 
-def keeper_quality_map(sig: pd.DataFrame) -> dict:
+def keeper_quality_map(sig: pd.DataFrame, *, symbol: str | None = None, gate=None) -> dict:
     """Map each raw BUY/REBUY bar (CB|revBuy & ~bear_block) to its keeper verdict.
 
-    Returns ``{bar_index(int, positional in the non-NaN rows): (verdict, reason)}``.
+    Returns ``{bar_index(int, positional in the non-NaN rows): {verdict, reason,
+    relievable, override_ctx}}``. ``override_ctx`` is present only on a WAIVED fire.
     The counter-trend fill shift (used for MARKER placement, not for the verdict) is
     ``2 if below200 & ~w_bull else 1`` — mirrored in ``build_v2`` when it stamps quality
     onto the emitted signal. Only bars where a raw buy fired are graded (KEEPER contract).
 
-    THE OVERRIDE IS DELIBERATELY ABSENT FROM THIS MASK — do not "fix" it.
-    ``& ~bear_block`` here is not a duplicate of the enter mask; it is the KEEPER's cohort,
-    and a washout-override fire must never enter it. ``bear_block`` requires below-200, so
-    every override fire is by construction counter-trend, and ``_reclaim_and_hold``'s
-    counter-trend leg ("counter-trend, no 200-reclaim/hold") would re-refuse nearly all of
-    them. Routing override fires through here would ship a far stricter rule than the one
-    the packet gauntleted — a silent substitution nothing downstream could detect. The
-    gauntleted construction enters on the fire itself, so a granted fire bypasses the
-    keeper entirely and is emitted as its own class (``contracts.OVERRIDE_TAKE_QUALITY``)
-    with a tier from the standard non-counter-trend recipe scoring only."""
-    rows = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"]).reset_index(drop=True)
+    THE WASHOUT-OVERRIDE (bear_block) CLASS IS DELIBERATELY ABSENT FROM THIS MASK — do not
+    "fix" it. ``& ~bear_block`` here is not a duplicate of the enter mask; it is the KEEPER's
+    cohort, and a washout-override fire must never enter it. ``bear_block`` requires
+    below-200, so every override fire is by construction counter-trend, and
+    ``_reclaim_and_hold``'s counter-trend leg would re-refuse nearly all of them. Routing
+    override fires through here would ship a far stricter rule than the one the packet
+    gauntleted — a silent substitution nothing downstream could detect. That construction
+    enters on the fire itself, so a granted fire bypasses the keeper entirely and is emitted
+    as ``contracts.OVERRIDE_TAKE_QUALITY``.
+
+    ── THE RECLAIM WAIVER (era gc_v2_wo2, Arm T) ────────────────────────────────────────
+    This function is where the OTHER ratified waiver lands, and it is a different animal:
+    it does not bypass the keeper, it relaxes ONE LEG of it, in place, for one cohort.
+    ``symbol`` + ``gate`` wire it (both required; either absent ⇒ this function is
+    bit-identical to the pre-wo2 build). At a block that is RELIEVABLE — the counter-trend
+    branch where the next-bar HOLD PASSED and only the 200-reclaim failed — the gate is
+    asked whether the name qualifies in the washout state at the fire's own known date. If
+    it does, the verdict becomes ``reclaim_override_take``: a take-class entry that scores
+    off the ordinary recipe like any other keeper take.
+
+    THREE THINGS THIS WAIVER MUST NEVER DO, each load-bearing (prereg §4/§5):
+      * relieve a HOLD-leg failure. The gauntlet ran on the relievable subset only; the
+        HL 2026-06-16 shape is a hold failure and stays blocked. ``relievable`` comes from
+        the BRANCH, never from the reason string, which collapses both legs into one
+        literal — the mis-specification that had to be corrected pre-ratification;
+      * touch a bearish-divergence block. That veto returns before the reclaim legs run, so
+        ``_keeper_verdict_ex`` reports ``relievable=False`` and the gate is never asked;
+      * reach backwards. The gate's PIT rule refuses a fire that predates the state, so a
+        waiver can no more act on history than the enter mask can.
+    """
+    src = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"])
+    rows = src.reset_index(drop=True)
     if len(rows) < 3:
         return {}
     hi = _swing_highs(rows["close"])
     raw_buy = ((rows["CB"] | rows["revBuy"]) & ~rows["bear_block"]).to_numpy()
+    ask = getattr(gate, "reclaim_override_for", None) if (gate is not None and symbol) else None
+    known = src["known_ts"] if "known_ts" in src.columns else None
     out = {}
     for pos in np.flatnonzero(raw_buy):
-        out[int(pos)] = keeper_verdict(int(pos), rows, hi)
+        pos = int(pos)
+        verdict, reason, relievable = _keeper_verdict_ex(pos, rows, hi)
+        entry = {"verdict": verdict, "reason": reason, "relievable": relievable}
+        if relievable and ask is not None:
+            ts = src.index[pos].strftime("%Y-%m-%d")
+            kts = ts
+            if known is not None:
+                kv = known.iloc[pos]
+                if kv is not None and not pd.isna(kv):
+                    kts = pd.Timestamp(kv).strftime("%Y-%m-%d")
+            try:
+                ctx = ask(symbol, ts, kts)
+            except Exception as e:  # noqa: BLE001 — a gate fault refuses, never breaks a slice
+                _log.warning("reclaim waiver gate failed for %s %s (%s) — block stands",
+                             symbol, ts, e)
+                ctx = None
+            if isinstance(ctx, dict) and ctx:
+                entry["verdict"] = RECLAIM_OVERRIDE_TAKE_QUALITY
+                entry["reason"] = reclaim_override_quality_reason(ctx)
+                entry["override_ctx"] = ctx
+        out[pos] = entry
     return out
 
 
@@ -749,11 +830,13 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
     history spans the full chart, whereas ``warnings`` is the last-40 DISPLAY side channel
     OracleDash reads. Both derive from the SAME ``warn_events`` pass (computed once)."""
     if not len(sig) or not {"macd", "sig", "k", "d", "rsi14"}.issubset(sig.columns):
-        return {"keeper": {}, "recipe": {}, "override": {}, "score_basis": "partial",
+        return {"keeper": {}, "recipe": {}, "override": {}, "keeper_relievable": [],
+                "score_basis": "partial",
                 "early_dots": [], "warnings": [], "sell_confirms": [], "reclaims": []}
     rows = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"])
     if len(rows) < 20:
-        return {"keeper": {}, "recipe": {}, "override": {}, "score_basis": "partial",
+        return {"keeper": {}, "recipe": {}, "override": {}, "keeper_relievable": [],
+                "score_basis": "partial",
                 "early_dots": [], "warnings": [], "sell_confirms": [], "reclaims": []}
 
     have_volume = volume is not None and volume.notna().any()
@@ -768,15 +851,26 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
     # see keeper_quality_map's docstring for why that is the whole ballgame).
     override = override_entries(sig, symbol, override_gate)
 
-    # keeper verdict + counter-trend fill shift per raw-buy bar
-    kmap = keeper_quality_map(sig)
+    # keeper verdict + counter-trend fill shift per raw-buy bar. ``symbol``/``override_gate``
+    # also carry the gc_v2_wo2 reclaim waiver into the keeper's own cohort (see
+    # keeper_quality_map): same gate, same notch, same PIT rule, different refusal relieved.
+    kmap = keeper_quality_map(sig, symbol=symbol, gate=override_gate)
     rows_reset = rows.reset_index(drop=True)
     keeper = {}
-    for pos, (verdict, reason) in kmap.items():
+    relievable_ts = []
+    for pos, k in kmap.items():
         below = not bool(rows_reset["above200"].iloc[pos])
         wkdn = not bool(rows_reset["w_bull"].iloc[pos])
         shift = 2 if (below and wkdn) else 1
-        keeper[pos] = {"verdict": verdict, "reason": reason, "shift": shift}
+        keeper[pos] = {"verdict": k["verdict"], "reason": k["reason"], "shift": shift}
+        if "override_ctx" in k:
+            keeper[pos]["override_ctx"] = k["override_ctx"]
+        elif k.get("relievable"):
+            # A block the waiver COULD have relieved but did not (the name did not qualify,
+            # or the fire predates the state). Reported by DATE, not stamped on the event:
+            # the retro projection needs the branch fact, and the emitted contract must stay
+            # bit-identical to the pre-fence one whenever no artifact is in play.
+            relievable_ts.append(rows.index[pos].strftime("%Y-%m-%d"))
 
     # recipe score + tier per bar (graded)
     score_s, tier_s, partial = recipe_score_on_3d(
@@ -806,6 +900,13 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
         # {positional bar index: override_ctx} — the taken washout-override fires. Empty on
         # every name, every night, until a qualifying basket meets a bear_block-vetoed fire.
         "override": override,
+        # The 3D bar-open dates of keeper blocks that failed ONLY the 200-reclaim leg and
+        # were NOT waived. Internal to this payload — deliberately not a field on the
+        # emitted event, so an emission built with no washout artifact stays byte-identical
+        # to the pre-fence one. The retro projection consumes it (washout_override.
+        # mark_retro's ``relievable_ts``) to tell a relievable block from a hold-leg failure
+        # without ever parsing the keeper's collapsed reason string.
+        "keeper_relievable": relievable_ts,
         "score_basis": "partial" if partial else "full",
         "early_dots": early_dots(sig, close)[-SIDE_CHANNEL_CAP:],
         "warnings": warns_all[-SIDE_CHANNEL_CAP:],

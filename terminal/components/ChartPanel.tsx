@@ -68,7 +68,7 @@ import {
 import type { SuiteRenderBundle, SuiteTier, SuiteColors, CoordMapper, TableSpec } from "@/lib/indicator-canvas/types";
 import ChartTables from "@/components/ChartTables";
 import { crossUps, crossDowns, crossUpsBelow, crossDownsAbove } from "@/lib/crossSignals";
-import { SOFT_Q, anchorSignal, isBlockedSignal, isOverrideCandidate, isOverrideTake, isStructureStop, sliceSignalBasis } from "@/lib/signalVerdict";
+import { SOFT_Q, anchorSignal, isBlockedSignal, isOverrideCandidate, isReclaimOverrideTake, isRetroOverride, isStructureStop, isWaivedEntry, sliceSignalBasis } from "@/lib/signalVerdict";
 import { makeNearestBarIndex } from "@/lib/barSnap";
 import { ichimoku, supertrend, avwap as computeAvwap, rollingVwap, weekAnchoredVwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
@@ -560,7 +560,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // regime_blocked BUY is a refused setup that must never wear buy geometry). Both are stamped
   // only on the slice path, where provenance is known — the client-Pine fallback leaves them
   // undefined so its genuinely momentum-sourced SELL is not relabelled a stop.
-  type SigMark = { t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null; reason?: string; basis?: string; blocked?: boolean; stopLevel?: number | null; overrideCandidate?: boolean; overrideTake?: boolean; overrideGroup?: string | null; overrideDd?: number | null };
+  type SigMark = { t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null; reason?: string; basis?: string; blocked?: boolean; stopLevel?: number | null; overrideCandidate?: boolean; overrideTake?: boolean; overrideGroup?: string | null; overrideDd?: number | null;
+    // the entry's waived leg was the KEEPER's 200-reclaim (era gc_v2_wo2), not the regime veto
+    reclaimWaived?: boolean;
+    // display-only RETRO PROJECTION: today's rule would have entered this pre-fence refusal
+    retro?: boolean };
   const sigMarksRef = useRef<SigMark[]>([]);
   // Client-Pine FALLBACK: when a symbol ships no slice signal history, marks come from ORACLE_V1_PINE
   // run client-side on the daily bars, memoized per (symbol · daily length · last daily date) so the
@@ -2274,15 +2278,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const m = snap(s.ts, s.type); if (!m) continue;
         m.quality = s.quality; m.tier = s.tier; m.reason = s.quality_reason;
         m.basis = sliceSignalBasis(s); m.blocked = isBlockedSignal(s); m.stopLevel = s.stop_level ?? null;
-        // the two washout-override classes (emitter-stamped, never re-derived here): the
-        // display-tier candidate — still a refusal — and the TAKEN entry (era gc_v2_wo1).
-        // Mutually exclusive by construction; both carry the same context.
+        // the washout classes (emitter-stamped, never re-derived here): the display-tier
+        // candidate — still a refusal — the TAKEN entry in either waived flavour (era
+        // gc_v2_wo2), and the display-only RETRO projection. Mutually exclusive by
+        // construction; the first three carry the same context shape.
         m.overrideCandidate = isOverrideCandidate(s);
-        m.overrideTake = isOverrideTake(s);
+        m.overrideTake = isWaivedEntry(s);
+        m.reclaimWaived = isReclaimOverrideTake(s);
+        m.retro = isRetroOverride(s);
         if (m.overrideCandidate || m.overrideTake) {
           m.overrideGroup = s.override_ctx?.name ?? s.override_ctx?.group_id ?? null;
           m.overrideDd = typeof s.override_ctx?.peer_dd === "number" ? s.override_ctx.peer_dd : null;
         }
+        if (m.retro) m.overrideGroup = s.retro_ctx?.name ?? s.retro_ctx?.group_id ?? null;
         marks.push(m);
       }
       // slice signals are chronological; snapping preserves order (the chip's fallback relies on it)
@@ -3234,6 +3242,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // washout-override amber. `--signal` (#e8b339) resolved through the token reader rather
       // than written as a literal, so the marker tracks the token the rail card uses.
       const AMBER = t2.signal || "#e8b339";
+      // The date the current rule took effect — named in every retro tooltip so the reader
+      // can see WHICH rule the counterfactual is measured against, not just that there is one.
+      const RETRO_RULE_DATE = "2026-08-10";
       while (layer.firstChild) layer.removeChild(layer.firstChild);
       if (priceProjHidden()) return;   // sub-pane maximized → price-anchored markers stay cleared
 
@@ -3373,7 +3384,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // and the operator chased it. A blocked setup now renders as a hollow slate ring
         // with a slash — no pill, no pointer, no star — below the bar, with the block
         // reason on hover. It cannot be mistaken for an entry at a glance.
-        if (m.blocked || m.quality === "regime_blocked") {
+        // A RETRO-marked refusal leaves the refusal geometry behind: the question it answers
+        // ("would today's rule have entered here?") is an entry question, so it is drawn with
+        // entry geometry below. What it must never do is answer it silently — the entry
+        // branch gives it a persistent, glance-tier `retro` tag for exactly that reason.
+        if ((m.blocked || m.quality === "regime_blocked") && !m.retro) {
           const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
           const cy = y + 15, r = 5.4, k = r * 0.707;
           // ── washout-override candidate: the SAME ring-slash, promoted in weight only ──
@@ -3431,7 +3446,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // owns, drawn as an outline around the pill and its pointer, so the two states of
         // one mechanism share a colour across the chart.
         const ovrTake = !!m.overrideTake;
-        const outline = ovrTake ? { stroke: AMBER, "stroke-width": 1.6 } : null;
+        const retro = !!m.retro;
+        const outline = (ovrTake || retro) ? { stroke: AMBER, "stroke-width": 1.6 } : null;
         // block → hollow (fill:none + colored stroke); take/pending/regime_blocked → solid (possibly dimmed) fill.
         // RECLAIM additionally DASHES the outline so a re-entry pill never reads as a keeper-blocked entry.
         const dash = m.type === "RECLAIM" ? "3 2" : undefined;
@@ -3461,10 +3477,35 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           // context the rail card's disclosure line carries, so hover and card agree.
           const title = mk("title", {});
           const dd = typeof m.overrideDd === "number" ? `−${Math.trunc(Math.abs(m.overrideDd) * 100)}%` : "";
-          title.textContent = `${m.t} · ${m.type} — washout override entry`
+          title.textContent = `${m.t} · ${m.type} — `
+            + (m.reclaimWaived ? "reclaim waived — entry" : "washout override entry")
             + `${m.overrideGroup ? ` — ${m.overrideGroup}` : ""}${dd ? ` ${dd} from highs` : ""}`
-            + " · the regime gate would refuse this; most still stop out";
+            + (m.reclaimWaived
+              ? " · it held the next bar but never reclaimed the 200-day; most still stop out"
+              : " · the regime gate would refuse this; most still stop out");
           g.appendChild(title);
+        } else if (retro) {
+          const title = mk("title", {});
+          title.textContent = `${m.t} · ${m.type} — re-marked under the current rule `
+            + `(${RETRO_RULE_DATE})${m.overrideGroup ? ` — ${m.overrideGroup}` : ""}`
+            + " · the system refused this live, so it is not a call we made";
+          g.appendChild(title);
+        }
+        // ── the RETRO tag: glance tier, always drawn, never hover-only ──────────────
+        // A retro mark wears the entry star because the question is an entry question, and
+        // the two must be distinguishable WITHOUT a pointer: hover does not exist on touch,
+        // does not appear in a screenshot, and is not read by anyone skimming a chart. A
+        // counterfactual that is indistinguishable from a live call at a glance is a track
+        // record the product did not earn, so the tag is part of the marker, not of its
+        // tooltip. It is deliberately quiet — muted, 7px — not hidden.
+        if (retro) {
+          const tag = mk("text", {
+            x, y: up ? top - ptr - 3 : top + h + ptr + 8,
+            fill: AMBER, opacity: 0.85, "font-size": 7, "font-weight": 700,
+            "text-anchor": "middle", "font-family": "var(--font-ui)", "letter-spacing": ".06em",
+          });
+          tag.textContent = "RETRO";
+          g.appendChild(tag);
         }
         // tier badge ("A+"/"Q") as a small superscript pill to the top-right of the marker (taken entries only).
         if (badge) {

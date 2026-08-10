@@ -23,7 +23,8 @@ import numpy as np
 import pandas as pd
 
 from . import SIGNAL_ERA, SIGNAL_ERA_PRE
-from .washout_override import OVERRIDE_TAKE_QUALITY, WASHOUT_OVERRIDE_NOTCH
+from .washout_override import (OVERRIDE_TAKE_QUALITY, RECLAIM_OVERRIDE_TAKE_QUALITY,
+                               WASHOUT_OVERRIDE_NOTCH)
 
 SCHEMA_INDICATOR = "mastermind.indicator/v1"
 SCHEMA_BACKTEST = "backtest_result/v1"
@@ -88,6 +89,19 @@ BLOCKED_QUALITY = "regime_blocked"
 #
 # It is a REAL scored BUY: it walks `position_hint`, anchors the rail verdict, and fires
 # alerts. `blocked` is never set on it, and it is NOT in the client's SOFT_Q set.
+#
+# ── the reclaim-waiver entry class (signal era gc_v2_wo2) ───────────────────────
+# `RECLAIM_OVERRIDE_TAKE_QUALITY` is the SIBLING class, and every sentence above applies to
+# it verbatim: real scored BUY, no `blocked` flag, absent from SOFT_Q, walks the position,
+# anchors the verdict, alerts. What differs is which refusal was relieved and on whose
+# cohort. The washout override takes a fire the REGIME gate vetoed and skips the keeper
+# entirely; the reclaim waiver takes a fire the KEEPER blocked, by dropping one of the
+# keeper's two counter-trend legs (the 200-reclaim) while the other (the next-bar hold)
+# still had to pass. Two waivers, two gauntlets, two forward ledgers — so two strings.
+#
+# The verdict is produced in `confluence_v2.keeper_quality_map` (on branch logic, never on
+# the keeper's collapsed reason string) and arrives here already decided; this module only
+# carries it, exactly as it carries `take`/`block`/`pending`.
 
 
 def override_quality_reason(ctx: dict | None) -> str:
@@ -295,8 +309,18 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
                 ev["tier"] = r["tier"]
                 ev["score"] = r["score"]
         elif p is not None and p in keeper:
-            ev["quality"] = keeper[p]["verdict"]           # take / block / pending
+            # take / block / pending — or, since gc_v2_wo2, ``reclaim_override_take``: the
+            # keeper's own verdict when the ratified waiver dropped its 200-reclaim leg for
+            # a qualifying name. It rides this branch rather than a new one BECAUSE it is a
+            # keeper verdict: same cohort, same scoring, one relaxed leg. Its ``override_ctx``
+            # rides along for the same reason the washout class's does — so the marker and
+            # the card can say WHY without a second fetch, and an archived slice stays
+            # self-describing.
+            ev["quality"] = keeper[p]["verdict"]
             ev["quality_reason"] = keeper[p]["reason"]
+            ovr_ctx = keeper[p].get("override_ctx")
+            if ovr_ctx is not None:
+                ev["override_ctx"] = dict(ovr_ctx)
             r = recipe.get(p)
             if r is not None:
                 ev["tier"] = r["tier"]                     # aplus / quality / base

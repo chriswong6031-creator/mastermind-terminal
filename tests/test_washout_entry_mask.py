@@ -200,16 +200,19 @@ def test_the_era_constant_is_pinned():
 
     Changing either string is an era event with a forward ledger behind it, never a tidy-up.
     """
-    assert SIGNAL_ERA == "gc_v2_wo1"
+    # gc_v2_wo2 = the keeper's counter-trend reclaim waiver (Arm T) + the override notch
+    # move 25 → 20, ratified together 2026-08-10 and fenced as ONE era event.
+    assert SIGNAL_ERA == "gc_v2_wo2"
     assert SIGNAL_ERA_PRE == "gc_v2"
     assert SIGNAL_ERA != SIGNAL_ERA_PRE
     assert contracts.SIGNAL_ERA is SIGNAL_ERA
 
 
 def test_the_notch_is_written_in_exactly_one_place():
-    """25%, ratified. The artifact-facing threshold DERIVES from it, so display and entry
-    can never be asked at different numbers."""
-    assert WASHOUT_OVERRIDE_NOTCH == 25
+    """20%, the operator's dial setting inside the gauntleted 20/25/30 band (gc_v2_wo2).
+    The artifact-facing threshold DERIVES from it, so display and entry can never be asked
+    at different numbers."""
+    assert WASHOUT_OVERRIDE_NOTCH == 20
     assert DEFAULT_THRESHOLD == str(WASHOUT_OVERRIDE_NOTCH)
     src = (ROOT / "signal_layer" / "washout_override.py").read_text()
     assert src.count("WASHOUT_OVERRIDE_NOTCH = ") == 1
@@ -328,7 +331,7 @@ def test_a_stale_artifact_grants_nothing(tape_frame, last_fire, tmp_path):
 def test_a_name_below_the_notch_is_not_taken(tape_frame, last_fire, tmp_path):
     close, sig = tape_frame
     _pos, _ts, known = last_fire
-    doc = artifact(known, peer_dd=-0.21, hits={"20": True, "25": False, "30": False})
+    doc = artifact(known, peer_dd=-0.11, hits={"20": False, "25": False, "30": False})
     assert confluence_v2.override_entries(sig, "SYNTH", gate(tmp_path, doc, today=known)) == {}
 
 
@@ -460,12 +463,13 @@ def test_the_quality_string_is_one_string(tape_frame):
 
 def test_the_reason_degrades_without_inventing(tape_frame):
     """A partial artifact yields a shorter line, never a wrong number or an empty slot."""
+    n = WASHOUT_OVERRIDE_NOTCH
     assert contracts.override_quality_reason({"group_id": GROUP, "peer_dd": -0.312}) == (
-        f"washout override: {GROUP} −31.2% ≤ −25% (era {SIGNAL_ERA})")
+        f"washout override: {GROUP} −31.2% ≤ −{n}% (era {SIGNAL_ERA})")
     assert contracts.override_quality_reason({"group_id": GROUP}) == (
-        f"washout override: {GROUP} ≤ −25% (era {SIGNAL_ERA})")
-    assert contracts.override_quality_reason({}) == f"washout override: ≤ −25% (era {SIGNAL_ERA})"
-    assert contracts.override_quality_reason(None) == f"washout override: ≤ −25% (era {SIGNAL_ERA})"
+        f"washout override: {GROUP} ≤ −{n}% (era {SIGNAL_ERA})")
+    assert contracts.override_quality_reason({}) == f"washout override: ≤ −{n}% (era {SIGNAL_ERA})"
+    assert contracts.override_quality_reason(None) == f"washout override: ≤ −{n}% (era {SIGNAL_ERA})"
 
 
 def test_the_gate_is_wired_into_every_lane_that_writes_a_slice():

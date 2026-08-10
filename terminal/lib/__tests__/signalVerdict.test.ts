@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs, SOFT_Q,
+import { WASHOUT_NOTCH, WASHOUT_MEASURED_NOTCH,
+  oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs, SOFT_Q,
   isBlockedSignal, isOverrideCandidate, isOverrideTake, isStructureStop, sliceSignalBasis,
   washoutOverrideCopy, OVERRIDE_TAKE_QUALITY } from "../signalVerdict";
 
@@ -710,8 +711,8 @@ describe("washout override candidate — the display class on a refusal", () => 
     const note = verdict().note ?? "";
     expect(note).toContain("still a refused entry");
     expect(note).toContain("not a green light");
-    expect(note).toContain("averaged +27% per trade vs +3% otherwise");
-    expect(note).toContain("2019-2026, stop always honored");
+    expectMeasuredLine(note, "averaged +27% per trade vs +3% otherwise");
+    expectMeasuredLine(note, "2019-2026, stop always honored");
     expect(note).toContain("most still stop out — the stop is the protection");
   });
 
@@ -721,7 +722,7 @@ describe("washout override candidate — the display class on a refusal", () => 
     expect(v.line2).toBe("深度洗盘例外候选 — 铀矿商板块距高点 −38%");
     const note = v.note ?? "";
     expect(note).toContain("仍是被拦截的入场");
-    expect(note).toContain("每笔平均 +27%");
+    expectMeasuredLine(note, "每笔平均 +27%");
     expect(note).toContain("止损才是保护");
     // no untranslated English clause left behind IN THE NEW COPY (the engine's own
     // `quality_reason` string rides the note in both languages — pre-existing contract)
@@ -846,7 +847,7 @@ describe("washout override entry — the taken class", () => {
     const note = verdict().note ?? "";
     expect(note).toContain("the regime gate would refuse this");
     expect(note).toContain("the deep group washout is the one reason it stands");
-    expect(note).toContain("averaged +27% per trade vs +3% otherwise");
+    expectMeasuredLine(note, "averaged +27% per trade vs +3% otherwise");
     expect(note).toContain("most still stop out — the stop is the protection");
     // it never claims the refusal is still standing — that is the OTHER class's lead
     expect(note).not.toContain("still a refused entry");
@@ -858,7 +859,7 @@ describe("washout override entry — the taken class", () => {
     expect(v.line2).toBe("深度洗盘例外入场 — 铀矿商板块距高点 −38%");
     const note = v.note ?? "";
     expect(note).toContain("趋势闸本会拦截");
-    expect(note).toContain("每笔平均 +27%");
+    expectMeasuredLine(note, "每笔平均 +27%");
     expect(note).toContain("止损才是保护");
     const copy = washoutOverrideCopy(CTX, true, true)!;
     for (const cell of copy.notes) expect(cell).not.toMatch(/[a-z]{4,}/);
@@ -925,4 +926,25 @@ describe("washout override entry — the taken class", () => {
       }
     }
   });
+});
+
+/** The published per-trade figures are a MEASUREMENT AT A NOTCH (blocked-entry packet
+ *  §2/§3.5, cut at 25%), not a property of the rule. The live notch is an operator dial.
+ *  While the two differ the copy must stay silent rather than attach a 25%-notch result to
+ *  whatever notch is live — so these assertions follow the same rule the copy does, and the
+ *  test below pins the rule itself so silence can never become the accident nobody noticed. */
+function expectMeasuredLine(note: string | null | undefined, fragment: string) {
+  if (WASHOUT_NOTCH === WASHOUT_MEASURED_NOTCH) expect(note).toContain(fragment);
+  else expect(note).not.toContain(fragment);
+}
+
+it("the measured per-trade figures print only at the notch they were measured at", () => {
+  const notes = washoutOverrideCopy(
+    { group_id: "g", peer_dd: -0.4, name: "G" }, false, true,
+  )!.notes.join(" · ");
+  expect(WASHOUT_MEASURED_NOTCH).toBe(25);          // the packet's cut, not the live dial
+  if (WASHOUT_NOTCH === WASHOUT_MEASURED_NOTCH) expect(notes).toContain("+27%");
+  else expect(notes).not.toContain("+27%");
+  // whatever the dial, the qualitative protection line always survives
+  expect(notes).toContain("most still stop out");
 });
