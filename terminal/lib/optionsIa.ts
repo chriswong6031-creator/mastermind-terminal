@@ -49,6 +49,8 @@ export const OPTIONS_IA_CATEGORIES = [
     views: [
       { key: "tape", pageKey: "tape", labelKey: "wtOptionsTape" },
       { key: "tide", pageKey: "tide", labelKey: "wtTide" },
+      { key: "zero_dte", pageKey: "0dte", labelKey: "wtZeroDte" },
+      { key: "largest", pageKey: "largest", labelKey: "wtLargestEvents" },
       { key: "surface", pageKey: "surface", labelKey: "tabSurface" },
       { key: "screener", pageKey: "vol", labelKey: "wtOptionsScreener" },
       { key: "tickers", pageKey: "tickers", labelKey: "wtTickers" },
@@ -104,6 +106,8 @@ export const OPTIONS_CATEGORY_BY_VIEW: Record<OptionsWorkspaceViewKey, OptionsCa
   desk: "command",
   tape: "flow",
   tide: "flow",
+  zero_dte: "flow",
+  largest: "flow",
   surface: "flow",
   screener: "flow",
   tickers: "flow",

@@ -32,6 +32,8 @@ const ROUTE_VIEW: Record<string, OptionsWorkspaceViewKey> = {
   tape: "tape",
   desk: "desk",
   tide: "tide",
+  "0dte": "zero_dte",
+  largest: "largest",
   tickers: "tickers",
   vol: "screener",
   screener: "screener",

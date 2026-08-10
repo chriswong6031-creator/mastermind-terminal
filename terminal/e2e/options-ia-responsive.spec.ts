@@ -31,6 +31,8 @@ test("seven-category Options IA stays addressable, honest, and contained", async
   }
   await expect(page.locator("#wtab-cat-flow")).toHaveAttribute("aria-selected", "true");
   await expect(page.locator("#wtab-tape")).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#wtab-0dte")).toBeVisible();
+  await expect(page.locator("#wtab-largest")).toBeVisible();
   await expect(page.locator("#wtab-vol")).toBeVisible();
   await expect(page.locator("#wtab-surface")).toBeVisible();
 
@@ -69,6 +71,58 @@ test("seven-category Options IA stays addressable, honest, and contained", async
     "data-export-contract",
     "terminal.options_tape_csv/v1",
   );
+
+  // The two remaining derived Flow blind spots share one immutable, display-only
+  // event contract. A feed event can coalesce multiple prints, so the public UI
+  // must never relabel the largest-event board as an individual-trade ranking.
+  await page.locator("#wtab-0dte").click();
+  await expect(page).toHaveURL(/\/options\?tab=0dte$/);
+  const zeroDteBoard = page.locator('[data-options-flow-board="0dte"]');
+  await expect(zeroDteBoard).toBeVisible();
+  await expect(zeroDteBoard).toHaveAttribute("data-options-flow-contract", "live_flow.feed/v1");
+  await expect(zeroDteBoard).toHaveAttribute("data-options-flow-authority", "display_only");
+  await expect(zeroDteBoard).toContainText(zh ? "0DTE 事件看板" : "0DTE Event Dashboard");
+  await expect(zeroDteBoard.locator(".options-flow-board-receipt").nth(1).locator("strong")).toHaveText("2");
+  const zeroDteRows = testInfo.project.name === "mobile"
+    ? zeroDteBoard.locator(".options-flow-board-card")
+    : zeroDteBoard.locator(".options-flow-board-table tbody tr");
+  await expect(zeroDteRows).toHaveCount(2);
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-options-0dte-board.png`),
+    fullPage: false,
+  });
+
+  const tickerSearch = zeroDteBoard.getByPlaceholder(zh ? "搜索代码…" : "Search ticker…");
+  await tickerSearch.fill("SPY");
+  await expect(zeroDteBoard.locator(".options-flow-board-receipt").nth(1).locator("strong")).toHaveText("1");
+  await tickerSearch.fill("");
+
+  await page.locator("#wtab-largest").click();
+  await expect(page).toHaveURL(/\/options\?tab=largest$/);
+  const largestBoard = page.locator('[data-options-flow-board="largest-events"]');
+  await expect(largestBoard).toBeVisible();
+  await expect(largestBoard).toContainText(zh ? "并非单笔成交排名" : "not an individual-trade ranking");
+  await expect(largestBoard.locator(".options-flow-board-receipt").nth(1).locator("strong")).toHaveText("12");
+  const largestRows = testInfo.project.name === "mobile"
+    ? largestBoard.locator(".options-flow-board-card")
+    : largestBoard.locator(".options-flow-board-table tbody tr");
+  await expect(largestRows).toHaveCount(12);
+  await expect(largestRows.first()).toContainText("GLD");
+  await expect(largestRows.first()).toContainText("$2.60M");
+  const boardContainment = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    resultsOverflow: getComputedStyle(
+      document.querySelector<HTMLElement>(".options-flow-board-results")!,
+    ).overflowX,
+  }));
+  expect(boardContainment.documentWidth).toBeLessThanOrEqual(boardContainment.viewport + 1);
+  expect(boardContainment.resultsOverflow).toBe("auto");
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-options-largest-events-board.png`),
+    fullPage: false,
+  });
+
   await page.locator("#wtab-vol").click();
   await expect(page).toHaveURL(/\/options\?tab=vol$/);
   await expect(page.locator('[data-options-export="screener-csv-v1"]')).toHaveAttribute(

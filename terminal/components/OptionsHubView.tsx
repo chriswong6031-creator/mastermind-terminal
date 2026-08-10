@@ -36,6 +36,7 @@ import {
 } from "@/lib/optionsScreener";
 import { VolRegimeChip } from "@/components/eodcontext/VolRegimeChip";
 import { OptionsCsvExportButton } from "@/components/options/OptionsCsvExportButton";
+import { OptionsFlowBoardView } from "@/components/options/OptionsFlowBoardView";
 // Shared SVG chart primitives — measured 1:1 viewBox, nice ticks, pixel-gap label
 // thinning, padded domains. The hygiene rules live in that module's header.
 import {
@@ -110,7 +111,7 @@ const TideChart = dynamic(
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-export type TabKey = "prophet" | "levels" | "desk" | "tape" | "tide" | "tickers" | "screener" | "gex" | "surface" | "structure" | "volatility" | "positioning" | "leaders" | "radar";
+export type TabKey = "prophet" | "levels" | "desk" | "tape" | "tide" | "zero_dte" | "largest" | "tickers" | "screener" | "gex" | "surface" | "structure" | "volatility" | "positioning" | "leaders" | "radar";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "prophet",  enKey: "tabProphet",  zhKey: "tabProphet" },
@@ -118,6 +119,8 @@ const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "desk",     enKey: "tabDesk",     zhKey: "tabDesk" },
   { key: "tape",     enKey: "tabTape",     zhKey: "tabTape" },
   { key: "tide",     enKey: "tabTide",     zhKey: "tabTide" },
+  { key: "zero_dte", enKey: "tabZeroDte",  zhKey: "tabZeroDte" },
+  { key: "largest",  enKey: "tabLargestEvents", zhKey: "tabLargestEvents" },
   { key: "tickers",  enKey: "tabTickers",  zhKey: "tabTickers" },
   { key: "screener", enKey: "tabScreener", zhKey: "tabScreener" },
   // "vol" tab removed from bar — vol surface now lives in the Tickers tab right column
@@ -1833,6 +1836,7 @@ export default function OptionsHubView({
   // over an independently-fresh series. `active*` resolves to the tape-derived
   // values off the Tide tab, so the Tape tab is byte-identical to before.
   const onTide = activeTab === "tide";
+  const onTapeFeed = activeTab === "tape" || activeTab === "zero_dte" || activeTab === "largest";
   const tideAsof = tideData?.asof ?? "";
   const tideStale = tideAsof ? isStale(tideAsof) : false;
   const tideUnavailable = onTide && tideStreamError && !tideData;
@@ -2236,7 +2240,7 @@ export default function OptionsHubView({
             doesn't leave an empty bordered bar. */}
         {(() => {
           const showStrip = !controlled && !hideTabStrip;
-          const showLive = (activeTab === "tape" || activeTab === "tide") && !activeUnavailable && !activeDelayed;
+          const showLive = (onTapeFeed || onTide) && !activeUnavailable && !activeDelayed;
           // Vol-regime chip (OEU T-E): hub-wide settled vol weather, so it belongs to the
           // hub's own header wherever the hub is acting as a HUB — standalone or inside the
           // workspace. A Discover single-tab embed (one allowed tab) is a bare mount of one
@@ -2287,7 +2291,7 @@ export default function OptionsHubView({
         })()}
 
         {/* ── Live-feed status banner (Tape + Tide are intraday-live) ── */}
-        {(activeTab === "tape" || activeTab === "tide") && (activeUnavailable || activeDelayed) && (
+        {(onTapeFeed || onTide) && (activeUnavailable || activeDelayed) && (
           <div
             role="status"
             style={{
@@ -2717,6 +2721,27 @@ export default function OptionsHubView({
                 )}
               </div>
             </>
+          )}
+
+          {/* ═══ R5 DERIVED FLOW BOARDS ════════════════════════════════════
+              Both panes consume the same immutable live_flow.feed/v1 snapshot.
+              The only mode difference is the publisher-owned `zerodte` predicate;
+              ordering and receipts stay descriptive/display-only. */}
+          {(activeTab === "zero_dte" || activeTab === "largest") && (
+            <OptionsFlowBoardView
+              mode={activeTab === "zero_dte" ? "zero_dte" : "largest"}
+              lang={lang}
+              events={feed?.events ?? null}
+              feedSchema={feed?.schema}
+              feedAsof={feed?.asof}
+              sessionDate={feed?.session_date}
+              stale={Boolean(dataStale)}
+              unavailable={Boolean(fetchError && !feed)}
+              onOpenTicker={(root) => {
+                switchTab("tickers");
+                setSelectedTicker(root);
+              }}
+            />
           )}
 
           {/* ═══ TIDE TAB ═══════════════════════════════════════════════════ */}
