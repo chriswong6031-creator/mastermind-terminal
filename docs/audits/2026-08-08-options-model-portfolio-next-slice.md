@@ -1,7 +1,7 @@
 # R6 execution appendix — Issue Desk first, model portfolio after evidence
 
-**Status:** immediate next delivery is the operator-reviewed Issue Desk; automatic portfolio is deferred
-**Immediate contract:** `options.issue_desk/v1`
+**Status:** R6.2-A operator-reviewed Issue Desk implemented; automatic portfolio is deferred
+**Current contract:** private `options.issue_desk/v1`
 **Later contract:** `options.model_portfolio/v1`, after PIT outcome and campaign evidence
 **Clean-room boundary:** product behavior and schema requirements only, based on public materials and lawful operator-supplied product observations. Do not retain or copy a competitor's private rules, datasets, coefficients, text, or implementation.
 
@@ -45,9 +45,22 @@ issued research plan records reviewer identity, exact `decision_at`, exact
 state. It cannot alter Macro candidate rank, cannot call itself automatic Options
 Alpha, and cannot bypass executable-contract or risk disclosure.
 
-This speed path should own a separate `options.issue_desk/v1` artifact and
-append-only review ledger. Human approval is explicit product authority, not
-evidence that the automatic options model is calibrated.
+This speed path owns a separate private `options.issue_desk/v1` read model and
+append-only proposal/decision ledgers. Human approval is explicit operator
+research authority, not evidence that the automatic options model is calibrated.
+It remains `brokerage_trade=false` with rank/gate/size/trade/automatic authority
+all false.
+
+The implemented boundary is authenticated and request-driven:
+
+- Macro: `GET /api/options/issue-desk` and `POST /api/options/issue-desk/reviews`;
+- Terminal: operator-only same-origin proxies at the same paths;
+- durable state: 0600 JSONL proposal and decision ledgers under a 0700 Macro API
+  state directory, protected by a global lock and fsync;
+- publication: no public R2, no public `site/` document, and no nightly GitHub
+  workflow carrying private proposal, decision, contract, risk or position rows;
+- write law: strict JSON, server-stamped reviewer/clocks/session/capacity,
+  immutable revisions, idempotent review keys, and no optimistic UI promotion.
 
 ## Wave-0 ownership — preserve these contracts
 
@@ -69,15 +82,33 @@ Terminal Wave 0 owns:
 
 The Issue Desk slice may consume these outputs. It must not add automatic ranking authority to the Wave-0 research watchlist.
 
-## Files the immediate Issue Desk slice should own
+## Files owned by the implemented Issue Desk slice
 
-Start with new, separate Macro files and stores:
+Macro owns the private state machine and API:
 
-- `research/options_estate/OPTIONS_ISSUE_DESK_PREREG.md`;
+- `research/OPTIONS_ISSUE_DESK_R62_PREREG.md`;
+- `engine/options_issue_desk.py`;
+- `app/options_issue_desk.py` and the guarded mount in `app/main.py`;
 - `scripts/build_options_issue_desk.py`;
-- `data/options_issue_desk/reviews.parquet`;
-- `site/options_issue_desk/index.json`;
-- `tests/test_build_options_issue_desk.py`;
+- `contracts/options/options.issue_desk*.schema.json` and
+  `contracts/options/options.issue_receipt.v1.schema.json`;
+- private runtime `proposals.jsonl` and `decisions.jsonl` beneath
+  `OPTIONS_ISSUE_DESK_STATE_DIR` or `$MACRO_API_STATE_DIR/options_issue_desk`;
+- `tests/test_options_issue_desk.py` and `tests/test_options_issue_desk_api.py`.
+
+Terminal owns the private operator surface:
+
+- `terminal/components/prophet/OptionsIssueDeskView.tsx` and
+  `optionsIssueDeskTypes.ts`;
+- `terminal/app/api/options/issue-desk/{route.ts,reviews/route.ts}`;
+- the Issue Desk additions to `ProphetLanesView.tsx`, operator entitlement and
+  dedicated Macro upstream;
+- unit, route and 1440/820/390 responsive tests.
+
+The earlier proposed public `site/options_issue_desk/index.json` and
+`data/options_issue_desk/reviews.parquet` are superseded. The desk contains
+owner-private review, contract and risk data and must not ride the public static
+artifact plane.
 
 After PIT outcome/campaign evidence accrues, the automatic selector slice should
 own new, separate files:
@@ -92,9 +123,9 @@ own new, separate files:
 
 Only after the producer contract and fixture are frozen should Terminal add a new `options_model_portfolio_idx` transport and an issued/managed-position surface. Avoid editing the Wave-0 research parser to reinterpret a fire as a position.
 
-The Issue Desk may integrate sooner through its own `options_issue_desk_idx` and
-review UI. Keep that route and its human actions separate from both
-`options_prophet_idx` and the eventual automatic portfolio route.
+The Issue Desk uses its own authenticated API/read model and review UI. Keep that
+route and its human actions separate from both `options_prophet_idx` and the
+eventual automatic portfolio route.
 
 ## Issued-position lifecycle contract
 
@@ -109,7 +140,10 @@ ISSUED
   -> CLOSED | CANCELLED | INVALIDATED
 ```
 
-An issued plan may enter `PARTIAL_ALLOWED` before its underlying trigger, but
+The current v1 appends only the initial `ISSUED` event (or terminal rejection)
+and exposes no post-issue mutation endpoint. The remaining states are the frozen
+next-version boundary, not manufactured current functionality. When that version
+lands, an issued plan may enter `PARTIAL_ALLOWED` before its underlying trigger, but
 only with frozen starter size, premium/underlying limits, no-chase ceiling,
 add-on rules and invalidation conditions. `ARMED` is not an open fully
 sized trade. Every transition is an append-only management event with exact
