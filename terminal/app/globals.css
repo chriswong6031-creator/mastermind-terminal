@@ -2690,6 +2690,135 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
   .wtabs .obs-pillnav-tab:active{transform:none}
 }
 
+/* ── Options R5 Stage A: category → view information architecture ── */
+.options-ia-nav{
+  flex:0 0 auto;
+  min-width:0;
+  border-bottom:1px solid var(--line);
+  background:color-mix(in srgb,var(--panel) 72%,transparent);
+}
+.options-ia-row{
+  display:grid;
+  grid-template-columns:68px minmax(0,1fr);
+  align-items:center;
+  gap:10px;
+  min-width:0;
+  padding:6px 14px;
+}
+.options-ia-row+.options-ia-row{border-top:1px solid var(--line-2)}
+.options-ia-row-label{
+  font:700 9px/1 var(--font-ui);
+  letter-spacing:.11em;
+  text-transform:uppercase;
+  color:var(--text-dim);
+}
+.options-ia-row .wtabs{
+  width:max-content;
+  max-width:100%;
+}
+.options-ia-row .obs-pillnav-tab{padding:7px 13px}
+/* Categories own the solid wayfinding state. Child views use the quieter
+   Observatory tint so two active rails never compete for visual authority. */
+.options-view-tabs.wtabs .obs-pillnav-tab.on{
+  background:color-mix(in srgb,var(--brand) 18%,transparent);
+  color:color-mix(in srgb,var(--brand-2) 100%,#fff 30%);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--brand) 35%,transparent);
+}
+.options-view-tabs.wtabs .obs-pillnav-tab.on:hover{
+  background:color-mix(in srgb,var(--brand) 24%,transparent);
+  color:color-mix(in srgb,var(--brand-2) 100%,#fff 30%);
+}
+.options-ia-gate-strip{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  min-height:34px;
+  width:max-content;
+  max-width:100%;
+  padding:0 11px;
+  border:1px solid color-mix(in srgb,var(--warn) 28%,var(--line));
+  border-radius:var(--r-pill);
+  background:color-mix(in srgb,var(--warn) 7%,transparent);
+  color:var(--text-2);
+  font:600 11px/1.25 var(--font-ui);
+}
+.options-ia-gate-dot{
+  width:6px;
+  height:6px;
+  flex:none;
+  border-radius:50%;
+  background:var(--warn);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 14%,transparent);
+}
+.options-statistics-gate{
+  flex:1 1 auto;
+  min-width:0;
+  min-height:0;
+  overflow:auto;
+  display:grid;
+  place-items:start center;
+  padding:clamp(20px,5vh,56px) 16px;
+}
+.options-statistics-gate-card{
+  width:min(680px,100%);
+  padding:clamp(22px,4vw,38px);
+  border-color:color-mix(in srgb,var(--warn) 22%,var(--line));
+  background:
+    radial-gradient(circle at 12% 0%,color-mix(in srgb,var(--warn) 9%,transparent),transparent 44%),
+    var(--panel);
+}
+.options-statistics-gate-eyebrow{
+  margin-bottom:10px;
+  font:750 10px/1 var(--font-ui);
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  color:var(--warn);
+}
+.options-statistics-gate h1{
+  margin:0;
+  max-width:560px;
+  color:var(--text);
+  font:700 clamp(22px,3vw,32px)/1.12 var(--font-ui);
+  letter-spacing:-.025em;
+}
+.options-statistics-gate p{
+  margin:14px 0 0;
+  max-width:590px;
+  color:var(--text-2);
+  font:400 13px/1.65 var(--font-ui);
+}
+.options-statistics-gate-receipts{
+  display:flex;
+  flex-wrap:wrap;
+  gap:7px;
+  margin-top:20px;
+}
+.options-statistics-gate-receipts span{
+  padding:5px 9px;
+  border:1px solid var(--line);
+  border-radius:var(--r-pill);
+  background:var(--panel-2);
+  color:var(--muted);
+  font:650 10px/1 var(--font-ui);
+  letter-spacing:.03em;
+}
+@media(max-width:640px){
+  .options-ia-row{
+    display:block;
+    padding:5px 8px;
+  }
+  .options-ia-row-label{display:none}
+  .options-ia-row .wtabs{width:100%}
+  .options-ia-row .obs-pillnav-tab{padding:7px 11px}
+  .options-ia-gate-strip{
+    width:100%;
+    box-sizing:border-box;
+    justify-content:center;
+  }
+  .options-statistics-gate{padding:18px 10px}
+  .options-statistics-gate-card{padding:22px 18px}
+}
+
 /* ---- Settings v2 (premium suites) ----
    Module accordion inside the IndicatorSettings dialog: one collapsible section per suite module,
    each with a master switch, a compact legend tag, an optional tier chip and (when the viewer's
