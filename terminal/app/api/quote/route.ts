@@ -23,8 +23,10 @@ export const dynamic = "force-dynamic";
 type Entry = { at: number; goodAt?: number; quote: any }; // goodAt: when quote was last genuinely fresh
 const CACHE = new Map<string, Entry>(); // per-symbol, shared by the single + batch paths
 const TTL = 5_000; // real-time snapshot cadence; also bounds upstream call volume per symbol
+const CHART_TTL = 750; // visible-pane cadence; the hub's A.* lane publishes one aggregate per second
 const KEEP_GOOD_MS = 30_000; // ride out a transient upstream miss on a recently-good symbol
 const MAX_BATCH = 200; // a watchlist is normally < 50; cap to bound one poll's upstream fan-out
+const MAX_CHART_BATCH = 8; // at most four panes today; leave headroom without enabling bulk scraping
 
 // Every client receives an explicit regular-session display lane. This keeps native/mobile
 // consumers from interpreting the feed's raw last/chg as an overnight percentage, while the
@@ -41,13 +43,13 @@ function exposeMap(quotes: Record<string, unknown>): Record<string, (PublicQuote
 }
 
 // Split requested symbols into fresh cache hits vs misses (the misses are fetched in one batch).
-function readCache(syms: string[]): { hits: Record<string, any>; miss: string[] } {
+function readCache(syms: string[], ttlMs: number = TTL): { hits: Record<string, any>; miss: string[] } {
   const now = Date.now();
   const hits: Record<string, any> = {};
   const miss: string[] = [];
   for (const s of syms) {
     const c = CACHE.get(s);
-    if (c && now - c.at < TTL) hits[s] = c.quote;
+    if (c && now - c.at < ttlMs) hits[s] = c.quote;
     else miss.push(s);
   }
   return { hits, miss };
@@ -100,12 +102,15 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const symsParam = (searchParams.get("syms") || "").trim();
   const sym = (searchParams.get("sym") || "").trim();
+  const chartCadence = searchParams.get("cadence") === "chart";
+  const ttlMs = chartCadence ? CHART_TTL : TTL;
 
   // ── batch: the live watchlist (one poll for the header + every row) ──
   if (symsParam) {
-    const want = Array.from(new Set(symsParam.split(",").map((s) => s.trim()).filter(Boolean))).slice(0, MAX_BATCH);
+    const want = Array.from(new Set(symsParam.split(",").map((s) => s.trim()).filter(Boolean)))
+      .slice(0, chartCadence ? MAX_CHART_BATCH : MAX_BATCH);
     if (!want.length) return NextResponse.json({ quotes: {} });
-    const { hits, miss } = readCache(want);
+    const { hits, miss } = readCache(want, ttlMs);
     if (miss.length) { const denied = await gate(); if (denied) return denied; }
     try {
       const filled = await fillMisses(miss);
@@ -117,7 +122,7 @@ export async function GET(req: Request) {
 
   // ── single: the detail/header pane (unchanged {sym, quote} contract) ──
   if (!sym) return NextResponse.json({ error: "bad params" }, { status: 400 });
-  const { hits, miss } = readCache([sym]);
+  const { hits, miss } = readCache([sym], ttlMs);
   if (!miss.length) return NextResponse.json({ sym, quote: expose(hits[sym] ?? null) });
   const denied = await gate(); if (denied) return denied;
   try {

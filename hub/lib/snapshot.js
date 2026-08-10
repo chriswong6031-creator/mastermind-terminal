@@ -1,9 +1,9 @@
 "use strict";
 // lib/snapshot.js — Polygon REST snapshot leg: today's session for symbols the
-// streaming AM.* feed is not currently carrying.
+// streaming aggregate feed is not currently carrying.
 //
 // WHY THIS EXISTS (operator-reported 2026-08-07, SKY/Champion Homes):
-//   The hub's only source of a current price was the Polygon `AM.*` WebSocket, and
+//   The hub's only source of a current price was the Polygon aggregate WebSocket, and
 //   subscriptions are idle-swept after 30 minutes (polygon.js) with the quote pruned
 //   after 45 (store.js). Outside the flagship 37 — which fast_flagship re-demands every
 //   5 minutes — that is the NORMAL state. With no live entry, polygon.js seeds a

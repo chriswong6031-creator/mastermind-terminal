@@ -1371,6 +1371,60 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     return () => clearTimeout(id);
   }, [quoteSymsKey, pollQuotes]);
 
+  // Visible-chart fast lane. The wide watchlist/movers batch stays on its inexpensive 6s cadence;
+  // only the (at most four) U.S. symbols actually painted in panes may poll the localhost hub once
+  // per second. A normal timeframe joins after the first quote proves `basis:REALTIME`; selecting a
+  // second timeframe may probe immediately so a newly opened chart does not wait for the slow poll.
+  // When the verdict demotes or the tab hides, this lane turns itself off automatically.
+  const chartQuoteSymsKey = useMemo(() => {
+    const syms: string[] = [];
+    for (let i = 0; i < panes.length; i++) {
+      const sym = panes[i];
+      if (!sym || isComposite(sym) || isMacroSymbol(sym) || classify(sym) !== "us") continue;
+      if (isSecondTf(paneTfs[i] ?? "D") || quotes[sym]?.basis === "REALTIME") syms.push(sym);
+    }
+    return Array.from(new Set(syms)).slice(0, 8).join(",");
+  }, [panes, paneTfs, quotes]);
+  const chartQuoteSymsKeyRef = useRef(chartQuoteSymsKey);
+  chartQuoteSymsKeyRef.current = chartQuoteSymsKey;
+  const chartQuoteAliveRef = useRef(true);
+  const pollChartQuotes = useCallback(() => {
+    if (typeof document !== "undefined" && document.hidden) return;
+    const key = chartQuoteSymsKeyRef.current;
+    if (!key) return;
+    fetch(`/api/quote?cadence=chart&syms=${encodeURIComponent(key)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!chartQuoteAliveRef.current || !d?.quotes) return;
+        setQuotes((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const [sym, quote] of Object.entries<any>(d.quotes)) {
+            // A transient fast-lane miss must not erase the slower lane's last-known quote.
+            if (quote && !quoteEq(prev[sym], quote)) { next[sym] = quote; changed = true; }
+          }
+          return changed ? next : prev;
+        });
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    chartQuoteAliveRef.current = true;
+    const id = setInterval(pollChartQuotes, 1_000);
+    const onVis = () => { if (!document.hidden) pollChartQuotes(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      chartQuoteAliveRef.current = false;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [pollChartQuotes]);
+  useEffect(() => {
+    if (!chartQuoteSymsKey) return;
+    const id = setTimeout(pollChartQuotes, 120);
+    return () => clearTimeout(id);
+  }, [chartQuoteSymsKey, pollChartQuotes]);
+
   // item-26/27: extended/overnight poll — US equities only. Always includes the active symbol
   // (pane-card secondary block, item-25) plus all watchlist US singles when the Ext column is on.
   // Runs at 30 s cadence (ext prints move slowly). Separate from main quote poll so the hub

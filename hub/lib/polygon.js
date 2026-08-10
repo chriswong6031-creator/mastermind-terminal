@@ -1,9 +1,11 @@
 "use strict";
 // Polygon US equities/ETF feed — delayed cluster by default, real-time when entitled.
 //
-// Verified live: auth_success then 'subscribed to: AM.AAPL' acks. AM = per-minute aggregate
-// (delayed ~15 min on the delayed cluster). Contract §2: DYNAMIC per-symbol subs — subscribe on
-// first request, LRU cap 500, unsubscribe after ~30 min idle. Day o/h/l/vol accumulated from AM;
+// Verified live: auth_success then aggregate subscription acks. The delayed cluster uses AM
+// (per-minute, ~15 min behind); the live cluster uses A (per-second OHLC). Contract §2:
+// DYNAMIC per-symbol subs — subscribe on
+// first request, LRU cap 500, unsubscribe after ~30 min idle. Day o/h/l/vol accumulated from
+// either aggregate channel;
 // chg vs manifest prev-close.
 //
 // Cluster select: HUB_POLYGON_CLUSTER=live → wss://socket.polygon.io (basis LIVE). A key that
@@ -11,7 +13,7 @@
 // ("You don't have access real-time data…") — we demote to the delayed cluster for the rest of
 // the process and reconnect, so a plan downgrade can never blank the US feed.
 //
-// AM message fields: ev=AM, sym, o, h, l, c, v, s(start ms), e(end ms).
+// Aggregate message fields: ev=A|AM, sym, o, h, l, c, v, s(start ms), e(end ms).
 // We key the day accumulator on the ET trading date (same formatter family as
 // intradaySources.ts:etDisplay) so a UTC-midnight rollover doesn't reset the US day mid-session.
 //
@@ -30,6 +32,7 @@ const IDLE_UNSUB_MS = 30 * 60 * 1000; // 30 min
 const SWEEP_INTERVAL_MS = 60 * 1000;
 const MAX_BACKOFF_MS = 30 * 1000;
 const MAX_PARAMS_PER_FRAME = 50; // batch subscribe/unsubscribe frames
+const REALTIME_AGG_MAX_LAG_MS = 2 * 60 * 1000;
 
 class Polygon {
   constructor(store, apiKey, extFeed) {
@@ -147,9 +150,16 @@ class Polygon {
         // false-positive demote only costs latency, a miss silently blanks the whole US feed.
         this.cluster = "delayed";
         log.error("polygon real-time denied — demoting to delayed cluster", msg.message || "");
-        // Quotes already stamped LIVE must not linger overclaiming until their next AM bar.
+        // Quotes already stamped live must not linger overclaiming until their next delayed AM bar.
         for (const q of this.store.quotes.values()) {
-          if (q && q.source === "polygon-live") { q.source = "polygon-delayed"; q.basis = "DELAYED_15M"; q.live = false; }
+          if (q && String(q.source || "").startsWith("polygon-live")) {
+            q.source = "polygon-delayed";
+            q.basis = "DELAYED_15M";
+            q.live = false;
+            delete q.asOfMs; delete q.lagMs;
+            delete q.tickOpen; delete q.tickHigh; delete q.tickLow; delete q.tickClose;
+            delete q.tickVol; delete q.tickStartMs; delete q.tickEndMs;
+          }
         }
         try { this.ws.terminate(); } catch {}
       } else if (msg.status === "connected") {
@@ -159,6 +169,85 @@ class Polygon {
       return;
     }
     if (msg.ev === "AM") this._onAM(msg);
+    else if (msg.ev === "A") this._onA(msg);
+  }
+
+  // Massive's A.* feed is the authoritative one-second candle source. A successfully received
+  // packet on the live cluster is still not labelled real-time by configuration alone: its own
+  // end timestamp must be close to the wall clock. The exact one-second OHLC rides alongside the
+  // quote so the browser can grow the active candle without reconstructing a bar from a day close.
+  _onA(m) {
+    const sym = m.sym;
+    if (!sym || this.cluster !== "live") return;
+    const o = Number(m.o), h = Number(m.h), l = Number(m.l), c = Number(m.c), v = Number(m.v);
+    if (![o, h, l, c].every((n) => Number.isFinite(n) && n > 0)) return;
+    const startMs = Number(m.s) || Number(m.e) || Date.now();
+    const endMs = Number(m.e) || startMs;
+    const now = Date.now();
+    const lagMs = Math.max(0, now - endMs);
+    // A buffered/old packet is not evidence of a live tape. The delayed cluster never subscribes
+    // A.* at all; this second guard protects reconnect/catch-up edge cases on the live socket.
+    if (endMs - now > 5_000 || lagMs > REALTIME_AGG_MAX_LAG_MS) return;
+    const session = classifySession(startMs);
+
+    if (session !== "rth") {
+      this.extFeed?.ingest(sym, {
+        price: c,
+        ts: Math.floor(endMs / 1000),
+        session,
+        source: "polygon-live-second",
+        basis: "LIVE",
+      });
+      return;
+    }
+
+    const date = etDate(startMs);
+    let acc = this.dayAcc.get(sym);
+    const officialOpen = Number(m.op);
+    const accumulatedVol = Number(m.av);
+    if (!acc || acc.date !== date) {
+      acc = {
+        date,
+        open: Number.isFinite(officialOpen) && officialOpen > 0 ? officialOpen : o,
+        high: h,
+        low: l,
+        vol: Number.isFinite(accumulatedVol) && accumulatedVol >= 0
+          ? accumulatedVol
+          : Number.isFinite(v) && v >= 0 ? v : 0,
+        last: c,
+      };
+    } else {
+      acc.high = Math.max(acc.high, h);
+      acc.low = Math.min(acc.low, l);
+      acc.last = c;
+      if (Number.isFinite(accumulatedVol) && accumulatedVol >= 0) acc.vol = accumulatedVol;
+      else if (Number.isFinite(v) && v >= 0) acc.vol += v;
+    }
+    this.dayAcc.set(sym, acc);
+
+    this.store.setQuote(sym, {
+      last: c,
+      open: acc.open,
+      high: acc.high,
+      low: acc.low,
+      vol: acc.vol,
+      ts: Math.floor(endMs / 1000),
+      live: true,
+      source: "polygon-live-second",
+      market: "us",
+      basis: "REALTIME",
+      asOfMs: endMs,
+      lagMs,
+      regularSessionDate: date,
+      regularSession: "rth",
+      tickOpen: o,
+      tickHigh: h,
+      tickLow: l,
+      tickClose: c,
+      tickVol: Number.isFinite(v) && v >= 0 ? v : 0,
+      tickStartMs: startMs,
+      tickEndMs: endMs,
+    });
   }
 
   _onAM(m) {
@@ -241,14 +330,14 @@ class Polygon {
       if (oldestKey === undefined) break;
       this.subs.delete(oldestKey);
       this.store.markSubscribed(oldestKey, false);
-      this._send({ action: "unsubscribe", params: `AM.${oldestKey}` });
+      this._send({ action: "unsubscribe", params: `${this._aggregateChannel()}.${oldestKey}` });
       log.info("polygon LRU-evicted", oldestKey);
     }
 
     this.subs.set(sym, { lastReq: now, subscribedAt: now });
     this.store.markSubscribed(sym, true);
     this._writePlaceholder(sym);
-    this._send({ action: "subscribe", params: `AM.${sym}` });
+    this._send({ action: "subscribe", params: `${this._aggregateChannel()}.${sym}` });
   }
 
   _writePlaceholder(sym) {
@@ -256,13 +345,13 @@ class Polygon {
     const existing = this.store.quotes.get(sym);
     if (existing && String(existing.source || "").startsWith("polygon-") && existing.last != null) return;
     // Seed last = MANIFEST last (EOD close). setQuote derives prevClose from prevCloseBySym and
-    // recomputes chg — reproducing the manifest's day-change (not a flat 0) until the first AM
-    // bar lands, at which point the real delayed price/chg take over. Off-hours the header thus
+    // recomputes chg — reproducing the manifest's day-change (not a flat 0) until the first
+    // aggregate bar lands, at which point the tape price/chg take over. Off-hours the header thus
     // keeps showing the session's ±% exactly like the pre-hub EOD fallback did.
     const manifestLast = this.store.manifest.lastBySym.get(sym);
     if (manifestLast == null) return;
     // Placeholder is EOD-derived, so it always carries the delayed labels even on the live
-    // cluster — the first real AM bar upgrades it to LIVE; off-hours it never overclaims.
+    // cluster — the first measured aggregate upgrades it to LIVE; off-hours it never overclaims.
     this.store.setQuote(sym, {
       last: manifestLast,
       ts: Math.floor(Date.now() / 1000),
@@ -279,7 +368,8 @@ class Polygon {
     const syms = [...this.subs.keys()];
     for (let i = 0; i < syms.length; i += MAX_PARAMS_PER_FRAME) {
       const chunk = syms.slice(i, i + MAX_PARAMS_PER_FRAME);
-      const params = chunk.map((s) => `AM.${s}`).join(",");
+      const channel = this._aggregateChannel();
+      const params = chunk.map((s) => `${channel}.${s}`).join(",");
       this._send({ action: "subscribe", params });
     }
   }
@@ -293,7 +383,8 @@ class Polygon {
     for (let i = 0; i < toUnsub.length; i += MAX_PARAMS_PER_FRAME) {
       const chunk = toUnsub.slice(i, i + MAX_PARAMS_PER_FRAME);
       for (const s of chunk) { this.subs.delete(s); this.store.markSubscribed(s, false); }
-      this._send({ action: "unsubscribe", params: chunk.map((s) => `AM.${s}`).join(",") });
+      const channel = this._aggregateChannel();
+      this._send({ action: "unsubscribe", params: chunk.map((s) => `${channel}.${s}`).join(",") });
     }
     if (toUnsub.length) log.info("polygon idle-swept", toUnsub.length, "subs (>30m idle)");
   }
@@ -305,11 +396,14 @@ class Polygon {
     }
   }
 
+  _aggregateChannel() { return this.cluster === "live" ? "A" : "AM"; }
+
   health() {
     return {
       authed: this.authed,
       authFailed: this.authFailed,
       cluster: this.cluster,
+      aggregateChannel: this._aggregateChannel(),
       wantLive: WANT_LIVE,
       subs: this.subs.size,
       lruCap: LRU_CAP,

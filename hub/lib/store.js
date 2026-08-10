@@ -4,7 +4,8 @@
 // Contract §1 quote shape:
 //   { sym, last, chg, prevClose?, close?, open?, high?, low?, vol?, amount?,
 //     ts, live, source, market, basis, marketSession?, regularSessionDate?,
-//     extPrice?, extChg?, extTs?, extSession?, extSource?, extBasis? }
+//     extPrice?, extChg?, extTs?, extSession?, extSource?, extBasis?,
+//     tickOpen?, tickHigh?, tickLow?, tickClose?, tickVol?, tickStartMs?, tickEndMs? }
 //
 // prevClose derivation (session-keyed, not manifest-derived):
 //   US:     prevClose comes from AnchorCache — daily file → Polygon REST → manifest fallback.
@@ -230,7 +231,7 @@ class Store {
     }
 
     // ── REST snapshot: adopt today's session when the tape never delivered one ──
-    // The streaming AM.* feed is idle-swept after 30 minutes, so outside the flagship 37
+    // The streaming aggregate feed is idle-swept after 30 minutes, so outside the flagship 37
     // the normal state for a symbol is "no live subscription". Without this leg the only
     // fallback was `manifest.last` — a NIGHTLY artifact carrying the PREVIOUS session's
     // close — which is how SKY read 91.52 after closing at 94.66 (operator, 2026-08-07).
@@ -287,6 +288,13 @@ class Store {
 
         const fresh = { ...q };
         fresh.last = rtPrice != null ? rtPrice : snap.close;
+        // A newer REST lastTrade may briefly outrun the completed A.* second aggregate. Do not
+        // leave the older tick OHLC attached to the newer `last`: the client prioritises tick*
+        // when shaping a candle, so that mismatch would visibly move backwards until the next A.
+        if (rtPrice != null && snap.printMs != null && snap.printMs > Number(q.tickEndMs || 0)) {
+          delete fresh.tickOpen; delete fresh.tickHigh; delete fresh.tickLow; delete fresh.tickClose;
+          delete fresh.tickVol; delete fresh.tickStartMs; delete fresh.tickEndMs;
+        }
         if (snap.open != null) fresh.open = snap.open;
         if (snap.high != null) fresh.high = snap.high;
         if (snap.low != null) fresh.low = snap.low;

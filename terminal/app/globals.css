@@ -306,6 +306,31 @@ svg{display:block}
 .draw-style-pop .dsp-w i{display:block;width:15px;background:currentColor;border-radius:2px}
 .draw-style-pop .dsp-d svg{width:20px;height:12px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round}
 .chart-wrap{flex:1;position:relative;min-width:0}
+/* Reactive-candle tracer. The actual OHLC body/wick is still native lightweight-charts canvas;
+   this finite halo simply makes a fresh one-second mutation legible at the right edge. Its y/color
+   are written from the series coordinate after update(), and alternating animation names let every
+   packet pulse without a forced layout. No permanent glow, no false motion while the tape is quiet. */
+.chart-wrap::after{
+  content:"";position:absolute;z-index:4;pointer-events:none;
+  right:46px;top:var(--mm-live-y,50%);width:116px;height:52px;
+  transform:translateY(-50%) scale(.72);opacity:0;
+  background:radial-gradient(ellipse at 82% 50%,color-mix(in srgb,var(--mm-live-color,var(--brand-2)) 30%,transparent) 0,color-mix(in srgb,var(--mm-live-color,var(--brand-2)) 12%,transparent) 34%,transparent 72%);
+  border-right:1px solid color-mix(in srgb,var(--mm-live-color,var(--brand-2)) 72%,transparent);
+  filter:saturate(1.12);will-change:transform,opacity;
+}
+.chart-wrap[data-live-kind="new-bar"]::after{width:142px;height:64px}
+.chart-wrap[data-live-pulse="a"]::after{animation:mmLiveCandleA 680ms var(--ease-out)}
+.chart-wrap[data-live-pulse="b"]::after{animation:mmLiveCandleB 680ms var(--ease-out)}
+.chart-wrap[data-live-pulse="a"] .mm-ptag-val{animation:mmLivePriceA 420ms var(--ease-out)}
+.chart-wrap[data-live-pulse="b"] .mm-ptag-val{animation:mmLivePriceB 420ms var(--ease-out)}
+@keyframes mmLiveCandleA{0%{opacity:.92;transform:translateY(-50%) scale(.72)}45%{opacity:.42}100%{opacity:0;transform:translateY(-50%) scale(1.18)}}
+@keyframes mmLiveCandleB{0%{opacity:.92;transform:translateY(-50%) scale(.72)}45%{opacity:.42}100%{opacity:0;transform:translateY(-50%) scale(1.18)}}
+@keyframes mmLivePriceA{0%{filter:brightness(1.5);box-shadow:0 0 0 0 color-mix(in srgb,var(--mm-live-color) 42%,transparent)}100%{filter:brightness(1);box-shadow:0 0 0 7px transparent}}
+@keyframes mmLivePriceB{0%{filter:brightness(1.5);box-shadow:0 0 0 0 color-mix(in srgb,var(--mm-live-color) 42%,transparent)}100%{filter:brightness(1);box-shadow:0 0 0 7px transparent}}
+@media (prefers-reduced-motion:reduce){
+  .chart-wrap[data-live-pulse]::after,.chart-wrap[data-live-pulse] .mm-ptag-val{animation:none}
+  .chart-wrap[data-live-pulse]::after{opacity:0}
+}
 .statusline{position:absolute;z-index:5;display:flex;align-items:center;gap:13px;padding:14px 18px;font-size:12px;color:var(--text-2);pointer-events:none}
 .statusline b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}.statusline .mut{color:var(--muted);margin-right:1px}
 .statusline>span:first-child,.status-identity,.status-values{display:inline-flex;align-items:center}.statusline>span:first-child{gap:11px;min-width:0}.status-identity{gap:7px;min-width:0}.status-values{gap:4px;white-space:nowrap}.status-change{margin-left:3px}

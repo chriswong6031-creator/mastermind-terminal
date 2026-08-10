@@ -8,8 +8,9 @@
 //
 // Feeds v1:
 //   (a) crypto: Coinbase exchange ws-feed (keyless) primary, OKX fallback (one writer at a time)
-//   (b) US: Polygon AM.* dynamic per-symbol subs (delayed cluster by default; HUB_POLYGON_CLUSTER=live
-//       when RT-entitled, auto-demotes back on denial), LRU 500, chg vs session anchor
+//   (b) US: Polygon aggregate dynamic per-symbol subs — delayed AM.* by default, live A.*
+//       when HUB_POLYGON_CLUSTER=live and RT-entitled (auto-demotes on denial), LRU 500,
+//       chg vs session anchor
 //   (c) macro: futures / caret indices / FX / DX-Y.NYB via lib/macrofeed.js — Sina global-futures
 //       snapshot (near-live, basis LIVE) with a Yahoo-spark leg (DELAYED_15M) for what Sina does
 //       not carry. Macro symbols bypass the Store, Polygon and the AnchorCache entirely.
@@ -66,7 +67,7 @@ const extFeed = new ExtFeed({
 // Kill-switch: MACRO_FEED_DISABLE=1 (read inside the constructor).
 const macroFeed = new MacroFeed();
 
-// REST snapshot leg — today's session for US symbols the AM.* stream is not carrying.
+// REST snapshot leg — today's session for US symbols the aggregate stream is not carrying.
 // The stream idle-sweeps subscriptions after 30 minutes, so this is the normal state for
 // anything outside the flagship 37; without this leg those symbols fall back to the
 // NIGHTLY manifest and display the previous session's close. Kill-switch:

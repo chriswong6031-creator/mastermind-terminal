@@ -1,7 +1,8 @@
 # Mastermind Quote Hub
 
 Localhost-only (127.0.0.1:3100) WebSocket fan-out + REST quote server for the
-Mastermind Terminal. Serves crypto (Coinbase/OKX), delayed-US (Polygon AM feed) and
+Mastermind Terminal. Serves crypto (Coinbase/OKX), delayed-US (Polygon AM.*) or entitled
+real-time US (Polygon A.* per-second aggregates), and
 macro (futures / indices / FX, near-live via Sina) quotes to the Next.js frontend via
 loopback proxy.
 
@@ -41,7 +42,7 @@ Env vars come from `/opt/terminal/.env` (EnvironmentFile in the unit):
 | `WEBULL_DISABLE` | optional | set to `1` to disable **only** the Webull ext leg (Alpaca + Yahoo legs unaffected) |
 | `MACRO_FEED_DISABLE` | optional | set to `1` to disable the macro feed — futures/indices/FX drop out of `/quotes` entirely |
 | `HUB_DISABLE_SNAPSHOT` | optional | set to `1` to disable the REST snapshot leg (reverts to exactly the pre-2026-08-07 behaviour — symbols the stream is not carrying fall back to the nightly manifest) |
-| `HUB_REALTIME_QUOTES` | optional | set to `1` to put the snapshot leg in **real-time mode**: 8s poll (vs 60s) and a `lastTrade` parse. Requires the Massive "Stocks Advanced" plan; **US STOCKS ONLY** — no index/futures/FX/crypto entitlement. **Also gates the Terminal's second-resolution bar band** (`/api/intraday` refuses `1s/5s/15s/30s` unless this is set, and the timeframe picker renders the Seconds group disabled to match) — one lever for everything real-time-derived, so the pending anonymous-vs-sign-in ruling has a single switch to land on. See below |
+| `HUB_REALTIME_QUOTES` | optional | set to `1` to put the snapshot leg in **real-time mode**: 8s poll (vs 60s) and a `lastTrade` parse. Requires the Massive "Stocks Advanced" plan; **US STOCKS ONLY** — no index/futures/FX/crypto entitlement. **Also gates the Terminal's second-resolution bar band** (`/api/intraday` refuses `1s/5s/15s/30s` unless this is set, and the timeframe picker renders the Seconds group disabled to match) — one lever for everything real-time-derived, so the pending anonymous-vs-sign-in ruling has a single switch to land on. Set `HUB_POLYGON_CLUSTER=live` as well to feed each open chart the official `A.*` per-second OHLC stream; otherwise the snapshot lane remains the freshest source. See below |
 
 Both new feeds are **keyless**: no credentials are required for the Sina, Yahoo-spark or
 Webull legs.
