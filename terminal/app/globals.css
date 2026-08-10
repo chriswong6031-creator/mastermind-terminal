@@ -1185,6 +1185,16 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 /* ===== alerts + portfolio pages ===== */
 .pg{flex:1;overflow-y:auto;min-height:0;padding:18px 20px}
 .pg-head{display:flex;align-items:center;gap:12px;margin-bottom:16px}.pg-head h2{font:650 17px/1 var(--font-ui)}.pg-head .sub{color:var(--muted);font-size:12.5px}
+.portfolio-wl-switch{display:flex;align-items:center;gap:10px;min-width:0;margin:-4px 0 14px}
+.portfolio-wl-label{flex:none;font:650 10px/1 var(--font-ui);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.portfolio-wl-tabs{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
+.portfolio-wl-pill{appearance:none;display:inline-flex;align-items:center;gap:7px;min-width:0;max-width:220px;min-height:34px;padding:5px 10px;border:1px solid var(--line);border-radius:var(--r-pill);background:var(--panel);color:var(--muted);font:600 12px/1 var(--font-ui);cursor:pointer;transition:color var(--t),border-color var(--t),background var(--t)}
+.portfolio-wl-pill:hover{color:var(--text);border-color:color-mix(in srgb,var(--brand) 62%,var(--line))}
+.portfolio-wl-pill:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
+.portfolio-wl-pill.on{color:var(--brand-2);border-color:var(--brand);background:color-mix(in srgb,var(--brand) 12%,var(--panel))}
+.portfolio-wl-name{min-width:0;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.portfolio-wl-count{flex:none;min-width:20px;padding:2px 5px;border-radius:var(--r-pill);background:color-mix(in srgb,var(--muted) 18%,transparent);font:700 10px/1 var(--font-num);text-align:center;color:currentColor}
+.portfolio-wl-pill.on .portfolio-wl-count{background:color-mix(in srgb,var(--brand) 22%,transparent)}
 .panel{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);overflow:hidden;margin-bottom:16px}
 /* allow table scroll inside panels without clipping */
 .panel:has(.tbl-scroll){overflow-x:visible;overflow-y:hidden}
@@ -1246,6 +1256,13 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
 .kpi{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:14px 16px}.kpi small{font:600 10px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.kpi b{display:block;font:700 22px/1.1 var(--font-ui);margin-top:7px;font-variant-numeric:tabular-nums}
 @media(max-width:500px){.kpis{grid-template-columns:repeat(2,1fr);gap:8px}.kpi{padding:11px 12px}.kpi b{font-size:18px}}
+@media(max-width:640px){
+  .portfolio-wl-switch{align-items:flex-start;flex-direction:column;gap:7px}
+  .portfolio-wl-tabs{width:100%;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;touch-action:pan-x;scrollbar-width:none;padding:2px}
+  .portfolio-wl-tabs::-webkit-scrollbar{display:none}
+  .portfolio-wl-pill{flex:0 0 auto;max-width:190px;min-height:44px;padding:7px 12px}
+  .portfolio-wl-name{max-width:132px}
+}
 
 /* ── Your book today · portfolio brief panel ──────────────────────────────────
    The desk's morning read of the user's own book, rendered as threaded prose.

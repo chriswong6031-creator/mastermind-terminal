@@ -602,6 +602,7 @@ export const LEX: Record<string, [string, string]> = {
   winRateShort: ["WR", "胜率"],
   // watchlist management
   watchlists: ["Watchlists", "自选列表"],
+  portfolioWatchlistSelector: ["Portfolio watchlists", "投资组合自选列表"],
   newWatchlist: ["New watchlist", "新建自选列表"],
   newWatchlistPrompt: ["Name your new watchlist", "为新的自选列表命名"],
   renameWatchlist: ["Rename", "重命名"],
@@ -832,6 +833,7 @@ export const LEX: Record<string, [string, string]> = {
   suggestedTilt: ["Suggested tilt", "建议权重"],
   loadingBook: ["Loading book…", "正在加载账本…"],
   noNamesYet: ["No names in your watchlist yet.", "你的自选中暂无标的。"],
+  emptySelectedWatchlist: ["This watchlist is empty. Add symbols from the chart.", "该自选列表为空。可从图表中添加标的。"],
   convictionFoot: ["{n} bullish · tilt weighted by backtested win-rate · paper / display-only", "{n} 看多 · 按回测胜率加权 · 模拟 / 仅供展示"],
   // portfolio brief — "Your book today" (Pro). Content lines arrive pre-localized from the
   // desk API; these keys are only the panel's own UI chrome.
