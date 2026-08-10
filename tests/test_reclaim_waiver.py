@@ -457,3 +457,50 @@ def test_keeper_verdict_the_parity_surface_is_never_waived(tmp_path):
     hi = confluence_v2._swing_highs(sig["close"])
     assert confluence_v2.keeper_verdict(40, sig, hi) == (
         "block", "counter-trend, no 200-reclaim/hold")
+
+
+# ═══════════════════════════ 8. THE SAME TAPE THE GOLDEN TEST USES ════════════
+# The frame above is surgical — it puts each leg exactly where a branch test needs it. That
+# precision is also its weakness: a waiver that only ever fires on a hand-built frame would
+# be a feature with no cohort. These two run on ``tests/_synthetic_tape``, the SAME long
+# bull→bear→recovery tape the golden fallback test is cut from, and prove the branch is
+# reachable by ordinary price action rather than by construction.
+def test_the_relievable_branch_is_reachable_on_the_synthetic_tape():
+    import tests._synthetic_tape as tape
+    from signal_layer import confluence
+
+    close = tape.synthetic_close()
+    sig = confluence.compute_signals(close)
+    kmap = confluence_v2.keeper_quality_map(sig)
+    literal = [p for p, k in kmap.items()
+               if k["verdict"] == "block" and k["reason"] == "counter-trend, no 200-reclaim/hold"]
+    relievable = [p for p, k in kmap.items() if k["relievable"]]
+    assert literal, "the tape must produce the collapsed-literal cohort at all"
+    assert relievable, "…and at least one of them must be RELIEVABLE, or the waiver is dead code"
+    # every relievable fire is inside the literal cohort — never outside it, which would mean
+    # the flag had drifted off the counter-trend branch it is supposed to describe
+    assert set(relievable) <= set(literal)
+
+
+def test_a_relievable_tape_fire_is_waived_end_to_end(tmp_path):
+    """Emitter → contract → state → ledger, on real price action rather than a fixture."""
+    import tests._synthetic_tape as tape
+    from signal_layer import confluence
+
+    close = tape.synthetic_close()
+    sig = confluence.compute_signals(close)
+    kmap = confluence_v2.keeper_quality_map(sig)
+    pos = max(p for p, k in kmap.items() if k["relievable"])
+    rows = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"])
+    ts = rows.index[pos].strftime("%Y-%m-%d")
+    known = pd.Timestamp(rows["known_ts"].iloc[pos]).strftime("%Y-%m-%d")
+
+    g = gate(tmp_path, artifact(known), today=known)
+    v2 = confluence_v2.build_v2(sig, close, symbol=SYM, override_gate=g)
+    ind = contracts.indicator_contract(SYM, "3D", sig, v2=v2)
+    ev = [e for e in ind["signals"] if e["ts"] == ts][0]
+    assert ev["quality"] == RECLAIM_OVERRIDE_TAKE_QUALITY
+    assert ev["quality_reason"].startswith("reclaim waived: washout")
+    assert "blocked" not in ev
+    # …and this fire is NOT in the washout-override cohort — the two never overlap
+    assert pos not in v2["override"]
