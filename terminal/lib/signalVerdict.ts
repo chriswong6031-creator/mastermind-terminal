@@ -19,13 +19,19 @@ export interface Verdict {
    *  window) — true whether that refusal IS the primary read or rides under a fresher
    *  anchor, so the same engine state can never render as two different-looking cards. */
   blocked?: boolean;
-  /** the refused entry sits inside a deep group washout (ratified 2026-08-10, 25% notch) —
-   *  a DISPLAY class on the same refusal, never a permission to enter. */
+  /** the refused entry sits inside a deep group washout (ratified 2026-08-10; live notch
+   *  `WASHOUT_NOTCH`) — a DISPLAY class on the same refusal, never a permission to enter. */
   overrideCandidate?: boolean;
-  /** the anchor IS a washout-override entry (signal era gc_v2_wo1): the regime gate refused
-   *  it and the ratified washout conditional took it anyway. A REAL entry — the verdict
-   *  keeps the ordinary entry label and color — carrying the washout context beside it. */
+  /** the anchor IS a waived entry (signal era gc_v2_wo2): either the regime gate refused it
+   *  and the washout conditional took it (`override_take`), or the keeper blocked it and the
+   *  ratified reclaim waiver dropped its 200-reclaim leg (`reclaim_override_take`). A REAL
+   *  entry — the verdict keeps the ordinary entry label and color — carrying the washout
+   *  context beside it. */
   overrideTake?: boolean;
+  /** the anchor is a RETRO PROJECTION: a pre-fence refusal today's rule would have entered.
+   *  A counterfactual, never a call — it is display-only, so it never actually reaches this
+   *  field through the scored lane; it is here for the surfaces that render marked history. */
+  retro?: boolean;
   /** second glance-tier line under the verdict. Today only the washout-override disclosure
    *  uses it: the card says which group is washed out and by how much, in plain words. */
   line2?: string | null;
@@ -106,6 +112,10 @@ interface OracleSlice {
        *  a refusal that qualified — a TAKEN override carries `quality:"override_take"` and
        *  no flag, because it is an entry, not a decorated refusal. */
       override_candidate?: boolean | null;
+      /** display-only retro projection: today's rule would have entered this pre-fence
+       *  refusal. Never an entry — see `isRetroOverride`. */
+      retro_override?: boolean | null;
+      retro_ctx?: { group_id?: string | null; name?: string | null; name_zh?: string | null } | null;
       override_ctx?: {
         group_id?: string | null;
         /** peer-median 252d drawdown as a NEGATIVE fraction (−0.388 = 38.8% off the high) */
@@ -167,6 +177,27 @@ export function isOverrideCandidate(
  *  OVERRIDE_TAKE_QUALITY). Its own class, not a keeper verdict — see below. */
 export const OVERRIDE_TAKE_QUALITY = "override_take";
 
+/** The engine quality string of a fire whose KEEPER 200-reclaim leg was waived (Arm T,
+ *  signal era gc_v2_wo2; signal_layer/washout_override.RECLAIM_OVERRIDE_TAKE_QUALITY).
+ *
+ *  A SIBLING of the class above, never the same string. Both are entries the engine stands
+ *  behind and both behave identically on every surface — the difference is which refusal was
+ *  relieved (the regime veto vs one leg of the keeper's counter-trend confirmation) and,
+ *  downstream, which forward ledger grades them. Two rules, two track records, two strings. */
+export const RECLAIM_OVERRIDE_TAKE_QUALITY = "reclaim_override_take";
+
+/** The live washout notch, in percent. SOURCE OF TRUTH IS PYTHON —
+ *  signal_layer/washout_override.WASHOUT_OVERRIDE_NOTCH — and `tests/test_notch_parity.py`
+ *  greps this file so the two can never drift silently. Moving it is an era event there;
+ *  here it is only ever a mirror of that move. */
+export const WASHOUT_NOTCH: number = 20;
+
+/** The notch the published per-trade evidence was measured at. NOT the same thing as the live
+ *  notch, and deliberately a separate constant: a dial move does not re-measure a result, so
+ *  the two are free to diverge and the copy goes quiet when they do (see `washoutOverrideCopy`).
+ *  They are equal today because the 20% row was re-graded and published for this build. */
+export const WASHOUT_MEASURED_NOTCH: number = 20;
+
 /** The washout-override ENTRY: a regime-refused fire the live enter mask TOOK because the
  *  name's thematic-basket peers sat at/below the ratified notch on the day it fired
  *  (signal era gc_v2_wo1; Macro Dashboard research/BLOCKED_ENTRY_CONDITIONAL_PREREG.md §4/§5).
@@ -180,6 +211,37 @@ export function isOverrideTake(
   s?: { quality?: unknown } | null,
 ): boolean {
   return !!s && String(s.quality ?? "").toLowerCase() === OVERRIDE_TAKE_QUALITY;
+}
+
+/** The KEEPER's waived entry (era gc_v2_wo2): a block whose next-bar hold PASSED and whose
+ *  200-reclaim leg the ratified waiver dropped for a qualifying name. Everything said about
+ *  `isOverrideTake` holds here verbatim — real entry, absent from SOFT_Q, anchors the
+ *  verdict, walks position_hint, alerts. Strict on the emitter's string, like its sibling. */
+export function isReclaimOverrideTake(
+  s?: { quality?: unknown } | null,
+): boolean {
+  return !!s && String(s.quality ?? "").toLowerCase() === RECLAIM_OVERRIDE_TAKE_QUALITY;
+}
+
+/** EITHER waived entry class. The render key for every surface that treats the two alike —
+ *  which is every surface except the one line of copy that names which leg was relieved. */
+export function isWaivedEntry(
+  s?: { quality?: unknown } | null,
+): boolean {
+  return isOverrideTake(s) || isReclaimOverrideTake(s);
+}
+
+/** The RETRO PROJECTION: a pre-fence refusal that today's rule would have entered
+ *  (signal_layer/washout_override.mark_retro). Emitter-stamped, never re-derived here.
+ *
+ *  READ THIS AS A COUNTERFACTUAL, NOT A CALL. The engine refused this fire when it fired;
+ *  the mark says only that the rule now in force would not have. Every surface that renders
+ *  it must carry that distinction in words a reader can see WITHOUT hovering — a
+ *  counterfactual painted as an entry is a track record nobody earned. */
+export function isRetroOverride(
+  s?: { retro_override?: unknown } | null,
+): boolean {
+  return !!s && s.retro_override === true;
 }
 
 /** A peer-median 252d drawdown → the glance-tier figure. Truncated toward zero, not rounded:
@@ -216,13 +278,16 @@ interface OverrideCtx {
 export function washoutOverrideCopy(
   ctx: OverrideCtx | null | undefined,
   zh: boolean,
-  taken = false,
+  taken: boolean | WashoutCopyKind = false,
 ): { line: string; notes: string[] } | null {
+  const kind: WashoutCopyKind = taken === true ? "entry" : taken === false ? "candidate" : taken;
   const dd = fmtPeerDd(ctx?.peer_dd);
   const group = (zh ? ctx?.name_zh || ctx?.name : ctx?.name) || null;
-  const head = taken
-    ? (zh ? "深度洗盘例外入场" : "Washout override entry")
-    : (zh ? "深度洗盘例外候选" : "Washout override candidate");
+  const head = kind === "reclaim"
+    ? (zh ? "免收复200日线入场" : "Reclaim waived — entry")
+    : kind === "entry"
+      ? (zh ? "深度洗盘例外入场" : "Washout override entry")
+      : (zh ? "深度洗盘例外候选" : "Washout override candidate");
   // Four honest shapes, because the artifact may ship a name, a number, both, or neither —
   // and a disclosure line that prints an empty slot is worse than a shorter one.
   const who = group ?? (dd ? (zh ? "同类" : "peer group") : null);
@@ -231,24 +296,88 @@ export function washoutOverrideCopy(
     : dd == null
       ? who
       : zh ? `${who}板块距高点 ${dd}` : `${who} ${dd} from highs`;
+  const lead = kind === "reclaim"
+    ? (zh
+      ? "确认条件本会拦截 — 次根K线已站稳，只差收复200日线；同类深度洗盘是放行的唯一理由"
+      : "the keeper would refuse this — it held the next bar but never reclaimed the 200-day; "
+        + "the deep group washout is the one reason it stands")
+    : kind === "entry"
+      ? (zh
+        ? "趋势闸本会拦截 — 同类深度洗盘是放行的唯一理由"
+        : "the regime gate would refuse this — the deep group washout is the one reason it stands")
+      : (zh
+        ? "仍是被拦截的入场 — 洗盘标记是背景，不是放行"
+        : "still a refused entry — the washout flag is context, not a green light");
+
+  const notes = [lead];
+  // THE MEASURED FIGURES ARE PINNED TO THE NOTCH THEY WERE MEASURED AT, and the guard below
+  // is what keeps them there. The dial is an operator setting; the result is a measurement,
+  // and a dial move does not re-measure anything. When the two constants diverge this line
+  // goes SILENT rather than attach one notch's result to another notch's rule.
+  //
+  // Currently both are 20, so it prints the 20% row: equal-notional +21.97% inside qualifying
+  // windows vs +3.05% outside, held-out 2019+, production-basis Gate B re-grade. Receipt:
+  // macro repo research/blocked_entry_study/regrade_receipts.json →
+  // gate_table["20"].B_PROD.{eq_notional_cell, eq_notional_complement}. (The +27%/+3% this
+  // line carried before wo2 was the 25% row and is NOT interchangeable with it.)
+  if (WASHOUT_NOTCH === WASHOUT_MEASURED_NOTCH) {
+    notes.push(zh
+      ? "同类深度洗盘中，这些被拦截信号每笔平均 +22%，其他情形 +3%（2019-2026，始终执行止损）"
+      : "in deep group washouts like this, these blocked signals averaged +22% per trade vs +3% otherwise (2019-2026, stop always honored)");
+  }
+  notes.push(zh
+    ? "多数仍会止损离场 — 止损才是保护"
+    : "most still stop out — the stop is the protection");
+  return { line: where ? `${head} — ${where}` : head, notes };
+}
+
+/** Which of the three washout copy shapes to write. `candidate` = a refusal wearing the
+ *  washout as context; `entry` = the regime veto was overridden; `reclaim` = the keeper's
+ *  200-reclaim leg was waived. One voice, three lead clauses. */
+export type WashoutCopyKind = "candidate" | "entry" | "reclaim";
+
+/** The RETRO PROJECTION disclosure — the counterfactual, said plainly, at glance tier.
+ *
+ *  COPY LAW: this is the one class on the chart the engine did NOT act on, so the line leads
+ *  with the counterfactual mood ("would have") and the note states the fact plainly ("the
+ *  system refused this live"). No study names, no refutation language, and — the point — no
+ *  wording that could be read as a call the product made. The line is glance tier ON PURPOSE:
+ *  a hover-only disclosure is invisible on touch, in a screenshot, and to anyone skimming. */
+export function retroOverrideCopy(
+  ctx: { group_id?: string | null; name?: string | null; name_zh?: string | null } | null | undefined,
+  zh: boolean,
+): { line: string; notes: string[] } {
+  const group = (zh ? ctx?.name_zh || ctx?.name : ctx?.name) || ctx?.group_id || null;
+  const head = zh ? "按当前规则本会入场" : "Would have entered under today's rule";
   return {
-    line: where ? `${head} — ${where}` : head,
+    line: group ? `${head} — ${group}` : head,
     notes: [
-      taken
-        ? (zh
-          ? "趋势闸本会拦截 — 同类深度洗盘是放行的唯一理由"
-          : "the regime gate would refuse this — the deep group washout is the one reason it stands")
-        : (zh
-          ? "仍是被拦截的入场 — 洗盘标记是背景，不是放行"
-          : "still a refused entry — the washout flag is context, not a green light"),
       zh
-        ? "同类深度洗盘中，这些被拦截信号每笔平均 +27%，其他情形 +3%（2019-2026，始终执行止损）"
-        : "in deep group washouts like this, these blocked signals averaged +27% per trade vs +3% otherwise (2019-2026, stop always honored)",
-      zh
-        ? "多数仍会止损离场 — 止损才是保护"
-        : "most still stop out — the stop is the protection",
+        ? "事后按当前规则重标 — 当时系统并未入场，这不是当时的判断"
+        : "re-marked under the current rule — the system refused this live, so it is not a call we made",
+      zh ? "仅供参考，不计入战绩" : "shown for context; it is not in the track record",
     ],
   };
+}
+
+/** THE RETRO LEGEND — the disclosure of record for the retro projection.
+ *
+ *  Load-bearing, and worth knowing why before editing it. On the chart, a re-marked fire is
+ *  drawn IDENTICALLY to a live waived entry (operator order 2026-08-10): same star, same
+ *  amber, no marker-level tag. The marker's `<title>` cannot carry the difference either —
+ *  the signal layer is `pointer-events:none`, so no native SVG tooltip on it has ever
+ *  rendered. That leaves this line as the only place the product tells a reader that some of
+ *  those stars are counterfactuals rather than calls it made.
+ *
+ *  So it is built to need nothing from the reader: no hover, no tap, no zoom. It renders
+ *  whenever a re-marked fire is in the visible signal list, and it RESOLVES THE LABEL — it
+ *  quotes the "(retro)" suffix the rows carry and says what it means, because a label a
+ *  reader cannot resolve is not a disclosure. Plain words, no study names, no era slugs. */
+export function retroLegendCopy(zh: boolean): string {
+  return zh
+    ? "（事后重标）— 按当前规则重新标注；这笔入场当时被系统拒绝，因此不是我们当时的判断。"
+    : "(retro) — re-marked under the current rule; the system refused this entry when it "
+      + "fired, so it is not a call we made.";
 }
 
 /** HK-O1: every SELL the SLICE emits is the ARM→CONFIRM structure break — a TRAILING STOP on
@@ -449,8 +578,11 @@ export function oracleVerdict(
     // it must NOT do is arrive unexplained, because this is the one entry class that fired
     // against the regime gate. The disclosure rides the same line2 the refused class uses,
     // so the two states of one mechanism read as one mechanism.
-    const took = isOverrideTake(eff)
-      ? washoutOverrideCopy((eff as { override_ctx?: OverrideCtx | null }).override_ctx, zh, true)
+    // Either waived class anchors identically; only the lead clause names which leg was
+    // relieved, because that is the only thing about them that differs to a reader.
+    const took = isWaivedEntry(eff)
+      ? washoutOverrideCopy((eff as { override_ctx?: OverrideCtx | null }).override_ctx, zh,
+                            isReclaimOverrideTake(eff) ? "reclaim" : "entry")
       : null;
     if (took) notes.push(...took.notes);
     // lane-disagreement note only between the two SCORED lanes (a RECLAIM primary is

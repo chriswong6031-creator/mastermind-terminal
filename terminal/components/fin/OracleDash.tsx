@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { pick, fmtPct, fmtDate } from "../../lib/finFormat"
 import { LineSeries } from "./FinCharts"
 import { getJSON } from "../../lib/dataCache"
-import { oracleVerdict, deskVerdict, signalKnownTs, isBlockedSignal, isStructureStop, sliceSignalBasis } from "../../lib/signalVerdict"
+import { oracleVerdict, deskVerdict, signalKnownTs, isBlockedSignal, isRetroOverride, isStructureStop, retroLegendCopy, sliceSignalBasis } from "../../lib/signalVerdict"
 import { computeTrendState } from "../../lib/trend"
 import { computeRatings, verdictFromScore } from "../../lib/techRating"
 import type { Bar } from "../../lib/fund"
@@ -74,7 +74,10 @@ interface Signal {
   // GC v2 keeper/recipe grading (BUY|REBUY only; absent on v1 slices, null tier/score for
   // regime_blocked). "override_take" is not a keeper verdict at all — it is the washout-
   // override ENTRY class (signal era gc_v2_wo1), which bypasses the keeper by design.
-  quality?: "take" | "block" | "pending" | "regime_blocked" | "override_take" | string | null
+  // "reclaim_override_take" IS a keeper verdict (era gc_v2_wo2): the keeper graded the fire
+  // and the ratified waiver dropped one of its two counter-trend legs.
+  quality?: "take" | "block" | "pending" | "regime_blocked" | "override_take"
+    | "reclaim_override_take" | string | null
   quality_reason?: string | null
   tier?: "aplus" | "quality" | "base" | string | null
   score?: number | null
@@ -88,6 +91,10 @@ interface Signal {
   basis?: "structure_stop" | string | null
   blocked?: boolean | null
   stop_level?: number | null
+  // DISPLAY-ONLY retro projection: today's rule would have entered this pre-fence refusal.
+  // Never an entry — it carries no entry quality, walks no position, and fires no alert.
+  retro_override?: boolean | null
+  retro_ctx?: { group_id?: string | null; name?: string | null; name_zh?: string | null } | null
 }
 
 /** GC v2 structure-break warning side channel: {ts, kind:"arm"|"confirm"}. */
@@ -220,6 +227,10 @@ function qualityLabel(q: string | null | undefined, zh: boolean): string {
   // The washout-override ENTRY (era gc_v2_wo1) — a taken entry, not a keeper verdict. It
   // names the exception rather than the gate, because the gate is what it went past.
   if (v === "override_take") return pick(zh, "Washout override", "深度洗盘例外")
+  // The KEEPER's waived entry (era gc_v2_wo2, Arm T). Its own label, because it is its own
+  // rule with its own forward ledger — and because it names a DIFFERENT relaxation: the
+  // 200-reclaim leg, not the regime veto. The next-bar hold still had to pass.
+  if (v === "reclaim_override_take") return pick(zh, "Reclaim waived", "免收复200日线")
   return ""
 }
 function qualityColor(q: string | null | undefined): string {
@@ -232,6 +243,7 @@ function qualityColor(q: string | null | undefined): string {
   // the ordinary entry green, so this chip's job is to make the exception FINDABLE, not to
   // grade it. One colour for one mechanism, in both of its states.
   if (v === "override_take") return "var(--signal)"
+  if (v === "reclaim_override_take") return "var(--signal)"
   return "var(--muted)"
 }
 
@@ -807,17 +819,24 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                     // regime-vetoed setup still types BUY/REBUY for back-compat, and it must
                     // never wear the buy pill or count as one in the list.
                     const isBlocked = isBlockedSignal(sig)
+                    // The RETRO PROJECTION: a pre-fence refusal today's rule would have
+                    // entered. It reads as the entry it would have been — and says, in the
+                    // row itself, that it was not one. `(retro)` is not decoration: without
+                    // it this row is a claim the product never earned.
+                    const isRetro = isRetroOverride(sig)
                     const isEntry = !isBlocked && (sig.type === "BUY" || sig.type === "REBUY")
                     const isReclaim = sig.type === "RECLAIM"
                     const isStop = isStructureStop({ type: sig.type, basis: sliceSignalBasis(sig) })
                     // badge text stays inside the 58px pill and matches the on-chart glyph, so the
                     // list and the chart read as one system; the mechanic rides the qualifier + hover.
-                    const badgeText = isBlocked ? pick(zh, "BLOCKED", "已拦截")
-                      : isStop ? pick(zh, "STOP", "止损")
-                        : isReclaim ? pick(zh, "RE-ENTRY", "再入场") : sig.type
-                    const qualifier = isBlocked ? pick(zh, "not an entry", "非入场信号")
-                      : isStop ? pick(zh, "swing-low break", "跌破前低")
-                        : isEntry ? qualityLabel(sig.quality, zh) : ""
+                    const badgeText = isRetro ? sig.type
+                      : isBlocked ? pick(zh, "BLOCKED", "已拦截")
+                        : isStop ? pick(zh, "STOP", "止损")
+                          : isReclaim ? pick(zh, "RE-ENTRY", "再入场") : sig.type
+                    const qualifier = isRetro ? pick(zh, "(retro)", "（事后重标）")
+                      : isBlocked ? pick(zh, "not an entry", "非入场信号")
+                        : isStop ? pick(zh, "swing-low break", "跌破前低")
+                          : isEntry ? qualityLabel(sig.quality, zh) : ""
                     const q = qualifier
                     const knownTs = signalKnownTs(sig) ?? sig.ts
                     const knownDate = signalHistoryDate(knownTs, zh)
@@ -835,7 +854,11 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                         className="sd-sigrow"
                         onClick={() => handleJump(sig.ts)}
                         title={
-                          isBlocked
+                          isRetro
+                            ? pick(zh,
+                              "Re-marked under the current rule (2026-08-10) — the system refused this live",
+                              "按当前规则事后重标（2026-08-10）— 当时系统并未入场")
+                          : isBlocked
                             ? pick(zh,
                               `Entry refused by the regime gate — not an entry${sig.quality_reason ? ` (${sig.quality_reason})` : ""}`,
                               `入场被趋势闸拒绝 — 非入场信号${sig.quality_reason ? `（${sig.quality_reason}）` : ""}`)
@@ -849,9 +872,12 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                         {/* tinted (not solid) pills — the signal color rides --sc; RECLAIM keeps the
                             hollow treatment (glyph law — never the solid entry pill), and HK-O1 gives
                             a REFUSED entry the same hollow/muted treatment so it can never read green */}
+                        {/* RETRO keeps the hollow treatment and the washout amber, never the
+                            solid entry green: the row says what today's rule WOULD have done,
+                            and a live-BUY pill would say the product did it. */}
                         <span
-                          className={"sd-sig-badge" + (isReclaim || isBlocked ? " hollow" : "")}
-                          style={{ ["--sc" as any]: isBlocked ? "var(--muted)" : isReclaim ? "var(--buy)" : signalColor(sig.type) }}
+                          className={"sd-sig-badge" + (isReclaim || isBlocked || isRetro ? " hollow" : "")}
+                          style={{ ["--sc" as any]: isRetro ? "var(--signal)" : isBlocked ? "var(--muted)" : isReclaim ? "var(--buy)" : signalColor(sig.type) }}
                         >
                           {badgeText}
                         </span>
@@ -864,6 +890,17 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                       </button>
                     )
                   })}
+                  {/* ── THE RETRO LEGEND: the disclosure that needs no hover and no tap ──
+                      A "(retro)" suffix is a label, and a label the reader cannot resolve is
+                      not a disclosure. The sentence behind it used to live only in the row's
+                      `title`, which is a desktop-hover affordance — invisible on touch, in a
+                      screenshot, and to anyone skimming. So when the visible list contains a
+                      re-marked fire, the card states the meaning in full, once, in place.
+                      Rendered only when such a row is on screen, so it costs nothing on the
+                      overwhelming majority of names that have none. */}
+                  {sigs.some(isRetroOverride) && (
+                    <div className="sd-sig-legend">{retroLegendCopy(zh)}</div>
+                  )}
                 </div>
               )}
             </div>

@@ -157,6 +157,10 @@ def main() -> None:
                 bar_opens=[d.strftime("%Y-%m-%d") for d in sig.index],
                 dates=[d.strftime("%Y-%m-%d") for d in idx],
                 high=high.to_list(), low=low.to_list(), close=close.to_list()))
+            # retro projection: DISPLAY-ONLY re-marks of pre-fence refusals today's rule
+            # would have entered. Never scored, never alerted, never accrued.
+            stamper.retro(sym, ind.get("signals"),
+                          relievable_ts=v2.get("keeper_relievable"))
             # the chart only consumes indicator.signals + indicator.state — drop the heavy arrays
             for heavy in ("series", "gates", "bars"):
                 ind.pop(heavy, None)

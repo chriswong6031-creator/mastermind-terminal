@@ -378,6 +378,9 @@
 .sd-sig-badge{display:inline-flex;align-items:center;justify-content:center;min-width:58px;padding:3.5px 8px;border-radius:var(--r);font:650 9.5px/1 var(--font-ui);color:var(--sc,var(--text-2));background:color-mix(in srgb,var(--sc,var(--muted)) 10%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sc,var(--muted)) 26%,transparent);letter-spacing:.05em;flex:none}
 .sd-sig-badge.hollow{background:transparent}
 .sd-sig-q{font:550 9.5px/1 var(--font-ui);color:var(--muted);white-space:nowrap;text-transform:lowercase}
+/* the retro legend: resolves the "(retro)" suffix in place, so the meaning survives
+   touch, screenshots and skimming — it must never depend on a hover affordance */
+.sd-sig-legend{grid-column:1/-1;margin-top:6px;padding-top:6px;border-top:1px solid rgba(148,163,184,.14);font:500 10px/1.45 var(--font-ui);color:var(--muted)}
 .sd-sig-date{margin-left:auto;font:500 11.5px/1 var(--font-num);color:var(--text-2);white-space:nowrap;font-variant-numeric:tabular-nums}
 .sd-sig-price{font:600 11.5px/1 var(--font-num);color:var(--text);min-width:58px;text-align:right;font-variant-numeric:tabular-nums}
 @media (max-width:860px){

@@ -64,8 +64,14 @@ def artifact(as_of: str = AS_OF, **over) -> dict:
         "names": {
             "UEC": {"basis": "basket", "group_id": "uranium_miners", "peer_dd": -0.388,
                     "qualifies": {"20": True, "25": True, "30": True}},
-            "SHALLOW": {"basis": "basket", "group_id": "uranium_miners", "peer_dd": -0.22,
-                        "qualifies": {"20": True, "25": False, "30": False}},
+            # shallower than the live 20% notch — the "qualified at some notch, but not
+            # ours" case. At notch 20 (the grid's floor) that means qualifying nowhere.
+            "SHALLOW": {"basis": "basket", "group_id": "uranium_miners", "peer_dd": -0.15,
+                        "qualifies": {"20": False, "25": False, "30": False}},
+            # qualifies at the live 20% notch and nowhere deeper — the name that proves the
+            # dial moved: pre-wo2 (notch 25) it was refused, and it is taken now.
+            "MID": {"basis": "basket", "group_id": "uranium_miners", "peer_dd": -0.22,
+                    "qualifies": {"20": True, "25": False, "30": False}},
             "CALM": {"basis": "sector", "group_id": "software_infra", "peer_dd": -0.11,
                      "qualifies": {"20": False, "25": False, "30": False}},
         },
@@ -144,21 +150,31 @@ def test_below_threshold_and_unlisted_names_stay_plain(tmp_path):
     st = stamper(tmp_path, artifact())
     shallow, calm, absent = blocked_ev(AS_OF), blocked_ev(AS_OF), blocked_ev(AS_OF)
     baseline = dict(blocked_ev(AS_OF))
-    assert st.stamp("SHALLOW", [shallow]) == 0   # qualifies at 20 only; ratified notch is 25
+    assert st.stamp("SHALLOW", [shallow]) == 0   # qualifies at nothing; live notch is 20
     assert st.stamp("CALM", [calm]) == 0
     assert st.stamp("NOTINARTIFACT", [absent]) == 0
     for ev in (shallow, calm, absent):
         assert ev == baseline          # byte-identical to a pre-override event
+    # …and the dial's own witness: MID clears 20 and nothing deeper, so it is exactly the
+    # name the 25 → 20 move added. It stamps.
+    mid = blocked_ev(AS_OF)
+    assert st.stamp("MID", [mid]) == 1
+    assert mid["override_ctx"]["thresholds_hit"] == [20]
 
 
 def test_threshold_is_a_config_dial_not_a_code_change(tmp_path, monkeypatch):
-    """20/30 also passed every frozen gate — the notch is an operator aggressiveness dial."""
-    assert DEFAULT_THRESHOLD == "25"
-    monkeypatch.setenv("WASHOUT_THRESHOLD", "20")
+    """20/25/30 all passed every frozen gate — the notch is an operator aggressiveness dial.
+
+    Live setting is 20 since gc_v2_wo2; the env lever must still move it, and moving it must
+    still move DISPLAY and ENTRY together (they read the same number or the amber ring and
+    the mask disagree about who qualifies).
+    """
+    assert DEFAULT_THRESHOLD == "20"
+    monkeypatch.setenv("WASHOUT_THRESHOLD", "30")
     st = stamper(tmp_path, artifact())
     ev = blocked_ev(AS_OF)
-    assert st.stamp("SHALLOW", [ev]) == 1
-    assert ev["override_ctx"]["thresholds_hit"] == [20]
+    assert st.stamp("UEC", [ev]) == 1
+    assert ev["override_ctx"]["thresholds_hit"] == [20, 25, 30]
 
 
 # ────────────────────────────────────────────────────── 2. the PIT rule ──
@@ -359,9 +375,9 @@ def test_peer_dd_is_normalized_to_one_negative_fraction(raw, expect):
 
 
 def test_qualifies_map_is_the_authority_over_derived_peer_dd(tmp_path):
-    """A publisher that says 'no' at 25 is obeyed even when its own peer_dd looks deep."""
+    """A publisher that says 'no' at the live notch is obeyed even when peer_dd looks deep."""
     doc = artifact()
-    doc["names"]["UEC"]["qualifies"] = {"20": True, "25": False, "30": False}
+    doc["names"]["UEC"]["qualifies"] = {"20": False, "25": True, "30": False}
     st = stamper(tmp_path, doc)
     assert st.stamp("UEC", [blocked_ev(AS_OF)]) == 0
 
@@ -385,8 +401,8 @@ def test_the_bridge_trims_to_qualifying_names_and_flags_staleness():
     assert out["as_of"] == AS_OF and out["stale"] is False
     assert out["is_display_only"] is True
     assert out["threshold"] == DEFAULT_THRESHOLD
-    # only names qualifying at SOME notch are served (CALM qualifies nowhere)
-    assert set(out["names"]) == {"UEC", "SHALLOW"}
+    # only names qualifying at SOME notch are served (CALM/SHALLOW qualify nowhere)
+    assert set(out["names"]) == {"UEC", "MID"}
     assert out["names"]["UEC"]["peer_dd"] == pytest.approx(-0.388)
     assert out["baskets"]["uranium_miners"]["name_zh"] == "铀矿商"
 

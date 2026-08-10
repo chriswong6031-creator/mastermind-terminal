@@ -18,6 +18,20 @@ DOES, since the ``gc_v2_wo1`` era fence:
   3. the forward ledger — one row per stamped or taken fire, carrying the era it was
      minted under, so the shipped rule grades itself from night one.
 
+DOES, additionally, since the ``gc_v2_wo2`` fence (Arm T of the reclaim-veto conditional,
+Macro Dashboard research/RECLAIM_VETO_CONDITIONAL_PREREG.md §4/§5, RATIFIED at 25%):
+  4. **the keeper's reclaim waiver** (``WashoutStamper.reclaim_override_for``) — the same
+     yes/no question, asked by ``confluence_v2.keeper_quality_map`` about a RELIEVABLE
+     keeper block: one whose next-bar HOLD leg PASSED and whose 200-reclaim leg failed.
+     A granted fire becomes ``quality="reclaim_override_take"``. The two gates share the
+     artifact, the notch, the PIT rule and the ledger, and differ only in which cohort
+     asks — which is why they live in one module. HOLD-leg failures are NOT relievable and
+     never reach this gate (the adjudicated boundary; HL 2026-06-16 stays blocked);
+  5. **the retro projection** (``mark_retro``) — a DISPLAY-ONLY re-mark of PRE-FENCE
+     refusals that today's rule would have entered. It is a labelled counterfactual, not a
+     call: it never enters the scored stream, never alerts, and never touches the ledger
+     (structurally — ``mark_retro`` has no ledger parameter to touch).
+
 DOES NOT: compute a score, a tier, or a keeper verdict; re-type an event; or reach a fire
 whose basket did not qualify on the day it fired. The gate answers one yes/no question and
 returns the context behind it; every other property of the emission is unchanged.
@@ -30,11 +44,19 @@ display build (no ``era``/``taken``) replays as the amber-ringed ⊘ it always w
 PIT rule below a historical fire can never be granted in the first place, and the era check
 is the belt to that braces — a fence that fails closed on any row it does not recognise.
 
-COHORT (load-bearing, corrected 2026-08-10): the override class keys on
+COHORT (load-bearing, corrected 2026-08-10): the *washout-override* class keys on
 ``quality == "regime_blocked"`` — the ``bear_block`` regime veto — and on nothing else. A
 keeper ``block`` ("counter-trend, no 200-reclaim/hold", e.g. HL's 2026-06-16/06-25 fires) is
-a DIFFERENT refusal, outside the studied cohort, and must never be stamped even when its
+a DIFFERENT refusal, outside that cohort, and must never be stamped with it even when its
 basket qualifies. ``contracts.BLOCKED_QUALITY`` is the single source of that string.
+
+The keeper block is the RECLAIM-WAIVER cohort instead, and only in part: Arm T's gauntlet
+ran on the RELIEVABLE subset — held passed, reclaim failed — which is 12.6% of the literal
+``"counter-trend, no 200-reclaim/hold"`` reason-set, because that one string collapses BOTH
+legs' failures (prereg §5: the charting-app copy never received the macro engine's #4583
+string split, and the collapsed literal mis-specified the frozen cohort). NEVER select this
+cohort by reason string. ``confluence_v2`` selects it on BRANCH LOGIC and hands this module
+an already-relievable fire; HL 06-16 (hold-leg failure) is not one and never arrives here.
 
 THE PIT RULE (why stamping is not a backfill)
 ---------------------------------------------
@@ -69,7 +91,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from . import SIGNAL_ERA, SIGNAL_ERA_PRE
+from . import (ERAS_WITH_ENTER_MASK, ERAS_WITH_RECLAIM_WAIVER, SIGNAL_ERA,
+               SIGNAL_ERA_PRE)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -83,16 +106,30 @@ SCHEMA_BRIDGE = "washout_state/v1"
 STATE_PATH = ROOT / "terminal" / "public" / "data" / "washout_state.json"
 
 # ── THE NOTCH: the one number that decides who gets taken ───────────────────────
-# Ratified 2026-08-10 at 25% (prereg §5; the operator named no other notch, and 20/30
-# passed every frozen gate too — packet §2 pre-declared the notch an aggressiveness dial,
-# not a statistical claim).
+# Ratified 2026-08-10 at 25%; moved to **20%** by the operator in the same breath as the
+# gc_v2_wo2 build (prereg §5 records 20/25/30 as gauntleted-and-passing at both arms, with
+# 15% failing everywhere — the notch is an aggressiveness dial inside the passing band, not
+# a statistical claim, so moving inside that band needs no new gauntlet).
 #
-# CHANGING THIS POST-FENCE IS AN ERA EVENT, NOT A CONFIG EDIT. Before the ``gc_v2_wo1``
-# fence a different notch was one word from the operator; now it changes which fires the
-# engine ENTERS, so the trades either side of the change are two different rules and
-# pooling them measures neither. A new notch ships WITH a new ``SIGNAL_ERA``
-# (signal_layer/__init__.py) so the forward ledger stays gradeable — never on its own.
-WASHOUT_OVERRIDE_NOTCH = 25
+# CHANGING THIS POST-FENCE IS AN ERA EVENT, NOT A CONFIG EDIT — and this change honoured
+# that: 25 → 20 ships WITH the ``gc_v2_wo1`` → ``gc_v2_wo2`` bump (signal_layer/__init__.py),
+# never on its own, so the forward ledger stays gradeable. wo2 therefore fences TWO changes
+# at once: the keeper's reclaim waiver AND this notch move. Rows either side are two
+# different rules and pooling them measures neither.
+WASHOUT_OVERRIDE_NOTCH = 20
+
+# The notch the PUBLISHED per-trade evidence was measured at. Deliberately NOT tied to the
+# live notch: the numbers are a measurement at a setting, and a dial move does not re-measure
+# them. Every surface that prints those figures gates on the two being equal
+# (terminal/lib/signalVerdict.ts ``washoutOverrideCopy``) so the product can never attach one
+# notch's result to another notch's rule — the copy goes silent instead.
+#
+# They are equal today because the 20% row was re-graded and published for this build:
+# equal-notional +21.97% inside qualifying windows vs +3.05% outside, held-out 2019+,
+# production-basis Gate B. Receipt (macro repo, committed on main):
+# research/blocked_entry_study/regrade_receipts.json ->
+# gate_table["20"].B_PROD.{eq_notional_cell, eq_notional_complement}.
+WASHOUT_MEASURED_NOTCH = 20
 
 # The single place the notch is written; the artifact-facing threshold derives from it so
 # the DISPLAY class and the ENTRY gate can never drift to different numbers (a name wearing
@@ -104,6 +141,22 @@ DEFAULT_THRESHOLD = str(WASHOUT_OVERRIDE_NOTCH)
 # (that module imports this one; the mirror is here so this module stays pandas-free), and
 # ``tests/test_washout_entry_mask.py`` pins the two together.
 OVERRIDE_TAKE_QUALITY = "override_take"
+
+# The quality string a fire carries when the KEEPER's counter-trend reclaim leg was waived
+# (era gc_v2_wo2, Arm T). A SIBLING of the class above, never the same string: the two
+# waivers relieve different refusals on disjoint cohorts, so pooling their forward rows
+# would measure neither. Both are take-class — a real scored entry in every downstream
+# sense — which is why the client's SOFT_Q set holds neither.
+RECLAIM_OVERRIDE_TAKE_QUALITY = "reclaim_override_take"
+
+# ── ledger row classes ──────────────────────────────────────────────────────────
+# One ledger, two waivers, so a row must say which rule minted it or the replay authority
+# could grant a wo1 washout override off a wo2 reclaim row (and vice versa). The cohorts
+# are disjoint by construction (override ⊂ bear_block, keeper ⊂ ~bear_block), so a
+# ``(ticker, ts)`` key still cannot collide — the class makes the REPLAY fail closed
+# anyway. A row with no class predates the split and can only be the washout override.
+LEDGER_CLASS_WASHOUT = "washout_override"
+LEDGER_CLASS_RECLAIM = "reclaim_override"
 
 # Trading sessions, not calendar days: the artifact is a nightly product, so 5 sessions is
 # one clean trading week of tolerance. Approximated as weekdays (no exchange holiday
@@ -186,6 +239,33 @@ def _is_regime_blocked(ev: dict) -> bool:
 def _is_override_take(ev: dict) -> bool:
     """The TAKEN class — a fire the live gate let through (``confluence_v2`` emitted it)."""
     return str(ev.get("quality") or "").lower() == OVERRIDE_TAKE_QUALITY
+
+
+def _is_reclaim_override_take(ev: dict) -> bool:
+    """The TAKEN keeper class — a relievable block whose reclaim leg the waiver dropped."""
+    return str(ev.get("quality") or "").lower() == RECLAIM_OVERRIDE_TAKE_QUALITY
+
+
+def reclaim_override_quality_reason(ctx: dict | None) -> str:
+    """The one-line WHY behind a waived reclaim leg, stamped on the event.
+
+    ``reclaim waived: washout <group_id> <peer_dd> (era gc_v2_wo2)`` — the group whose peers
+    were washed out, how far below their 252d highs the peer median sat, and the era the
+    decision was made under. Sibling of ``contracts.override_quality_reason`` and degrades
+    the same way: an artifact shipping no group, or no number, yields a shorter line, never
+    an empty slot. Lives here rather than in ``contracts`` because ``confluence_v2`` stamps
+    it at the keeper branch and must not import the emitter.
+    """
+    ctx = ctx or {}
+    bits = []
+    group = ctx.get("group_id")
+    if group:
+        bits.append(str(group))
+    dd = ctx.get("peer_dd")
+    if isinstance(dd, (int, float)) and not isinstance(dd, bool) and dd == dd:
+        bits.append(f"−{abs(float(dd)) * 100:.1f}%")
+    washout = " ".join(["washout", *bits])
+    return f"reclaim waived: {washout} (era {SIGNAL_ERA})"
 
 
 # ────────────────────────────────────────────────────────────────── the state ──
@@ -378,6 +458,242 @@ def qualifies(
     return state.context_for(ticker, notch=notch)
 
 
+# ══════════════════════════════════════════════ THE RETRO PROJECTION (display) ══
+# A LABELLED COUNTERFACTUAL, AND NOTHING ELSE.
+#
+# The live gate above cannot reach backwards (the PIT rule) and must not: an entry the
+# engine did not make is not a trade. But the refusals it left behind are still on the
+# chart, and a user reading them has no way to see that today's rule would treat that bar
+# differently. The retro projection answers exactly that question, on the display tier:
+# a PRE-FENCE ``regime_blocked`` (or relievable keeper-block) fire whose date sits inside a
+# qualifying interval for its name gets ``retro_override``/``retro_ctx``.
+#
+# THE FOUR HARD BOUNDARIES (each has its own test; the first is structural):
+#   1. it never touches the forward ledger — ``mark_retro`` takes NO ledger parameter, so
+#      there is no code path through which it could, not merely none that does;
+#   2. it never changes ``quality``, so it can never become an entry class, can never walk
+#      ``position_hint``/``last_scored``, and can never enter the scored stream;
+#   3. it never alerts (``ingest/alerts_engine`` keys on the entry qualities, and these
+#      fires keep their refusal quality);
+#   4. artifact absent/unparseable/wrong-notch → nothing is marked and the emission is
+#      byte-identical to one built without this module.
+#
+# WHY "PRE-FENCE" IS THE CUT: a fire the LIVE mask judged already has its answer, and
+# re-answering it here would let a display artifact contradict a traded decision. So the
+# projection only reaches fires the live gate could not have judged — ``known_ts`` strictly
+# before the live state's ``as_of``. Post-fence fires are the mask's, always.
+HISTORY_SCHEMA_IN = "basket_washout_history.v1"
+HISTORY_SCHEMA_BRIDGE = "washout_history/v1"
+
+HISTORY_PATH = ROOT / "terminal" / "public" / "data" / "washout_history.json"
+
+# The keeper's refusal string (confluence_v2.keeper_verdict). Held here so the retro cohort
+# can be selected without importing the pandas-bearing emitter.
+KEEPER_BLOCK_QUALITY = "block"
+
+
+def _parse_interval(v: Any) -> tuple[str, str | None] | None:
+    """One qualifying window → ``(start, end|None)``. None end = still open."""
+    start = end = None
+    if isinstance(v, dict):
+        start = v.get("start") or v.get("from") or v.get("begin")
+        end = v.get("end") or v.get("to") or v.get("until")
+    elif isinstance(v, (list, tuple)) and len(v) >= 1:
+        start = v[0]
+        end = v[1] if len(v) >= 2 else None
+    start = _iso(start)
+    if start is None:
+        return None
+    return (start, _iso(end))
+
+
+def _intervals_at(row: dict, notch: int) -> list[tuple[str, str | None]]:
+    """The name's qualifying windows AT ``notch``.
+
+    The artifact publishes windows per notch (``{"20": [...], "25": [...]}``) so one file
+    serves the whole grid; a flat list is accepted as the single-notch shape and is only
+    ever read when the artifact declares that same notch (checked by the caller).
+    """
+    raw = row.get("intervals")
+    if raw is None:
+        raw = row.get("qualifying_intervals")
+    if isinstance(raw, dict):
+        raw = raw.get(str(notch))
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out = []
+    for item in raw:
+        iv = _parse_interval(item)
+        if iv is not None:
+            out.append(iv)
+    return out
+
+
+@dataclass(frozen=True)
+class WashoutHistory:
+    """Per-name qualifying date INTERVALS — the backward-looking sibling of ``WashoutState``.
+
+    Deliberately NOT freshness-gated. The state artifact is gated because a stale one would
+    let yesterday's basket take today's fire; this one only ever describes days that are
+    already over, so age costs coverage at the recent edge (the safe direction) and nothing
+    else. It IS notch-gated: windows cut at 25% must never paint a 20%-notch claim.
+
+    INTEGRATION REQUIREMENT — SAME BASIS AS THE LIVE STATE. The windows must be cut on the
+    same LOO peer-median construction and the same ``qualifies`` rule as
+    ``basket_washout_state.v1``. Not a style preference: a fire the live mask refuses TODAY
+    (post-fence, so no retro mark) becomes PRE-FENCE tomorrow, when ``as_of`` advances past
+    it. If the two artifacts agree, that fire is absent from the windows too and nothing
+    happens — the flicker case is empty by construction. If they disagree, the product
+    refuses a fire on Monday and paints "would have entered" on the same bar on Tuesday.
+    Both artifacts come off the macro side's ``r3_axes.py``, which is what makes them agree;
+    a future history publisher that re-derives the basis independently breaks it silently.
+    """
+
+    as_of: str | None
+    notch: int
+    names: dict[str, dict]
+    source: str
+
+    def retro_ctx_for(self, ticker: str, ts: str) -> dict | None:
+        """``retro_ctx`` when ``ts`` sits inside a qualifying window for this name."""
+        row = self.names.get(ticker) or self.names.get(ticker.upper())
+        if not isinstance(row, dict):
+            return None
+        day = _iso(ts)
+        if day is None:
+            return None
+        hit = any(start <= day and (end is None or day <= end)
+                  for start, end in _intervals_at(row, self.notch))
+        if not hit:
+            return None
+        group_id = row.get("group_id")
+        ctx: dict[str, Any] = {"group_id": str(group_id) if group_id is not None else None}
+        # Display names ride WITH the mark for the same reason they ride with the live
+        # stamp: the card needs no second fetch and an archived slice stays self-describing.
+        for src, key in (("name", "name"), ("name_zh", "name_zh")):
+            val = row.get(src)
+            if val:
+                ctx[key] = str(val)
+        return ctx
+
+
+def load_history(path: str | Path | None = None, *, notch: int | None = None) -> WashoutHistory | None:
+    """Read the bridged history artifact. None (with ONE log line) on every failure mode."""
+    p = Path(path) if path is not None else Path(
+        os.environ.get("WASHOUT_HISTORY_PATH") or HISTORY_PATH)
+    if not p.exists():
+        log.info("washout retro: no history artifact at %s — no retro marks", p)
+        return None
+    try:
+        raw = json.loads(p.read_text())
+    except Exception as e:  # noqa: BLE001 — a bad artifact must never break slice generation
+        log.warning("washout retro: unreadable history %s (%s) — retro marking off", p, e)
+        return None
+    return history_from_dict(raw, notch=notch, source=str(p))
+
+
+def history_from_dict(raw: Any, *, notch: int | None = None,
+                      source: str = "<dict>") -> WashoutHistory | None:
+    """Validate a raw history artifact dict. The pure half of ``load_history``."""
+    want = int(notch if notch is not None else WASHOUT_OVERRIDE_NOTCH)
+    if not isinstance(raw, dict):
+        log.warning("washout retro: history is not an object (%s) — retro marking off", source)
+        return None
+    schema = str(raw.get("schema") or "")
+    if not (schema.startswith(HISTORY_SCHEMA_IN.split(".v")[0])
+            or schema.startswith(HISTORY_SCHEMA_BRIDGE.split("/")[0])):
+        log.warning("washout retro: unexpected history schema %r in %s — retro marking off",
+                    schema, source)
+        return None
+    names = raw.get("names")
+    if not isinstance(names, dict):
+        log.warning("washout retro: history %s has no names map — retro marking off", source)
+        return None
+
+    # NOTCH GATE. A per-notch artifact serves every notch and needs no declaration; a
+    # single-notch artifact must declare OUR notch or its windows are somebody else's cut.
+    declared = raw.get("notch") if raw.get("notch") is not None else raw.get("threshold")
+    per_notch = any(isinstance(v, dict) and isinstance(v.get("intervals"), dict)
+                    for v in names.values() if isinstance(v, dict))
+    if not per_notch:
+        try:
+            if declared is None or int(str(declared)) != want:
+                log.warning("washout retro: history %s is cut at notch %r, live notch is %d "
+                            "— retro marking off", source, declared, want)
+                return None
+        except (TypeError, ValueError):
+            log.warning("washout retro: history %s carries an unreadable notch %r — off",
+                        source, declared)
+            return None
+    return WashoutHistory(
+        as_of=_iso(raw.get("as_of")),
+        notch=want,
+        names={str(k): v for k, v in names.items() if isinstance(v, dict)},
+        source=source,
+    )
+
+
+def mark_retro(
+    symbol: str,
+    signals: Iterable[dict] | None,
+    *,
+    history: WashoutHistory | None,
+    live_as_of: str | None = None,
+    grace_days: int = 0,
+    relievable_ts: Iterable[str] | None = None,
+) -> int:
+    """Mark PRE-FENCE refusals today's rule would have entered. Display fields ONLY.
+
+    Sets ``retro_override=True`` + ``retro_ctx`` in place and returns how many were marked.
+    Writes NOTHING else — not ``quality``, not ``tier``, not ``blocked`` — which is what
+    keeps the class out of the scored stream, the alert lane, and the ledger.
+
+    ``relievable_ts`` are the 3D bar-open dates of keeper blocks that failed ONLY the
+    200-reclaim leg (``confluence_v2.build_v2``'s ``keeper_relievable``). They are passed in
+    rather than read off the events for two reasons: the emitted event deliberately carries
+    no such field, so an artifact-free emission stays byte-identical to the pre-fence one;
+    and the branch fact cannot be recovered from the keeper's reason string, which collapses
+    both legs' failures into one literal (prereg §5).
+
+    Note the signature: there is no ledger parameter, by design. "It must never accrue" is
+    a property of the code's shape here, not of its branches.
+    """
+    if not signals or history is None:
+        return 0
+    relievable = {str(t) for t in (relievable_ts or ())}
+    n = 0
+    for ev in signals:
+        if not isinstance(ev, dict):
+            continue
+        q = str(ev.get("quality") or "").lower()
+        # 1. cohort: a regime veto, or a keeper block the reclaim waiver could have
+        #    relieved. Never a hold-leg failure, and never a bearish-divergence block.
+        if q == BLOCKED_QUALITY:
+            pass
+        elif q == KEEPER_BLOCK_QUALITY and str(ev.get("ts") or "") in relievable:
+            pass
+        else:
+            continue
+        # 2. a point-in-time stamp already answered this fire from its own day's state —
+        #    history's own numbers outrank a projection built from an interval file.
+        if ev.get("override_candidate") is True:
+            continue
+        ts = _iso(ev.get("ts"))
+        if ts is None:
+            continue
+        known = _iso(ev.get("known_ts")) or ts
+        # 3. THE FENCE CUT: anything the live mask could have judged belongs to the mask.
+        if live_as_of is not None and _pit_ok(known, live_as_of, grace_days):
+            continue
+        ctx = history.retro_ctx_for(symbol, ts)
+        if ctx is None:
+            continue
+        ev["retro_override"] = True
+        ev["retro_ctx"] = ctx
+        n += 1
+    return n
+
+
 # ─────────────────────────────────────────────────────────── the stop reference ──
 def atr14(high: Sequence[float], low: Sequence[float], close: Sequence[float],
           length: int = 14) -> list[float | None]:
@@ -546,24 +862,31 @@ class WashoutStamper:
 
     state: WashoutState | None
     ledger: OverrideLedger | None
+    history: WashoutHistory | None = None
     stamped: int = 0
     accrued: int = 0
     replayed: int = 0
     taken: int = 0
+    retro_marked: int = 0
 
     @classmethod
     def create(cls, *, state_path: str | Path | None = None,
                ledger_path: str | Path | None = None,
+               history_path: str | Path | None = None,
                today: date | None = None) -> "WashoutStamper":
         state = load_state(state_path, today=today)
         # The ledger opens even without a live artifact: replaying already-recorded stamps is
         # what stops a marker from flickering back to slate on a night the macro feed is down.
         ledger = OverrideLedger.open(ledger_path)
+        history = load_history(history_path)
         if state is not None:
             log.info("washout override: state as_of=%s thr=%s%% names=%d baskets=%d ledger=%d rows",
                      state.as_of, state.threshold, len(state.names), len(state.baskets),
                      len(ledger.rows))
-        return cls(state=state, ledger=ledger)
+        if history is not None:
+            log.info("washout retro: history names=%d notch=%d%% (display-only)",
+                     len(history.names), history.notch)
+        return cls(state=state, ledger=ledger, history=history)
 
     @property
     def active(self) -> bool:
@@ -586,12 +909,54 @@ class WashoutStamper:
             row (no ``era``/``taken``) is a refusal, and so is anything unrecognised.
           * otherwise the live gate (``qualifies``) judges it fresh.
         """
+        return self._granted(ticker, ts, known_ts,
+                             eras=ERAS_WITH_ENTER_MASK,
+                             klass=LEDGER_CLASS_WASHOUT,
+                             class_required=False)
+
+    def reclaim_override_for(self, ticker: str, ts: str, known_ts: str) -> dict | None:
+        """WAIVE the keeper's 200-reclaim leg for this RELIEVABLE block? Context, or None.
+
+        The gc_v2_wo2 sibling of ``override_for``, asked by ``confluence_v2.
+        keeper_quality_map``. Same artifact, same notch, same PIT rule, same ledger, same
+        replay-wins ordering — only the cohort differs, and the caller has already
+        established that: a fire only reaches here when its HOLD leg passed and its reclaim
+        leg failed. This method does not re-derive that and must never try; the branch fact
+        does not survive the trip through a reason string, which is the whole lesson of the
+        prereg §5 correction.
+
+        The ledger replay is CLASS-STRICT here. A row must say it was a reclaim waiver to
+        replay as one — the class did not exist before wo2, so a row that does not name it
+        is some other rule's row and this gate refuses it.
+        """
+        return self._granted(ticker, ts, known_ts,
+                             eras=ERAS_WITH_RECLAIM_WAIVER,
+                             klass=LEDGER_CLASS_RECLAIM,
+                             class_required=True)
+
+    def _granted(self, ticker: str, ts: str, known_ts: str, *,
+                 eras: frozenset[str], klass: str, class_required: bool) -> dict | None:
+        """The shared body of the two gates: replay if recorded, else judge fresh.
+
+        THE ERA SET, NOT THE CURRENT ERA (changed with the wo2 bump): a row minted under an
+        earlier era in which this rule was ALREADY LIVE recorded a real entry, and a later
+        era does not retract it — the fence forbids POOLING two eras' results, not honouring
+        what a past era did. Pinning the replay to ``== SIGNAL_ERA`` would have un-taken
+        every wo1 entry the night wo2 shipped: the marker would revert to a plain ⊘ while
+        the forward ledger still carried the position. Each row keeps its own ``era``, which
+        is what a grader reads; ``eras`` only decides whether the row still means "entered".
+        A pre-fence display row carries no era at all and still fails closed.
+        """
         if self.ledger is not None:
             prior = self.ledger.get(ticker, ts)
             if prior is not None:
                 ctx = prior.get("override_ctx")
+                row_class = prior.get("class")
+                class_ok = (row_class == klass) if class_required else (
+                    row_class in (None, klass))
                 if (prior.get("taken") is True
-                        and str(prior.get("era") or SIGNAL_ERA_PRE) == SIGNAL_ERA
+                        and str(prior.get("era") or SIGNAL_ERA_PRE) in eras
+                        and class_ok
                         and isinstance(ctx, dict)):
                     return dict(ctx)
                 return None
@@ -619,10 +984,16 @@ class WashoutStamper:
         for ev in signals:
             if not isinstance(ev, dict):
                 continue
-            if _is_override_take(ev):
+            # Both TAKEN classes accrue, each under its own ledger class so the two waivers'
+            # forward rows can be graded apart (they are two rules and two gauntlets).
+            taken_class = (LEDGER_CLASS_WASHOUT if _is_override_take(ev)
+                           else LEDGER_CLASS_RECLAIM if _is_reclaim_override_take(ev)
+                           else None)
+            if taken_class is not None:
                 ctx = ev.get("override_ctx")
                 if accrue and self.ledger is not None and isinstance(ctx, dict):
-                    row = _ledger_row(symbol, ev, ctx, daily, today=today, taken=True)
+                    row = _ledger_row(symbol, ev, ctx, daily, today=today, taken=True,
+                                      klass=taken_class)
                     if self.ledger.record(row):
                         self.accrued += 1
                         self.taken += 1
@@ -661,12 +1032,29 @@ class WashoutStamper:
                     self.accrued += 1
         return n
 
+    # ──────────────────────────────────────────── 3. the retro projection ──
+    def retro(self, symbol: str, signals: Iterable[dict] | None, *,
+              relievable_ts: Iterable[str] | None = None) -> int:
+        """Apply the display-only retro marks for this symbol. See ``mark_retro``.
+
+        A thin bind of the run's history + the live state's ``as_of`` onto the free
+        function — which is where the marking actually happens, and which cannot reach the
+        ledger because it is never handed one.
+        """
+        n = mark_retro(symbol, signals, history=self.history,
+                       live_as_of=self.state.as_of if self.state is not None else None,
+                       grace_days=_env_int("WASHOUT_PIT_GRACE_DAYS", 0),
+                       relievable_ts=relievable_ts)
+        self.retro_marked += n
+        return n
+
     def flush(self) -> int:
         written = self.ledger.flush() if self.ledger else 0
-        if self.stamped or self.replayed or self.taken or written:
+        if self.stamped or self.replayed or self.taken or self.retro_marked or written:
             log.info("washout override: %d taken (era %s), %d stamped, %d replayed, "
-                     "%d new ledger rows",
-                     self.taken, SIGNAL_ERA, self.stamped, self.replayed, written)
+                     "%d retro-marked (display only), %d new ledger rows",
+                     self.taken, SIGNAL_ERA, self.stamped, self.replayed,
+                     self.retro_marked, written)
         return written
 
 
@@ -679,7 +1067,8 @@ def _pit_ok(known_ts: str, as_of: str, grace_days: int) -> bool:
 
 
 def _ledger_row(symbol: str, ev: dict, ctx: dict, daily: DailyBars | None,
-                *, today: date | None = None, taken: bool = False) -> dict:
+                *, today: date | None = None, taken: bool = False,
+                klass: str = LEDGER_CLASS_WASHOUT) -> dict:
     ts = _iso(ev.get("ts")) or ""
     stop_ref = None
     if daily is not None:
@@ -710,5 +1099,9 @@ def _ledger_row(symbol: str, ev: dict, ctx: dict, daily: DailyBars | None,
         # pooled — that is the whole point of the fence (prereg §4).
         "era": SIGNAL_ERA,
         "taken": bool(taken),
+        # WHICH WAIVER minted this row — the regime-veto override or the keeper's reclaim
+        # waiver. Two rules, two gauntlets, two forward track records: a grader that pooled
+        # them would measure neither, and the replay authority reads it to fail closed.
+        "class": klass,
         "override_ctx": ctx,
     }

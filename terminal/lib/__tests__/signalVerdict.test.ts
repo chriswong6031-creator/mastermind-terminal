@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs, SOFT_Q,
+import { WASHOUT_NOTCH, WASHOUT_MEASURED_NOTCH, retroLegendCopy,
+  oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs, SOFT_Q,
   isBlockedSignal, isOverrideCandidate, isOverrideTake, isStructureStop, sliceSignalBasis,
-  washoutOverrideCopy, OVERRIDE_TAKE_QUALITY } from "../signalVerdict";
+  washoutOverrideCopy, OVERRIDE_TAKE_QUALITY,
+  isReclaimOverrideTake, isWaivedEntry, isRetroOverride, retroOverrideCopy,
+  RECLAIM_OVERRIDE_TAKE_QUALITY } from "../signalVerdict";
 
 // Frozen "today" so ages are deterministic: 2026-07-14 (the NVDA/GOOGL stale-Sell incident date).
 const NOW = Date.parse("2026-07-14T21:00:00Z");
@@ -710,8 +713,8 @@ describe("washout override candidate — the display class on a refusal", () => 
     const note = verdict().note ?? "";
     expect(note).toContain("still a refused entry");
     expect(note).toContain("not a green light");
-    expect(note).toContain("averaged +27% per trade vs +3% otherwise");
-    expect(note).toContain("2019-2026, stop always honored");
+    expectMeasuredLine(note, "averaged +22% per trade vs +3% otherwise");
+    expectMeasuredLine(note, "2019-2026, stop always honored");
     expect(note).toContain("most still stop out — the stop is the protection");
   });
 
@@ -721,7 +724,7 @@ describe("washout override candidate — the display class on a refusal", () => 
     expect(v.line2).toBe("深度洗盘例外候选 — 铀矿商板块距高点 −38%");
     const note = v.note ?? "";
     expect(note).toContain("仍是被拦截的入场");
-    expect(note).toContain("每笔平均 +27%");
+    expectMeasuredLine(note, "每笔平均 +22%");
     expect(note).toContain("止损才是保护");
     // no untranslated English clause left behind IN THE NEW COPY (the engine's own
     // `quality_reason` string rides the note in both languages — pre-existing contract)
@@ -735,7 +738,7 @@ describe("washout override candidate — the display class on a refusal", () => 
     expect(v.line2).toBeNull();
     expect(v.overrideCandidate).toBe(false);
     expect(v.note).not.toContain("washout");
-    expect(v.note).not.toContain("+27%");
+    expect(v.note).not.toContain("+22%");
   });
 
   it("a keeper `block` is a DIFFERENT refusal and can never reach this class", () => {
@@ -846,7 +849,7 @@ describe("washout override entry — the taken class", () => {
     const note = verdict().note ?? "";
     expect(note).toContain("the regime gate would refuse this");
     expect(note).toContain("the deep group washout is the one reason it stands");
-    expect(note).toContain("averaged +27% per trade vs +3% otherwise");
+    expectMeasuredLine(note, "averaged +22% per trade vs +3% otherwise");
     expect(note).toContain("most still stop out — the stop is the protection");
     // it never claims the refusal is still standing — that is the OTHER class's lead
     expect(note).not.toContain("still a refused entry");
@@ -858,7 +861,7 @@ describe("washout override entry — the taken class", () => {
     expect(v.line2).toBe("深度洗盘例外入场 — 铀矿商板块距高点 −38%");
     const note = v.note ?? "";
     expect(note).toContain("趋势闸本会拦截");
-    expect(note).toContain("每笔平均 +27%");
+    expectMeasuredLine(note, "每笔平均 +22%");
     expect(note).toContain("止损才是保护");
     const copy = washoutOverrideCopy(CTX, true, true)!;
     for (const cell of copy.notes) expect(cell).not.toMatch(/[a-z]{4,}/);
@@ -924,5 +927,445 @@ describe("washout override entry — the taken class", () => {
         for (const bad of BANNED) expect(low, `${cell} contains ${bad}`).not.toContain(bad);
       }
     }
+  });
+});
+
+/** The published per-trade figures are a MEASUREMENT AT A NOTCH (blocked-entry packet
+ *  §2/§3.5, cut at 25%), not a property of the rule. The live notch is an operator dial.
+ *  While the two differ the copy must stay silent rather than attach a 25%-notch result to
+ *  whatever notch is live — so these assertions follow the same rule the copy does, and the
+ *  test below pins the rule itself so silence can never become the accident nobody noticed. */
+function expectMeasuredLine(note: string | null | undefined, fragment: string) {
+  if (WASHOUT_NOTCH === WASHOUT_MEASURED_NOTCH) expect(note).toContain(fragment);
+  else expect(note).not.toContain(fragment);
+}
+
+it("the measured per-trade figures print only at the notch they were measured at", () => {
+  const notes = washoutOverrideCopy(
+    { group_id: "g", peer_dd: -0.4, name: "G" }, false, true,
+  )!.notes.join(" · ");
+  // the notch the figures were RE-GRADED at for this build (receipt: macro repo
+  // research/blocked_entry_study/regrade_receipts.json, gate_table["20"].B_PROD)
+  expect(WASHOUT_MEASURED_NOTCH).toBe(20);
+  if (WASHOUT_NOTCH === WASHOUT_MEASURED_NOTCH) expect(notes).toContain("+22%");
+  else expect(notes).not.toContain("+22%");
+  // whatever the dial, the qualitative protection line always survives
+  expect(notes).toContain("most still stop out");
+});
+
+// ── shared fixtures for the two new classes (era gc_v2_wo2 + the retro projection) ─────────
+const WO2_NOW = Date.parse("2026-08-10T21:00:00Z");
+const WO2_CTX = {
+  group_id: "uranium_miners", peer_dd: -0.388, basis: "basket",
+  thresholds_hit: [20, 25, 30], as_of: "2026-08-10",
+  name: "Uranium miners", name_zh: "铀矿商",
+};
+/** The ZH RECLAIM copy is mid-correction («回补» reads as short-covering, not the 200-day
+ *  reclaim), so its wording is asserted STRUCTURALLY — the head is distinct from both washout
+ *  heads, the lead names the keeper's two legs, and neither carries stray Latin — while the EN
+ *  strings, which are final, stay pinned verbatim. What must not drift is the SHAPE of the
+ *  disclosure; the exact Chinese noun for "the 200-day reclaim" is a copy edit, not a contract.
+ *  Matches "200 日线" and "200日线" alike, because the spacing is part of that same edit. */
+const ZH_RECLAIM_LEG = /200\s*日线/;
+/** the retro mark writes ONLY its two display fields — everything else is the refusal it was
+ *  (`tier`/`score` ride along so the fixture can assert they stayed null, which is the shape
+ *  of "the recipe never graded this fire") */
+type RetroSig = Sig & {
+  tier?: string | null;
+  score?: number | null;
+  retro_override?: boolean | null;
+  retro_ctx?: { group_id?: string | null; name?: string | null; name_zh?: string | null } | null;
+};
+const wo2Slice = (state: Record<string, unknown>, signals: RetroSig[]) => ({ indicator: { state, signals } });
+
+// ── the RECLAIM WAIVER: the keeper's waived entry (signal era gc_v2_wo2, Arm T) ────────────
+// Receipts: Macro Dashboard research/BLOCKED_ENTRY_CONDITIONAL_PREREG.md §5 (the reclaim leg)
+// + signal_layer/washout_override.RECLAIM_OVERRIDE_TAKE_QUALITY.
+//
+// WHY THIS BLOCK EXISTS. A second waived class is the exact shape of bug that ships silently:
+// every surface already knew how to render ONE waived entry, so a sibling string that nobody
+// taught them about renders as a plain grey nothing — no disclosure line, no amber, a real
+// entry the reader is never told fired against a refusal. The properties pinned here are the
+// two that keep the classes honest in opposite directions: `isWaivedEntry` must cover BOTH
+// (so the render key never has to know which), and the two strings must stay DISTINCT (so the
+// two forward ledgers can never grade each other's trades). Everything else — anchoring, the
+// absence from SOFT_Q, the ordinary entry label — is the claim that a waived entry is an
+// ENTRY, which is the thing a reader is entitled to see without hovering.
+describe("reclaim waiver — the keeper's waived entry is a real entry, and its own rule", () => {
+  const state = {
+    last_signal: "BUY", last_scored_signal: "BUY", last_scored_ts: "2026-08-03",
+    position_hint: "long", strong_bull: false, overbought: false, weeklyBull: false, above200: false,
+  };
+  const waived = (over: Partial<Sig> = {}): Sig => ({
+    ts: "2026-08-03", known_ts: "2026-08-03", type: "BUY", price: 10.5,
+    quality: RECLAIM_OVERRIDE_TAKE_QUALITY, tier: "quality", score: 71,
+    quality_reason: "reclaim waived: uranium_miners −38.8% ≤ −25% (era gc_v2_wo2)",
+    override_ctx: WO2_CTX, ...over,
+  } as Sig);
+  const verdict = (over: Partial<Sig> = {}, zh = false) => oracleVerdict(
+    "BUY", wo2Slice(state, [{ ts: "2026-05-12", type: "SELL", price: 14.2 }, waived(over)]),
+    zh, WO2_NOW, "DOWNTREND",
+  );
+
+  it("is STRICT on its own emitter string — the sibling take class is not this class", () => {
+    expect(isReclaimOverrideTake(waived())).toBe(true);
+    expect(isReclaimOverrideTake({ quality: "RECLAIM_OVERRIDE_TAKE" })).toBe(true);  // case-insensitive
+    // the sibling: same behaviour on every surface, DIFFERENT rule and different ledger
+    expect(isReclaimOverrideTake({ quality: OVERRIDE_TAKE_QUALITY })).toBe(false);
+    expect(isReclaimOverrideTake({ quality: "block" })).toBe(false);
+    expect(isReclaimOverrideTake({ quality: "regime_blocked" })).toBe(false);
+    expect(isReclaimOverrideTake({ quality: "reclaim" })).toBe(false);   // the RECLAIM lane ≠ the waiver
+    expect(isReclaimOverrideTake({})).toBe(false);
+    expect(isReclaimOverrideTake(null)).toBe(false);
+    // and the strings themselves must never collapse into one another
+    expect(RECLAIM_OVERRIDE_TAKE_QUALITY).toBe("reclaim_override_take");
+    expect(RECLAIM_OVERRIDE_TAKE_QUALITY).not.toBe(OVERRIDE_TAKE_QUALITY);
+  });
+
+  it("isWaivedEntry is the RENDER key — true for both take classes, false for every refusal", () => {
+    // A surface asking "do I draw the amber outline / the disclosure line?" must never have to
+    // know WHICH leg was waived; only the one line of copy that names the leg does.
+    expect(isWaivedEntry({ quality: OVERRIDE_TAKE_QUALITY })).toBe(true);
+    expect(isWaivedEntry(waived())).toBe(true);
+    for (const q of ["block", "pending", "regime_blocked", "take", "reclaim", "block_repair"])
+      expect(isWaivedEntry({ quality: q }), `${q} is not a waived entry`).toBe(false);
+    expect(isWaivedEntry({ override_candidate: true } as never)).toBe(false);   // a decorated refusal
+    expect(isWaivedEntry({})).toBe(false);
+    expect(isWaivedEntry(null)).toBe(false);
+  });
+
+  it("SOFT_Q holds NEITHER take class — softening a waived entry would demote a real entry", () => {
+    // SOFT_Q is the shared softening set (ChartPanel.renderSignals + oracleVerdict read the
+    // SAME set). A take class landing in it would render the engine's own entry as a
+    // subordinate marker — which is exactly the mistake the classes exist to avoid.
+    expect([...SOFT_Q].sort()).toEqual(["block", "pending", "regime_blocked"]);
+    expect(SOFT_Q.has(OVERRIDE_TAKE_QUALITY)).toBe(false);
+    expect(SOFT_Q.has(RECLAIM_OVERRIDE_TAKE_QUALITY)).toBe(false);
+  });
+
+  it("anchors the card as an ORDINARY entry — Buy, green, dated, never a refusal", () => {
+    const v = verdict();
+    expect(v.label).toBe("Buy");
+    expect(v.color).toBe("var(--buy)");
+    expect(v.raw).toBe("BUY");
+    expect(v.overrideTake).toBe(true);
+    expect(v.overrideCandidate).toBeFalsy();
+    expect(v.blocked).toBeFalsy();
+    expect(v.soft).toBe(false);
+    expect(v.stance).toBeFalsy();
+    expect(v.dim).toBe(false);
+    // it really is unrefused at the anchor rule, not merely labelled that way
+    expect(isBlockedSignal(waived())).toBe(false);
+    expect(anchorSignal([{ ts: "2026-05-12", type: "SELL" }, waived()]).anchor?.quality)
+      .toBe(RECLAIM_OVERRIDE_TAKE_QUALITY);
+  });
+
+  it("the disclosure line names the WAIVED LEG — 'Reclaim waived', not the regime gate", () => {
+    const v = verdict();
+    expect(v.line2!.startsWith("Reclaim waived — ")).toBe(true);
+    expect(v.line2).toBe("Reclaim waived — entry — Uranium miners −38% from highs");
+    // the sibling's head must not appear: two rules, two disclosures
+    expect(v.line2).not.toContain("Washout override entry");
+  });
+
+  it("the hover leads with the keeper's own mechanic: it HELD the next bar, it never reclaimed the 200-day", () => {
+    const note = verdict().note ?? "";
+    expect(note).toContain("the keeper would refuse this");
+    expect(note).toContain("it held the next bar but never reclaimed the 200-day");
+    expect(note).toContain("the deep group washout is the one reason it stands");
+    expectMeasuredLine(note, "averaged +22% per trade vs +3% otherwise");
+    expect(note).toContain("most still stop out — the stop is the protection");
+    // neither of the other two leads may ride along — one fire, one story
+    expect(note).not.toContain("the regime gate would refuse this");
+    expect(note).not.toContain("still a refused entry");
+  });
+
+  it("zh ships the whole disclosure as a real translation, not an English-shaped one", () => {
+    const v = verdict({}, true);
+    expect(v.label).toBe("买入");
+    expect(v.color).toBe("var(--buy)");
+    // the "where" half is shared with its siblings and is pinned; the head is structural
+    // (see ZH_RECLAIM_LEG) — it must simply not be either washout head
+    expect(v.line2!.endsWith(" — 铀矿商板块距高点 −38%")).toBe(true);
+    expect(v.line2).not.toContain("深度洗盘例外");
+    expect(v.line2).not.toBe(washoutOverrideCopy(WO2_CTX, true, "entry")!.line);
+    const note = v.note ?? "";
+    expect(note).toContain("次根K线");              // the hold leg PASSED — that is the point
+    expect(note).toContain("只差收复");              // …and the reclaim leg is the one waived
+    expect(note).toMatch(ZH_RECLAIM_LEG);
+    expect(note).toContain("同类深度洗盘是放行的唯一理由");
+    expect(note).toContain("止损才是保护");
+    expect(note).not.toContain("趋势闸本会拦截");   // that is the sibling's lead
+    // no untranslated English clause left behind in the NEW copy
+    const copy = washoutOverrideCopy(WO2_CTX, true, "reclaim")!;
+    for (const cell of copy.notes) expect(cell).not.toMatch(/[a-z]{4,}/);
+    expect(copy.line).not.toMatch(/[a-z]{4,}/);
+  });
+
+  it("carries no banned vocabulary in either language", () => {
+    const BANNED = [
+      "validated", "证伪", "falsifier", "falsif", "refuted", "refut",
+      "buy now", "act now", "buy", "sell", "target",
+    ];
+    for (const zh of [false, true]) {
+      const copy = washoutOverrideCopy(WO2_CTX, zh, "reclaim")!;
+      for (const cell of [copy.line, ...copy.notes]) {
+        const low = cell.toLowerCase();
+        for (const bad of BANNED) expect(low, `${cell} contains ${bad}`).not.toContain(bad);
+      }
+    }
+  });
+});
+
+// ── washoutOverrideCopy: THREE kinds, ONE voice ────────────────────────────────────────────
+// WHY THIS BLOCK EXISTS. The three shapes share one function precisely so their EVIDENCE can
+// never drift apart — the measured figures and the stop-out warning are the same facts about
+// the same mechanism no matter which leg was relieved. What must differ is the lead clause and
+// the head, because those are the only things a reader can use to tell a refusal from an entry
+// and one waiver from the other. So the property is two-sided and both sides are load-bearing:
+// heads and leads all-distinct, tails all-identical. A regression in either direction is a
+// disclosure that lies — either three classes wearing one story, or one mechanism telling
+// three different stories about the same evidence.
+describe("washoutOverrideCopy — three lead clauses, one shared body of evidence", () => {
+  const KINDS = ["candidate", "entry", "reclaim"] as const;
+
+  it("the boolean legacy signature still selects the original two shapes", () => {
+    // `taken` predates the kind union; ChartPanel/oracleVerdict callers still pass booleans.
+    expect(washoutOverrideCopy(WO2_CTX, false, false)!.line)
+      .toBe(washoutOverrideCopy(WO2_CTX, false, "candidate")!.line);
+    expect(washoutOverrideCopy(WO2_CTX, false, true)!.line)
+      .toBe(washoutOverrideCopy(WO2_CTX, false, "entry")!.line);
+    expect(washoutOverrideCopy(WO2_CTX, false)!.line)          // default = the refusal shape
+      .toBe(washoutOverrideCopy(WO2_CTX, false, "candidate")!.line);
+  });
+
+  for (const zh of [false, true]) {
+    const lang = zh ? "zh" : "en";
+
+    it(`[${lang}] the three heads are distinct and name what happened`, () => {
+      const lines = KINDS.map((k) => washoutOverrideCopy(WO2_CTX, zh, k)!.line);
+      expect(new Set(lines).size).toBe(3);
+      const [candidate, entry, reclaim] = lines;
+      expect(candidate).toContain(zh ? "深度洗盘例外候选" : "Washout override candidate");
+      expect(entry).toContain(zh ? "深度洗盘例外入场" : "Washout override entry");
+      // the reclaim head names a DIFFERENT mechanism, so it may not borrow the washout head
+      // (EN pinned; ZH structural — the noun is mid-correction, see ZH_RECLAIM_LEG)
+      if (zh) expect(reclaim).not.toContain("深度洗盘例外");
+      else expect(reclaim).toContain("Reclaim waived");
+      // the entry heads must not be prefixes of one another — "Washout override" alone would
+      // read identically on a truncated glance surface
+      expect(entry.startsWith(reclaim)).toBe(false);
+      expect(reclaim.startsWith(entry)).toBe(false);
+    });
+
+    it(`[${lang}] the three lead clauses are distinct and each names its own refusal`, () => {
+      const leads = KINDS.map((k) => washoutOverrideCopy(WO2_CTX, zh, k)!.notes[0]);
+      expect(new Set(leads).size).toBe(3);
+      const [candidate, entry, reclaim] = leads;
+      expect(candidate).toContain(zh ? "仍是被拦截的入场" : "still a refused entry");
+      expect(entry).toContain(zh ? "趋势闸本会拦截" : "the regime gate would refuse this");
+      // the reclaim lead is identified by the keeper mechanic it names, not by its verb
+      expect(reclaim).toContain(zh ? "次根K线" : "the keeper would refuse this");
+      // only the reclaim shape may name the keeper's two legs — that IS its distinguishing fact
+      const leg = zh ? ZH_RECLAIM_LEG : /200-day/;
+      expect(reclaim).toMatch(leg);
+      expect(candidate).not.toMatch(leg);
+      expect(entry).not.toMatch(leg);
+    });
+
+    it(`[${lang}] the evidence behind the lead is IDENTICAL across all three`, () => {
+      // notes[0] is the lead; everything after it is the measurement + the stop-out warning,
+      // which are properties of the mechanism, not of which leg was relieved.
+      const tails = KINDS.map((k) => washoutOverrideCopy(WO2_CTX, zh, k)!.notes.slice(1));
+      expect(tails[1]).toEqual(tails[0]);
+      expect(tails[2]).toEqual(tails[0]);
+      // and the tail is never empty — a disclosure with no stop-out warning is not compliant
+      expect(tails[0].join(" · ")).toContain(zh ? "止损才是保护" : "most still stop out");
+    });
+  }
+
+  it("every kind degrades the same honest way when the artifact shipped no basket name", () => {
+    for (const kind of KINDS) {
+      const full = washoutOverrideCopy(WO2_CTX, false, kind)!.line;
+      const bare = washoutOverrideCopy({}, false, kind)!.line;
+      expect(full.startsWith(bare)).toBe(true);       // the head survives; only the "where" drops
+      // no dangling separator: a shorter line beats one that prints an empty slot.
+      // (the reclaim head carries an em-dash of its own — only a TRAILING one is the bug)
+      expect(bare.trimEnd().endsWith("—")).toBe(false);
+      expect(washoutOverrideCopy({ peer_dd: -0.31 }, false, kind)!.line)
+        .toBe(`${bare} — peer group −31% from highs`);
+    }
+  });
+});
+
+// ── the RETRO PROJECTION: a counterfactual that must never read as a call ──────────────────
+// Receipts: signal_layer/washout_override.mark_retro (writes retro_override/retro_ctx and
+// NOTHING else — no quality, no tier, no blocked, no ledger parameter).
+//
+// WHY THIS BLOCK EXISTS. This is the only class on the chart the engine did NOT act on, so its
+// entire correctness is a negative: it must not accrue, must not anchor, must not be mistaken
+// for an entry, and must not be describable in words that imply the product made the call. The
+// emitter guarantees the first by having no ledger to write to; these tests guarantee the rest
+// on the client. The strictness assertions matter more here than anywhere else in this file —
+// a truthy-but-not-true `retro_override` promoting a refusal to a counterfactual would paint a
+// track record nobody earned, and the reader has no way to detect it.
+describe("retro projection — a counterfactual, never a call", () => {
+  const RETRO_CTX = { group_id: "uranium_miners", name: "Uranium miners", name_zh: "铀矿商" };
+  const retroFire = (over: Partial<RetroSig> = {}): RetroSig => ({
+    ts: "2026-06-10", known_ts: "2026-06-10", type: "BUY", price: 8.4,
+    // the refusal it still is: mark_retro writes NOTHING to these fields
+    quality: "regime_blocked", blocked: true, tier: null, score: null,
+    quality_reason: "bear_block: monthly-bear & below-200 & 2W-not-bull",
+    retro_override: true, retro_ctx: RETRO_CTX, ...over,
+  } as RetroSig);
+
+  it("isRetroOverride is STRICT on the boolean — a truthy value never promotes a refusal", () => {
+    expect(isRetroOverride(retroFire())).toBe(true);
+    expect(isRetroOverride({ retro_override: "true" })).toBe(false);
+    expect(isRetroOverride({ retro_override: 1 })).toBe(false);
+    expect(isRetroOverride({ retro_override: undefined })).toBe(false);
+    expect(isRetroOverride({ retro_override: false })).toBe(false);
+    expect(isRetroOverride({})).toBe(false);
+    expect(isRetroOverride(null)).toBe(false);
+    // the point-in-time class is a DIFFERENT answer to the same question — history's own
+    // numbers outrank a projection, and mark_retro skips a stamped fire for exactly that reason
+    expect(isRetroOverride({ override_candidate: true } as never)).toBe(false);
+  });
+
+  it("EN and ZH lead with the counterfactual mood, at glance tier", () => {
+    const en = retroOverrideCopy(RETRO_CTX, false);
+    expect(en.line.startsWith("Would have entered under today's rule")).toBe(true);
+    expect(en.line).toBe("Would have entered under today's rule — Uranium miners");
+    const zh = retroOverrideCopy(RETRO_CTX, true);
+    expect(zh.line.startsWith("按当前规则本会入场")).toBe(true);
+    expect(zh.line).toBe("按当前规则本会入场 — 铀矿商");
+  });
+
+  it("the notes say plainly that the system refused it live and that it is not in the record", () => {
+    const en = retroOverrideCopy(RETRO_CTX, false).notes.join(" · ");
+    expect(en).toContain("the system refused this live");
+    expect(en).toContain("not a call we made");
+    expect(en).toContain("not in the track record");
+    // no hedging vocabulary that could be read as an endorsement
+    expect(en.toLowerCase()).not.toContain("would have profited");
+    expect(en.toLowerCase()).not.toContain("missed");
+  });
+
+  it("zh is a real translation, not an English-shaped one", () => {
+    const zh = retroOverrideCopy(RETRO_CTX, true);
+    const notes = zh.notes.join(" · ");
+    expect(notes).toContain("当时系统并未入场");        // the plain fact, said in Chinese
+    expect(notes).toContain("这不是当时的判断");
+    expect(notes).toContain("不计入战绩");              // …and it is not in the track record
+    for (const cell of [zh.line, ...zh.notes]) expect(cell).not.toMatch(/[a-z]{4,}/);
+    // zh falls back to the EN basket name rather than printing a raw slug, like its siblings
+    expect(retroOverrideCopy({ group_id: "uranium_miners", name: "Uranium miners" }, true).line)
+      .toBe("按当前规则本会入场 — Uranium miners");
+    // …and to the slug only when there is no name at all — an honest short form, never blank
+    expect(retroOverrideCopy({ group_id: "uranium_miners" }, false).line)
+      .toBe("Would have entered under today's rule — uranium_miners");
+    expect(retroOverrideCopy(null, false).line).toBe("Would have entered under today's rule");
+  });
+
+  it("carries no banned vocabulary in either language", () => {
+    const BANNED = [
+      "validated", "证伪", "falsifier", "falsif", "refuted", "refut",
+      "buy now", "act now", "buy", "sell", "target",
+    ];
+    for (const zh of [false, true]) {
+      const copy = retroOverrideCopy(RETRO_CTX, zh);
+      for (const cell of [copy.line, ...copy.notes]) {
+        const low = cell.toLowerCase();
+        for (const bad of BANNED) expect(low, `${cell} contains ${bad}`).not.toContain(bad);
+      }
+    }
+  });
+
+  // ── THE HARD BOUNDARY ──────────────────────────────────────────────────────────────────
+  // Everything above is about how the counterfactual is WORDED. This is about what it can
+  // DO — and the answer is nothing. A retro mark is still the refusal it always was.
+  it("a retro fire is NOT a waived entry — the mark changes how it reads, never what it is", () => {
+    const sig = retroFire();
+    expect(isWaivedEntry(sig)).toBe(false);
+    expect(isOverrideTake(sig)).toBe(false);
+    expect(isReclaimOverrideTake(sig)).toBe(false);
+    expect(isOverrideCandidate(sig)).toBe(false);
+    expect(isBlockedSignal(sig)).toBe(true);      // it is, and stays, a refusal
+    expect(sig.quality).toBe("regime_blocked");   // mark_retro wrote no quality at all
+    expect(sig.tier).toBeNull();
+    expect(sig.score).toBeNull();
+  });
+
+  it("anchorSignal still REFUSES to anchor it — a counterfactual can never become the read", () => {
+    const { anchor, blockedTail } = anchorSignal([
+      { ts: "2026-05-12", type: "SELL", price: 14.2 },
+      retroFire(),
+    ]);
+    expect(anchor?.type).toBe("SELL");            // the refusal is skipped, as always
+    expect(blockedTail?.ts).toBe("2026-06-10");   // …and surfaces only as the refused tail
+  });
+
+  it("a retro fire alone never produces a Buy verdict — it renders the refusal it is", () => {
+    const v = oracleVerdict("BUY", wo2Slice(
+      { last_signal: "BUY", last_scored_signal: "SELL", position_hint: "flat",
+        strong_bull: false, overbought: false, weeklyBull: false, above200: false },
+      [{ ts: "2026-05-12", type: "SELL", price: 14.2 }, retroFire({ ts: "2026-08-03", known_ts: "2026-08-03" })],
+    ), false, WO2_NOW, "DOWNTREND");
+    expect(v.label).toBe("Entry trigger — regime-blocked");
+    expect(v.label).not.toBe("Buy");
+    expect(v.raw).toBe("BLOCKED_ENTRY");
+    expect(v.color).not.toBe("var(--buy)");
+    expect(v.blocked).toBe(true);
+    expect(v.overrideTake).toBeFalsy();
+    // and the counterfactual copy does NOT leak into the scored-lane card — the retro
+    // disclosure belongs to the marked-history surfaces, which is why `Verdict.retro` is
+    // documented as never reaching this field through the scored lane.
+    expect(v.retro).toBeFalsy();
+    expect(v.note).not.toContain("Would have entered");
+    expect(v.line2).toBeNull();
+  });
+});
+
+// ── THE RETRO LEGEND — the disclosure of record ────────────────────────────────────────────
+// This block exists because of a specific, documented trade: the retro marker is drawn
+// identically to a live waived entry, and the marker tooltip that was meant to carry the
+// difference cannot render (the signal layer is `pointer-events:none`, measured). The legend
+// is therefore the ONLY surface that tells a reader some of those stars are counterfactuals.
+// Every assertion here is guarding that one job.
+describe("retro legend — the only surface that separates a counterfactual from a call", () => {
+  it("resolves the row label instead of merely repeating it", () => {
+    // a disclosure that says "(retro)" without saying what retro MEANS is a label, not a
+    // disclosure — so the legend must quote the suffix AND explain it in the same breath
+    const en = retroLegendCopy(false);
+    expect(en).toContain("(retro)");
+    expect(en).toContain("re-marked under the current rule");
+    expect(en).toContain("refused");
+    expect(en).toContain("not a call we made");
+  });
+
+  it("says the same thing in Chinese, in Chinese — not an English sentence in translation", () => {
+    const zh = retroLegendCopy(true);
+    expect(zh).toContain("（事后重标）");
+    expect(zh).toContain("按当前规则");
+    expect(zh).toContain("当时被系统拒绝");
+    expect(zh).not.toMatch(/[A-Za-z]{4,}/);          // no untranslated English left in it
+    expect(zh).not.toBe(retroLegendCopy(false));
+  });
+
+  it("carries no study name, no era slug and no refutation language", () => {
+    for (const copy of [retroLegendCopy(false), retroLegendCopy(true)]) {
+      for (const banned of ["gc_v2", "wo1", "wo2", "washout_override", "regime_blocked",
+        "validated", "falsifier", "refuted", "证伪", "Arm T", "prereg"]) {
+        expect(copy).not.toContain(banned);
+      }
+    }
+  });
+
+  it("never claims the entry happened — the whole point of the line", () => {
+    // "would have" / counterfactual mood only. If this line ever reads as a completed action
+    // the product is claiming a trade it did not make.
+    const en = retroLegendCopy(false).toLowerCase();
+    expect(en).not.toMatch(/\bwe (entered|bought)\b/);
+    expect(en).not.toMatch(/\bentry taken\b/);
   });
 });
