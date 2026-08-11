@@ -7,7 +7,10 @@ or statement-family adapter is immediately visible in an assertion failure.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -17,6 +20,21 @@ import ingest.collect_cn_hk_fund as collector
 import ingest.gen_fund_hk as generator
 from ingest.collect_cn_hk_fund import _hk_report
 from ingest.gen_fund_hk import build_statements
+
+
+def test_collector_import_does_not_require_tushare_token(tmp_path: Path):
+    env = os.environ.copy()
+    env.pop("TUSHARE_TOKEN", None)
+    env["MACRO_REPO"] = str(tmp_path)
+    result = subprocess.run(
+        [sys.executable, "-c", "import ingest.collect_cn_hk_fund as c; assert c.TOKEN is None"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def _period(

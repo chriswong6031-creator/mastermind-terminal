@@ -77,7 +77,13 @@ HK_DEEP = OUT / "hk_deep.parquet"
 
 
 # ─────────────────────────────── Tushare REST ───────────────────────────────
+TOKEN: str | None = None
+
+
 def _token() -> str:
+    global TOKEN
+    if TOKEN:
+        return TOKEN
     t = (os.environ.get("TUSHARE_TOKEN") or "").strip()
     if not t:
         env = MACRO / ".env"
@@ -87,15 +93,13 @@ def _token() -> str:
                     t = line.split("=", 1)[1].strip().strip('"').strip("'")
     if not t:
         sys.exit("no TUSHARE_TOKEN (env or Macro Dashboard/.env)")
+    TOKEN = t
     return t
-
-
-TOKEN = _token()
 
 
 def ts_call(api: str, params: dict, fields: str = "", retries: int = 4):
     """Tushare REST → (fields, items). Retries on rate-limit (频率超限). Returns ([],[]) on hard error."""
-    body = json.dumps({"api_name": api, "token": TOKEN, "params": params, "fields": fields}).encode()
+    body = json.dumps({"api_name": api, "token": _token(), "params": params, "fields": fields}).encode()
     for attempt in range(retries):
         try:
             req = urllib.request.Request("http://api.tushare.pro", data=body,
