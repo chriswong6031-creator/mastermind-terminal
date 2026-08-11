@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import WorkspaceTabs, { type WorkspaceTab } from "@/components/chrome/WorkspaceTabs";
 import OptionsHubView, { type TabKey } from "@/components/OptionsHubView";
+import OptionsWorkflowGuide from "@/components/options/OptionsWorkflowGuide";
 import { useLang, useT } from "@/lib/i18n";
 import {
   OPTIONS_HUB_WORKSPACE_VIEWS,
@@ -133,13 +134,16 @@ export default function OptionsWorkspace() {
       <header className="options-ia-nav">
         <div className="options-ia-row options-ia-category-row">
           <span className="options-ia-row-label">{t("optionsIaCategoryLabel", "Category")}</span>
-          <WorkspaceTabs
-            tabs={CATEGORY_TABS}
-            active={`cat-${activeCategory}`}
-            onSelect={onCategorySelect}
-            aria-label={lang === "zh" ? "期权类别" : "Options categories"}
-            className="options-category-tabs"
-          />
+          <div className="options-ia-main">
+            <WorkspaceTabs
+              tabs={CATEGORY_TABS}
+              active={`cat-${activeCategory}`}
+              onSelect={onCategorySelect}
+              aria-label={lang === "zh" ? "期权类别" : "Options categories"}
+              className="options-category-tabs"
+            />
+            <OptionsWorkflowGuide activeView={activeView} onOpenView={selectView} />
+          </div>
         </div>
         <div className="options-ia-row options-ia-view-row">
           <span className="options-ia-row-label">{t("optionsIaViewLabel", "View")}</span>
