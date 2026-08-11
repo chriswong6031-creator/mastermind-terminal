@@ -513,6 +513,10 @@ export type Quote = {
   extSource?: string;
   extBasis?: "LIVE" | "DELAYED_15M" | "UNOFFICIAL";
   marketSession?: "pre" | "rth" | "post" | "overnight";
+  /** A-share opening call-auction price (09:15–09:29 Asia/Shanghai), kept out of OHLC. */
+  auctionPrice?: number | null;
+  /** Opening-auction move versus the prior close, in percent. */
+  auctionChg?: number | null;
   regularSessionDate?: string;
   regularSession?: "rth" | "closed";
   close?: number | null;
@@ -538,12 +542,28 @@ function _pos(s: string | undefined): number | null {
 }
 
 // Tencent quote time is "YYYYmmddHHMMSS" (A-share) or "YYYY/MM/DD HH:MM:SS" (HK); both UTC+8.
-function _tencentTs(s: string | undefined): number | null {
+function _tencentParts(s: string | undefined): RegExpExecArray | null {
   if (!s) return null;
-  const m = /(\d{4})\D?(\d{2})\D?(\d{2})\D?(\d{2}):?(\d{2}):?(\d{2})/.exec(s);
+  return /(\d{4})\D?(\d{2})\D?(\d{2})\D?(\d{2}):?(\d{2}):?(\d{2})/.exec(s);
+}
+
+function _tencentTs(s: string | undefined): number | null {
+  const m = _tencentParts(s);
   if (!m) return null;
   const [, y, mo, d, h, mi, se] = m;
   return Math.floor(Date.UTC(+y, +mo - 1, +d, +h - 8, +mi, +se) / 1000);
+}
+
+// A-share opening call auction runs before continuous trading. Tencent timestamps are exchange
+// local, so classify the raw wall clock directly: no host timezone and no DST can distort it.
+// Only the pre-open state is emitted. Leaving the ordinary CN session undefined preserves the
+// existing live-candle path after 09:30, while `pre` explicitly keeps the auction quote out of
+// daily/intraday OHLC and lets the primary price lane opt into it.
+function _cnTencentSession(s: string | undefined): "pre" | undefined {
+  const m = _tencentParts(s);
+  if (!m) return undefined;
+  const hhmm = Number(m[4]) * 100 + Number(m[5]);
+  return hhmm >= 915 && hhmm < 930 ? "pre" : undefined;
 }
 
 // Parse one Tencent qt.gtimg.cn "~"-delimited field record into a Quote (shared by the single and
@@ -554,15 +574,28 @@ export function parseTencentFields(sym: string, market: Market, f: string[]): Qu
   if (f.length < 35) return null;
   const last = _n(f[3]);
   if (last == null || last === 0) return null;
+  const prevClose = _n(f[4]);
+  const open = _pos(f[5]);
+  const ts = _tencentTs(f[30]);
+  const marketSession = market === "cn" ? _cnTencentSession(f[30]) : undefined;
+  // Before the match resolves, Tencent publishes a valid indicative `last` while O/H/L remain
+  // zero placeholders. Once the 09:25 match resolves, `open` is the authoritative auction print.
+  // Give both phases one explicit field so clients never have to infer auction semantics from raw
+  // OHLC, and never let this price create a candle before continuous trading begins.
+  const auctionPrice = marketSession === "pre" ? (open ?? last) : null;
+  const auctionChg = auctionPrice != null && prevClose != null && prevClose > 0
+    ? ((auctionPrice - prevClose) / prevClose) * 100
+    : null;
   const volRaw = _n(f[6]); // A-share volume is in 手 (lots, ×100 shares); HK is already in shares
   return {
-    sym, last, prevClose: _n(f[4]), chg: _n(f[32]),
-    open: _pos(f[5]), high: _pos(f[33]), low: _pos(f[34]),
+    sym, last, prevClose, chg: _n(f[32]),
+    open, high: _pos(f[33]), low: _pos(f[34]),
     vol: volRaw == null ? null : (market === "cn" ? volRaw * 100 : volRaw),
-    amount: _n(f[37]), ts: _tencentTs(f[30]),
+    amount: _n(f[37]), ts,
     live: true, source: "tencent", market,
     // A-share is genuinely real-time (LIVE); HK is ~15-min delayed at source (DELAYED_15M).
     basis: market === "cn" ? "LIVE" : "DELAYED_15M",
+    ...(marketSession ? { marketSession, auctionPrice, auctionChg } : {}),
   };
 }
 

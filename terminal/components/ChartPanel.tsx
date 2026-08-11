@@ -252,6 +252,10 @@ export function canSpliceRegularBar(
   sessionDate: string | null,
 ): boolean {
   if (!q || sessionDate == null) return false;
+  // A-share opening-auction quotes replace the header/watchlist price from 09:15, but continuous
+  // trading has not begun. Chinese brokerages show that indicative/matched price without drawing
+  // a daily or intraday candle for it; the first candle still belongs to 09:30.
+  if (classify(sym) === "cn" && q.marketSession === "pre") return false;
   if (classify(sym) !== "us" || isMacroSymbol(sym)) return true;
   if (q.marketSession === "rth") return true;
   return q.regularSessionDate === sessionDate;

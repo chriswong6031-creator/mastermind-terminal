@@ -48,3 +48,18 @@ export function resolveStartTf(saved: unknown, functional: ReadonlySet<string>):
   const tf = typeof saved === "string" && TF_CANONICAL_ORDER.includes(saved) ? saved : DEFAULT_START_TF;
   return functional.has(tf) ? tf : "D";
 }
+
+/**
+ * Intervals exposed by the phone's scroll wheel.
+ *
+ * The wheel is the phone's only timeframe control, so filtering it through the desktop
+ * favourites tray strands every unstarred minute/hour interval. Keep favourites as shortcuts;
+ * the mobile wheel must carry every interval the active market can actually load. The current
+ * value is retained during a symbol transition even if the new market cannot serve it yet, so
+ * the controlled wheel never silently jumps to its first row while the chart still shows another.
+ */
+export function mobileTimeframeOptions(functional: ReadonlySet<string>, current: string): string[] {
+  const options = TF_CANONICAL_ORDER.filter((tf) => functional.has(tf));
+  if (TF_CANONICAL_ORDER.includes(current) && !options.includes(current)) options.push(current);
+  return options.sort((a, b) => TF_CANONICAL_ORDER.indexOf(a) - TF_CANONICAL_ORDER.indexOf(b));
+}

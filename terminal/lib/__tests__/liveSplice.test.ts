@@ -25,6 +25,17 @@ describe("parseTencentFields — premarket zero open/high/low", () => {
     expect(q.open).toBeNull();
     expect(q.high).toBeNull();
     expect(q.low).toBeNull();
+    expect(q.marketSession).toBe("pre");
+    expect(q.auctionPrice).toBe(11.74);
+    expect(q.auctionChg).toBe(0);
+  });
+
+  it("prefers the resolved opening-auction print once Tencent publishes it", () => {
+    const rec = tencentRecord({ 3: "11.95", 4: "11.74", 5: "11.90", 30: "20260721092600", 32: "1.79" });
+    const q = parseTencentFields("000729.SZ", "cn", rec)!;
+    expect(q.marketSession).toBe("pre");
+    expect(q.auctionPrice).toBe(11.90);
+    expect(q.auctionChg).toBeCloseTo(((11.90 - 11.74) / 11.74) * 100);
   });
 
   it("passes real open/high/low through untouched once the session prints", () => {
@@ -33,6 +44,8 @@ describe("parseTencentFields — premarket zero open/high/low", () => {
     expect(q.open).toBe(11.90);
     expect(q.high).toBe(12.35);
     expect(q.low).toBe(11.85);
+    expect(q.marketSession).toBeUndefined();
+    expect(q.auctionPrice).toBeUndefined();
   });
 });
 
@@ -112,6 +125,10 @@ describe("canSpliceRegularBar — today's completed session belongs on the chart
     expect(canSpliceRegularBar("0700.HK", { marketSession: undefined }, TODAY)).toBe(true);
     expect(canSpliceRegularBar("600000.SS", { marketSession: undefined }, TODAY)).toBe(true);
     expect(canSpliceRegularBar("BTC-USD", { marketSession: undefined }, TODAY)).toBe(true);
+  });
+
+  it("A-share pre-open auction prices update the quote lane without drawing a candle", () => {
+    expect(canSpliceRegularBar("600000.SS", { marketSession: "pre" }, TODAY)).toBe(false);
   });
 
   it("returns false with no quote or no session date", () => {
