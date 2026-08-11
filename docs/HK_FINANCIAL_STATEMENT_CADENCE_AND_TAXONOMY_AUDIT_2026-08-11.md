@@ -161,15 +161,15 @@ Both notes speculate that HK may not be cumulative because Tencent publishes dis
 
 ## Verification receipt
 
-Pre-release local gates on the implementation head:
+Exact code head tested: `70fdb4e8de1c614a48874fe9b52df80b57d37912` (rebased on `origin/master` `66bc936000f80857173c7947bc01b15fbbea5e2e`).
 
-- Python: 697 tests passed, including the HK interval/taxonomy contract and the existing Massive/US controls.
-- Terminal: 2,518 Vitest tests passed (four pre-existing todos), TypeScript passed, the scoped financial component/helper lint run had zero errors and six pre-existing warnings, and the Next production build completed. Repository-wide ESLint still reports unrelated legacy debt outside this change.
-- Responsive suite: 295 tests passed and 131 were intentionally skipped; one unrelated desktop marker-drag tolerance case failed in the aggregate run and passed on its immediate isolated rerun.
-- Browser: `0001.HK` rendered H1/H2 at 1440×900, 820×1180, and 390×844 with no page overflow or quarter labels; `0700.HK` retained Q1–Q4; March-year-end `8428.HK` rendered H1/H2; `0005.HK` and `1299.HK` populated financial-family totals while omitting industrial COGS/gross-profit rows. The insurer control was also checked in Chinese (`半年度`, H1/H2, `经营收入总额`) with no quarterly wording.
+- Python: 728 tests passed, including the maintained 2,798-file corpus gate, HK interval/taxonomy contract, collector failure paths, and existing Massive/US controls.
+- Terminal: 2,570 Vitest tests passed with four existing todos; TypeScript passed; and the Next production build completed. The task-scoped financial page/helper lint run had zero errors and five existing warnings. Including touched legacy `StockAnalysis.tsx` and `fund.ts` exposes ten pre-existing `no-explicit-any` errors and eight additional warnings; this change adds no lint error.
+- Responsive suite: 302 tests passed and 131 were intentionally skipped in 2.7 minutes. The suite exercised the contractual 1440×900 desktop, 820×1180 tablet, and 390×844 mobile layouts without a failure.
+- Browser: `0001.HK` rendered H1/H2 at all three contractual widths with document width contained and no Q2/Q4 fiction. `0700.HK` retained Q1–Q4; March-year-end `8428.HK` rendered H1/H2; and `0005.HK`, `1299.HK`, and `0388.HK` populated their vendor totals while omitting industrial COGS/gross-profit rows. `AAPL` retained the industrial COGS/gross-profit/operating-expense bridge, while `JPM` used the financial presentation. Localized SSR regressions cover the equivalent Chinese cadence, family, currency, empty-state, and signed-surprise copy.
+- Adversarial browser controls: `1973.HK` used a neutral mixed-family top line without the fabricated −96.04M cross-family quarter; `0767.HK` showed its dual-schema H1 2020 as ambiguous with no selected top line; both `0030.HK` H1 2024 rows carried their source dates; `0990.HK` showed dashes for revised H2 capex/FCF; `1378.HK` showed 70.10B total debt from the complete component map; and annual-only `2720.HK` disabled Interim, preserved both dated FY 2022 rows, labelled statement currency unavailable, and suppressed unit-mixing comparisons.
 - Mutation guard 1: changing the semiannual producer label from `H2` back to `Q4` made `test_semiannual_h1_and_fy_become_h1_and_h2_without_quarter_fiction` fail on the exact label mismatch.
-- Mutation guard 2: forcing the waterfall's tax bridge through `-Math.abs(...)` made the signed tax-benefit regression fail (`-4` versus the required `+4`).
-- Mutation guard 3: removing cumulative-base subtraction from the HK producer made four interval/cash-flow regressions fail, including Tencent-style Q1–Q4 recovery and H1/H2 recovery.
-- Mutation guard 4: reintroducing the retired `opex - cogs` derivation made seven AAPL operating-expense/waterfall regressions fail, including the exact `-158.8B` double-subtraction.
+- Mutation guard 2: removing cumulative-base subtraction made four interval/cash-flow regressions fail, including Tencent-style Q1–Q4 and H1/H2 recovery.
+- Mutation guard 3: reintroducing `opex - cogs` made four AAPL/family/waterfall regressions fail, including the exact −158.8B double-subtraction.
 
-Both mutations were reverted before the green verification run.
+All mutations were reverted and their focused suites returned green. No signal, rank, Prophet, trade, or portfolio-authority code changed.
