@@ -20,10 +20,14 @@
  *  not pan, a wheel over a marker does not zoom, and the crosshair drops out while the cursor
  *  crosses it because the canvas stops receiving moves.
  *
- *  (The same pattern already ships one layer down: `indicator-canvas/render.bindTooltip` sets
- *  `pointer-events:auto` on premium-suite prims inside the equally `pointer-events:none`
- *  indicator layer. Those prims carry the same gesture hole. It is out of scope here and
- *  reported rather than fixed, but it is the reason this file does not follow that precedent.)
+ *  (The broken pattern used to ship one layer down as well: `indicator-canvas/render.bindTooltip`
+ *  set `pointer-events:auto` on premium-suite prims inside the equally `pointer-events:none`
+ *  indicator layer, so those prims carried the same gesture hole — every premium prim with a
+ *  tooltip deleted pan, wheel-zoom and crosshair over its own footprint. That was out of scope for
+ *  the marker repair and was reported rather than fixed; it is the reason this file did not follow
+ *  that precedent. The indicator layer has since been converted to this same delegated hit test —
+ *  `render.wireTooltipHitTest`, driven by `data-ic-tip` and the two helpers below — so the two
+ *  overlay layers now resolve their tooltips the same way, from the same wrapper's events.)
  *
  *  So the layer stays `pointer-events:none` and NOTHING about the chart's hit-testing changes —
  *  drag, crosshair, wheel and pinch are byte-identical because not one pixel of the app's
@@ -63,14 +67,19 @@ export const MARKER_TAP_SLACK = 10;
  *
  *  Overlapping markers resolve by CENTRE DISTANCE rather than paint order. Two fires on adjacent
  *  bars can have overlapping slack boxes, and "whichever was appended last" would make the
- *  tooltip depend on emitter ordering — the nearest centre is what the reader is pointing at. */
-export function hitTestMarkers(
-  boxes: readonly MarkerHit[],
+ *  tooltip depend on emitter ordering — the nearest centre is what the reader is pointing at.
+ *
+ *  Generic over the box type, not fixed to `MarkerHit`: the indicator layer's boxes carry an
+ *  element and a tooltip id where a signal marker carries its title, and only the RECTANGLE is
+ *  hit-test input. Callers passing `MarkerHit[]` still get `MarkerHit | null` back — this is a
+ *  type widening with no runtime change at all. */
+export function hitTestMarkers<T extends { x: number; y: number; w: number; h: number }>(
+  boxes: readonly T[],
   px: number,
   py: number,
   slack = 0,
-): MarkerHit | null {
-  let best: MarkerHit | null = null;
+): T | null {
+  let best: T | null = null;
   let bestD = Infinity;
   for (const b of boxes) {
     if (px < b.x - slack || px > b.x + b.w + slack) continue;

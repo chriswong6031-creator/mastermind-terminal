@@ -16,13 +16,18 @@
 //   • Alpha clamps: zone fill ≤0.18, bgshade ≤0.10. NaN/Infinity numbers never render.
 //   • Colors pass through verbatim (CSS var() tokens); alpha is applied via *-opacity
 //     attributes, never by baking rgba() literals.
-// Tooltips: elements carrying tooltipId get pointer-events:auto (the layer itself is none) and
-// drive one shared ".ic-tip" HTML div inside the chart wrapper (svgEl.parentElement).
+// Tooltips: elements carrying tooltipId are marked `data-ic-tip` and stay NON-hit-testable — the
+// layer's own pointer-events:none really does cover everything. Hover/tap is resolved in JS from
+// delegated listeners on the chart wrapper, which drive one shared ".ic-tip" HTML div inside it.
+// lib/markerTooltip.ts documents at length why this is a JS hit test and not `pointer-events:auto`.
 
 import type {
   Prim, ZonePrim, LinePrim, PolyPrim, CloudPrim, GradLinePrim, LabelPrim, MarkerPrim,
   ProfilePrim, BgShadePrim, ColumnsPrim, XRef, CoordMapper, SuiteRenderBundle, TooltipDef,
 } from "./types";
+import {
+  hitTestMarkers, isTapGesture, MARKER_HOVER_SLACK, MARKER_TAP_SLACK,
+} from "../markerTooltip";
 
 const NS = "http://www.w3.org/2000/svg";
 const CULL_PAD = 40;
@@ -66,20 +71,227 @@ function isCapsTag(text: string): boolean {
 /** Per-wrapper tooltip defs, refreshed by every renderPrims call. */
 const TIP_DEFS = new WeakMap<HTMLElement, Map<string, TooltipDef>>();
 
+/** One hit-testable prim, measured in VIEWPORT (client) coordinates — the space pointer events
+ *  already report in, so the hit test never has to reason about the overlay's SVG user space
+ *  versus the wrapper's border box. Same choice, for the same reason, as ChartPanel's sig hits. */
+type HitEntry = { el: Element; tid: string; x: number; y: number; w: number; h: number };
+
+/** Hit boxes for the prims currently painted in a wrapper. `null` (or absent) = stale: renderPrims
+ *  drops it on every frame and the next pointer event rebuilds it. Rebuilding is LAZY because
+ *  renderPrims runs on every pan/zoom frame while a hover is a far rarer event — measuring here
+ *  would put a layout read on the render path, which the perf bar forbids. */
+const HIT_BOXES = new WeakMap<HTMLElement, HitEntry[] | null>();
+
+/** Wrappers whose delegated pointer listeners are already installed. */
+const HIT_WIRED = new WeakSet<HTMLElement>();
+
 /**
- * Create (once) the shared tooltip div inside the chart wrapper. Idempotent. The wrapper must be
- * a positioned element (chart wrappers are position:relative).
+ * Create (once) the shared tooltip div inside the chart wrapper, and install (once) the delegated
+ * pointer listeners that drive it. Idempotent. The wrapper must be a positioned element (chart
+ * wrappers are position:relative).
  */
 export function ensureTooltipHost(wrap: HTMLElement): void {
-  if (wrap.querySelector(":scope > .ic-tip")) return;
-  const tip = document.createElement("div");
-  tip.className = "ic-tip";
-  tip.style.cssText =
-    "position:absolute;left:0;top:0;display:none;z-index:6;pointer-events:none;max-width:260px;" +
-    "background:var(--pop-bg,rgba(24,26,32,.96));border:1px solid var(--line-3);" +
-    "border-radius:var(--r-md);padding:6px 9px;font:11px/1.45 var(--font-ui);color:var(--text);" +
-    "white-space:nowrap;box-shadow:0 8px 24px rgba(0,0,0,.45)";
-  wrap.appendChild(tip);
+  if (!wrap.querySelector(":scope > .ic-tip")) {
+    const tip = document.createElement("div");
+    tip.className = "ic-tip";
+    tip.style.cssText =
+      "position:absolute;left:0;top:0;display:none;z-index:6;pointer-events:none;max-width:260px;" +
+      "background:var(--pop-bg,rgba(24,26,32,.96));border:1px solid var(--line-3);" +
+      "border-radius:var(--r-md);padding:6px 9px;font:11px/1.45 var(--font-ui);color:var(--text);" +
+      "white-space:nowrap;box-shadow:0 8px 24px rgba(0,0,0,.45)";
+    wrap.appendChild(tip);
+  }
+  wireTooltipHitTest(wrap);
+}
+
+/** The clip window a prim actually renders inside, in CLIENT coordinates, or null when the prim is
+ *  unclipped (or the clip cannot be read, in which case the caller must not narrow anything).
+ *
+ *  Pane suites — and the price pane itself — render into `<g clip-path="url(#…)">`, and the clip is
+ *  not decoration: ChartPanel sizes it to the live pane band precisely so off-scale prims (a TP/SL
+ *  label pushed past the band, say) are HIDDEN. A hidden prim still reports a full
+ *  getBoundingClientRect, so without this it would ghost-hit — the reader would get a tooltip from
+ *  a chart element they cannot see. `url(#id)` resolves against the whole document, which is why
+ *  ChartPanel mints document-unique clip ids; the containment check keeps a same-id clip in another
+ *  chart's overlay from being applied to this one. */
+function clipWindowOf(el: Element): { x: number; y: number; w: number; h: number } | null {
+  const g = el.closest("g[clip-path]");
+  if (!g) return null;
+  const ref = /^url\(\s*["']?#([^"'()\s]+)["']?\s*\)$/.exec((g.getAttribute("clip-path") || "").trim());
+  const svg = el.closest("svg");
+  if (!ref || !svg) return null;
+  const cp = svg.ownerDocument?.getElementById(ref[1]);
+  if (!cp || !svg.contains(cp) || cp.tagName.toLowerCase() !== "clippath") return null;
+  // Only userSpaceOnUse is convertible by a plain origin shift; anything else is left un-narrowed.
+  const units = cp.getAttribute("clipPathUnits");
+  if (units && units !== "userSpaceOnUse") return null;
+  const r = cp.querySelector("rect");
+  if (!r) return null;
+  const rx = parseFloat(r.getAttribute("x") || "0"), ry = parseFloat(r.getAttribute("y") || "0");
+  const rw = parseFloat(r.getAttribute("width") || ""), rh = parseFloat(r.getAttribute("height") || "");
+  if (!fin(rx) || !fin(ry) || !fin(rw) || !fin(rh)) return null;
+  let sr: DOMRect;
+  // The overlay <svg> is inset:0 with no viewBox, so one SVG user unit is one CSS px and the whole
+  // conversion is the svg's own client origin.
+  try { sr = svg.getBoundingClientRect(); } catch { return null; }
+  return { x: sr.x + rx, y: sr.y + ry, w: rw, h: rh };
+}
+
+/** Measure every prim currently carrying a tooltip. Live query, so a prim kind added later is
+ *  hoverable for free and cannot be forgotten. */
+function buildHitEntries(wrap: HTMLElement): HitEntry[] {
+  const out: HitEntry[] = [];
+  for (const el of wrap.querySelectorAll("svg [data-ic-tip]")) {
+    const tid = el.getAttribute("data-ic-tip");
+    if (!tid) continue;
+    let b: DOMRect;
+    try { b = el.getBoundingClientRect(); } catch { continue; }
+    if (!(b.width > 0) || !(b.height > 0)) continue;
+    let x = b.x, y = b.y, w = b.width, h = b.height;
+    const clip = clipWindowOf(el);
+    if (clip) {
+      const x1 = Math.max(x, clip.x), y1 = Math.max(y, clip.y);
+      const x2 = Math.min(x + w, clip.x + clip.w), y2 = Math.min(y + h, clip.y + clip.h);
+      if (!(x2 > x1) || !(y2 > y1)) continue;   // clipped fully out of sight — never a ghost hit
+      x = x1; y = y1; w = x2 - x1; h = y2 - y1;
+    }
+    out.push({ el, tid, x, y, w, h });
+  }
+  return out;
+}
+
+/**
+ * Install the delegated hover/tap listeners for one chart wrapper. Once per wrapper, ever.
+ *
+ * WHY DELEGATION AND NOT `pointer-events:auto` ON THE PRIMS — the full argument lives in
+ * lib/markerTooltip.ts and is structural, not a matter of tuning: lightweight-charts owns pan,
+ * crosshair, wheel-zoom and pinch on ITS OWN canvas, which lives inside the chart container. The
+ * overlay layers are appended to the container's PARENT, so the canvas is a SIBLING SUBTREE, not an
+ * ancestor. An event landing on a hit-testable prim bubbles to `wrap` and stops — it never reaches
+ * the canvas and there is no propagation path that would take it there. A hit-testable prim
+ * therefore does not merely "risk" swallowing a drag, it DELETES the chart's gesture surface over
+ * its own footprint: a pan that starts on it does not pan, a wheel over it does not zoom, and the
+ * crosshair drops out as the cursor crosses it. That is what these prims shipped with until now.
+ *
+ * So the layer stays entirely `pointer-events:none` and NOT ONE PIXEL of the chart's hit-test
+ * geometry moves. Every listener here is read-only — no preventDefault, no stopPropagation, no
+ * capture — and registered on `wrap`, which already receives the canvas's bubbled pointer events
+ * (ChartPanel's pane-hover, double-tap and signal-marker handlers have all relied on that for as
+ * long as they have existed).
+ */
+function wireTooltipHitTest(wrap: HTMLElement): void {
+  if (HIT_WIRED.has(wrap)) return;
+  HIT_WIRED.add(wrap);
+
+  /** A tapped tooltip stays put until the next pointerdown; a hovered one follows the cursor. */
+  let pinned = false;
+  /** Suppresses the tooltip for the whole of a press-drag, so it can never chase a pan. */
+  let down: { x: number; y: number; t: number; id: number } | null = null;
+  /** Touch emits a synthetic mouse-ish move right after a tap; it must not un-pin the tap. */
+  let lastTouchTs = 0;
+  /** What the shared node is currently showing. Keyed on the def OBJECT as well as the id: bundles
+   *  are memoized per (suite, symbol, tf, bars, params, tier), so identity is stable across pan
+   *  frames — steady-state hover never rebuilds a node, and a recompute still refreshes the rows. */
+  let shownTid: string | null = null;
+  let shownDef: TooltipDef | null = null;
+
+  const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const tipOf = () => wrap.querySelector(":scope > .ic-tip") as HTMLElement | null;
+
+  const hide = () => {
+    pinned = false;
+    const tip = tipOf();
+    if (tip && tip.style.display !== "none") tip.style.display = "none";
+  };
+
+  const hitAt = (clientX: number, clientY: number, slack: number): HitEntry | null => {
+    let entries = HIT_BOXES.get(wrap) ?? null;
+    // The layer can also be emptied with no renderPrims call behind it (every suite toggled off),
+    // which leaves a cache of boxes whose elements are gone. A detached first element proves it.
+    if (entries && entries.length && !entries[0].el.isConnected) entries = null;
+    if (!entries) { entries = buildHitEntries(wrap); HIT_BOXES.set(wrap, entries); }
+    return entries.length ? hitTestMarkers(entries, clientX, clientY, slack) : null;
+  };
+
+  const show = (hit: HitEntry, def: TooltipDef, clientX: number, clientY: number) => {
+    const tip = tipOf(); if (!tip) return;
+    // Only rewrite the node when the tooltip actually changed — this runs on every pointermove
+    // while the cursor sits on a prim, and re-filling 60×/s rebuilds a subtree for nothing.
+    if (shownTid !== hit.tid || shownDef !== def) {
+      fillTip(tip, def);
+      tip.dataset.icTipFor = hit.tid;
+      shownTid = hit.tid; shownDef = def;
+    }
+    if (tip.style.display !== "block") tip.style.display = "block";
+    placeTip(tip, wrap, { clientX, clientY });
+  };
+
+  const defOf = (tid: string): TooltipDef | null => TIP_DEFS.get(wrap)?.get(tid) ?? null;
+
+  const onMove = (e: PointerEvent) => {
+    // A PointerEvent always carries a pointerType in a browser; an absent one means a plain
+    // MouseEvent (jsdom) and reads as a mouse. Touch takes the tap path below.
+    if (e.pointerType && e.pointerType !== "mouse") return;
+    // Synthetic post-touch move. Gated on a touch having HAPPENED: `performance.now()` is measured
+    // from the page's time origin, so a bare `now() - 0 < 700` would also suppress every hover in
+    // the first 700ms of the page's life.
+    if (lastTouchTs > 0 && now() - lastTouchTs < 700) return;
+    if (pinned) return;                           // a tapped tooltip is not chased by the cursor
+    if (down) {
+      if (e.buttons !== 0) { hide(); return; }    // mid press-drag → never chase a pan
+      // A press whose release landed outside the window never reaches our `pointerup`, and a stuck
+      // flag would suppress hover for the rest of the session. A move with no button held is proof
+      // the gesture ended, so the flag heals itself instead of needing window listeners.
+      down = null;
+    }
+    const hit = hitAt(e.clientX, e.clientY, MARKER_HOVER_SLACK);
+    const def = hit ? defOf(hit.tid) : null;
+    if (hit && def) show(hit, def, e.clientX, e.clientY);
+    else hide();
+  };
+
+  const onDown = (e: PointerEvent) => {
+    // Unconditional: a press anywhere dismisses an open tooltip BEFORE the gesture it starts.
+    // This is also what makes the pinned (tapped) tooltip dismissable by a tap elsewhere.
+    hide();
+    down = { x: e.clientX, y: e.clientY, t: now(), id: e.pointerId };
+  };
+
+  const onUp = (e: PointerEvent) => {
+    const d = down;
+    down = null;
+    if (!d || d.id !== e.pointerId) return;
+    if (e.pointerType === "mouse") return;        // a mouse click is not a tooltip gesture
+    lastTouchTs = now();
+    // TOUCH: a tap on a prim must not dead-end. Same thresholds as ChartPanel's double-tap
+    // detector, so one gesture can never be a tap here and a drag for the chart.
+    if (!isTapGesture(d, { x: e.clientX, y: e.clientY, t: now() })) return;
+    // Hit-tested at the DOWN point — where the finger actually landed — and with the larger touch
+    // slack, because these prims are a few px across and a fingertip has no hover to correct with.
+    const hit = hitAt(d.x, d.y, MARKER_TAP_SLACK);
+    const def = hit ? defOf(hit.tid) : null;
+    if (!hit || !def) return;
+    show(hit, def, d.x, d.y);
+    pinned = true;    // stays until the next pointerdown; there is no hover to dismiss it
+  };
+
+  const onCancel = () => { down = null; hide(); };
+
+  const onLeave = (e: PointerEvent) => {
+    // Touch fires pointerleave immediately after pointerup, which would kill the pin the tap just
+    // set. Only a real cursor leaving the chart dismisses a tooltip.
+    if (e.pointerType && e.pointerType !== "mouse") return;
+    hide();
+  };
+
+  // `passive` is the contract in code: nothing here may ever call preventDefault. No capture phase
+  // and no removal — the listeners live exactly as long as the wrapper element does.
+  const opts = { passive: true } as const;
+  wrap.addEventListener("pointermove", onMove, opts);
+  wrap.addEventListener("pointerdown", onDown, opts);
+  wrap.addEventListener("pointerup", onUp, opts);
+  wrap.addEventListener("pointercancel", onCancel, opts);
+  wrap.addEventListener("pointerleave", onLeave, opts);
 }
 
 function fillTip(tip: HTMLElement, def: TooltipDef): void {
@@ -108,7 +320,9 @@ function fillTip(tip: HTMLElement, def: TooltipDef): void {
   }
 }
 
-function placeTip(tip: HTMLElement, wrap: HTMLElement, ev: MouseEvent): void {
+/** `ev` is only ever read for its cursor position, so the tap path can hand over the DOWN point as
+ *  a plain object rather than the (already-consumed) pointerup event. */
+function placeTip(tip: HTMLElement, wrap: HTMLElement, ev: { clientX: number; clientY: number }): void {
   const wr = wrap.getBoundingClientRect();
   const tw = tip.offsetWidth, th = tip.offsetHeight;
   let x = ev.clientX - wr.left + 12, y = ev.clientY - wr.top + 14;
@@ -119,38 +333,18 @@ function placeTip(tip: HTMLElement, wrap: HTMLElement, ev: MouseEvent): void {
 }
 
 /**
- * Wire an SVG element to the shared tooltip. Looks up the TooltipDef by id from the defs map the
- * last renderPrims call stored for this element's chart wrapper (renderPrims calls this itself
- * for every prim carrying a tooltipId — modules never need to).
+ * Mark an SVG element as carrying a tooltip. ATTRIBUTE ONLY — no listeners and, deliberately, no
+ * `pointer-events`: the prim stays non-hit-testable so the layer's `pointer-events:none` really
+ * does cover everything, and the chart keeps every gesture over the prim's footprint (see
+ * wireTooltipHitTest above, and lib/markerTooltip.ts for the structural argument).
+ *
+ * `data-ic-tip` is the hit query's only input: the delegated listeners on the wrapper measure every
+ * element carrying it and resolve the id against the defs map the last renderPrims call stored for
+ * that wrapper. renderPrims calls this itself for every prim carrying a tooltipId — modules never
+ * need to.
  */
 export function bindTooltip(el: Element, tooltipId: string): void {
-  (el as SVGElement).setAttribute("pointer-events", "auto");
   (el as SVGElement).setAttribute("data-ic-tip", tooltipId);
-  const onEnter = (ev: Event) => {
-    const svg = el.closest("svg");
-    const wrap = svg?.parentElement;
-    if (!wrap) return;
-    const def = TIP_DEFS.get(wrap)?.get(tooltipId);
-    if (!def) return;
-    ensureTooltipHost(wrap);
-    const tip = wrap.querySelector(":scope > .ic-tip") as HTMLElement | null;
-    if (!tip) return;
-    fillTip(tip, def);
-    tip.style.display = "block";
-    placeTip(tip, wrap, ev as MouseEvent);
-  };
-  const onMove = (ev: Event) => {
-    const wrap = el.closest("svg")?.parentElement;
-    const tip = wrap?.querySelector(":scope > .ic-tip") as HTMLElement | null;
-    if (wrap && tip && tip.style.display !== "none") placeTip(tip, wrap, ev as MouseEvent);
-  };
-  const onLeave = () => {
-    const tip = el.closest("svg")?.parentElement?.querySelector(":scope > .ic-tip") as HTMLElement | null;
-    if (tip) tip.style.display = "none";
-  };
-  el.addEventListener("mouseenter", onEnter);
-  el.addEventListener("mousemove", onMove);
-  el.addEventListener("mouseleave", onLeave);
 }
 
 // ---------------------------------------------------------------------------------- coordinates
@@ -594,8 +788,9 @@ function drawColumns(f: DocumentFragment, cp: ColumnsPrim, m: CoordMapper): Elem
 /**
  * Draw every prim in the bundle into svgEl. APPEND-ONLY — the caller clears the layer each frame.
  * Builds a DocumentFragment and appends once. Prims are stable-sorted by (z ?? 0) with bgshade
- * forced behind everything. Prims with tooltipId get pointer-events:auto and drive the shared
- * ".ic-tip" host inside the chart wrapper (the parent of the owning <svg>).
+ * forced behind everything. Prims with tooltipId are marked `data-ic-tip` and stay
+ * pointer-events-transparent; the delegated wrapper hit test (wireTooltipHitTest) is what raises
+ * the shared ".ic-tip" host inside the chart wrapper (the parent of the owning <svg>).
  *
  * The target may be the overlay <svg> itself (overlay suites) or a <g> inside it (pane suites pass
  * a clip-wrapped group so their sub-pane content cannot bleed past the pane). Children are appended
@@ -604,11 +799,16 @@ function drawColumns(f: DocumentFragment, cp: ColumnsPrim, m: CoordMapper): Elem
 export function renderPrims(
   svgEl: SVGSVGElement | SVGGElement, bundle: SuiteRenderBundle, m: CoordMapper,
 ): void {
-  const prims = bundle.prims;
-  if (!prims.length) return;
   // closest("svg") returns the element itself when it IS the <svg>, so this is identical to
   // svgEl.parentElement for overlay callers and resolves the wrapper for a <g> target.
   const wrap = svgEl.closest("svg")?.parentElement ?? null;
+  // The hit cache is MEASURED geometry and this frame is about to move it. Dropped before the
+  // empty-bundle early-out, so a frame that draws nothing still cannot leave last frame's boxes
+  // hoverable. This is the renderer's whole share of the hit test — one WeakMap write, no layout.
+  if (wrap) HIT_BOXES.set(wrap, null);
+
+  const prims = bundle.prims;
+  if (!prims.length) return;
   if (wrap) {
     {
     // MERGE per wrapper: several suites render into the same chart wrap each frame; replacing the

@@ -17,8 +17,14 @@ section is your visual acceptance bar). UI doctrine: `docs/TERMINAL_UI_DOCTRINE_
 - **Renderer** (`render.ts`): draws `Prim[]` into the existing indicator SVG overlay each frame via
   a `CoordMapper` ChartPanel provides. Culling: skip prims fully outside `[i0-2, i1+2]`; clamp
   zone/line x to the viewport with ±40px slack (do NOT drop a zone whose i1 is far left of view).
-  Density: honor `minPxPerBar`. Tooltips: elements carrying `tooltipId` get `pointer-events:auto`
-  and raise/hide one shared HTML tooltip div (the layer itself stays `pointer-events:none`).
+  Density: honor `minPxPerBar`. Tooltips: elements carrying `tooltipId` are marked `data-ic-tip`
+  and NOTHING in the layer is ever made hit-testable — `pointer-events:none` covers the whole
+  overlay. Hover/tap is resolved in JS by delegated listeners on the chart wrapper, which measure
+  the `data-ic-tip` elements (intersected with their `g[clip-path]` window, so a clipped-invisible
+  prim cannot ghost-hit) and raise/hide one shared HTML tooltip div. `pointer-events:auto` on a
+  prim is FORBIDDEN and is not a smaller version of this: the lightweight-charts canvas is a
+  sibling subtree of the overlay, so a hit-testable prim deletes pan, wheel-zoom and crosshair over
+  its own footprint. `lib/markerTooltip.ts` carries the full argument and the shared helpers.
 - **ChartPanel integration** (done by the main session, not by builder agents): builds the mapper
   from `logicalToCoordinate`/`priceToCoordinate`, calls the renderer inside `renderIndOverlays()`,
   applies candlePaint via the `applyRibbonCandleColors` pattern, forwards events.
