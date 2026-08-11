@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { isPaidTier, isProTier } from "@/lib/entitlement";
+import { canonicalizeOptAlertIdentity } from "@/lib/optionsAlerts";
 import { SUITE_ALERT_EVENTS, validateSuiteCondition, validateSuiteSequence } from "@/lib/suiteAlerts";
 
 async function uid() {
@@ -24,6 +25,20 @@ const SUITE_SEQ_TYPE = "suite_sequence"; // two-step "A then B within N bars" (s
 
 const MAX_ALERTS_PER_USER = 50;
 
+function normalizeStoredAlert(row: unknown): unknown {
+  if (!row || typeof row !== "object") return row;
+  const alert = row as Record<string, unknown>;
+  const condition = alert.condition;
+  if (!condition || typeof condition !== "object") return row;
+  const type = String((condition as Record<string, unknown>).type ?? "");
+  if (!OPT_TYPES.has(type)) return row;
+  const identity = canonicalizeOptAlertIdentity(
+    typeof alert.symbol === "string" ? alert.symbol : "",
+    condition as Record<string, unknown>,
+  );
+  return identity ? { ...alert, ...identity } : row;
+}
+
 /** Owning tier of a catalog event; unknown event → "pro" so an unlisted event fails CLOSED. */
 function eventTier(suite: unknown, event: unknown): "free" | "essential" | "pro" {
   const hit = SUITE_ALERT_EVENTS.find((e) => e.suite === suite && e.event === event);
@@ -35,7 +50,10 @@ export async function GET() {
   const { supabase, user } = await uid();
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const { data } = await supabase.from("alerts").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
-  return NextResponse.json({ alerts: data || [] });
+  // Legacy rows predate the MARKET sentinel and the single-root identity law. Normalize
+  // them at the read boundary so stored SPY/QQQ labels cannot misdescribe what the
+  // evaluator actually reads. No historical trigger evidence is rewritten.
+  return NextResponse.json({ alerts: (data || []).map(normalizeStoredAlert) });
 }
 
 export async function POST(req: Request) {
@@ -84,12 +102,17 @@ export async function POST(req: Request) {
   if ((count ?? 0) >= MAX_ALERTS_PER_USER)
     return NextResponse.json({ error: `Alert limit reached (${MAX_ALERTS_PER_USER}). Delete one to add another.` }, { status: 400 });
 
-  const { data, error } = await supabase.from("alerts").insert({ user_id: user.id, symbol, condition }).select("*").single();
+  const stored = OPT_TYPES.has(type)
+    ? canonicalizeOptAlertIdentity(symbol, condition)
+    : { symbol, condition };
+  if (!stored)
+    return NextResponse.json({ error: "Invalid options root" }, { status: 400 });
+  const { data, error } = await supabase.from("alerts").insert({ user_id: user.id, ...stored }).select("*").single();
   if (error) {
     console.error("alerts POST failed:", error);
     return NextResponse.json({ error: "Could not create alert" }, { status: 400 });
   }
-  return NextResponse.json({ alert: data });
+  return NextResponse.json({ alert: normalizeStoredAlert(data) });
 }
 
 // Re-arm a fired alert: the engine (ingest/alerts_engine.py) disarms on trigger and stamps
@@ -103,13 +126,17 @@ export async function PATCH(req: Request) {
   if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
   const cond = { ...(row.condition || {}) };
   delete cond.triggered;
-  const { data, error } = await supabase.from("alerts").update({ active: true, condition: cond })
+  const identity = canonicalizeOptAlertIdentity(String(row.symbol ?? ""), cond);
+  const patch = identity
+    ? { active: true, symbol: identity.symbol, condition: identity.condition }
+    : { active: true, condition: cond };
+  const { data, error } = await supabase.from("alerts").update(patch)
     .eq("id", id).eq("user_id", user.id).select("*").single();
   if (error) {
     console.error("alerts PATCH failed:", error);
     return NextResponse.json({ error: "Could not update alert" }, { status: 400 });
   }
-  return NextResponse.json({ alert: data });
+  return NextResponse.json({ alert: normalizeStoredAlert(data) });
 }
 
 export async function DELETE(req: Request) {
