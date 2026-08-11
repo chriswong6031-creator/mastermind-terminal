@@ -613,9 +613,16 @@ describe("optAlertPreview + buildOptCondition", () => {
       const cond = buildOptCondition(kind, "SPY", extra as any);
       const en = optAlertPreview(cond, "en");
       const zh = optAlertPreview(cond, "zh");
-      expect(en).toContain("SPY");
+      if (kind === "opt_premium_burst" || kind === "opt_0dte_spike") {
+        expect(en).toContain("covered options tape");
+        expect(zh).toContain("覆盖范围内");
+        expect(en).not.toContain("market-wide");
+        expect(zh).not.toContain("全市场");
+      } else {
+        expect(en).toContain("SPY");
+        expect(zh).toContain("SPY");
+      }
       expect(en).not.toMatch(banned);
-      expect(zh).toContain("SPY");
       expect(zh).toMatch(/[一-鿿]/); // has Chinese
     }
   });
@@ -623,9 +630,37 @@ describe("optAlertPreview + buildOptCondition", () => {
   it("buildOptCondition emits the fields each evaluator reads, root upper-cased", () => {
     expect(buildOptCondition("opt_gamma_flip", "spy", { band_pct: 0.1 })).toEqual({ type: "opt_gamma_flip", root: "SPY", band_pct: 0.1 });
     expect(buildOptCondition("opt_wall_touch", "qqq", { wall: "put", within_pct: 0.3 })).toEqual({ type: "opt_wall_touch", root: "QQQ", wall: "put", within_pct: 0.3 });
-    expect(buildOptCondition("opt_premium_burst", "iwm", { leg: "npp", window_min: 15, z: 2.5 })).toEqual({ type: "opt_premium_burst", root: "IWM", leg: "npp", window_min: 15, z: 2.5 });
-    expect(buildOptCondition("opt_0dte_spike", "spy", { share_pct: 60 })).toEqual({ type: "opt_0dte_spike", root: "SPY", share_pct: 60 });
+    expect(buildOptCondition("opt_premium_burst", "iwm", { leg: "npp", window_min: 15, z: 2.5 })).toEqual({ type: "opt_premium_burst", root: "MARKET", leg: "npp", window_min: 15, z: 2.5 });
+    expect(buildOptCondition("opt_0dte_spike", "spy", { share_pct: 60 })).toEqual({ type: "opt_0dte_spike", root: "MARKET", share_pct: 60 });
     expect(buildOptCondition("opt_surface_pocket", "spy", { k: 5, near_pct: 3 })).toEqual({ type: "opt_surface_pocket", root: "SPY", k: 5, near_pct: 3 });
+  });
+
+  it("canonicalizes market-wide alert identity even for a stale or bypassing client", async () => {
+    const { canonicalizeOptAlertIdentity, isMarketWideOptKind } = await import("../optionsAlerts");
+    expect(isMarketWideOptKind("opt_premium_burst")).toBe(true);
+    expect(isMarketWideOptKind("opt_0dte_spike")).toBe(true);
+    expect(isMarketWideOptKind("opt_gamma_flip")).toBe(false);
+    expect(canonicalizeOptAlertIdentity("SPY", {
+      type: "opt_premium_burst", root: "QQQ", leg: "ncp",
+    })).toEqual({
+      symbol: "MARKET",
+      condition: { type: "opt_premium_burst", root: "MARKET", leg: "ncp" },
+    });
+    expect(canonicalizeOptAlertIdentity(" qqq ", {
+      type: "opt_gamma_flip", root: "QQQ",
+    })).toEqual({
+      symbol: "QQQ",
+      condition: { type: "opt_gamma_flip", root: "QQQ" },
+    });
+    expect(canonicalizeOptAlertIdentity("SPY", {
+      type: "opt_gamma_flip", root: " qqq ",
+    })).toEqual({
+      symbol: "QQQ",
+      condition: { type: "opt_gamma_flip", root: "QQQ" },
+    });
+    expect(canonicalizeOptAlertIdentity("SPY", {
+      type: "opt_gamma_flip", root: "../../QQQ",
+    })).toBeNull();
   });
 
   it("omitted numeric params fall through to evaluator defaults (field absent in condition)", () => {

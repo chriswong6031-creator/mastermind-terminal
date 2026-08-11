@@ -15,6 +15,9 @@ import SignupGate from "@/components/gates/SignupGate";
 export const metadata: Metadata = { title: "Alerts · Mastermind Terminal" };
 
 export default async function AlertsPage() {
+  if (process.env.TERMINAL_E2E_FIXTURE === "1") {
+    return <AlertsView email={process.env.TERMINAL_E2E_EMAIL || "responsive@example.com"} />;
+  }
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return <SignupGate surface="alerts" />;

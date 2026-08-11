@@ -21,12 +21,13 @@ Condition contract (see terminal/components/AlertsView.tsx COND_TYPES):
   {type:"opt_gamma_flip", root, band_pct?}          fires when spot crosses the gamma-flip level
                                                     (hysteresis dead-band = band_pct% of flip, default
                                                     0.05); first observation ARMS, never fires. State
-                                                    on cond._fs = {side}. Reads Flow.gexstate(root).
+                                                    on cond._fs = {side}. Reads Flow.gamma_state(root)
+                                                    (current Quote-Hub spot vs latest EOD flip).
   {type:"opt_wall_touch", root, wall, within_pct?}  fires on ENTER within within_pct% (default 0.25)
                                                     of the call|put wall (EOD wall level). First obs
                                                     arms; re-arms on leave. State on cond._wp={inside}.
                                                     Reads Flow.gex(root).
-  {type:"opt_premium_burst", root, leg, window_min?, z?}  fires when the trailing-window per-minute
+  {type:"opt_premium_burst", root:"MARKET", leg, window_min?, z?}  fires when the trailing-window per-minute
                                                     slope of the cumulative ncp|npp leg runs ≥ z
                                                     standard errors ABOVE the baseline that PRECEDES
                                                     that window (defaults window 10, z 2). One-sided
@@ -34,7 +35,7 @@ Condition contract (see terminal/components/AlertsView.tsx COND_TYPES):
                                                     the window or the result is an honest null.
                                                     Fire-once per minute stamp on cond._pb=
                                                     {lastFiredT,lastZ}. Reads Flow.tide().
-  {type:"opt_0dte_spike", root, share_pct?}         fires when the 0d bucket's share of tracked net
+  {type:"opt_0dte_spike", root:"MARKET", share_pct?} fires when the 0d bucket's share of tracked net
                                                     premium at the latest common stamp ≥ share_pct
                                                     (default 55). Missing "0d" bucket → SKIP (honest
                                                     disable). Fire-once per stamp on cond._zd. Reads
@@ -61,10 +62,11 @@ Condition contract (see terminal/components/AlertsView.tsx COND_TYPES):
                                                     Fire-once per interval on cond._sp. Reads
                                                     Flow.surface(root).
 
-Data sources (all local to the VPS): terminal/public/data/manifest.json (verdict/regime/EOD),
-<SYM>.slice.json (flagship signals), <SYM>.json (daily bars), Quote-Hub :HUB_PORT/quotes (live US+crypto),
-and the flow fixtures gexstate_fixture.json / gex_fixture.json / tide_fixture.json / dte_fixture.json
-(prod: FLOW_BACKEND + R2 per terminal/lib/flowSource.ts — see Flow's TODO(prod) note).
+Data sources: terminal/public/data/manifest.json (verdict/regime/EOD), <SYM>.slice.json
+(flagship signals), <SYM>.json (daily bars), Quote-Hub :HUB_PORT/quotes (live US+crypto),
+and the same live Flow backend -> public-R2 fallback chain used by terminal/lib/flowSource.ts.
+Committed Flow fixtures are available only through the explicit --flow-fixtures development flag;
+production never treats fixture bytes as live alert evidence.
 Supabase access via the service-role key in terminal/.env.local (same file the app loads).
 
 Usage: alerts_engine.py [--dry-run] [--data-dir DIR] [--env-file FILE]
@@ -75,14 +77,32 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 DEFAULT_ENV = "/opt/terminal/terminal/.env.local"
 DEFAULT_DATA = "/opt/terminal/terminal/public/data"
+DEFAULT_FLOW_BACKEND = "http://127.0.0.1:8000"
+DEFAULT_FLOW_R2 = "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev"
+FLOW_USER_AGENT = "mastermind-alerts/1.0"
+FLOW_ROOT_RE = re.compile(r"^[A-Z0-9]{1,10}(?:[.-][A-Z0-9]{1,4})?$")
+FLOW_STAMP_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+FLOW_ET = ZoneInfo("America/New_York")
+FLOW_RTH_OPEN = time(9, 30)
+FLOW_QUOTE_RTH_CLOSE = time(16, 0)
+FLOW_TAPE_RTH_CLOSE = time(16, 15)
+# A 15-minute-delayed source plus the 5-minute alert cron gets 20 minutes end to end.
+# Anything older is context, not trigger evidence. This deliberately withholds alerts while
+# the producer's actual cadence is slower instead of normalizing sparse tape as current.
+FLOW_INTRADAY_MAX_AGE_SEC = 20 * 60
+FLOW_EOD_MAX_AGE_DAYS = 3
+FLOW_QUOTE_MAX_AGE_SEC = 30 * 60
+FLOW_QUOTE_BASES = {"LIVE", "REALTIME", "DELAYED_15M"}
 BUY_TYPES = {"BUY", "REBUY"}
 SELL_TYPES = {"SELL", "CUT"}
 
@@ -163,9 +183,10 @@ def rsi14(closes: list[float], period: int = 14) -> float | None:
 class Data:
     """Lazy per-symbol data access over the on-disk store + one batched hub call."""
 
-    def __init__(self, data_dir: str, hub_port: str | None):
+    def __init__(self, data_dir: str, hub_port: str | None, *, now_fn=None):
         self.dir = Path(data_dir)
         self.hub_port = hub_port
+        self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))
         self.quotes: dict[str, dict] = {}
         manifest = json.loads((self.dir / "manifest.json").read_text())
         self.symbols: dict[str, dict] = manifest.get("symbols") or {}
@@ -188,6 +209,61 @@ class Data:
         if isinstance(m.get("last"), (int, float)):
             return float(m["last"]), "eod"
         return None, None
+
+    def live_quote(self, sym: str) -> dict | None:
+        """Return a current-session Quote-Hub spot receipt or fail closed.
+
+        Delayed-15m quotes are admissible when their own timestamp is current; manifest/EOD
+        fallback is not. Options crossing/touch alerts must never compare an EOD spot to an
+        EOD structural level and call the result live.
+        """
+        q = self.quotes.get(sym)
+        if not isinstance(q, dict) or not _finite(q.get("last")):
+            return None
+        basis = str(q.get("basis") or "").upper()
+        if basis not in FLOW_QUOTE_BASES:
+            return None
+        now = self.now_fn().astimezone(timezone.utc)
+        now_et = now.astimezone(FLOW_ET)
+        if now_et.weekday() >= 5 or not (FLOW_RTH_OPEN <= now_et.time() < FLOW_QUOTE_RTH_CLOSE):
+            return None
+        if str(q.get("marketSession") or "").lower() != "rth":
+            return None
+        # Quote Hub seeds a manifest/EOD placeholder with ts=Date.now(), a delayed basis,
+        # and regularSession="closed" while waiting for the first current-session print.
+        # A fresh transport timestamp is therefore not evidence of a fresh quote. Require
+        # the publisher's actual-session receipt before a crossing/touch alert can arm.
+        if str(q.get("regularSession") or "").lower() != "rth":
+            return None
+        if str(q.get("regularSessionDate") or "") != now_et.date().isoformat():
+            return None
+        observed_sec = (
+            float(q["asOfMs"]) / 1000
+            if _finite(q.get("asOfMs"))
+            else float(q["ts"])
+            if _finite(q.get("ts"))
+            else None
+        )
+        if observed_sec is None:
+            return None
+        observed = datetime.fromtimestamp(observed_sec, tz=timezone.utc)
+        age = (now - observed).total_seconds()
+        if observed.astimezone(FLOW_ET).date() != now_et.date():
+            return None
+        if not (-60 <= age <= FLOW_QUOTE_MAX_AGE_SEC):
+            return None
+        if q.get("lagMs") is not None:
+            if not _finite(q.get("lagMs")) or not (0 <= float(q["lagMs"]) <= FLOW_QUOTE_MAX_AGE_SEC * 1000):
+                return None
+        return {
+            "spot": float(q["last"]),
+            "asof": observed.isoformat().replace("+00:00", "Z"),
+            "basis": basis or str(q.get("source") or "quote-hub"),
+        }
+
+    def live_spot(self, sym: str) -> float | None:
+        receipt = self.live_quote(sym)
+        return receipt["spot"] if receipt is not None else None
 
     def regime_bull(self, sym: str):
         m = self.symbols.get(sym)
@@ -215,19 +291,33 @@ class Data:
 
 
 class Flow:
-    """Options-flow payload accessor over the on-disk fixture/data store (mirrors `Data`).
+    """Options-flow accessor with the Terminal's production source law.
 
-    For THIS task the disk/fixture read IS the contract: dev + parity run off the committed
-    fixtures in terminal/public/data. On the VPS these arrive from the Python backend / R2 mirror
-    (keys per terminal/lib/flowSource.ts r2Key()/backendPath()); the nightly/collect side writes the
-    resolved files. Fail-soft: a missing file returns None → evaluate() returns fired=None → SKIP.
-
-    # TODO(prod): resolve gexstate/gex/tide/dte via FLOW_BACKEND (http://127.0.0.1:8000) + R2 per
-    # flowSource.r2Key/backendPath instead of the fixture read. Out of scope for this lane.
+    Remote mode (the safe default) resolves the local Flow backend first and the public R2
+    mirror second, using the exact paths in ``terminal/lib/flowSource.ts``. A malformed or
+    unavailable document fails closed to ``None``; fixture files are never a production
+    fallback. ``fixture_mode=True`` exists only for deterministic parity tests and the explicit
+    ``--flow-fixtures`` development flag.
     """
 
-    def __init__(self, data_dir: str):
+    def __init__(
+        self,
+        data_dir: str,
+        *,
+        backend_base: str = DEFAULT_FLOW_BACKEND,
+        r2_base: str = DEFAULT_FLOW_R2,
+        fixture_mode: bool = False,
+        fetch_json=None,
+        now_fn=None,
+        spot_getter=None,
+    ):
         self.dir = Path(data_dir)
+        self.backend_base = backend_base.rstrip("/")
+        self.r2_base = r2_base.rstrip("/")
+        self.fixture_mode = fixture_mode
+        self.fetch_json = fetch_json or http_json
+        self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+        self.spot_getter = spot_getter
         self._cache: dict[str, dict | None] = {}
 
     def _load(self, name: str):
@@ -243,47 +333,236 @@ class Flow:
         self._cache[name] = val
         return val
 
+    @staticmethod
+    def _root(root: str) -> str | None:
+        key = str(root or "").upper()
+        return key if len(key) <= 12 and FLOW_ROOT_RE.fullmatch(key) else None
+
+    @staticmethod
+    def _root_doc(doc, root: str, *, schema: str | None = None) -> bool:
+        if not isinstance(doc, dict):
+            return False
+        if schema is not None and doc.get("schema") != schema:
+            return False
+        return str(doc.get("root") or "").upper() == root
+
+    @staticmethod
+    def _schema_doc(doc, schema: str) -> bool:
+        return isinstance(doc, dict) and doc.get("schema") == schema
+
+    @staticmethod
+    def _parse_clock(value) -> datetime | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+
+    def _intraday_fresh(self, doc) -> bool:
+        if not isinstance(doc, dict):
+            return False
+        observed = self._parse_clock(doc.get("asof"))
+        now = self.now_fn().astimezone(timezone.utc)
+        if observed is None:
+            return False
+        age = (now - observed).total_seconds()
+        now_et = now.astimezone(FLOW_ET)
+        observed_et = observed.astimezone(FLOW_ET)
+        if now_et.weekday() >= 5 or not (FLOW_RTH_OPEN <= now_et.time() <= FLOW_TAPE_RTH_CLOSE):
+            return False
+        if observed_et.date() != now_et.date() or not (-60 <= age <= FLOW_INTRADAY_MAX_AGE_SEC):
+            return False
+        session_date = doc.get("session_date")
+        return session_date in (None, now_et.date().isoformat())
+
+    def _eod_fresh(self, doc) -> bool:
+        if not isinstance(doc, dict):
+            return False
+        value = doc.get("asof")
+        observed_date = None
+        if isinstance(value, str):
+            try:
+                observed_date = date.fromisoformat(value[:10])
+            except ValueError:
+                observed_date = None
+        if observed_date is None:
+            return False
+        today = self.now_fn().astimezone(FLOW_ET).date()
+        age_days = (today - observed_date).days
+        return 0 <= age_days <= FLOW_EOD_MAX_AGE_DAYS
+
+    def _remote(self, cache_key: str, backend_path: str, r2_key: str, validator):
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+        val = None
+        urls = (
+            f"{self.backend_base}{backend_path}",
+            f"{self.r2_base}/{r2_key.lstrip('/')}",
+        )
+        for url in urls:
+            try:
+                candidate = self.fetch_json(
+                    url,
+                    headers={"User-Agent": FLOW_USER_AGENT, "Cache-Control": "no-cache"},
+                    timeout=8,
+                )
+            except Exception:
+                continue
+            if validator(candidate):
+                val = candidate
+                break
+        self._cache[cache_key] = val
+        return val
+
+    def _spot(self, root: str) -> dict | None:
+        if self.spot_getter is None:
+            return None
+        try:
+            receipt = self.spot_getter(root)
+        except Exception:
+            return None
+        if not isinstance(receipt, dict) or not _finite(receipt.get("spot")):
+            return None
+        return receipt
+
     def gexstate(self, root: str):
-        """Single-root gex_state. On the box it is per-root (gex_state_{ROOT}.json); in dev the one
-        gexstate_fixture.json stands in. Returns the dict only when its root matches (or when the
-        per-root file exists), else None → honest 'unavailable'."""
-        specific = self._load(f"gex_state_{root}.json")
-        if isinstance(specific, dict):
-            return specific
-        fx = self._load("gexstate_fixture.json")
-        if isinstance(fx, dict) and (not root or str(fx.get("root", "")).upper() == root.upper()):
-            return fx
-        return None
+        """Single-root structural state; exact-root and schema checked."""
+        key = self._root(root)
+        if key is None:
+            return None
+        if self.fixture_mode:
+            specific = self._load(f"gex_state_{key}.json")
+            if isinstance(specific, dict) and str(specific.get("root") or key).upper() == key:
+                return specific
+            fx = self._load("gexstate_fixture.json")
+            if isinstance(fx, dict) and str(fx.get("root", "")).upper() == key:
+                return fx
+            return None
+        doc = self._remote(
+            f"gexstate:{key}",
+            f"/api/hub/gexstate/{key}",
+            f"options_structure/gex_state/{key}.json",
+            lambda doc: (
+                self._root_doc(doc, key, schema="options_structure.gex_state/v1")
+                and self._eod_fresh(doc)
+            ),
+        )
+        if not isinstance(doc, dict):
+            return None
+        return doc
 
     def gex(self, root: str):
-        """Per-symbol EOD gex payload, keyed by root in gex_fixture.json."""
-        fx = self._load("gex_fixture.json")
-        if isinstance(fx, dict):
-            hit = fx.get(root) or fx.get(root.upper())
-            if isinstance(hit, dict):
-                return hit
-        return None
+        """Per-root EOD GEX payload; exact-root and schema checked."""
+        key = self._root(root)
+        if key is None:
+            return None
+        if self.fixture_mode:
+            fx = self._load("gex_fixture.json")
+            if isinstance(fx, dict):
+                hit = fx.get(key)
+                if isinstance(hit, dict):
+                    return hit
+            return None
+        doc = self._remote(
+            f"gex:{key}",
+            f"/api/hub/gex/{key}",
+            f"options_hub/gex/{key}.json",
+            lambda doc: (
+                self._root_doc(doc, key, schema="options_hub.gex/v1")
+                and self._eod_fresh(doc)
+            ),
+        )
+        if not isinstance(doc, dict):
+            return None
+        receipt = self._spot(key)
+        return {
+            **doc,
+            # Preserve the publisher's settled spot_ref for structural EOD alerts such
+            # as wall migration. Price-touch/cross alerts consume this separately named
+            # current-session receipt and therefore fail closed when Quote-Hub cannot
+            # attest a live spot.
+            "live_spot": receipt.get("spot") if receipt else None,
+            "live_spot_asof": receipt.get("asof") if receipt else None,
+            "live_spot_basis": receipt.get("basis") if receipt else None,
+        }
+
+    def gamma_state(self, root: str):
+        """Live quote crossed against the latest admissible EOD gamma-flip level."""
+        if self.fixture_mode:
+            return self.gexstate(root)
+        gx = self.gex(root)
+        if not isinstance(gx, dict):
+            return None
+        return {
+            "root": gx.get("root"),
+            "spot": gx.get("live_spot"),
+            "gamma_flip": gx.get("gamma_flip"),
+            "asof": gx.get("asof"),
+            "spot_asof": gx.get("live_spot_asof"),
+            "spot_basis": gx.get("live_spot_basis"),
+        }
 
     def tide(self):
-        fx = self._load("tide_fixture.json")
-        return fx if isinstance(fx, dict) else None
+        if self.fixture_mode:
+            fx = self._load("tide_fixture.json")
+            return fx if isinstance(fx, dict) else None
+        return self._remote(
+            "tide",
+            "/api/flow/tide",
+            "live_flow/tide_current.json",
+            lambda doc: self._schema_doc(doc, "live_flow.tide/v1") and self._intraday_fresh(doc),
+        )
 
     def dte(self):
-        fx = self._load("dte_fixture.json")
-        return fx if isinstance(fx, dict) else None
+        if self.fixture_mode:
+            fx = self._load("dte_fixture.json")
+            return fx if isinstance(fx, dict) else None
+        return self._remote(
+            "dte",
+            "/api/flow/dte",
+            "live_flow/dte_tide_current.json",
+            lambda doc: self._schema_doc(doc, "live_flow.dte_tide/v1") and self._intraday_fresh(doc),
+        )
 
     def surface(self, root: str):
-        """Latest Flow-Surface frame for a root, via the store's own chain:
-        surface_idx:{ROOT} → latest stamp → surface:{ROOT}:{STAMP}.
-
-        Mirrors terminal/lib/flowSource.ts fixtureFor(): the fixture holds ONE canonical
-        full-day frame per root, truncated to the intervals realized as of the requested
-        stamp. Unknown root (or an index with no stamps) → None → the evaluator's honest
-        'no surface for this root yet' null.
-        """
-        if not root:
+        """Latest exact-root Flow-Surface frame via idx.latest -> frame."""
+        key = self._root(root)
+        if key is None:
             return None
-        key = root.upper()
+        if not self.fixture_mode:
+            idx = self._remote(
+                f"surface_idx:{key}",
+                f"/api/flow/surface/{key}/idx",
+                f"live_flow/surface/{key}/idx.json",
+                lambda doc: (
+                    self._root_doc(doc, key)
+                    and isinstance(doc.get("stamps"), list)
+                    and isinstance(doc.get("latest"), str)
+                    and doc.get("latest") in doc.get("stamps")
+                    and FLOW_STAMP_RE.fullmatch(doc.get("latest")) is not None
+                    and self._intraday_fresh(doc)
+                ),
+            )
+            if not isinstance(idx, dict):
+                return None
+            latest = idx["latest"]
+            return self._remote(
+                f"surface:{key}:{latest}",
+                f"/api/flow/surface/{key}/{latest}",
+                f"live_flow/surface/{key}/{latest}.json",
+                lambda doc: (
+                    self._root_doc(doc, key)
+                    and isinstance(doc.get("time_steps"), list)
+                    and isinstance(doc.get("grids"), dict)
+                    and isinstance(doc.get("price_levels"), list)
+                    and self._intraday_fresh(doc)
+                ),
+            )
+
         idx_all = self._load("surface_idx_fixture.json")
         idx = idx_all.get(key) if isinstance(idx_all, dict) else None
         if not isinstance(idx, dict):
@@ -299,7 +578,7 @@ class Flow:
         frame_stamps = full.get("stamps") if isinstance(full.get("stamps"), list) else []
         times = full.get("time_steps") if isinstance(full.get("time_steps"), list) else []
         i = frame_stamps.index(latest) if latest in frame_stamps else -1
-        upto = i + 1 if i >= 0 else len(times)  # unknown stamp → full day (flowSource parity)
+        upto = i + 1 if i >= 0 else len(times)
         grids_full = full.get("grids") if isinstance(full.get("grids"), dict) else {}
         grids = {m: [row[:upto] for row in g] for m, g in grids_full.items() if isinstance(g, list)}
         spot_path = full.get("spot_path") if isinstance(full.get("spot_path"), list) else None
@@ -324,6 +603,15 @@ def _finite(x) -> bool:
 
 def _as_of(asof) -> str:
     return f"as of {asof}" if asof else "as of unknown time"
+
+
+def _quote_basis_label(basis) -> str:
+    value = str(basis or "").upper()
+    if value == "DELAYED_15M":
+        return "15-minute-delayed quote"
+    if value in {"LIVE", "REALTIME"}:
+        return "live quote"
+    return "current quote"
 
 
 # The baseline must be at least this multiple of the test window before a pace can be called
@@ -403,14 +691,23 @@ def _eval_gamma_flip(cond: dict, gs, prev: dict):
             dirtxt = f"crossed above its gamma flip ({flip}) → long-gamma side"
         else:
             dirtxt = f"crossed below its gamma flip ({flip}) → short-gamma side"
-        note = f"{root} {dirtxt} · {_as_of(gs.get('asof'))}, intraday"
+        if gs.get("spot_asof"):
+            note = (
+                f"{root} {dirtxt} · {_quote_basis_label(gs.get('spot_basis'))} "
+                f"{_as_of(gs.get('spot_asof'))}; "
+                f"gamma level EOD {_as_of(gs.get('asof'))}"
+            )
+        else:
+            note = f"{root} {dirtxt} · {_as_of(gs.get('asof'))}, intraday"
         return True, spot, note, nxt
     return False, spot, "", nxt
 
 
 def _eval_wall(cond: dict, gx, prev: dict):
     """Ports evalWallProximity — fire on ENTER (false->true), first-obs arms, note says EOD."""
-    spot = gx.get("spot_ref") if isinstance(gx, dict) else None
+    # Remote GEX carries both a settled EOD spot_ref and an independently attested
+    # current-session live_spot. Fixture payloads predate that split and keep spot_ref.
+    spot = (gx.get("live_spot") if "live_spot" in gx else gx.get("spot_ref")) if isinstance(gx, dict) else None
     wall_side = "put" if cond.get("wall") == "put" else "call"
     wall = (gx.get("put_wall") if wall_side == "put" else gx.get("call_wall")) if isinstance(gx, dict) else None
     if not _finite(spot) or not _finite(wall) or wall == 0:
@@ -422,7 +719,14 @@ def _eval_wall(cond: dict, gx, prev: dict):
     nxt = {"inside": inside}
     if inside and prior is False:
         root = cond.get("root") or (gx.get("root") if isinstance(gx, dict) else None) or "the underlying"
-        note = f"{root} within {within}% of its {wall_side} wall ({wall}) — EOD wall level · {_as_of(gx.get('asof'))}"
+        if gx.get("live_spot_asof"):
+            note = (
+                f"{root} within {within}% of its {wall_side} wall ({wall}) — "
+                f"{_quote_basis_label(gx.get('live_spot_basis'))} "
+                f"{_as_of(gx.get('live_spot_asof'))}; EOD wall level {_as_of(gx.get('asof'))}"
+            )
+        else:
+            note = f"{root} within {within}% of its {wall_side} wall ({wall}) — EOD wall level · {_as_of(gx.get('asof'))}"
         return True, spot, note, nxt
     return False, spot, "", nxt
 
@@ -564,7 +868,7 @@ def _eval_premium_burst(cond: dict, tide, prev: dict):
     else:
         nxt = {"lastFiredT": prev.get("lastFiredT"), "lastZ": prev.get("lastZ")}
     if fires and not already:
-        root = cond.get("root") or "the underlying"
+        root = "Covered options tape"
         legw = "net-put premium" if leg == "npp" else "net-call premium"
         note = (f"{root} {legw} moving at an unusual pace (z {z:.1f}, last {window_min}m vs the "
                 f"{stats['baseN']}m before it) · intraday tape {_as_of(tide.get('asof'))}")
@@ -677,7 +981,7 @@ def _eval_0dte(cond: dict, dte, prev: dict):
     already = prev.get("lastFiredT") == stamp
     nxt = {"lastFiredT": stamp} if fires else {"lastFiredT": prev.get("lastFiredT")}
     if fires and not already:
-        root = cond.get("root") or "the underlying"
+        root = "Covered options tape"
         note = f"{root} 0DTE share {share:.0f}% of tracked net premium · 10-min DTE tape {_as_of(dte.get('asof'))}"
         return True, round(share, 1), note, nxt
     return False, round(share, 1), "", nxt
@@ -687,7 +991,7 @@ def _eval_0dte(cond: dict, dte, prev: dict):
 # The tuple is (state-key, evaluator, payload-getter). The engine persists nxt back to that
 # sub-key when it changed but did NOT fire (see main()), so the state machine survives across runs.
 _OPT_EVALUATORS = {
-    "opt_gamma_flip": ("_fs", _eval_gamma_flip, lambda cond, flow: flow.gexstate(cond.get("root") or "")),
+    "opt_gamma_flip": ("_fs", _eval_gamma_flip, lambda cond, flow: flow.gamma_state(cond.get("root") or "")),
     "opt_wall_touch": ("_wp", _eval_wall, lambda cond, flow: flow.gex(cond.get("root") or "")),
     "opt_premium_burst": ("_pb", _eval_premium_burst, lambda cond, flow: flow.tide()),
     "opt_0dte_spike": ("_zd", _eval_0dte, lambda cond, flow: flow.dte()),
@@ -769,6 +1073,11 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="evaluate + log, but never write to Supabase")
     ap.add_argument("--env-file", default=DEFAULT_ENV)
     ap.add_argument("--data-dir", default=DEFAULT_DATA)
+    ap.add_argument(
+        "--flow-fixtures",
+        action="store_true",
+        help="development only: evaluate options conditions from committed Flow fixtures",
+    )
     args = ap.parse_args()
 
     env = load_env(args.env_file)
@@ -784,9 +1093,28 @@ def main() -> int:
         return 0
 
     data = Data(args.data_dir, env.get("HUB_PORT", "3100"))
-    flow = Flow(args.data_dir)
-    price_syms = sorted({a["symbol"] for a in alerts if (a.get("condition") or {}).get("type") == "price"})
-    data.prime_quotes(price_syms)
+    price_syms = {
+        str(a.get("symbol") or "").upper()
+        for a in alerts
+        if (a.get("condition") or {}).get("type") == "price"
+    }
+    option_syms = {
+        str((a.get("condition") or {}).get("root") or "").upper()
+        for a in alerts
+        if str((a.get("condition") or {}).get("type") or "").startswith("opt_")
+    }
+    quote_syms = sorted({
+        sym for sym in price_syms | option_syms
+        if sym != "MARKET" and len(sym) <= 12 and FLOW_ROOT_RE.fullmatch(sym)
+    })
+    data.prime_quotes(quote_syms)
+    flow = Flow(
+        args.data_dir,
+        backend_base=env.get("FLOW_API_BASE") or DEFAULT_FLOW_BACKEND,
+        r2_base=env.get("FLOW_R2_BASE") or DEFAULT_FLOW_R2,
+        fixture_mode=args.flow_fixtures,
+        spot_getter=data.live_quote,
+    )
 
     fired = skipped = 0
     for a in alerts:
