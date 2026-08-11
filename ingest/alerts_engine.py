@@ -214,7 +214,7 @@ class Data:
         EOD structural level and call the result live.
         """
         q = self.quotes.get(sym)
-        if not isinstance(q, dict) or not _finite(q.get("last")) or not _finite(q.get("ts")):
+        if not isinstance(q, dict) or not _finite(q.get("last")):
             return None
         basis = str(q.get("basis") or "").upper()
         if basis not in FLOW_QUOTE_BASES:
@@ -223,12 +223,32 @@ class Data:
         now_et = now.astimezone(FLOW_ET)
         if now_et.weekday() >= 5 or not (FLOW_RTH_OPEN <= now_et.time() <= FLOW_RTH_CLOSE):
             return None
-        observed = datetime.fromtimestamp(float(q["ts"]), tz=timezone.utc)
+        # Quote Hub seeds a manifest/EOD placeholder with ts=Date.now(), a delayed basis,
+        # and regularSession="closed" while waiting for the first current-session print.
+        # A fresh transport timestamp is therefore not evidence of a fresh quote. Require
+        # the publisher's actual-session receipt before a crossing/touch alert can arm.
+        if str(q.get("regularSession") or "").lower() != "rth":
+            return None
+        if str(q.get("regularSessionDate") or "") != now_et.date().isoformat():
+            return None
+        observed_sec = (
+            float(q["asOfMs"]) / 1000
+            if _finite(q.get("asOfMs"))
+            else float(q["ts"])
+            if _finite(q.get("ts"))
+            else None
+        )
+        if observed_sec is None:
+            return None
+        observed = datetime.fromtimestamp(observed_sec, tz=timezone.utc)
         age = (now - observed).total_seconds()
         if observed.astimezone(FLOW_ET).date() != now_et.date():
             return None
         if not (-60 <= age <= FLOW_QUOTE_MAX_AGE_SEC):
             return None
+        if q.get("lagMs") is not None:
+            if not _finite(q.get("lagMs")) or not (0 <= float(q["lagMs"]) <= FLOW_QUOTE_MAX_AGE_SEC * 1000):
+                return None
         return {
             "spot": float(q["last"]),
             "asof": observed.isoformat().replace("+00:00", "Z"),
@@ -842,7 +862,7 @@ def _eval_premium_burst(cond: dict, tide, prev: dict):
     else:
         nxt = {"lastFiredT": prev.get("lastFiredT"), "lastZ": prev.get("lastZ")}
     if fires and not already:
-        root = "Market-wide"
+        root = "Covered options tape"
         legw = "net-put premium" if leg == "npp" else "net-call premium"
         note = (f"{root} {legw} moving at an unusual pace (z {z:.1f}, last {window_min}m vs the "
                 f"{stats['baseN']}m before it) · intraday tape {_as_of(tide.get('asof'))}")
@@ -955,7 +975,7 @@ def _eval_0dte(cond: dict, dte, prev: dict):
     already = prev.get("lastFiredT") == stamp
     nxt = {"lastFiredT": stamp} if fires else {"lastFiredT": prev.get("lastFiredT")}
     if fires and not already:
-        root = "Market-wide"
+        root = "Covered options tape"
         note = f"{root} 0DTE share {share:.0f}% of tracked net premium · 10-min DTE tape {_as_of(dte.get('asof'))}"
         return True, round(share, 1), note, nxt
     return False, round(share, 1), "", nxt

@@ -15,7 +15,7 @@ test.beforeAll(() => {
   if (EVIDENCE) mkdirSync(EVIDENCE_DIR, { recursive: true });
 });
 
-test("market-wide options alerts stay honest and contained", async ({ page }, testInfo) => {
+test("covered-tape options alerts stay honest and contained", async ({ page }, testInfo) => {
   const zh = testInfo.project.name === "tablet";
   let posted: Record<string, unknown> | null = null;
 
@@ -50,7 +50,7 @@ test("market-wide options alerts stay honest and contained", async ({ page }, te
 
   await kind.selectOption("opt_premium_burst");
   await expect(page.locator('.alert-form select:has(option[value="SPY"])')).toHaveCount(0);
-  await expect(page.locator(".opt-preview-txt")).toContainText(zh ? "全市场" : "market-wide");
+  await expect(page.locator(".opt-preview-txt")).toContainText(zh ? "覆盖范围内" : "covered options tape");
   await page.locator(".alert-form button").click();
 
   await expect.poll(() => posted).not.toBeNull();
@@ -59,7 +59,7 @@ test("market-wide options alerts stay honest and contained", async ({ page }, te
     condition: { type: "opt_premium_burst", root: "MARKET", leg: "ncp" },
   });
   await expect(page.locator(".arow .tk")).toHaveText("MARKET");
-  await expect(page.locator(".arow .cond")).toContainText(zh ? "全市场" : "market-wide");
+  await expect(page.locator(".arow .cond")).toContainText(zh ? "覆盖范围内" : "covered options tape");
 
   const containment = await page.evaluate(() => {
     const form = document.querySelector<HTMLElement>(".alert-form");

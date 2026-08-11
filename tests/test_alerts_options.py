@@ -678,7 +678,8 @@ def test_quote_hub_spot_requires_current_rth_receipt(tmp_path):
     data = ae.Data(str(tmp_path), None, now_fn=lambda: REMOTE_NOW)
     data.quotes = {
         "SPY": {"last": 701.25, "ts": REMOTE_NOW.timestamp() - 15 * 60,
-                "basis": "DELAYED_15M", "live": False},
+                "basis": "DELAYED_15M", "live": False,
+                "regularSession": "rth", "regularSessionDate": "2026-08-11"},
     }
     assert data.live_spot("SPY") == 701.25
     assert data.live_quote("SPY")["basis"] == "DELAYED_15M"
@@ -688,6 +689,49 @@ def test_quote_hub_spot_requires_current_rth_receipt(tmp_path):
     assert data.live_spot("SPY") is None
     data.quotes["SPY"] = {"last": 701.25, "ts": REMOTE_NOW.timestamp(), "basis": "UNKNOWN"}
     assert data.live_spot("SPY") is None
+
+
+def test_quote_hub_manifest_placeholder_never_masquerades_as_current_spot(tmp_path):
+    """Quote Hub deliberately stamps the EOD placeholder with ts=now before the first AM."""
+    (tmp_path / "manifest.json").write_text('{"symbols":{}}')
+    data = ae.Data(str(tmp_path), None, now_fn=lambda: REMOTE_NOW)
+    data.quotes = {
+        "SPY": {
+            "last": 701.25,
+            "ts": REMOTE_NOW.timestamp(),
+            "source": "polygon-delayed",
+            "basis": "DELAYED_15M",
+            "regularSession": "closed",
+        },
+    }
+    assert data.live_quote("SPY") is None
+    # Neither omission nor a stale session date may be treated as an equivalent receipt.
+    data.quotes["SPY"]["regularSession"] = "rth"
+    assert data.live_quote("SPY") is None
+    data.quotes["SPY"]["regularSessionDate"] = "2026-08-10"
+    assert data.live_quote("SPY") is None
+
+
+def test_quote_hub_prefers_print_clock_and_rejects_bad_measured_lag(tmp_path):
+    (tmp_path / "manifest.json").write_text('{"symbols":{}}')
+    data = ae.Data(str(tmp_path), None, now_fn=lambda: REMOTE_NOW)
+    current = {
+        "last": 701.25,
+        "ts": REMOTE_NOW.timestamp(),  # transport/update time looks fresh
+        "asOfMs": int((REMOTE_NOW.timestamp() - 31 * 60) * 1000),  # print is stale
+        "lagMs": 31 * 60 * 1000,
+        "source": "polygon-snapshot-rt",
+        "basis": "REALTIME",
+        "regularSession": "rth",
+        "regularSessionDate": "2026-08-11",
+    }
+    data.quotes = {"SPY": current}
+    assert data.live_quote("SPY") is None
+    current["asOfMs"] = int((REMOTE_NOW.timestamp() - 10) * 1000)
+    current["lagMs"] = 10_000
+    assert data.live_quote("SPY")["asof"] == "2026-08-11T14:59:50Z"
+    current["lagMs"] = float("nan")
+    assert data.live_quote("SPY") is None
 
 
 def test_remote_unavailable_never_reads_a_fixture(tmp_path):

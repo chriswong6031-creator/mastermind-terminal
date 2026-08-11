@@ -243,7 +243,12 @@ export default function AlertsView({ email }: { email: string }) {
       let symbol: string;
       let condition: Record<string, unknown>;
       if (cat === "options") {
-        ({ symbol, condition } = canonicalizeOptAlertIdentity(optRoot, optCondition));
+        const identity = canonicalizeOptAlertIdentity(optRoot, optCondition);
+        if (!identity) {
+          setErr(t("couldNotCreateAlert"));
+          return;
+        }
+        ({ symbol, condition } = identity);
       } else if (cat === "suite") {
         symbol = sym;
         condition = suiteMode === "seq" ? seqCondition! : suiteCondition!;

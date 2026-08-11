@@ -614,8 +614,10 @@ describe("optAlertPreview + buildOptCondition", () => {
       const en = optAlertPreview(cond, "en");
       const zh = optAlertPreview(cond, "zh");
       if (kind === "opt_premium_burst" || kind === "opt_0dte_spike") {
-        expect(en).toContain("market-wide");
-        expect(zh).toContain("全市场");
+        expect(en).toContain("covered options tape");
+        expect(zh).toContain("覆盖范围内");
+        expect(en).not.toContain("market-wide");
+        expect(zh).not.toContain("全市场");
       } else {
         expect(en).toContain("SPY");
         expect(zh).toContain("SPY");
@@ -650,6 +652,15 @@ describe("optAlertPreview + buildOptCondition", () => {
       symbol: "QQQ",
       condition: { type: "opt_gamma_flip", root: "QQQ" },
     });
+    expect(canonicalizeOptAlertIdentity("SPY", {
+      type: "opt_gamma_flip", root: " qqq ",
+    })).toEqual({
+      symbol: "QQQ",
+      condition: { type: "opt_gamma_flip", root: "QQQ" },
+    });
+    expect(canonicalizeOptAlertIdentity("SPY", {
+      type: "opt_gamma_flip", root: "../../QQQ",
+    })).toBeNull();
   });
 
   it("omitted numeric params fall through to evaluator defaults (field absent in condition)", () => {
