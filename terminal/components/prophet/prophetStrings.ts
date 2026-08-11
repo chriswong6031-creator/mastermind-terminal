@@ -86,6 +86,9 @@ const PROPHET_LEX = {
   sortGainers:      ["GAINERS", "涨幅"],
   daysActive:       ["d active", "天活跃"],
   entryLabel:       ["Entry", "入场价"],
+  // Suffix label on the live P&L % — "vs plan" states the figure is measured against
+  // the plan's entry, never realized (honesty doctrine).
+  vsPlan:           ["vs plan", "较计划"],
   phase:            ["Phase", "阶段"],
   t1Progress:       ["→ T1", "→ T1"],
   minHold:          ["min hold", "最短持有"],

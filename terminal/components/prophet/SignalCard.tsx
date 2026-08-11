@@ -344,7 +344,7 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
           <span className="num" style={{ marginLeft: "auto", font: "600 11px/1 var(--font-num)", fontVariantNumeric: "tabular-nums", color: pnlPct >= 0 ? "var(--up)" : "var(--down)" }}>
             {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%
             <span style={{ font: "500 9px/1 var(--font-ui)", color: "var(--muted)", marginLeft: 3 }}>
-              vs plan
+              {t("vsPlan")}
             </span>
           </span>
         )}
