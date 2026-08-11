@@ -51,5 +51,8 @@ docs/                RESEARCH_AND_ARCHITECTURE.md, PRODUCT_PLAN_V2.md
 web/                 the original static design mockups (pre-Next.js reference)
 ```
 
-> Not on GitHub yet (local container, like `Mastermind`). Integrates into the Macro Dashboard
-> via the publish-then-pull contract flow (see `docs/`).
+> Canonical repository: `mastermindx-market-intelligence/mastermind-terminal` on
+> `master`. This is one of three first-class Mastermind-X repositories alongside
+> Macro Dashboard and Mastermind Portfolio. For current operating and deployment
+> truth, read `AGENTS.md`, `terminal/AGENTS.md`, and `DEPLOY.md`; this README is
+> product orientation, not an authority or deployment contract.
