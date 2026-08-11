@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT))
 from signal_layer import backtest, confluence, contracts, confluence_v2  # noqa: E402
 from signal_layer.washout_override import DailyBars, WashoutStamper  # noqa: E402
 from ingest.build_polygon_universe import DEFAULT as FLAGSHIP, write_backtest_artifact  # noqa: E402
+from ingest.slice_document import write_slice_preserving_siblings  # noqa: E402
 from ingest.v2_cohort_cache import build_cohort_cache  # noqa: E402
 
 OUT = Path(os.environ.get("TERMINAL_DATA_DIR") or (ROOT / "terminal" / "public" / "data"))
@@ -169,7 +170,10 @@ def regen(sym: str, write: bool = True, cache=None, patches: dict | None = None,
         if ls and (mrow.get("verdict") != ls or mrow.get("vts") != vts):
             patches.setdefault(sym, {}).update(verdict=ls, vts=vts)
     if write:
-        sf.write_text(json.dumps(out, separators=(",", ":")))
+        # Own only indicator/backtest. Cross-engine siblings were published by
+        # independent bridges and must survive this second Phase-1 flagship rewrite.
+        write_slice_preserving_siblings(
+            sf, out, owned_fields={"indicator", "backtest"})
     return f"{sym}: {len(sigs)} sigs [{span}] over {len(bars)}b  state={ind['state'].get('last_signal')}  bt={bt_state}"
 
 

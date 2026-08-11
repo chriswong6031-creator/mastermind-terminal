@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT))
 from signal_layer import confluence, contracts, confluence_v2  # noqa: E402
 from signal_layer.washout_override import DailyBars, WashoutStamper  # noqa: E402
 from ingest.build_polygon_universe import DEFAULT as FLAGSHIP  # the ~37 with rich slices  # noqa: E402
+from ingest.slice_document import write_slice_preserving_siblings  # noqa: E402
 from ingest.v2_cohort_cache import build_cohort_cache  # noqa: E402
 
 OUT = ROOT / "terminal" / "public" / "data"
@@ -164,7 +165,14 @@ def main() -> None:
             # the chart only consumes indicator.signals + indicator.state — drop the heavy arrays
             for heavy in ("series", "gates", "bars"):
                 ind.pop(heavy, None)
-            slice_f.write_text(json.dumps({"indicator": ind}, separators=(",", ":")))
+            # This broad writer intentionally owns the slim indicator/backtest shape,
+            # but not independently-published siblings such as opportunities. Preserve
+            # every unowned field so a missing bridge source really is last-good/no-op.
+            write_slice_preserving_siblings(
+                slice_f,
+                {"indicator": ind},
+                owned_fields={"indicator", "backtest"},
+            )
             n_ok += 1
             if n_ok % 250 == 0:
                 print(f"  …{n_ok} slices ({time.time() - t0:.0f}s)", flush=True)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markerTooltipCopy, retroOverrideCopy, RETRO_RULE_DATE } from "../signalVerdict";
+import { markerTooltipCopy, opportunityMarkerGlyph, retroOverrideCopy, RETRO_RULE_DATE } from "../signalVerdict";
 
 // The chart marker's hover/tap tooltip. Until the marker-tooltip repair these strings had never
 // rendered for anyone — the signal layer is `pointer-events:none` — so they lived as hand-rolled
@@ -65,16 +65,27 @@ describe("markerTooltipCopy — English", () => {
       "2026-07-01 · structure stop — the daily close broke the prior swing low at 11.2, not a momentum exit");
   });
 
-  it("names the veto on a soft mark, and distinguishes pending from blocked", () => {
+  it("names keeper soft marks as distinct starter states", () => {
     expect(markerTooltipCopy({ t: "2026-07-02", type: "BUY", quality: "pending" }, false))
-      .toBe("2026-07-02 · BUY (pending)");
+      .toBe("2026-07-02 · BUY (starter — awaiting confirmation)");
     expect(markerTooltipCopy({ t: "2026-07-03", type: "BUY", quality: "block" }, false))
-      .toBe("2026-07-03 · BUY (blocked)");
+      .toBe("2026-07-03 · BUY (starter — confirmation filter failed)");
   });
 
   it("gives a plain scored entry NO tooltip — the pill already says it", () => {
     expect(markerTooltipCopy({ t: "2026-07-05", type: "BUY", quality: "take" }, false)).toBeNull();
     expect(markerTooltipCopy({ t: "2026-07-05", type: "BUY" }, false)).toBeNull();
+  });
+
+  it("keeps reversal-watch receipts distinct from Prophet in copy and glyph", () => {
+    const reversal = {
+      t: "2026-08-05", type: "PROPHET", source: "reversal_watch",
+      rank: 19, returnPct: 4.4,
+    };
+    expect(markerTooltipCopy(reversal, false)).toBe(
+      "2026-08-05 · Reversal-watch candidate receipt — not a trade plan · rank #19 · +4.4%");
+    expect(opportunityMarkerGlyph(reversal.source)).toBe("R");
+    expect(opportunityMarkerGlyph("prophet_board")).toBe("P");
   });
 });
 
@@ -126,7 +137,7 @@ describe("markerTooltipCopy — 中文", () => {
 
   it("does not run two bracket groups together on a soft mark", () => {
     const s = markerTooltipCopy({ t: "2026-07-02", type: "BUY", quality: "pending", reason: REASON }, true)!;
-    expect(s).toBe(`2026-07-02 · BUY — 待定（${REASON}）`);
+    expect(s).toBe(`2026-07-02 · BUY — 试仓 — 等待确认（${REASON}）`);
     expect(s).not.toContain("）（");
   });
 });

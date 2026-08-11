@@ -4,7 +4,8 @@ import { WASHOUT_NOTCH, WASHOUT_MEASURED_NOTCH, retroLegendCopy,
   isBlockedSignal, isOverrideCandidate, isOverrideTake, isStructureStop, sliceSignalBasis,
   washoutOverrideCopy, OVERRIDE_TAKE_QUALITY,
   isReclaimOverrideTake, isWaivedEntry, isRetroOverride, retroOverrideCopy,
-  RECLAIM_OVERRIDE_TAKE_QUALITY } from "../signalVerdict";
+  RECLAIM_OVERRIDE_TAKE_QUALITY, isBottomWatch, isStopSweepReclaim,
+  markerTooltipCopy } from "../signalVerdict";
 
 // Frozen "today" so ages are deterministic: 2026-07-14 (the NVDA/GOOGL stale-Sell incident date).
 const NOW = Date.parse("2026-07-14T21:00:00Z");
@@ -101,9 +102,11 @@ describe("oracleVerdict — age, dimming, provenance", () => {
       NOW,
     );
     expect(v.raw).toBe("BUY");
+    expect(v.label).toBe("Starter");
+    expect(v.color).toBe("var(--signal)");
     expect(v.sub).toBe("Jul 13");
     expect(v.note).toContain("@ 314.86");
-    expect(v.note).toContain("pending");
+    expect(v.note).toContain("starter — awaiting confirmation");
   });
 
   it("a regime_blocked tail NEVER anchors as the event — a fresh one renders the amber blocked-entry caution", () => {
@@ -195,9 +198,33 @@ describe("oracleVerdict — age, dimming, provenance", () => {
       false,
       NOW,
     );
-    expect(v.label).toBe("Buy");
+    expect(v.label).toBe("Starter");
+    expect(v.color).toBe("var(--signal)");
+    expect(v.raw).toBe("BUY");             // still position-backed, never demoted to a refusal
+    expect(v.soft).toBe(false);
+    expect(v.blocked).toBe(false);
     expect(v.dim).toBe(false); // fresh — dimming stays age-driven; quality rides the note
+    expect(v.note).toContain("starter — awaiting confirmation");
     expect(v.note).toContain("pending confirmation");
+    expect(v.note).not.toContain("not an entry");
+  });
+
+  it("renders keeper block and pending with the same amber Starter authority", () => {
+    for (const quality of ["block", "pending"] as const) {
+      const v = oracleVerdict(
+        "BUY",
+        sliceOf("BUY", [{ ts: "2026-07-13", type: "BUY", price: 314.86, quality }]),
+        false,
+        NOW,
+      );
+      expect(v.label).toBe("Starter");
+      expect(v.color).toBe("var(--signal)");
+      expect(v.raw).toBe("BUY");
+      expect(v.soft).toBe(false);
+      expect(v.blocked).toBe(false);
+      expect(v.note).toContain("starter —");
+      expect(v.note).not.toMatch(/refused|not an entry/i);
+    }
   });
 
   it("no verdict anywhere → em-dash, not dimmed styling noise", () => {
@@ -1367,5 +1394,105 @@ describe("retro legend — the only surface that separates a counterfactual from
     const en = retroLegendCopy(false).toLowerCase();
     expect(en).not.toMatch(/\bwe (entered|bought)\b/);
     expect(en).not.toMatch(/\bentry taken\b/);
+  });
+});
+
+// ── bottom-entry lanes — authority and source separation ─────────────────────────────────
+// These cases pin the product boundary, not just wording. A visible early opportunity is useful
+// only if it cannot quietly inherit the authority of either a scored Oracle buy or a Prophet plan.
+describe("bottom-entry UI contracts — useful early, honest about authority", () => {
+  const NOW_BOTTOM = Date.parse("2026-08-10T21:00:00Z");
+
+  it("anchors BOTTOM_WATCH as an amber soft watch, never a blocked or scored Buy", () => {
+    const bottom = {
+      ts: "2026-07-23", known_ts: "2026-07-27", type: "BOTTOM_WATCH",
+      price: 7.69, quality: "self_washout", scored: false, stop_level: 6.92,
+    };
+    const { anchor, blockedTail } = anchorSignal([
+      { ts: "2026-06-01", type: "SELL", price: 8.4 },
+      bottom,
+    ]);
+
+    expect(isBottomWatch(bottom)).toBe(true);
+    expect(isBlockedSignal(bottom)).toBe(false);
+    expect(anchor).toBe(bottom);
+    expect(blockedTail).toBeNull();
+
+    const v = oracleVerdict("SELL", sliceOf("SELL", [
+      { ts: "2026-06-01", type: "SELL", price: 8.4 },
+      bottom,
+    ]), false, NOW_BOTTOM, "DOWNTREND");
+    expect(v.raw).toBe("BOTTOM_WATCH");
+    expect(v.label).toBe("Bottom watch");
+    expect(v.label).not.toMatch(/buy/i);
+    expect(v.color).toBe("var(--signal)");
+    expect(v.color).not.toBe("var(--buy)");
+    expect(v.soft).toBe(true);
+    expect(v.blocked).toBe(false);
+    expect(v.note).toContain("not in the confirmed-buy track record");
+    expect(v.note).not.toContain("data lanes disagree");
+  });
+
+  it("labels the fast stop-sweep path as an unscored liquidity reclaim", () => {
+    const reclaim = {
+      ts: "2026-08-03", type: "RECLAIM", quality: "stop_sweep_reclaim",
+      price: 14.43, scored: false, prior_stop_level: 14.29, stop_level: 13.74,
+    };
+    expect(isStopSweepReclaim(reclaim)).toBe(true);
+
+    const v = oracleVerdict("SELL", sliceOf("SELL", [reclaim]), false, NOW_BOTTOM);
+    expect(v.raw).toBe("RECLAIM");
+    expect(v.label).toBe("Liquidity reclaim");
+    expect(v.soft).toBe(true);
+    expect(v.note).toContain("unscored re-entry signal");
+    expect(v.note).toContain("not in the track record");
+
+    const tip = markerTooltipCopy({
+      t: reclaim.ts, type: reclaim.type, quality: reclaim.quality, scored: reclaim.scored,
+      priorStopLevel: reclaim.prior_stop_level, stopLevel: reclaim.stop_level,
+    }, false);
+    expect(tip).toContain("liquidity reclaim");
+    expect(tip).toContain("unscored re-entry watch");
+    expect(tip).not.toContain("scored reclaim lane");
+  });
+
+  it("calls a keeper block a starter, not a refused entry", () => {
+    const tip = markerTooltipCopy({
+      t: "2026-06-25", type: "BUY", quality: "block",
+      reason: "counter-trend, no 200-reclaim/hold",
+    }, false);
+    expect(tip).toContain("starter — confirmation filter failed");
+    expect(tip).not.toMatch(/blocked|refused|not an entry/i);
+  });
+
+  it("calls a Prophet marker a candidate receipt and explicitly not a plan", () => {
+    const tip = markerTooltipCopy({
+      t: "2026-07-24", type: "PROPHET", source: "prophet_board",
+      definition: "us_prophet_v2", rank: 14, returnPct: 20.9, authority: "candidate",
+    }, false);
+    expect(tip).toContain("Prophet candidate receipt");
+    expect(tip).toContain("not a trade plan");
+    expect(tip).toContain("rank #14");
+    expect(tip).not.toContain("Golden Oracle");
+  });
+
+  it("keeps an opportunity sibling out of the Oracle verdict anchor", () => {
+    const payload = {
+      indicator: {
+        state: { last_signal: "BUY" },
+        signals: [{ ts: "2026-08-01", type: "BUY", price: 93.47, quality: "take" }],
+      },
+      opportunities: {
+        events: [{
+          id: "NEM-us_prophet_v2-2026-08-09", surfaced_at: "2026-08-09",
+          system: "prophet_board", definition: "us_prophet_v2", authority: "candidate",
+        }],
+      },
+    };
+    const v = oracleVerdict("BUY", payload, false, NOW_BOTTOM);
+    expect(v.raw).toBe("BUY");
+    expect(v.label).toBe("Buy");
+    expect(v.sub).toBe("Aug 1");
+    expect(v.note).not.toMatch(/Prophet|candidate|trade plan/i);
   });
 });

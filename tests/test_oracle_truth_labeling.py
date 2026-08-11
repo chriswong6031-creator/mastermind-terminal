@@ -301,6 +301,22 @@ def test_a_taken_entry_still_fires_a_buy_alert():
     assert fired is True and value == 110.70
 
 
+def test_a_keeper_entry_fires_as_a_starter_not_a_refusal_or_full_buy():
+    """Keeper block/pending already walks the scored position and alert lane.  Its alert
+    must use the same starter authority the chart and rail show, while regime_blocked
+    remains the only refused entry class."""
+    import ingest.alerts_engine as ae
+
+    fired, value, note, _extra = ae.evaluate(
+        _signal_alert("BUY"),
+        _StubData([{"ts": "2026-07-09", "type": "BUY", "price": 110.70,
+                    "strength": 0.7, "quality": "block"}]),
+    )
+    assert fired is True and value == 110.70
+    assert note.startswith("STARTER signal on 2026-07-09")
+    assert not note.startswith("BUY signal")
+
+
 def test_sell_alert_note_names_the_structure_stop():
     """The note is stored verbatim and rendered to the user — it must not say a bare SELL."""
     import ingest.alerts_engine as ae

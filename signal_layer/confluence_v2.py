@@ -38,8 +38,8 @@ import numpy as np
 import pandas as pd
 
 from . import confluence as C
-from .washout_override import (RECLAIM_OVERRIDE_TAKE_QUALITY,
-                               reclaim_override_quality_reason)
+from .washout_override import (RECLAIM_OVERRIDE_TAKE_QUALITY, atr14,
+                               reclaim_override_quality_reason, stop_reference)
 
 _log = logging.getLogger(__name__)
 
@@ -68,6 +68,18 @@ SIDE_CHANNEL_CAP = 40
 # "the engine said no / said exit — and the market then repaired it".
 RECLAIM_DEBOUNCE_BARS = 4   # 3D bars flat after a SELL before a reclaim may fire (~12 sessions)
 REPAIR_WINDOW_BARS = 8      # a blocked entry may re-fire while its cross is live, within this window
+
+# ── own-name bottom-watch grammar (display/watch only; frozen research definition) ──
+DD_LOOKBACK_3D = 84        # W2a: approximately 252 sessions on the 3D grid
+DD_MIN = -0.35             # W2a: drawdown from the trailing high
+MO_DWELL_MIN = 3           # W2b: consecutive prior-closed monthly StochRSI-D<20 bars
+OS_WINDOW = 8              # W3: a 3D StochRSI-D<20 visit within the last 8 bars
+BOTTOM_STOP_ATR_MULT = 0.5
+
+# A structure stop remains valid risk control. This second, display-only lane recognizes
+# the failed-breakdown shape when price closes back over that exact level quickly.
+STOP_SWEEP_WINDOW_SESSIONS = 5
+STOP_SWEEP_ATR_MULT = 0.5
 
 # Symbol-class eligibility: trend-reclaim semantics require an asset that can HOLD a
 # reclaimed price level. Leveraged/inverse products and futures-roll wrappers decay by
@@ -575,6 +587,59 @@ def recipe_score_on_3d(sig, close, high, low, volume, *, have_volume,
 
 
 # ════════════════════════════════════════════════ early anticipation dot ════
+def _known_dates(rows: pd.DataFrame) -> pd.DatetimeIndex:
+    """Availability dates for 3D rows, with a legacy fallback to their chart labels."""
+    if "known_ts" not in rows.columns:
+        return pd.DatetimeIndex(rows.index)
+    values = []
+    for ts, value in zip(rows.index, rows["known_ts"]):
+        values.append(ts if value is None or pd.isna(value) else pd.Timestamp(value))
+    return pd.DatetimeIndex(values)
+
+
+def _early_dot_mask(sig: pd.DataFrame, close: pd.Series) -> pd.Series:
+    """GRID_GATE form (a), aligned to the valid 3D rows.
+
+    The 2B resample label is the LEFT edge of a pandas bucket, not the date on which the
+    bucket's last price was observable. Mapping that label directly onto a 3D bar lets a
+    later 2B close leak backwards. We instead relabel every 2B value by the bucket's last
+    actual trading session, then join it to each 3D row by that row's ``known_ts``.
+    """
+    need = {"macd", "sig", "k", "d", "rsi14"}
+    if not len(sig) or not need.issubset(sig.columns):
+        return pd.Series(dtype=bool)
+    rows = sig.dropna(subset=list(need))
+    if len(rows) < C.CONF_W + 2:
+        return pd.Series(False, index=rows.index, dtype=bool)
+
+    k, d = rows["k"], rows["d"]
+    stoch_bull = C.crossover(k, d)
+    from_os = d.rolling(C.CONF_W).min() < C.OS
+
+    dc = close.dropna().sort_index()
+    sm = dc.resample("2B").last().dropna()
+    if sm.empty:
+        return pd.Series(False, index=rows.index, dtype=bool)
+    known2 = dc.index.to_series().resample("2B").max().reindex(sm.index)
+    valid = known2.notna()
+    sm = sm.loc[valid]
+    known2 = pd.DatetimeIndex(pd.to_datetime(known2.loc[valid].to_numpy()))
+    m2, s2 = C.rsi_macd(sm)
+    rising2 = (m2 - s2 > (m2 - s2).shift(1)).fillna(False)
+
+    # Relabel by availability, de-duplicate defensively, then take the latest 2B state that
+    # was already known when the 3D row itself closed.
+    rising_known = pd.Series(rising2.to_numpy(dtype=bool), index=known2)
+    rising_known = rising_known[~rising_known.index.duplicated(keep="last")].sort_index()
+    row_known = _known_dates(rows)
+    pos = rising_known.index.searchsorted(row_known, side="right") - 1
+    mapped = np.zeros(len(rows), dtype=bool)
+    ok = pos >= 0
+    mapped[ok] = rising_known.to_numpy(dtype=bool)[pos[ok]]
+
+    return (stoch_bull & from_os & pd.Series(mapped, index=rows.index)).fillna(False)
+
+
 def early_dots(sig: pd.DataFrame, close: pd.Series) -> list[str]:
     """GRID_GATE anticipation form (a) — the EARLY pre-cross dot (~4.6d lead, hollow):
 
@@ -584,30 +649,160 @@ def early_dots(sig: pd.DataFrame, close: pd.Series) -> list[str]:
     "From oversold" = the 3D StochRSI D dipped below OS(20) within the last CONF_W bars
     (the oracle's ``b1_from_os`` primitive). All math is the ORACLE's. Close-only-safe.
     Returns the list of 3D-open-date strings on which the dot fires (chronological)."""
+    dot = _early_dot_mask(sig, close)
+    return [ts.strftime("%Y-%m-%d") for ts in dot.index[dot.to_numpy()]]
+
+
+# ═════════════════════════════════════ own-name washout / bottom watch ══════
+def _map_prior_closed_monthly_dwell(rows: pd.DataFrame, daily_close: pd.Series) -> pd.Series:
+    """Frozen monthly-oversold dwell, mapped by real availability dates.
+
+    ``shift(1)`` is the production/preregistered prior-closed-month convention. The extra
+    relabeling step fixes a separate issue: ``resample('ME')`` uses a calendar month-end
+    label that may not be a session. Values are joined by the last actual session in their
+    source bucket and the 3D row's actual known date.
+    """
+    dc = daily_close.dropna().sort_index()
+    mo = dc.resample("ME").last().dropna()
+    if mo.empty:
+        return pd.Series(0, index=rows.index, dtype=int)
+    known = dc.index.to_series().resample("ME").max().reindex(mo.index)
+    valid = known.notna()
+    mo = mo.loc[valid]
+    known = pd.DatetimeIndex(pd.to_datetime(known.loc[valid].to_numpy()))
+    _mk, md = C.stoch_rsi_kd(mo)
+    prior_dwell = _monthly_oversold_dwell(md < C.OS).shift(1).fillna(0)
+    available = pd.Series(prior_dwell.to_numpy(dtype=float), index=known)
+    available = available[~available.index.duplicated(keep="last")].sort_index()
+
+    row_known = _known_dates(rows)
+    pos = available.index.searchsorted(row_known, side="right") - 1
+    mapped = np.zeros(len(rows), dtype=float)
+    ok = pos >= 0
+    mapped[ok] = available.to_numpy(dtype=float)[pos[ok]]
+    return pd.Series(mapped.astype(int), index=rows.index)
+
+
+def washout_context(sig: pd.DataFrame, daily_close: pd.Series) -> dict | None:
+    """Frozen, point-in-time own-name washout context on valid 3D rows.
+
+    W1 ``bear_block``; W2 either a <=-35% trailing drawdown or at least three consecutive
+    prior-closed monthly StochRSI-D<20 bars; W3 a 3D StochRSI-D<20 visit in the last eight
+    bars. This is context only: it never weakens the classic ``bear_block`` entry rule.
+    """
+    need = {"macd", "sig", "k", "d", "rsi14", "close", "bear_block"}
+    if not len(sig) or not need.issubset(sig.columns):
+        return None
     rows = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"])
-    if len(rows) < C.CONF_W + 2:
+    if len(rows) < 20:
+        return None
+
+    close3 = rows["close"].astype(float)
+    drawdown = close3 / close3.rolling(DD_LOOKBACK_3D, min_periods=20).max() - 1
+    monthly_dwell = _map_prior_closed_monthly_dwell(rows, daily_close)
+    recent_os = rows["d"].rolling(OS_WINDOW, min_periods=1).min() < C.OS
+    bear = rows["bear_block"].fillna(False).astype(bool)
+    washed = bear & ((drawdown <= DD_MIN) | (monthly_dwell >= MO_DWELL_MIN)) & recent_os
+    raw_buy = (rows["CB"].fillna(False).astype(bool)
+               | rows["revBuy"].fillna(False).astype(bool))
+    return {
+        "rows": rows.index,
+        "known_ts": _known_dates(rows),
+        "drawdown": drawdown.to_numpy(dtype=float),
+        "monthly_dwell": monthly_dwell.to_numpy(dtype=int),
+        "recent_oversold": recent_os.to_numpy(dtype=bool),
+        "washed": washed.to_numpy(dtype=bool),
+        "trig": (raw_buy & washed).to_numpy(dtype=bool),
+    }
+
+
+def _event_risk_metadata(
+    fire_ts: str,
+    known_ts: str,
+    bar_opens: list[str],
+    daily_close: pd.Series,
+    high: pd.Series | None,
+    low: pd.Series | None,
+) -> dict:
+    """PIT sweep low + ATR stop; close-derived proxy is explicit when OHLC is absent."""
+    dc = daily_close.dropna().sort_index()
+    dc = dc.loc[dc.index <= pd.Timestamp(known_ts)]
+    if dc.empty:
+        return {}
+    real_ohlc = high is not None and low is not None
+    hs = (high.reindex(dc.index) if high is not None else dc).astype(float).fillna(dc)
+    ls = (low.reindex(dc.index) if low is not None else dc).astype(float).fillna(dc)
+    dates = [d.strftime("%Y-%m-%d") for d in dc.index]
+    hvals, lvals, cvals = hs.to_list(), ls.to_list(), dc.astype(float).to_list()
+    stop = stop_reference(fire_ts, bar_opens, dates, hvals, lvals, cvals,
+                          mult=BOTTOM_STOP_ATR_MULT)
+    try:
+        j = bar_opens.index(fire_ts)
+    except ValueError:
+        return {}
+    start = pd.Timestamp(bar_opens[max(0, j - 2)])
+    sweep = float(ls.loc[ls.index >= start].min())
+    av = atr14(hvals, lvals, cvals)
+    atr = av[-1] if av else None
+    out = {"sweep_low": round(sweep, 6),
+           "risk_basis": "daily_ohlc_atr14" if real_ohlc else "close_proxy_atr14"}
+    if atr is not None and np.isfinite(atr) and float(atr) > 0:
+        out["atr14"] = round(float(atr), 6)
+    if stop is not None and np.isfinite(stop) and float(stop) < sweep:
+        out["stop_level"] = round(float(stop), 6)
+    return out
+
+
+def bottom_watch_events(
+    sig: pd.DataFrame,
+    daily_close: pd.Series,
+    *,
+    high: pd.Series | None = None,
+    low: pd.Series | None = None,
+) -> list[dict]:
+    """Cross-market display/watch events for early or blocked turns in a washout.
+
+    A raw blocked CB/revBuy is the stronger subtype and de-duplicates an anticipation dot
+    on the same bar. Every event is explicitly ``scored:false``; no position, alert or
+    backtest behavior changes.
+    """
+    ctx = washout_context(sig, daily_close)
+    if ctx is None:
         return []
-    k, d = rows["k"], rows["d"]
-    stoch_bull = C.crossover(k, d)
-    from_os = d.rolling(C.CONF_W).min() < C.OS          # oracle b1_from_os primitive
-
-    # 2D RSI-MACD histogram rising, mapped to 3D rows by each bar's CLOSE session date.
-    open_dates, close_dates, _px = C._3d_groups(close, 0)
-    sm = close.resample("2B").last().dropna()
-    m2, s2 = C.rsi_macd(sm)
-    hist2 = (m2 - s2)
-    rising2 = (hist2 > hist2.shift(1)).fillna(False)
-    if len(sm):
-        wpos = sm.index.searchsorted(pd.DatetimeIndex(close_dates), side="right") - 1
-        wok = wpos >= 0
-        wci = np.clip(wpos, 0, len(rising2) - 1)
-        rising_on3 = pd.Series(wok & rising2.to_numpy()[wci], index=open_dates)
-    else:
-        rising_on3 = pd.Series(False, index=open_dates)
-    rising_on3 = rising_on3.reindex(rows.index).fillna(False)
-
-    dot = (stoch_bull & from_os & rising_on3).fillna(False)
-    return [ts.strftime("%Y-%m-%d") for ts in rows.index[dot.to_numpy()]]
+    rows = sig.loc[ctx["rows"]]
+    dots = _early_dot_mask(sig, daily_close).reindex(rows.index).fillna(False).to_numpy(bool)
+    candidates = (dots | ctx["trig"]) & ctx["washed"]
+    bar_opens = [d.strftime("%Y-%m-%d") for d in rows.index]
+    out: list[dict] = []
+    for i in np.flatnonzero(candidates):
+        i = int(i)
+        trigger = bool(ctx["trig"][i])
+        subtype = "blocked_trigger" if trigger else "early_dot"
+        quality = "washout_trigger_watch" if trigger else "washout_early_watch"
+        ts = rows.index[i].strftime("%Y-%m-%d")
+        known_ts = pd.Timestamp(ctx["known_ts"][i]).strftime("%Y-%m-%d")
+        dd = ctx["drawdown"][i]
+        washout_ctx = {
+            "rule": "bear_block & (dd252<=-35% | monthly_os_dwell>=3) & recent_3d_os",
+            "drawdown_252": round(float(dd), 6) if np.isfinite(dd) else None,
+            "monthly_oversold_dwell": int(ctx["monthly_dwell"][i]),
+            "recent_3d_oversold": bool(ctx["recent_oversold"][i]),
+        }
+        event = {
+            "ts": ts,
+            "known_ts": known_ts,
+            "trigger_ts": ts,
+            "trigger_known_ts": known_ts,
+            "kind": subtype,
+            "quality": quality,
+            "price": float(rows["close"].iloc[i]),
+            "scored": False,
+            "washout_ctx": washout_ctx,
+        }
+        event.update(_event_risk_metadata(
+            ts, known_ts, bar_opens, daily_close, high, low))
+        out.append(event)
+    return out
 
 
 # ════════════════════════════════════════════════ ⚠ ARM / ⛔ CONFIRM warns ══
@@ -709,10 +904,16 @@ def warn_events(close: pd.Series) -> list[dict]:
     armed_until = -1
     for t in range(len(di)):
         if arm[t]:
-            if t > armed_until:                       # fresh ARM (was disarmed) -> ⚠ event
+            fresh_arm = t > armed_until
+            if fresh_arm:                             # fresh ARM (was disarmed) -> ⚠ event
                 events.append({"ts": di[t].strftime("%Y-%m-%d"), "kind": "arm",
                                "px": float(dv[t])})
             armed_until = t + ARMED_WINDOW            # (re-)arm
+            # A FRESH arm is learned from this session's close and cannot confirm from that
+            # same close. A same-day RE-ARM while an earlier arm is already active does not
+            # erase that prior information; it remains eligible to confirm below.
+            if fresh_arm:
+                continue
         if t <= armed_until:
             lvl = confirmed_low[t]
             if not np.isnan(lvl) and dv[t] < lvl:     # ⛔ structure break while armed
@@ -724,6 +925,77 @@ def warn_events(close: pd.Series) -> list[dict]:
 
 
 # ════════════════════════════════════════════════ repair grammar (re-entry) ═
+def stop_sweep_reclaim_events(
+    daily_close: pd.Series,
+    sell_confirms: list[dict],
+    *,
+    high: pd.Series | None = None,
+    low: pd.Series | None = None,
+) -> list[dict]:
+    """Display-only fast rearm after a failed structure break.
+
+    A valid structure stop requires its own daily close below ``level``. Starting on the
+    *next* session, the first close back above that level within five sessions emits a
+    ``stop_sweep_reclaim``. It deliberately asks for neither weekly-bull nor above-200:
+    those are confirmation rails and would recreate the delay this watch lane repairs.
+    """
+    dc = daily_close.dropna().sort_index().astype(float)
+    if dc.empty or not sell_confirms:
+        return []
+    hs = (high.reindex(dc.index) if high is not None else dc).astype(float).fillna(dc)
+    ls = (low.reindex(dc.index) if low is not None else dc).astype(float).fillna(dc)
+    hvals, lvals, cvals = hs.to_list(), ls.to_list(), dc.to_list()
+    atr = atr14(hvals, lvals, cvals)
+    real_ohlc = high is not None and low is not None
+    out: list[dict] = []
+    for stop in sell_confirms:
+        if stop.get("kind") != "confirm":
+            continue
+        try:
+            level = float(stop.get("level"))
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(level):
+            continue
+        day = pd.Timestamp(stop.get("ts"))
+        pos = int(dc.index.searchsorted(day, side="left"))
+        if pos >= len(dc) or dc.index[pos] != day:
+            continue
+        stop_px = stop.get("px", dc.iloc[pos])
+        try:
+            stop_px = float(stop_px)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(stop_px) or stop_px >= level:
+            continue                              # not a valid close-through structure stop
+
+        end = min(len(dc), pos + STOP_SWEEP_WINDOW_SESSIONS + 1)
+        for i in range(pos + 1, end):             # never stop and rearm on the same close
+            if float(dc.iloc[i]) <= level:
+                continue
+            sweep = float(ls.iloc[pos:i + 1].min())
+            av = atr[i]
+            event = {
+                "ts": dc.index[i].strftime("%Y-%m-%d"),
+                "known_ts": dc.index[i].strftime("%Y-%m-%d"),
+                "kind": "stop_sweep_reclaim",
+                "anchor_ts": day.strftime("%Y-%m-%d"),
+                "price": float(dc.iloc[i]),
+                "prior_stop_level": round(level, 6),
+                "sweep_low": round(sweep, 6),
+                "risk_basis": ("daily_ohlc_atr14" if real_ohlc
+                               else "close_proxy_atr14"),
+            }
+            if av is not None and np.isfinite(av) and float(av) > 0:
+                event["atr14"] = round(float(av), 6)
+                new_stop = sweep - STOP_SWEEP_ATR_MULT * float(av)
+                if np.isfinite(new_stop) and new_stop < sweep:
+                    event["stop_level"] = round(float(new_stop), 6)
+            out.append(event)
+            break
+    return out
+
+
 def reclaim_events(sig: pd.DataFrame, sell_confirms: list[dict]) -> list[dict]:
     """The RE-ENTRY repair lane: display events (scored:false) for the two structural
     holes the 2026-07-15 Mag7 diagnosis verified in the entry grammar.
@@ -822,7 +1094,7 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
       { keeper: {bar_index:{verdict,reason,shift}}, recipe: {bar_index:{score,tier}},
         override: {bar_index: override_ctx},
         score_basis: "full"|"partial", early_dots: [ts...], warnings: [{ts,kind}...],
-        sell_confirms: [{ts,kind}...] }
+        sell_confirms: [{ts,kind}...], bottom_watches: [{ts,kind}...] }
 
     ``sell_confirms`` is the FULL (uncapped) list of CONFIRM warn events (kind=="confirm").
     It is the source of the UNIFIED-stream SELL signal (contracts._extract_signals maps each
@@ -832,12 +1104,14 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
     if not len(sig) or not {"macd", "sig", "k", "d", "rsi14"}.issubset(sig.columns):
         return {"keeper": {}, "recipe": {}, "override": {}, "keeper_relievable": [],
                 "score_basis": "partial",
-                "early_dots": [], "warnings": [], "sell_confirms": [], "reclaims": []}
+                "early_dots": [], "warnings": [], "sell_confirms": [], "reclaims": [],
+                "bottom_watches": []}
     rows = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"])
     if len(rows) < 20:
         return {"keeper": {}, "recipe": {}, "override": {}, "keeper_relievable": [],
                 "score_basis": "partial",
-                "early_dots": [], "warnings": [], "sell_confirms": [], "reclaims": []}
+                "early_dots": [], "warnings": [], "sell_confirms": [], "reclaims": [],
+                "bottom_watches": []}
 
     have_volume = volume is not None and volume.notna().any()
     hi = high if high is not None else close
@@ -893,6 +1167,22 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
     # ONE warn pass feeds both the capped DISPLAY side channel and the uncapped SELL source.
     warns_all = warn_events(close)
     sell_confirms = [w for w in warns_all if w.get("kind") == "confirm"]
+    bottom_watches = bottom_watch_events(sig, close, high=high, low=low)
+    promoted_dot_dates = {
+        str(w.get("ts")) for w in bottom_watches if w.get("kind") == "early_dot"
+    }
+    # A deep-washout anticipation dot now has a proper amber EARLY marker. Keeping the old
+    # gray side-channel dot underneath it would show one event twice and preserve the exact
+    # ambiguity this lane removes. Ordinary anticipation dots remain unchanged.
+    unpromoted_early_dots = [
+        ts for ts in early_dots(sig, close) if ts not in promoted_dot_dates
+    ]
+    reclaims = []
+    if reclaims_enabled:
+        reclaims = reclaim_events(sig, sell_confirms)
+        reclaims.extend(stop_sweep_reclaim_events(
+            close, sell_confirms, high=high, low=low))
+        reclaims.sort(key=lambda e: (e.get("ts", ""), e.get("kind", "")))
 
     return {
         "keeper": keeper,
@@ -908,11 +1198,14 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
         # without ever parsing the keeper's collapsed reason string.
         "keeper_relievable": relievable_ts,
         "score_basis": "partial" if partial else "full",
-        "early_dots": early_dots(sig, close)[-SIDE_CHANNEL_CAP:],
+        "early_dots": unpromoted_early_dots[-SIDE_CHANNEL_CAP:],
+        # Bright, cross-market watch candidates. These never touch the classic mask or
+        # scored state; contracts stamps type=BOTTOM_WATCH + scored:false.
+        "bottom_watches": bottom_watches,
         "warnings": warns_all[-SIDE_CHANNEL_CAP:],
         "sell_confirms": sell_confirms,
         # RE-ENTRY repair lane (see reclaim_events). Uncapped like sell_confirms: contracts
         # folds them into the stream, model_slice caps the tail. ``reclaims_enabled=False``
         # = the symbol-class exclusion (reclaim_eligible): decay instruments emit none.
-        "reclaims": reclaim_events(sig, sell_confirms) if reclaims_enabled else [],
+        "reclaims": reclaims,
     }
