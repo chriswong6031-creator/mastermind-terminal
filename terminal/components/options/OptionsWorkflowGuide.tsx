@@ -13,7 +13,7 @@ interface WorkflowStage {
   id: StageId;
   titleKey: string;
   bodyKey: string;
-  receiptKey: string;
+  contextKey: string;
   ctaKey: string;
   view?: OptionsWorkspaceViewKey;
   href?: string;
@@ -29,7 +29,7 @@ const STAGES: readonly WorkflowStage[] = [
     id: "tape",
     titleKey: "optionsWorkflowTapeTitle",
     bodyKey: "optionsWorkflowTapeBody",
-    receiptKey: "optionsWorkflowTapeReceipt",
+    contextKey: "optionsWorkflowTapeReceipt",
     ctaKey: "optionsWorkflowTapeCta",
     view: "tape",
   },
@@ -37,7 +37,7 @@ const STAGES: readonly WorkflowStage[] = [
     id: "structure",
     titleKey: "optionsWorkflowStructureTitle",
     bodyKey: "optionsWorkflowStructureBody",
-    receiptKey: "optionsWorkflowStructureReceipt",
+    contextKey: "optionsWorkflowStructureReceipt",
     ctaKey: "optionsWorkflowStructureCta",
     view: "gex",
   },
@@ -45,7 +45,7 @@ const STAGES: readonly WorkflowStage[] = [
     id: "plan",
     titleKey: "optionsWorkflowPlanTitle",
     bodyKey: "optionsWorkflowPlanBody",
-    receiptKey: "optionsWorkflowPlanReceipt",
+    contextKey: "optionsWorkflowPlanReceipt",
     ctaKey: "optionsWorkflowPlanCta",
     view: "prophet",
   },
@@ -53,7 +53,7 @@ const STAGES: readonly WorkflowStage[] = [
     id: "alert",
     titleKey: "optionsWorkflowAlertTitle",
     bodyKey: "optionsWorkflowAlertBody",
-    receiptKey: "optionsWorkflowAlertReceipt",
+    contextKey: "optionsWorkflowAlertReceipt",
     ctaKey: "optionsWorkflowAlertCta",
     href: "/alerts?cat=options&root=SPY&kind=opt_gamma_flip",
   },
@@ -152,6 +152,9 @@ export default function OptionsWorkflowGuide({ activeView, onOpenView }: Options
     () => STAGES.find((stage) => !visited.includes(stage.id))?.id ?? null,
     [visited],
   );
+  const viewedProgress = lang === "zh"
+    ? `${t("optionsWorkflowViewedShort")} ${visited.length}/4`
+    : `${visited.length}/4 ${t("optionsWorkflowViewedShort")}`;
 
   const visit = (id: StageId) => {
     setVisited((current) => {
@@ -181,7 +184,7 @@ export default function OptionsWorkflowGuide({ activeView, onOpenView }: Options
         data-options-workflow-guide="launcher"
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={t("optionsWorkflowOpenAria")}
+        aria-label={`${t("optionsWorkflowOpenAria")} · ${viewedProgress}`}
         onClick={() => setOpen(true)}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -189,7 +192,7 @@ export default function OptionsWorkflowGuide({ activeView, onOpenView }: Options
           <path d="m16 16 2 2 3-4" />
         </svg>
         <span className="options-workflow-launch-label">{t("optionsWorkflowOpen")}</span>
-        <span className="options-workflow-progress" aria-hidden="true">{visited.length}/4</span>
+        <span className="options-workflow-progress" aria-hidden="true">{viewedProgress}</span>
       </button>
 
       {open && (
@@ -226,27 +229,26 @@ export default function OptionsWorkflowGuide({ activeView, onOpenView }: Options
 
             <div className="options-workflow-rail" aria-label={t("optionsWorkflowStepsAria")}>
               {STAGES.map((stage, index) => {
-                const done = visited.includes(stage.id);
+                const viewed = visited.includes(stage.id);
                 const current = activeStage === stage.id;
                 const next = nextStage === stage.id;
                 return (
                   <article
                     key={stage.id}
-                    className={`options-workflow-step${done ? " is-visited" : ""}${current ? " is-current" : ""}${next ? " is-next" : ""}`}
+                    className={`options-workflow-step${viewed ? " is-viewed" : ""}${current ? " is-current" : ""}${next ? " is-next" : ""}`}
                     data-options-workflow-stage={stage.id}
                   >
                     <div className="options-workflow-step-index" aria-hidden="true">
-                      {done ? (
-                        <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg>
-                      ) : String(index + 1).padStart(2, "0")}
+                      {String(index + 1).padStart(2, "0")}
                     </div>
                     <div className="options-workflow-step-copy">
                       <div className="options-workflow-step-title">
                         <h3>{t(stage.titleKey)}</h3>
                         {current && <span>{t("optionsWorkflowCurrent")}</span>}
+                        {viewed && <span className="is-viewed-label">{t("optionsWorkflowViewedHere")}</span>}
                       </div>
                       <p>{t(stage.bodyKey)}</p>
-                      <small>{t(stage.receiptKey)}</small>
+                      <small>{t(stage.contextKey)}</small>
                     </div>
                     <button
                       type="button"

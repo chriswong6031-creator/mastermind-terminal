@@ -7,6 +7,7 @@ import {
   buildOptCondition,
   canonicalizeOptAlertIdentity,
   isMarketWideOptKind,
+  normalizeOptAlertRoot,
   type OptKind,
   type OptParams,
 } from "@/lib/optionsAlerts";
@@ -166,15 +167,25 @@ export default function AlertsView({ email }: { email: string }) {
       const sp = new URLSearchParams(window.location.search);
       const qSym = sp.get("sym"); const qPrice = sp.get("price"); const qType = sp.get("type");
       const qCat = sp.get("cat"); const qRoot = sp.get("root"); const qKind = sp.get("kind");
-      const normalizedRoot = qRoot?.trim().toUpperCase() ?? "";
+      const wantsOptionsPrefill = qCat === "options";
+      const normalizedRoot = qRoot === null ? "SPY" : normalizeOptAlertRoot(qRoot);
+      const normalizedKind = qKind && OPT_TYPES.some((c) => c.v === qKind) ? qKind as OptKind : null;
+      // Treat cat/root/kind as one contract. A malformed root or kind must not leak into the
+      // hidden options form while another category is visible, nor turn into a row the POST
+      // boundary later rejects. Missing root/kind use the form's canonical SPY/gamma defaults.
+      const validOptionsPrefill = wantsOptionsPrefill
+        && normalizedRoot !== null
+        && (qKind === null || normalizedKind !== null);
       queueMicrotask(() => {
         if (!alive) return;
         if (qSym) setSym(qSym);
         if (qType && COND_TYPES.some((c) => c.v === qType)) setCtype(qType);
         if (qPrice && parseFloat(qPrice) > 0) setVal(parseFloat(qPrice).toString());
-        if (qCat === "options") setCat("options");
-        if (/^[A-Z0-9._-]{1,16}$/.test(normalizedRoot)) setOptRoot(normalizedRoot);
-        if (qKind && OPT_TYPES.some((c) => c.v === qKind)) setOptKind(qKind as OptKind);
+        if (validOptionsPrefill) {
+          setCat("options");
+          setOptRoot(normalizedRoot);
+          if (normalizedKind) setOptKind(normalizedKind);
+        }
       });
       // strip the params so a reload doesn't re-prefill
       if (qSym || qPrice || qType || qCat || qRoot || qKind) {
