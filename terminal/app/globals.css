@@ -2733,6 +2733,17 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
   width:max-content;
   max-width:100%;
 }
+.options-ia-main{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+}
+.options-ia-main .wtabs{
+  flex:1 1 auto;
+  width:auto;
+  min-width:0;
+}
 .options-ia-row .obs-pillnav-tab{padding:7px 13px}
 /* Categories own the solid wayfinding state. Child views use the quieter
    Observatory tint so two active rails never compete for visual authority. */
@@ -2766,6 +2777,271 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
   border-radius:50%;
   background:var(--warn);
   box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 14%,transparent);
+}
+.options-workflow-launch{
+  flex:none;
+  min-height:34px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
+  padding:0 8px 0 10px;
+  border:1px solid color-mix(in srgb,var(--brand-2) 30%,var(--line));
+  border-radius:var(--r-pill);
+  background:color-mix(in srgb,var(--brand) 8%,var(--panel-2));
+  color:var(--text-2);
+  font:680 10.5px/1 var(--font-ui);
+  white-space:nowrap;
+  transition:border-color var(--t-fast) var(--ease-out),background var(--t-fast) var(--ease-out),color var(--t-fast) var(--ease-out);
+}
+.options-workflow-launch:hover{
+  border-color:color-mix(in srgb,var(--brand-2) 52%,var(--line));
+  background:color-mix(in srgb,var(--brand) 14%,var(--panel-2));
+  color:var(--text);
+}
+.options-workflow-launch:focus-visible,
+.options-workflow-step-cta:focus-visible,
+.options-workflow-close:focus-visible{
+  outline:2px solid var(--brand-2);
+  outline-offset:2px;
+}
+.options-workflow-launch>svg{
+  width:15px;
+  height:15px;
+  fill:none;
+  stroke:currentColor;
+  stroke-width:1.8;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+.options-workflow-progress{
+  min-width:29px;
+  padding:4px 6px;
+  border:1px solid var(--line-2);
+  border-radius:var(--r-pill);
+  background:var(--inset);
+  color:var(--brand-2);
+  font:700 9.5px/1 var(--font-num);
+  font-variant-numeric:tabular-nums;
+}
+.options-workflow-backdrop{
+  position:fixed;
+  inset:0;
+  z-index:260;
+  display:grid;
+  place-items:center;
+  box-sizing:border-box;
+  padding:20px;
+  overflow:auto;
+  background:rgba(3,6,12,.76);
+  backdrop-filter:blur(7px);
+}
+.options-workflow-dialog{
+  width:min(760px,100%);
+  max-height:min(760px,calc(100dvh - 40px));
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  border:1px solid color-mix(in srgb,var(--brand-2) 25%,var(--line));
+  border-radius:16px;
+  background:
+    radial-gradient(620px 240px at 15% -20%,color-mix(in srgb,var(--brand) 18%,transparent),transparent 70%),
+    var(--panel);
+  box-shadow:0 32px 90px rgba(0,0,0,.62),inset 0 1px rgba(255,255,255,.035);
+}
+.options-workflow-head{
+  flex:none;
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:20px;
+  padding:22px 22px 18px;
+  border-bottom:1px solid var(--line-2);
+}
+.options-workflow-head>div{min-width:0}
+.options-workflow-head span{
+  display:block;
+  margin-bottom:7px;
+  color:var(--brand-2);
+  font:750 9px/1 var(--font-ui);
+  letter-spacing:.15em;
+}
+.options-workflow-head h2{
+  margin:0;
+  color:var(--text);
+  font:700 24px/1.12 var(--font-ui);
+  letter-spacing:-.022em;
+}
+.options-workflow-head p{
+  max-width:590px;
+  margin:8px 0 0;
+  color:var(--text-2);
+  font:500 11.5px/1.55 var(--font-ui);
+}
+.options-workflow-close{
+  width:34px;
+  height:34px;
+  flex:none;
+  display:grid;
+  place-items:center;
+  border:1px solid var(--line);
+  border-radius:9px;
+  color:var(--muted);
+  background:var(--panel-2);
+}
+.options-workflow-close:hover{color:var(--text);border-color:var(--line-3)}
+.options-workflow-close svg{
+  width:15px;
+  height:15px;
+  fill:none;
+  stroke:currentColor;
+  stroke-width:1.8;
+  stroke-linecap:round;
+}
+.options-workflow-rail{
+  flex:1 1 auto;
+  min-height:0;
+  overflow:auto;
+  padding:8px 14px;
+  scrollbar-width:thin;
+}
+.options-workflow-step{
+  position:relative;
+  isolation:isolate;
+  display:grid;
+  grid-template-columns:38px minmax(0,1fr) auto;
+  align-items:center;
+  gap:13px;
+  min-width:0;
+  padding:13px 8px;
+  border-bottom:1px solid var(--line-2);
+}
+.options-workflow-step:last-child{border-bottom:0}
+.options-workflow-step::before{
+  content:"";
+  position:absolute;
+  inset:7px 0;
+  z-index:-1;
+  border-radius:10px;
+  background:transparent;
+}
+.options-workflow-step.is-current::before{
+  background:color-mix(in srgb,var(--brand) 7%,transparent);
+  box-shadow:inset 2px 0 color-mix(in srgb,var(--brand-2) 70%,transparent);
+}
+.options-workflow-step-index{
+  width:30px;
+  height:30px;
+  display:grid;
+  place-items:center;
+  border:1px solid var(--line-3);
+  border-radius:50%;
+  color:var(--muted);
+  background:var(--panel-2);
+  font:700 9.5px/1 var(--font-num);
+  font-variant-numeric:tabular-nums;
+}
+.options-workflow-step.is-next .options-workflow-step-index{
+  border-color:color-mix(in srgb,var(--brand-2) 45%,var(--line));
+  color:var(--brand-2);
+}
+.options-workflow-step.is-visited .options-workflow-step-index{
+  border-color:color-mix(in srgb,var(--up) 36%,var(--line));
+  background:color-mix(in srgb,var(--up) 9%,var(--panel-2));
+  color:var(--up);
+}
+.options-workflow-step-index svg{
+  width:14px;
+  height:14px;
+  fill:none;
+  stroke:currentColor;
+  stroke-width:2;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+.options-workflow-step-copy{min-width:0}
+.options-workflow-step-title{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.options-workflow-step-title h3{
+  margin:0;
+  color:var(--text);
+  font:670 12.5px/1.25 var(--font-ui);
+}
+.options-workflow-step-title span{
+  padding:3px 6px;
+  border:1px solid color-mix(in srgb,var(--brand-2) 34%,var(--line));
+  border-radius:var(--r-pill);
+  color:var(--brand-2);
+  font:720 7.5px/1 var(--font-ui);
+  letter-spacing:.08em;
+}
+.options-workflow-step-copy p{
+  max-width:500px;
+  margin:5px 0 0;
+  color:var(--text-2);
+  font:480 10.5px/1.5 var(--font-ui);
+}
+.options-workflow-step-copy small{
+  display:block;
+  margin-top:6px;
+  color:var(--muted);
+  font:620 9px/1.3 var(--font-ui);
+  letter-spacing:.015em;
+}
+.options-workflow-step-cta{
+  min-height:34px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  padding:0 10px;
+  border:1px solid var(--line-3);
+  border-radius:8px;
+  background:var(--panel-2);
+  color:var(--text-2);
+  font:650 10px/1 var(--font-ui);
+  white-space:nowrap;
+}
+.options-workflow-step.is-next .options-workflow-step-cta{
+  border-color:color-mix(in srgb,var(--brand-2) 38%,var(--line));
+  background:color-mix(in srgb,var(--brand) 12%,var(--panel-2));
+  color:var(--text);
+}
+.options-workflow-step-cta:hover{border-color:var(--brand-2);color:var(--text)}
+.options-workflow-step-cta svg{
+  width:12px;
+  height:12px;
+  fill:none;
+  stroke:currentColor;
+  stroke-width:2;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+.options-workflow-foot{
+  flex:none;
+  display:grid;
+  grid-template-columns:16px minmax(0,1fr) auto;
+  align-items:center;
+  gap:9px;
+  padding:12px 20px;
+  border-top:1px solid var(--line-2);
+  background:color-mix(in srgb,var(--inset) 65%,transparent);
+  color:var(--muted);
+  font:520 9.5px/1.4 var(--font-ui);
+}
+.options-workflow-foot svg{
+  width:14px;
+  height:14px;
+  fill:none;
+  stroke:var(--brand-2);
+  stroke-width:1.7;
+  stroke-linecap:round;
+}
+.options-workflow-foot code{
+  padding:4px 6px;
+  border:1px solid var(--line-2);
+  border-radius:5px;
+  color:var(--text-dim);
+  font:550 8.5px/1 var(--font-code);
 }
 .options-statistics-gate{
   flex:1 1 auto;
@@ -2825,8 +3101,37 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
     padding:5px 8px;
   }
   .options-ia-row-label{display:none}
-  .options-ia-row .wtabs{width:100%}
+  .options-ia-main{width:100%}
+  .options-ia-row .wtabs{width:auto}
   .options-ia-row .obs-pillnav-tab{padding:7px 11px}
+  .options-workflow-launch{min-width:38px;padding:0 6px;gap:5px}
+  .options-workflow-launch-label{display:none}
+  .options-workflow-progress{min-width:26px;padding-inline:5px}
+  .options-workflow-backdrop{place-items:end center;padding:0}
+  .options-workflow-dialog{
+    width:100%;
+    max-height:min(760px,calc(100dvh - 18px));
+    border-width:1px 0 0;
+    border-radius:15px 15px 0 0;
+  }
+  .options-workflow-head{padding:18px 16px 14px;gap:12px}
+  .options-workflow-head h2{font-size:21px}
+  .options-workflow-head p{font-size:10.5px}
+  .options-workflow-rail{padding:5px 10px 8px}
+  .options-workflow-step{
+    grid-template-columns:34px minmax(0,1fr);
+    gap:10px;
+    padding:12px 5px;
+  }
+  .options-workflow-step-cta{
+    grid-column:2;
+    justify-self:start;
+    min-height:32px;
+    margin-top:1px;
+  }
+  .options-workflow-step-copy p{font-size:10px}
+  .options-workflow-foot{grid-template-columns:15px minmax(0,1fr);padding:10px 14px}
+  .options-workflow-foot code{display:none}
   .options-ia-gate-strip{
     width:100%;
     box-sizing:border-box;
@@ -2834,6 +3139,9 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
   }
   .options-statistics-gate{padding:18px 10px}
   .options-statistics-gate-card{padding:22px 18px}
+}
+@media(prefers-reduced-motion:reduce){
+  .options-workflow-launch{transition:none}
 }
 
 /* ── Options R5: honest derived Flow boards (0DTE + largest events) ── */
