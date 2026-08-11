@@ -968,7 +968,7 @@ export async function tryFetchUpstream(f: string): Promise<Record<string, unknow
   if (f === "flow_idx") {
     try {
       return await fetchWithUA(
-        "https://chriswong6031-creator.github.io/macro/flow/index.json"
+        "https://mastermindx-market-intelligence.github.io/macro/flow/index.json"
       );
     } catch {
       return null;

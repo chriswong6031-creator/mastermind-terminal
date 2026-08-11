@@ -4,7 +4,7 @@
 `terminal/components/fin/` is changed by this branch.
 
 **Ticket:** R0-D Terminal half, Earnings / Company Event Suite Wave 0
-([remaining-build handoff](https://github.com/chriswong6031-creator/macro/blob/main/research/EARNINGS_COMPANY_EVENT_SUITE_REMAINING_BUILD_HANDOFF_FOR_CLAUDE_2026-08-06.md) §5 R0-D, §8 UI and UX release law).
+([remaining-build handoff](https://github.com/mastermindx-market-intelligence/macro/blob/main/research/EARNINGS_COMPANY_EVENT_SUITE_REMAINING_BUILD_HANDOFF_FOR_CLAUDE_2026-08-06.md) §5 R0-D, §8 UI and UX release law).
 
 **Shaped by:** the frozen Wave 1 producer contract
 (`research/EARNINGS_WAVE1_CONTRACT_FREEZE_2026-08-06.md`, answers Q1–Q5).

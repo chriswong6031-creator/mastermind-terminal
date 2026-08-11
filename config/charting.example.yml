@@ -35,7 +35,7 @@ universe:
 # vendor/macro -> macro_src pulls on the daily/cron cadence (state the latency).
 publish:
   enabled: false
-  macro_remote: "chriswong6031-creator/macro"
+  macro_remote: "mastermindx-market-intelligence/macro"
   staging_dir: "data/publish_staging"
 
 server:

@@ -10,7 +10,7 @@ sessions were rsync'ing working trees straight to the box and silently overwriti
 ## To ship a change — the ONLY supported flow
 
 1. **Branch + commit** your change (work in a git checkout, not on the box).
-2. **Open a PR** to `master` on `github.com/chriswong6031-creator/mastermind-terminal`.
+2. **Open a PR** to `master` on `github.com/mastermindx-market-intelligence/mastermind-terminal`.
 3. **Merge to `master`** (get it reviewed / conflicts resolved against everyone else's merged work).
 4. **Deploy** — run the build on the VPS (it fetches + builds `origin/master`, zero-downtime, auto-rollback):
 
