@@ -596,7 +596,7 @@ export function StrikeExpiryMatrix({
     : new Map<number, LevelBadgeKey>();
 
   return (
-    <div style={DESK_SCROLL} className="obs-scroll">
+    <div style={DESK_SCROLL} className="obs-scroll obs-mtx-desk-grid">
       <table style={DESK_TABLE}>
         <thead>
           <tr>

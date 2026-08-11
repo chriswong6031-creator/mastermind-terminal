@@ -52,7 +52,7 @@ import type { GexStatePayload } from "./MarketStateCard";
 import { GexGuide } from "./GexGuide";
 import { ExposureMatrix } from "./ExposureMatrix";
 import { HeatSeekerCard } from "./HeatSeekerCard";
-import { mergeMatrixLevels, type MatrixDoc } from "./matrixDoc";
+import { isMatrixDocForRoot, mergeMatrixLevels, type MatrixDoc } from "./matrixDoc";
 import { EodContextBelt } from "@/components/eodcontext/EodContextBelt";
 import { isGexDates, gexSessionOf } from "@/lib/gexSessions";
 import {
@@ -210,6 +210,10 @@ export function GexDeskView() {
   // what makes the lens real. Best-effort: it exists only for some roots (and can run a
   // different session than the gex payload) — absent → the lens reports itself unavailable.
   const [matrix, setMatrix] = useState<MatrixDoc | null>(null);
+  // Drops a slow old-root matrix response after the ticker has changed. Envelope root
+  // validation stops substitution, but without request ordering an internally valid SPY
+  // response can still arrive after a newer QQQ request and clobber QQQ's state.
+  const matrixReqRef = useRef(0);
   // ── Dated session replay (R0.10) ──────────────────────────────────────────
   // sessionDates = the gex_history dates.json index (null = absent/invalid → no dropdown;
   // the scrubber's explicit per-date probe still works — the index is an enumeration aid,
@@ -264,15 +268,17 @@ export function GexDeskView() {
   const readMatrix = useCallback(async (root: string): Promise<MatrixDoc | null> => {
     // `matrix:{ROOT}` is published FLAT — the desk's pre-§5.3 reader never unwrapped a
     // by-root envelope and its expiry lens works in prod, so no `data[root]` step here.
-    const doc = await safeFetch<MatrixDoc>(`/api/flow?f=matrix:${root}`);
-    // A payload without a cells array — the fixture's honest {} for an unknown root, or
-    // a malformed upstream doc — resolves to null, which is what routes to the desk's
-    // placeholder states (the same place a prod 503 for a missing matrix lands).
-    return Array.isArray(doc?.cells) ? doc : null;
+    const doc = await safeFetch<unknown>(`/api/flow?f=matrix:${root}`);
+    // A cells-less, wrong-schema, or wrong-root payload — the fixture's honest {} for
+    // an unknown root, a malformed upstream doc, or a substituted cache object — resolves
+    // to null. A matrix must never wear a different selected ticker's header.
+    return isMatrixDocForRoot(doc, root) ? doc : null;
   }, []);
 
   const fetchMatrix = useCallback(async (root: string) => {
-    setMatrix(await readMatrix(root));
+    const req = ++matrixReqRef.current;
+    const doc = await readMatrix(root);
+    if (matrixReqRef.current === req) setMatrix(doc);
   }, [readMatrix]);
 
   // Sessions index for the dated-ladder plane. Validated (isGexDates) before it drives
@@ -405,12 +411,17 @@ export function GexDeskView() {
   //
   // Both matrix reads are anchored to the GEX payload's own as-of, never the wall clock —
   // an EOD snapshot's "0DTE" is a property of the snapshot's session, not of today.
+  // Render-time identity fence: React effects clear the prior ticker's matrix only after
+  // the ticker-change commit. Gate every consumer synchronously so an already-resolved
+  // SPY document can never flash under a newly selected QQQ header for even one render.
+  const visibleMatrix = isMatrixDocForRoot(matrix, ticker) ? matrix : null;
+
   const matrixCells = useMemo(
-    () => (Array.isArray(matrix?.cells)
-      ? matrix.cells.filter((c): c is { strike: number; expiry: string; gex: number } =>
+    () => (Array.isArray(visibleMatrix?.cells)
+      ? visibleMatrix.cells.filter((c): c is { strike: number; expiry: string; gex: number } =>
           c.gex != null && Number.isFinite(c.gex))
       : null),
-    [matrix]
+    [visibleMatrix]
   );
 
   const ladderStrikes = useMemo(
@@ -423,19 +434,19 @@ export function GexDeskView() {
   // lib/gexLadder.ts). Treat the matrix as covering nothing so every narrow-lens control
   // goes dark (existing honest-unavailable state) instead of letting the user select a
   // lens that would sum — or mislabel 0DTE — across two different sessions.
-  const matrixSessionOk = matrixSessionsAgree(matrix?.asof, asof);
+  const matrixSessionOk = matrixSessionsAgree(visibleMatrix?.asof, asof);
 
   // Which expiries the matrix can actually answer for THIS ladder (see lib/gexLadder.ts —
   // it demands a real strike overlap, so two stores on different sessions read as "no
   // coverage" rather than producing a ladder of dashes).
   const lensCoverage = useMemo(
-    () => (matrixSessionOk ? matrixExpiryCoverage(matrix, ladderStrikes) : new Set<string>()),
-    [matrix, ladderStrikes, matrixSessionOk]
+    () => (matrixSessionOk ? matrixExpiryCoverage(visibleMatrix, ladderStrikes) : new Set<string>()),
+    [visibleMatrix, ladderStrikes, matrixSessionOk]
   );
 
   const lensValues = useMemo(
-    () => matrixLensByStrike(matrix, lens, asof),
-    [matrix, lens, asof]
+    () => matrixLensByStrike(visibleMatrix, lens, asof),
+    [visibleMatrix, lens, asof]
   );
 
   // Strike-window disclosure for the summary bar's scoped Net GEX (bug: the hero used to
@@ -458,8 +469,8 @@ export function GexDeskView() {
   // the matrix builder's own levels block still carries the retired cumulative-by-strike
   // estimator. See matrixDoc.mergeMatrixLevels for the measurement and the RCA link.
   const matrixLevels = useMemo(
-    () => mergeMatrixLevels(matrix, statePayload),
-    [matrix, statePayload]
+    () => mergeMatrixLevels(visibleMatrix, statePayload),
+    [visibleMatrix, statePayload]
   );
 
   // Format spot for display
@@ -728,7 +739,7 @@ export function GexDeskView() {
               </div>
             ) : view === "matrix" ? (
               <ExposureMatrix
-                matrix={matrix}
+                matrix={visibleMatrix}
                 levels={matrixLevels}
                 spot={spot}
                 fetchMatrix={readMatrix}
@@ -746,7 +757,7 @@ export function GexDeskView() {
                 lensValues={lensValues}
                 lensCoverage={lensCoverage}
                 asOf={asof}
-                matrixAsOf={matrix?.asof ?? null}
+                matrixAsOf={visibleMatrix?.asof ?? null}
                 lang={lang}
                 netGexBn={activePayload?.net_gex_bn ?? null}
                 matrixCells={matrixCells}
@@ -816,9 +827,9 @@ export function GexDeskView() {
                 so it is withdrawn during archived replay along with them. */}
             <div style={HEATSEEKER_SLOT}>
               <HeatSeekerCard
-                pick={matrix?.heat_seeker ?? null}
-                spot={matrix?.spot ?? spot ?? null}
-                sessionAnchor={matrix?._build_meta?.asof_date ?? null}
+                pick={visibleMatrix?.heat_seeker ?? null}
+                spot={visibleMatrix?.spot ?? spot ?? null}
+                sessionAnchor={visibleMatrix?._build_meta?.asof_date ?? null}
                 lang={lang}
               />
             </div>
