@@ -624,6 +624,27 @@ export type OptParams = {
   tilt_pct?: number;
 };
 
+/** These publishers aggregate the whole covered tape; they are not root-specific. */
+export function isMarketWideOptKind(kind: string): boolean {
+  return kind === "opt_premium_burst" || kind === "opt_0dte_spike";
+}
+
+/** Canonical storage identity for an options alert.
+ *
+ * Tide and DTE publishers aggregate the covered market rather than one root. Keeping
+ * this normalization pure lets both the form and the POST route enforce the same law,
+ * including clients that bypass or predate the current picker.
+ */
+export function canonicalizeOptAlertIdentity(
+  symbol: string,
+  condition: Record<string, unknown>,
+): { symbol: string; condition: Record<string, unknown> } {
+  if (isMarketWideOptKind(String(condition.type ?? ""))) {
+    return { symbol: "MARKET", condition: { ...condition, root: "MARKET" } };
+  }
+  return { symbol: symbol.trim().toUpperCase(), condition };
+}
+
 /**
  * Build the `{type, root, ...}` condition the POST sends. Only the fields each
  * type reads are included (opaque jsonb — the API route passes it through
@@ -643,7 +664,7 @@ export function buildOptCondition(kind: OptKind, root: string, params: OptParams
     return c;
   }
   if (kind === "opt_premium_burst") {
-    const c: Record<string, unknown> = { type: kind, root: r, leg: params.leg === "npp" ? "npp" : "ncp" };
+    const c: Record<string, unknown> = { type: kind, root: "MARKET", leg: params.leg === "npp" ? "npp" : "ncp" };
     if (isNum(params.window_min)) c.window_min = params.window_min;
     if (isNum(params.z)) c.z = params.z;
     return c;
@@ -670,7 +691,7 @@ export function buildOptCondition(kind: OptKind, root: string, params: OptParams
     return c;
   }
   // opt_0dte_spike
-  const c: Record<string, unknown> = { type: kind, root: r };
+  const c: Record<string, unknown> = { type: kind, root: "MARKET" };
   if (isNum(params.share_pct)) c.share_pct = params.share_pct;
   return c;
 }
@@ -699,10 +720,10 @@ export function optAlertPreview(cond: Record<string, unknown>, lang: "en" | "zh"
     const leg = cond.leg === "npp" ? "npp" : "ncp";
     if (zh) {
       const lw = leg === "npp" ? "看跌权利金" : "看涨权利金";
-      return `当 ${root} 净${lw}以异常速度变动时提醒我`;
+      return `当全市场净${lw}以异常速度变动时提醒我`;
     }
     const lw = leg === "npp" ? "net-put premium" : "net-call premium";
-    return `Alert me when ${root} ${lw} moves at an unusual pace`;
+    return `Alert me when market-wide ${lw} moves at an unusual pace`;
   }
   if (type === "opt_surface_pocket") {
     const near = isNum(cond.near_pct) ? (cond.near_pct as number) : 5;
@@ -733,5 +754,5 @@ export function optAlertPreview(cond: Record<string, unknown>, lang: "en" | "zh"
   }
   // opt_0dte_spike
   const share = isNum(cond.share_pct) ? (cond.share_pct as number) : 55;
-  return zh ? `当 ${root} 0DTE 占比超过 ${share}% 时提醒我` : `Alert me when ${root} 0DTE share tops ${share}%`;
+  return zh ? `当全市场 0DTE 占比超过 ${share}% 时提醒我` : `Alert me when market-wide 0DTE share tops ${share}%`;
 }

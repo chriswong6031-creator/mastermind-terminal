@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +34,9 @@ class StubFlow:
         self._surface = surface
 
     def gexstate(self, root):  # noqa: ARG002 — single-root fixture ignores root, like prod dev
+        return self._gexstate
+
+    def gamma_state(self, root):  # noqa: ARG002 — normalized production accessor
         return self._gexstate
 
     def gex(self, root):  # noqa: ARG002
@@ -534,7 +538,7 @@ def test_real_tide_fixture_premium_burst_evaluable():
 
 def test_real_surface_fixture_pocket_evaluable():
     """The REAL Flow accessor chain (surface_idx → latest → frame), not a stub."""
-    flow = ae.Flow(str(DATA))
+    flow = ae.Flow(str(DATA), fixture_mode=True)
     frame = flow.surface("SPY")
     assert frame is not None
     assert len(frame["time_steps"]) == 78  # idx latest "1556" → full realized session
@@ -545,7 +549,7 @@ def test_real_surface_fixture_pocket_evaluable():
 
 def test_real_surface_unknown_root_null():
     """Only SPY is materialized — an unmaterialized root must be an honest null."""
-    flow = ae.Flow(str(DATA))
+    flow = ae.Flow(str(DATA), fixture_mode=True)
     assert flow.surface("QQQ") is None
     fired, _, note, _ = _eval({"type": "opt_surface_pocket", "root": "QQQ"}, StubFlow(surface=None))
     assert fired is None
@@ -557,6 +561,244 @@ def test_real_dte_fixture_0dte_evaluable_not_null():
     fired, val, _, _ = _eval({"type": "opt_0dte_spike", "root": "SPY"}, StubFlow(dte=dte))
     assert fired is not None  # 0d bucket IS present → NOT null (honest: real ~8% share)
     assert isinstance(val, (int, float))
+
+
+# ─── production Flow resolver: backend → R2, never fixture fallback ──────────
+
+
+REMOTE_NOW = datetime(2026, 8, 11, 15, 0, tzinfo=timezone.utc)  # 11:00 ET, inside RTH
+REMOTE_QUOTE = {"spot": 701.25, "asof": "2026-08-11T14:59:00Z", "basis": "DELAYED_15M"}
+
+
+def _remote_flow(tmp_path, fetch, *, now=REMOTE_NOW):
+    return ae.Flow(
+        str(tmp_path),
+        backend_base="http://flow.test",
+        r2_base="https://r2.test",
+        fetch_json=fetch,
+        now_fn=lambda: now,
+        spot_getter=lambda _root: REMOTE_QUOTE,
+    )
+
+
+def test_remote_gexstate_backend_first_uses_exact_path_and_cache(tmp_path):
+    calls = []
+    payload = {
+        "schema": "options_structure.gex_state/v1", "root": "SPY", "spot": 1,
+        "asof": "2026-08-11T14:30:00Z", "session_date": "2026-08-11",
+    }
+
+    def fetch(url, **kwargs):
+        calls.append((url, kwargs))
+        return payload
+
+    flow = _remote_flow(tmp_path, fetch)
+    assert flow.gexstate("spy") == payload
+    assert flow.gexstate("SPY") == payload
+    assert [c[0] for c in calls] == ["http://flow.test/api/hub/gexstate/SPY"]
+    assert calls[0][1]["headers"]["User-Agent"] == ae.FLOW_USER_AGENT
+
+
+def test_remote_gex_rejects_wrong_root_then_falls_back_to_r2(tmp_path):
+    calls = []
+    wrong = {"schema": "options_hub.gex/v1", "root": "QQQ", "asof": "2026-08-10"}
+    right = {"schema": "options_hub.gex/v1", "root": "SPY", "spot_ref": 700, "asof": "2026-08-10"}
+
+    def fetch(url, **_kwargs):
+        calls.append(url)
+        return wrong if url.startswith("http://") else right
+
+    expected = {
+        **right,
+        "live_spot": 701.25,
+        "live_spot_asof": REMOTE_QUOTE["asof"],
+        "live_spot_basis": "DELAYED_15M",
+    }
+    assert _remote_flow(tmp_path, fetch).gex("SPY") == expected
+    assert calls == [
+        "http://flow.test/api/hub/gex/SPY",
+        "https://r2.test/options_hub/gex/SPY.json",
+    ]
+
+
+def test_remote_gamma_state_uses_live_quote_and_eod_flip(tmp_path):
+    gx = {
+        "schema": "options_hub.gex/v1", "root": "SPY", "asof": "2026-08-10",
+        "spot_ref": 680, "gamma_flip": 700,
+    }
+    state = _remote_flow(tmp_path, lambda _url, **_kwargs: gx).gamma_state("SPY")
+    assert state == {
+        "root": "SPY", "spot": 701.25, "gamma_flip": 700, "asof": "2026-08-10",
+        "spot_asof": REMOTE_QUOTE["asof"], "spot_basis": "DELAYED_15M",
+    }
+    fired, _value, note, _next = ae._eval_gamma_flip(
+        {"type": "opt_gamma_flip", "root": "SPY"}, state, {"side": "below"},
+    )
+    assert fired is True
+    assert "15-minute-delayed quote" in note
+    assert REMOTE_QUOTE["asof"] in note
+
+
+def test_remote_cross_and_touch_withhold_when_live_quote_is_missing(tmp_path):
+    gx = {
+        "schema": "options_hub.gex/v1", "root": "SPY", "asof": "2026-08-10",
+        "spot_ref": 700, "gamma_flip": 699, "call_wall": 701,
+    }
+    flow = ae.Flow(
+        str(tmp_path), backend_base="http://flow.test", r2_base="https://r2.test",
+        fetch_json=lambda _url, **_kwargs: gx, now_fn=lambda: REMOTE_NOW,
+    )
+    assert flow.gamma_state("SPY")["spot"] is None
+    assert flow.gex("SPY")["spot_ref"] == 700
+    assert flow.gex("SPY")["live_spot"] is None
+    assert _eval({"type": "opt_gamma_flip", "root": "SPY"}, flow)[0] is None
+    assert _eval({"type": "opt_wall_touch", "root": "SPY", "wall": "call"}, flow)[0] is None
+    # Structural EOD alerts retain the publisher-bound denominator. Only a claim that
+    # spot crossed/touched a level requires the separate current-session quote receipt.
+    assert _eval({"type": "opt_wall_migration", "root": "SPY", "wall": "call"}, flow)[0] is False
+
+
+def test_remote_wall_touch_discloses_delayed_quote_basis(tmp_path):
+    gx = {
+        "schema": "options_hub.gex/v1", "root": "SPY", "asof": "2026-08-10",
+        "spot_ref": 680, "call_wall": 701.5,
+    }
+    flow = _remote_flow(tmp_path, lambda _url, **_kwargs: gx)
+    fired, _value, note, _next = _eval(
+        {"type": "opt_wall_touch", "root": "SPY", "wall": "call", "_wp": {"inside": False}},
+        flow,
+    )
+    assert fired is True
+    assert "15-minute-delayed quote" in note
+    assert REMOTE_QUOTE["asof"] in note
+
+
+def test_quote_hub_spot_requires_current_rth_receipt(tmp_path):
+    (tmp_path / "manifest.json").write_text('{"symbols":{}}')
+    data = ae.Data(str(tmp_path), None, now_fn=lambda: REMOTE_NOW)
+    data.quotes = {
+        "SPY": {"last": 701.25, "ts": REMOTE_NOW.timestamp() - 15 * 60,
+                "basis": "DELAYED_15M", "live": False},
+    }
+    assert data.live_spot("SPY") == 701.25
+    assert data.live_quote("SPY")["basis"] == "DELAYED_15M"
+    data.quotes["SPY"]["ts"] = REMOTE_NOW.timestamp() - 31 * 60
+    assert data.live_spot("SPY") is None
+    data.quotes["SPY"] = {"last": 701.25, "ts": REMOTE_NOW.timestamp(), "basis": "EOD"}
+    assert data.live_spot("SPY") is None
+    data.quotes["SPY"] = {"last": 701.25, "ts": REMOTE_NOW.timestamp(), "basis": "UNKNOWN"}
+    assert data.live_spot("SPY") is None
+
+
+def test_remote_unavailable_never_reads_a_fixture(tmp_path):
+    (tmp_path / "gexstate_fixture.json").write_text(json.dumps({
+        "schema": "options_structure.gex_state/v1", "root": "SPY", "spot": 999,
+    }))
+    calls = []
+
+    def fail(url, **_kwargs):
+        calls.append(url)
+        raise OSError("offline")
+
+    flow = _remote_flow(tmp_path, fail)
+    assert flow.gexstate("SPY") is None
+    assert flow.gexstate("SPY") is None  # cached fail-closed result; no retry storm in one run
+    assert len(calls) == 2
+
+
+def test_remote_tide_and_dte_require_exact_live_schemas(tmp_path):
+    docs = {
+        "https://r2.test/live_flow/tide_current.json": {
+            "schema": "live_flow.tide/v1", "minutes": [],
+            "asof": "2026-08-11T14:30:00Z", "session_date": "2026-08-11",
+        },
+        "https://r2.test/live_flow/dte_tide_current.json": {
+            "schema": "live_flow.dte_tide/v1", "buckets": {},
+            "asof": "2026-08-11T14:30:00Z",
+        },
+    }
+
+    def fetch(url, **_kwargs):
+        if url.startswith("http://"):
+            return {"schema": "foreign/v1"}
+        return docs[url]
+
+    flow = _remote_flow(tmp_path, fetch)
+    assert flow.tide() == docs["https://r2.test/live_flow/tide_current.json"]
+    assert flow.dte() == docs["https://r2.test/live_flow/dte_tide_current.json"]
+
+
+def test_remote_intraday_payload_is_withheld_when_stale_or_outside_rth(tmp_path):
+    stale = {
+        "schema": "live_flow.tide/v1", "minutes": [],
+        "asof": "2026-08-10T20:00:00Z", "session_date": "2026-08-10",
+    }
+
+    def fetch(_url, **_kwargs):
+        return stale
+
+    assert _remote_flow(tmp_path, fetch).tide() is None
+    preopen = datetime(2026, 8, 11, 12, 0, tzinfo=timezone.utc)  # 08:00 ET
+    current = {**stale, "asof": "2026-08-11T11:59:00Z", "session_date": "2026-08-11"}
+    assert _remote_flow(tmp_path, lambda _url, **_kwargs: current, now=preopen).tide() is None
+
+
+def test_remote_eod_gex_rejects_expired_snapshot(tmp_path):
+    stale = {"schema": "options_hub.gex/v1", "root": "SPY", "asof": "2026-08-07"}
+    assert _remote_flow(tmp_path, lambda _url, **_kwargs: stale).gex("SPY") is None
+
+
+def test_remote_eod_gex_allows_friday_snapshot_on_monday(tmp_path):
+    monday = datetime(2026, 8, 10, 15, 0, tzinfo=timezone.utc)
+    friday = {"schema": "options_hub.gex/v1", "root": "SPY", "asof": "2026-08-07"}
+    assert _remote_flow(tmp_path, lambda _url, **_kwargs: friday, now=monday).gex("SPY") is not None
+
+
+def test_remote_surface_resolves_exact_latest_frame(tmp_path):
+    calls = []
+    idx = {
+        "root": "SPY", "latest": "1045", "stamps": ["1030", "1045"],
+        "asof": "2026-08-11T14:45:00Z",
+    }
+    frame = {
+        "root": "SPY", "time_steps": ["10:30", "10:45"], "price_levels": [700],
+        "grids": {"netprem": [[1, 2]]},
+        "asof": "2026-08-11T14:45:00Z", "session_date": "2026-08-11",
+    }
+
+    def fetch(url, **_kwargs):
+        calls.append(url)
+        if url.endswith("/idx"):
+            return idx
+        if url.endswith("/1045"):
+            return frame
+        raise AssertionError(f"unexpected fetch {url}")
+
+    assert _remote_flow(tmp_path, fetch).surface("SPY") == frame
+    assert calls == [
+        "http://flow.test/api/flow/surface/SPY/idx",
+        "http://flow.test/api/flow/surface/SPY/1045",
+    ]
+
+
+def test_remote_root_and_surface_stamp_cannot_escape_paths(tmp_path):
+    calls = []
+
+    def fetch(url, **_kwargs):
+        calls.append(url)
+        return {
+            "root": "SPY", "latest": "../../admin", "stamps": ["../../admin"],
+            "asof": "2026-08-11T14:45:00Z",
+        }
+
+    flow = _remote_flow(tmp_path, fetch)
+    assert flow.gex("../../admin") is None
+    assert flow.gex("ABCDEFGHIJ.KLMN") is None  # grammar match but over Terminal's 12-char cap
+    assert flow.surface("SPY") is None
+    assert calls == [
+        "http://flow.test/api/flow/surface/SPY/idx",
+        "https://r2.test/live_flow/surface/SPY/idx.json",
+    ]
 
 
 # ─── (b2) wall migration — parity with evalWallMigration ─────────────────────

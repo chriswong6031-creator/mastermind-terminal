@@ -5,6 +5,8 @@ import { getJSON } from "@/lib/dataCache";
 import {
   optAlertPreview,
   buildOptCondition,
+  canonicalizeOptAlertIdentity,
+  isMarketWideOptKind,
   type OptKind,
   type OptParams,
 } from "@/lib/optionsAlerts";
@@ -172,6 +174,7 @@ export default function AlertsView({ email }: { email: string }) {
 
   // The condition the CURRENT form would POST (drives the preview + create()).
   const optCondition = buildOptCondition(optKind, optRoot, optParams);
+  const marketWideOpt = isMarketWideOptKind(optKind);
   const setP = (patch: Partial<OptParams>) => setOptParams((p) => ({ ...p, ...patch }));
 
   // ── suite cascade: suite → event → optional dir / min-strength ──────────────
@@ -240,8 +243,7 @@ export default function AlertsView({ email }: { email: string }) {
       let symbol: string;
       let condition: Record<string, unknown>;
       if (cat === "options") {
-        symbol = optRoot;
-        condition = optCondition;
+        ({ symbol, condition } = canonicalizeOptAlertIdentity(optRoot, optCondition));
       } else if (cat === "suite") {
         symbol = sym;
         condition = suiteMode === "seq" ? seqCondition! : suiteCondition!;
@@ -379,7 +381,9 @@ export default function AlertsView({ email }: { email: string }) {
               </>
             ) : (
               <>
-                <select aria-label={t("optRoot")} value={optRoot} onChange={(e) => setOptRoot(e.target.value)}>{rootOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select>
+                {!marketWideOpt && (
+                  <select aria-label={t("optRoot")} value={optRoot} onChange={(e) => setOptRoot(e.target.value)}>{rootOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select>
+                )}
                 <select aria-label={t("condCatOptions")} value={optKind} onChange={(e) => setOptKind(e.target.value as OptKind)}>{OPT_TYPES.map((c) => <option key={c.v} value={c.v}>{t(c.tkey)}</option>)}</select>
                 {/* type-specific params */}
                 {optKind === "opt_gamma_flip" && (

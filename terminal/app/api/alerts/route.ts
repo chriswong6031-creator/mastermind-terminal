@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { isPaidTier, isProTier } from "@/lib/entitlement";
+import { canonicalizeOptAlertIdentity } from "@/lib/optionsAlerts";
 import { SUITE_ALERT_EVENTS, validateSuiteCondition, validateSuiteSequence } from "@/lib/suiteAlerts";
 
 async function uid() {
@@ -84,7 +85,10 @@ export async function POST(req: Request) {
   if ((count ?? 0) >= MAX_ALERTS_PER_USER)
     return NextResponse.json({ error: `Alert limit reached (${MAX_ALERTS_PER_USER}). Delete one to add another.` }, { status: 400 });
 
-  const { data, error } = await supabase.from("alerts").insert({ user_id: user.id, symbol, condition }).select("*").single();
+  const stored = OPT_TYPES.has(type)
+    ? canonicalizeOptAlertIdentity(symbol, condition)
+    : { symbol, condition };
+  const { data, error } = await supabase.from("alerts").insert({ user_id: user.id, ...stored }).select("*").single();
   if (error) {
     console.error("alerts POST failed:", error);
     return NextResponse.json({ error: "Could not create alert" }, { status: 400 });
