@@ -11,10 +11,10 @@
 # relocations. Therefore this lane lives ENTIRELY outside ~/Documents/:
 #
 #   DEPLOY   /Users/chriswong/fund-ops-wt     standalone clone of
-#                                             chriswong6031-creator/mastermind-terminal (master)
+#                                             mastermindx-market-intelligence/mastermind-terminal (master)
 #                                             — this script + ingest/ code + terminal/public/data
 #   ENGINE   /Users/chriswong/fund-engine-wt  standalone sparse+shallow clone of
-#                                             chriswong6031-creator/macro (main), cone dirs:
+#                                             mastermindx-market-intelligence/macro (main), cone dirs:
 #                                             engine lib config data/edgar data/finra
 #                                             data/sec_insider data/stock_fundamentals
 #                                             site/factordata
@@ -29,11 +29,11 @@
 #
 # RECREATE THE LANE (if any piece is missing):
 #   git clone --filter=blob:none --depth 1 --single-branch --branch main --no-checkout \
-#       https://github.com/chriswong6031-creator/macro.git /Users/chriswong/fund-engine-wt
+#       https://github.com/mastermindx-market-intelligence/macro.git /Users/chriswong/fund-engine-wt
 #   cd /Users/chriswong/fund-engine-wt && git sparse-checkout init --cone && \
 #       git sparse-checkout set engine lib config data/edgar data/finra data/sec_insider \
 #       data/stock_fundamentals site/factordata && git checkout main
-#   git clone https://github.com/chriswong6031-creator/mastermind-terminal.git /Users/chriswong/fund-ops-wt
+#   git clone https://github.com/mastermindx-market-intelligence/mastermind-terminal.git /Users/chriswong/fund-ops-wt
 #   /opt/homebrew/Caskroom/miniconda/base/bin/python -m venv /Users/chriswong/fund-venv
 #   /Users/chriswong/fund-venv/bin/pip install "numpy==2.4.6" "pandas==3.0.3" \
 #       "pyarrow==24.0.0" "PyYAML==6.0.3" "yfinance==1.4.1" "requests==2.34.2"

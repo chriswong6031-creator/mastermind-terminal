@@ -2,7 +2,7 @@
 # GIT-GATED zero-downtime build for the Mastermind Terminal (Next.js).
 #
 # ┌────────────────────────────────────────────────────────────────────────────┐
-# │  SOURCE OF TRUTH = origin/master (github.com/chriswong6031-creator/          │
+# │  SOURCE OF TRUTH = origin/master (github.com/mastermindx-market-intelligence/          │
 # │  mastermind-terminal). This script builds ONLY committed master code.       │
 # │  Working-tree edits under /opt/terminal/terminal are IGNORED and will be     │
 # │  overwritten. TO GO LIVE:  commit -> open PR -> merge to master -> run this. │
@@ -40,7 +40,7 @@ log "node $(node -v)"
 # 0) GIT GATE — the ONLY code that gets built is origin/$BRANCH.
 if [ ! -d "$SRC/.git" ]; then
   log "FATAL: canonical checkout missing. Create it once with:"
-  log "  git clone --branch $BRANCH git@github-mmterminal:chriswong6031-creator/mastermind-terminal.git $SRC"
+  log "  git clone --branch $BRANCH git@github-mmterminal:mastermindx-market-intelligence/mastermind-terminal.git $SRC"
   exit 1
 fi
 log "fetching origin/$BRANCH ..."
