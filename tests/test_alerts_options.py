@@ -679,10 +679,14 @@ def test_quote_hub_spot_requires_current_rth_receipt(tmp_path):
     data.quotes = {
         "SPY": {"last": 701.25, "ts": REMOTE_NOW.timestamp() - 15 * 60,
                 "basis": "DELAYED_15M", "live": False,
-                "regularSession": "rth", "regularSessionDate": "2026-08-11"},
+                "regularSession": "rth", "regularSessionDate": "2026-08-11",
+                "marketSession": "rth"},
     }
     assert data.live_spot("SPY") == 701.25
     assert data.live_quote("SPY")["basis"] == "DELAYED_15M"
+    data.quotes["SPY"].pop("marketSession")
+    assert data.live_quote("SPY") is None
+    data.quotes["SPY"]["marketSession"] = "rth"
     data.quotes["SPY"]["ts"] = REMOTE_NOW.timestamp() - 31 * 60
     assert data.live_spot("SPY") is None
     data.quotes["SPY"] = {"last": 701.25, "ts": REMOTE_NOW.timestamp(), "basis": "EOD"}
@@ -702,6 +706,7 @@ def test_quote_hub_manifest_placeholder_never_masquerades_as_current_spot(tmp_pa
             "source": "polygon-delayed",
             "basis": "DELAYED_15M",
             "regularSession": "closed",
+            "marketSession": "rth",
         },
     }
     assert data.live_quote("SPY") is None
@@ -724,6 +729,7 @@ def test_quote_hub_prefers_print_clock_and_rejects_bad_measured_lag(tmp_path):
         "basis": "REALTIME",
         "regularSession": "rth",
         "regularSessionDate": "2026-08-11",
+        "marketSession": "rth",
     }
     data.quotes = {"SPY": current}
     assert data.live_quote("SPY") is None
@@ -731,6 +737,23 @@ def test_quote_hub_prefers_print_clock_and_rejects_bad_measured_lag(tmp_path):
     current["lagMs"] = 10_000
     assert data.live_quote("SPY")["asof"] == "2026-08-11T14:59:50Z"
     current["lagMs"] = float("nan")
+    assert data.live_quote("SPY") is None
+
+
+def test_quote_hub_regular_close_is_not_current_post_market_spot(tmp_path):
+    (tmp_path / "manifest.json").write_text('{"symbols":{}}')
+    post = datetime(2026, 8, 11, 20, 5, tzinfo=timezone.utc)  # 16:05 ET
+    data = ae.Data(str(tmp_path), None, now_fn=lambda: post)
+    data.quotes = {
+        "SPY": {
+            "last": 701.25,
+            "ts": post.timestamp() - 5 * 60,
+            "basis": "DELAYED_15M",
+            "regularSession": "rth",  # retained last regular-session print
+            "regularSessionDate": "2026-08-11",
+            "marketSession": "post",
+        },
+    }
     assert data.live_quote("SPY") is None
 
 
@@ -754,11 +777,11 @@ def test_remote_tide_and_dte_require_exact_live_schemas(tmp_path):
     docs = {
         "https://r2.test/live_flow/tide_current.json": {
             "schema": "live_flow.tide/v1", "minutes": [],
-            "asof": "2026-08-11T14:30:00Z", "session_date": "2026-08-11",
+            "asof": "2026-08-11T14:45:00Z", "session_date": "2026-08-11",
         },
         "https://r2.test/live_flow/dte_tide_current.json": {
             "schema": "live_flow.dte_tide/v1", "buckets": {},
-            "asof": "2026-08-11T14:30:00Z",
+            "asof": "2026-08-11T14:45:00Z",
         },
     }
 
@@ -785,6 +808,16 @@ def test_remote_intraday_payload_is_withheld_when_stale_or_outside_rth(tmp_path)
     preopen = datetime(2026, 8, 11, 12, 0, tzinfo=timezone.utc)  # 08:00 ET
     current = {**stale, "asof": "2026-08-11T11:59:00Z", "session_date": "2026-08-11"}
     assert _remote_flow(tmp_path, lambda _url, **_kwargs: current, now=preopen).tide() is None
+
+
+def test_remote_intraday_alert_evidence_has_a_strict_twenty_minute_ceiling(tmp_path):
+    at_limit = {
+        "schema": "live_flow.tide/v1", "minutes": [],
+        "asof": "2026-08-11T14:40:00Z", "session_date": "2026-08-11",
+    }
+    assert _remote_flow(tmp_path, lambda _url, **_kwargs: at_limit).tide() == at_limit
+    too_old = {**at_limit, "asof": "2026-08-11T14:39:59Z"}
+    assert _remote_flow(tmp_path, lambda _url, **_kwargs: too_old).tide() is None
 
 
 def test_remote_eod_gex_rejects_expired_snapshot(tmp_path):

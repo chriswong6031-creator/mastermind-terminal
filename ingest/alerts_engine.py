@@ -94,8 +94,12 @@ FLOW_ROOT_RE = re.compile(r"^[A-Z0-9]{1,10}(?:[.-][A-Z0-9]{1,4})?$")
 FLOW_STAMP_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 FLOW_ET = ZoneInfo("America/New_York")
 FLOW_RTH_OPEN = time(9, 30)
-FLOW_RTH_CLOSE = time(16, 15)
-FLOW_INTRADAY_MAX_AGE_SEC = 2 * 60 * 60
+FLOW_QUOTE_RTH_CLOSE = time(16, 0)
+FLOW_TAPE_RTH_CLOSE = time(16, 15)
+# A 15-minute-delayed source plus the 5-minute alert cron gets 20 minutes end to end.
+# Anything older is context, not trigger evidence. This deliberately withholds alerts while
+# the producer's actual cadence is slower instead of normalizing sparse tape as current.
+FLOW_INTRADAY_MAX_AGE_SEC = 20 * 60
 FLOW_EOD_MAX_AGE_DAYS = 3
 FLOW_QUOTE_MAX_AGE_SEC = 30 * 60
 FLOW_QUOTE_BASES = {"LIVE", "REALTIME", "DELAYED_15M"}
@@ -221,7 +225,9 @@ class Data:
             return None
         now = self.now_fn().astimezone(timezone.utc)
         now_et = now.astimezone(FLOW_ET)
-        if now_et.weekday() >= 5 or not (FLOW_RTH_OPEN <= now_et.time() <= FLOW_RTH_CLOSE):
+        if now_et.weekday() >= 5 or not (FLOW_RTH_OPEN <= now_et.time() < FLOW_QUOTE_RTH_CLOSE):
+            return None
+        if str(q.get("marketSession") or "").lower() != "rth":
             return None
         # Quote Hub seeds a manifest/EOD placeholder with ts=Date.now(), a delayed basis,
         # and regularSession="closed" while waiting for the first current-session print.
@@ -366,7 +372,7 @@ class Flow:
         age = (now - observed).total_seconds()
         now_et = now.astimezone(FLOW_ET)
         observed_et = observed.astimezone(FLOW_ET)
-        if now_et.weekday() >= 5 or not (FLOW_RTH_OPEN <= now_et.time() <= FLOW_RTH_CLOSE):
+        if now_et.weekday() >= 5 or not (FLOW_RTH_OPEN <= now_et.time() <= FLOW_TAPE_RTH_CLOSE):
             return False
         if observed_et.date() != now_et.date() or not (-60 <= age <= FLOW_INTRADAY_MAX_AGE_SEC):
             return False
