@@ -161,9 +161,9 @@ Both notes speculate that HK may not be cumulative because Tencent publishes dis
 
 ## Verification receipt
 
-Exact code head tested: `70fdb4e8de1c614a48874fe9b52df80b57d37912` (rebased on `origin/master` `66bc936000f80857173c7947bc01b15fbbea5e2e`).
+Exact code head tested: `b629033e38b7efc0d19b56e7e422c072bba6cd70` (rebased on `origin/master` `66bc936000f80857173c7947bc01b15fbbea5e2e`).
 
-- Python: 728 tests passed, including the maintained 2,798-file corpus gate, HK interval/taxonomy contract, collector failure paths, and existing Massive/US controls.
+- Python: 729 tests passed, including the maintained 2,798-file corpus gate, HK interval/taxonomy contract, token-free HK collector import, collector failure paths, and existing Massive/US controls.
 - Terminal: 2,570 Vitest tests passed with four existing todos; TypeScript passed; and the Next production build completed. The task-scoped financial page/helper lint run had zero errors and five existing warnings. Including touched legacy `StockAnalysis.tsx` and `fund.ts` exposes ten pre-existing `no-explicit-any` errors and eight additional warnings; this change adds no lint error.
 - Responsive suite: 302 tests passed and 131 were intentionally skipped in 2.7 minutes. The suite exercised the contractual 1440×900 desktop, 820×1180 tablet, and 390×844 mobile layouts without a failure.
 - Browser: `0001.HK` rendered H1/H2 at all three contractual widths with document width contained and no Q2/Q4 fiction. `0700.HK` retained Q1–Q4; March-year-end `8428.HK` rendered H1/H2; and `0005.HK`, `1299.HK`, and `0388.HK` populated their vendor totals while omitting industrial COGS/gross-profit rows. `AAPL` retained the industrial COGS/gross-profit/operating-expense bridge, while `JPM` used the financial presentation. Localized SSR regressions cover the equivalent Chinese cadence, family, currency, empty-state, and signed-surprise copy.
