@@ -550,28 +550,32 @@ export function AnalysisPanel({
       </div>
 
       {/*
-        Reconstruction disclosure — a footnote to the ticker header, ABOVE the rail.
+        Reconstruction disclosure, part 1 of 2 — the DATED CLAUSE, a footnote to the
+        ticker header and ABOVE the rail. The receipt that explains it is at the panel
+        foot; see ORIGINATION_RECEIPT for why the two are split.
 
-        WHY HERE, and why not where the card puts it. On the card the same disclosure
-        goes last and quietest, because a reader scanning the stream wants the plan
-        first and the accounting after. The panel inverts that for two reasons. This
-        header is already the panel's provenance zone — the display-only chip sits in
-        it — so the note is with its family rather than opening a third register at the
-        foot. And everything BELOW this line is timed from the origination date: the
-        rail's horizon, the phase the profit rows are keyed to, the brief that is keyed
-        to that phase. Disclosed underneath them, the date arrives after the numbers it
-        explains and the reader has to go back.
+        WHY THE CLAUSE IS HERE, and not where the card puts it. On the card the same
+        disclosure goes last and quietest, because a reader scanning the stream wants
+        the plan first and the accounting after. The panel inverts that for two reasons.
+        This header is already the panel's provenance zone — the display-only chip sits
+        in it — so the note is with its family rather than opening a third register.
+        And everything BELOW this line is timed from the origination date: the rail's
+        horizon, the phase the profit rows are keyed to, the brief keyed to that phase.
+        Disclosed underneath them, the date arrives after the numbers it explains.
+
+        SO IT HAS TO STAY CHEAP. The desktop centre column is height-locked
+        (`.obs-prophet-grid{flex:1;min-height:0}` + CENTER_PANE overflow:hidden +
+        ANALYSIS_SCROLL flex:1), so every pixel spent here is taken from the first
+        screen — and what sits at the fold is WHAT TO DO NOW, the one block the panel
+        exists to deliver. Measured at 1440×900 on a production-shaped plan: this block
+        is ~27px and the stance block keeps ~89 of its 130px. An earlier revision put
+        the 47-word receipt here too, cost 106px, and left the stance block 24px — the
+        panel stopped answering "so what do I do". Do not put prose back in this zone.
 
         NOT A SECTION, and it must never grow into one. No fill, no radius, no rail —
         the filled boxes below are the panel's content register, and provenance is not
-        content. Its whole separation from the header is one hairline, and its ink runs
-        --text-2 → --muted, one and two steps down from the plan it annotates. It is
+        content. Its whole separation from the header is one hairline. It is
         deliberately not --warn: nothing is wrong with this stock.
-
-        THE RECEIPT IS INLINE, not a hover. This is a detail surface, so the fuller
-        text can simply be read; the card already carries the hover for the reader who
-        is still scanning. Putting a hover here would hide the answer behind a second
-        affordance from the one reader who has already asked for it.
 
         Every string is the row's own — the producer ships finished EN/ZH copy so the
         dashboard and the Terminal cannot describe the same plan differently. There is
@@ -579,13 +583,10 @@ export function AnalysisPanel({
       */}
       {origination && (
         <div style={ORIGINATION_NOTE} className="obs-prophet-origination">
-          <div style={ORIGINATION_LEAD}>
-            <span style={ORIGINATION_CLAUSE}>{origination.chip}</span>
-            {/* Separated by ink and space, not by a glyph: a punctuation mark would be
-                this repo wording something, and it is the one thing this repo may not do. */}
-            {originationStamp && <span style={ORIGINATION_STAMP}>{originationStamp}</span>}
-          </div>
-          {origination.tip && <p style={ORIGINATION_RECEIPT}>{origination.tip}</p>}
+          <span style={ORIGINATION_CLAUSE}>{origination.chip}</span>
+          {/* Separated by ink and space, not by a glyph: a punctuation mark would be
+              this repo wording something, and it is the one thing this repo may not do. */}
+          {originationStamp && <span style={ORIGINATION_STAMP}>{originationStamp}</span>}
         </div>
       )}
 
@@ -653,6 +654,31 @@ export function AnalysisPanel({
             </p>
           )}
         </div>
+      )}
+
+      {/*
+        Reconstruction disclosure, part 2 of 2 — the RECEIPT, closing the panel under
+        the same hairline rule that opened it. The clause and its date are up at the
+        header, where they must be read before the numbers they govern; the paragraph
+        that explains how the plan was rebuilt does not govern anything, so it waits
+        until after the plan has been read. The two rules bracket the plan, which is
+        also what binds them as one annotation without repeating a word of copy.
+
+        This is the fix for a real regression, not a preference: with the receipt in
+        the header zone the disclosure cost 106px of a height-locked column and pushed
+        WHAT TO DO NOW down to 24 visible pixels. Down here it costs the first screen
+        nothing — the reader scrolls to it, and by then the panel has already answered
+        "so what do I do".
+
+        STILL INLINE, still not a hover. This is a detail surface; the reader who opened
+        the plan has already asked the question the card's tooltip answers, and hiding
+        it behind a second affordance would make them ask twice. The move is from the
+        top of the panel to the bottom of it, never from the page into a popover.
+      */}
+      {origination?.tip && (
+        <p style={ORIGINATION_RECEIPT} className="obs-prophet-origination-receipt">
+          {origination.tip}
+        </p>
       )}
     </div>
   );
@@ -951,32 +977,29 @@ const AUTH_CHIP: React.CSSProperties = {
 };
 
 /**
- * Reconstruction disclosure — the header's footnote rule.
+ * Reconstruction disclosure — the header's footnote rule (the dated clause).
  *
  * One hairline and nothing else. The header above it already ends on its own 14px, so
  * the rule reads as terminating that block; 10px below binds it to the note rather
- * than to the rail. `marginBottom` matches the rail's, so a plan carrying the note
- * spends exactly one block of height on it and a plan without it is untouched.
+ * than to the rail. ONE LINE OF CONTENT is the budget: the desktop centre column is
+ * height-locked, so this block trades directly against the stance block at the fold.
  */
 const ORIGINATION_NOTE: React.CSSProperties = {
-  marginBottom: 14,
-  paddingTop: 10,
-  borderTop: "1px solid var(--hairline)",
-};
-
-const ORIGINATION_LEAD: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
   alignItems: "baseline",
   columnGap: 8,
   rowGap: 2,
+  marginBottom: 14,
+  paddingTop: 10,
+  borderTop: "1px solid var(--hairline)",
 };
 
 /**
- * The clause carries the meaning, so it takes the note's strongest ink — but it is
- * SECTION_LABEL's size and weight WITHOUT the uppercase and tracking, because that
- * pair is what makes a section header here and this is not one. It is also producer
- * copy: text-transforming a sentence someone else wrote is editing it.
+ * The clause carries the meaning, so it leads on weight — but it is SECTION_LABEL's
+ * size and weight WITHOUT the uppercase and tracking, because that pair is what makes
+ * a section header here and this is not one. It is also producer copy:
+ * text-transforming a sentence someone else wrote is editing it.
  */
 const ORIGINATION_CLAUSE: React.CSSProperties = {
   font: "600 10.5px/1.45 var(--font-ui)",
@@ -986,25 +1009,36 @@ const ORIGINATION_CLAUSE: React.CSSProperties = {
 /**
  * The date is the fact the disclosure exists to deliver — every window below this line
  * is measured from it — so it gets the panel's figure treatment (tabular, so a stamp
- * lines up with the prices in the rail) and sits a step back in --muted, because the
- * clause has to be read first for the date to mean anything.
+ * lines up with the prices in the rail) and steps back from the clause on WEIGHT.
+ *
+ * Not on ink. It was --muted, which measures 4.2:1 on the composited panel backdrop
+ * and fails the 4.5:1 AA floor; this text is a compliance disclosure, so it is the one
+ * place in the panel where the quiet register does not get to win. --text-2 is the
+ * panel's own body-copy ink (7.5:1 here) and the note stays quiet by SIZE instead — it
+ * is the smallest type on the surface either way.
  */
 const ORIGINATION_STAMP: React.CSSProperties = {
-  font: "600 10.5px/1.45 var(--font-num)",
+  font: "500 10.5px/1.45 var(--font-num)",
   fontVariantNumeric: "tabular-nums",
-  color: "var(--muted)",
+  color: "var(--text-2)",
 };
 
 /**
- * Matches `.obs-prophet-source` in observatory.css — the Prophet family's declared
- * spec for provenance prose, down to the 64ch measure that keeps the line readable
- * when the centre column stretches. Inline rather than by class only because every
- * other style in this file is.
+ * The receipt, closing the panel under a rule that mirrors the header's — the pair of
+ * hairlines is what makes the two halves read as one annotation without repeating any
+ * copy to say so.
+ *
+ * Type matches `.obs-prophet-source` in observatory.css — the Prophet family's declared
+ * spec for provenance prose, down to the 64ch measure that keeps the line readable when
+ * the centre column stretches. Ink is --text-2 for the AA reason above. Inline rather
+ * than by class only because every other style in this file is.
  */
 const ORIGINATION_RECEIPT: React.CSSProperties = {
-  margin: "5px 0 0",
+  margin: "2px 0 4px",
+  paddingTop: 10,
+  borderTop: "1px solid var(--hairline)",
   font: "500 10.5px/1.45 var(--font-ui)",
-  color: "var(--muted)",
+  color: "var(--text-2)",
   maxWidth: "64ch",
 };
 

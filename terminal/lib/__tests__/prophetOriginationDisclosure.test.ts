@@ -21,10 +21,10 @@
  *
  * The PANEL snapshots could not be taken before the fact — AnalysisPanel was not
  * exported until the disclosure needed it — so they are a drift detector from here on,
- * and the zero-regression claim rests on `soleInsertion` instead: the note-bearing
- * panel must equal the plain panel with ONE contiguous run inserted, which no amount of
- * unrelated movement elsewhere can satisfy. (The component diff agrees: every line of
- * the pre-existing render path is untouched.)
+ * and the zero-regression claim rests on `cutDisclosure` instead: cut the two
+ * disclosure blocks out of the rendered panel and the remainder must equal the
+ * untouched panel byte for byte, which no unrelated movement can survive. (The
+ * component diff agrees: every line of the pre-existing render path is untouched.)
  *
  * The rendered copy is never asserted against a literal written here — it is asserted
  * to be the row's own string. Wording lives upstream, in one place, on purpose.
@@ -123,22 +123,41 @@ const PANEL_PLAN: PlanSummary = {
 };
 
 /**
- * The single contiguous run of markup that `withNote` adds to `without`, proved to be
- * contiguous: everything before it and everything after it must reassemble `without`
- * exactly. A regex strip could delete the right node and quietly tolerate a second,
- * unrelated change elsewhere in the panel; this cannot.
+ * The disclosure is TWO blocks: the dated clause under the ticker header, and the
+ * receipt closing the panel. (They were one until the header-zone version was measured
+ * costing 106px of a height-locked column and pushing WHAT TO DO NOW to 24 visible
+ * pixels — see ORIGINATION_RECEIPT in ProphetView.)
+ *
+ * So the zero-regression proof is: cut exactly those two blocks out of the rendered
+ * panel and what remains must be the untouched panel, byte for byte. Anything else the
+ * disclosure disturbed — a moved section, a changed margin, a second stray node —
+ * survives the cut and breaks the equality.
+ *
+ * The non-greedy regexes are safe BY STRUCTURE, not by luck: the clause block contains
+ * only `<span>`s and the receipt is a leaf `<p>`, so the first closing tag is always
+ * the block's own. `expectFlatBlocks` below pins that premise, so a future revision
+ * that nests a `<div>` in there fails loudly instead of silently cutting half a block.
  */
-function soleInsertion(withNote: string, without: string): string {
-  let head = 0;
-  while (head < without.length && withNote[head] === without[head]) head++;
-  let tail = 0;
-  while (
-    tail < without.length - head &&
-    withNote[withNote.length - 1 - tail] === without[without.length - 1 - tail]
-  ) tail++;
-  // The untouched panel is exactly the head plus the tail — nothing else moved.
-  expect(without.slice(0, head) + without.slice(without.length - tail)).toBe(without);
-  return withNote.slice(head, withNote.length - tail);
+const CLAUSE_BLOCK = /<div style="[^"]*" class="obs-prophet-origination">.*?<\/div>/;
+const RECEIPT_BLOCK = /<p style="[^"]*" class="obs-prophet-origination-receipt">.*?<\/p>/;
+
+function cutDisclosure(html: string): { rest: string; clause: string; receipt: string | null } {
+  const clauseMatch = html.match(CLAUSE_BLOCK);
+  expect(clauseMatch, "clause block not found — the regex premise moved").not.toBeNull();
+  const clause = clauseMatch![0];
+  const receiptMatch = html.match(RECEIPT_BLOCK);
+  const receipt = receiptMatch ? receiptMatch[0] : null;
+
+  // The premise: neither block nests a same-tag child, so `.*?` cannot under-cut.
+  expect(clause.slice(clause.indexOf(">") + 1)).not.toContain("<div");
+  if (receipt) expect(receipt.slice(receipt.indexOf(">") + 1)).not.toContain("<p");
+  // And neither is empty — a block that rendered nothing would strip cleanly and let a
+  // "disclosure absent" bug pass as "disclosure present, panel unchanged".
+  expect(clause.length).toBeGreaterThan(80);
+
+  let rest = html.replace(CLAUSE_BLOCK, "");
+  if (receipt) rest = rest.replace(RECEIPT_BLOCK, "");
+  return { rest, clause, receipt };
 }
 
 beforeEach(() => {
@@ -309,15 +328,15 @@ describe("AnalysisPanel without origination fields renders exactly as today", ()
     expect(renderPanel(PANEL_PLAN, "zh")).toMatchSnapshot();
   });
 
-  it("emits no disclosure container at all — not an empty one", () => {
+  it("emits neither disclosure block at all — not empty ones", () => {
     for (const lang of ["en", "zh"] as const) {
       const html = renderPanel(PANEL_PLAN, lang);
       expect(html).not.toContain("obs-prophet-origination");
-      // The note's own rule, specifically — the thesis block has a hairline of its own,
-      // so asserting on the token alone would be a test of the wrong element.
-      expect(html).not.toContain("padding-top:10px;border-top:1px solid var(--hairline)");
+      expect(html).not.toContain("obs-prophet-origination-receipt");
       expect(html).not.toContain(PRODUCER_NOTE.en);
       expect(html).not.toContain(PRODUCER_NOTE.zh);
+      expect(html).not.toContain(PRODUCER_NOTE.date_en);
+      expect(html).not.toContain(PRODUCER_NOTE.date_zh);
     }
   });
 
@@ -359,29 +378,57 @@ describe("AnalysisPanel with origination fields shows the row's own disclosure",
     }
   });
 
-  it("adds one contiguous block and disturbs nothing else in the panel", () => {
+  it("pins the exact markup of both disclosure blocks", () => {
+    // Snapshotting the WITH-note render, not just the without: a `not.toContain` guard
+    // written against a serialized style string goes quietly vacuous the moment the
+    // style is tweaked, so the serialization itself is what gets pinned.
     for (const lang of ["en", "zh"] as const) {
-      const inserted = soleInsertion(
-        renderPanel(RECONSTRUCTED_PANEL_PLAN, lang),
-        renderPanel({ ...PANEL_PLAN, id: RECONSTRUCTED_PANEL_PLAN.id }, lang),
-      );
-      expect(inserted).toContain("obs-prophet-origination");
-      expect(inserted).toContain(lang === "zh" ? PRODUCER_NOTE.zh : PRODUCER_NOTE.en);
+      const { clause, receipt } = cutDisclosure(renderPanel(RECONSTRUCTED_PANEL_PLAN, lang));
+      expect({ clause, receipt }).toMatchSnapshot();
     }
   });
 
-  it("places the disclosure above the geometry rail, not below the thesis", () => {
-    // The reason the panel diverges from the card: the rail, the phase the profit rows
-    // are keyed to, and the brief keyed to that phase are all timed from this date. A
-    // disclosure underneath them arrives after the numbers it explains.
+  it("adds exactly the two disclosure blocks and disturbs nothing else", () => {
+    for (const lang of ["en", "zh"] as const) {
+      const { rest, clause, receipt } = cutDisclosure(renderPanel(RECONSTRUCTED_PANEL_PLAN, lang));
+      expect(clause).toContain(lang === "zh" ? PRODUCER_NOTE.zh : PRODUCER_NOTE.en);
+      expect(receipt).not.toBeNull();
+      // Cut the two blocks out and the panel is the untouched panel again.
+      expect(rest).toBe(renderPanel({ ...PANEL_PLAN, id: RECONSTRUCTED_PANEL_PLAN.id }, lang));
+    }
+  });
+
+  it("dates the plan above the rail and explains it below the thesis", () => {
+    // The split is the whole design. The clause and its date must precede the numbers
+    // they govern — the rail's horizon, the phase the profit rows are keyed to, the
+    // brief keyed to that phase. The receipt governs nothing, so it waits until the
+    // plan has been read; in the header zone it cost the stance block its first screen.
     const html = renderPanel(RECONSTRUCTED_PANEL_PLAN, "en");
-    const note   = html.indexOf("obs-prophet-origination");
-    const ticker = html.indexOf(RECONSTRUCTED_PANEL_PLAN.asset);
-    const rail   = html.indexOf("obs-prophet-geometry");
-    expect(ticker).toBeGreaterThanOrEqual(0);
-    expect(rail).toBeGreaterThan(0);
-    expect(note).toBeGreaterThan(ticker);
-    expect(note).toBeLessThan(rail);
+    const ticker  = html.indexOf(RECONSTRUCTED_PANEL_PLAN.asset);
+    const clause  = html.indexOf("obs-prophet-origination\"");
+    const rail    = html.indexOf("obs-prophet-geometry");
+    const thesis  = html.indexOf("obs-prophet-section\"");
+    const receipt = html.indexOf("obs-prophet-origination-receipt");
+    for (const idx of [ticker, clause, rail, thesis, receipt]) expect(idx).toBeGreaterThanOrEqual(0);
+    expect(clause).toBeGreaterThan(ticker);
+    expect(clause).toBeLessThan(rail);
+    expect(receipt).toBeGreaterThan(thesis);
+    // Last thing in the panel — nothing may be appended after the disclosure closes it.
+    expect(html.indexOf("</p></div>", receipt)).toBe(html.length - "</p></div>".length);
+  });
+
+  it("keeps prose out of the header zone, where it costs the stance block", () => {
+    // The regression this split exists to prevent, pinned in the cheapest place that
+    // can see it: the header block carries the clause and the date and NOTHING else.
+    // (The pixel version of this assertion lives in the e2e fold guard.)
+    for (const lang of ["en", "zh"] as const) {
+      const { clause } = cutDisclosure(renderPanel(RECONSTRUCTED_PANEL_PLAN, lang));
+      const tip = (lang === "zh" ? PRODUCER_NOTE.tip_zh : PRODUCER_NOTE.tip_en)!;
+      expect(readable(clause)).not.toContain(tip);
+      expect(clause).not.toContain("<p");
+      // Two spans at most: the clause and the stamp.
+      expect((clause.match(/<span/g) ?? []).length).toBeLessThanOrEqual(2);
+    }
   });
 
   it("shows the clause alone when the producer could not date the row", () => {
@@ -390,11 +437,14 @@ describe("AnalysisPanel with origination fields shows the row's own disclosure",
       origination_note: { en: PRODUCER_NOTE.en, zh: PRODUCER_NOTE.zh },
     };
     const html = renderPanel(undated, "en");
-    expect(html).toContain(PRODUCER_NOTE.en);
-    // No stamp and no receipt — and no empty span or stray margin standing in for them.
+    const { clause, receipt } = cutDisclosure(html);
+    expect(clause).toContain(PRODUCER_NOTE.en);
+    // No stamp and no receipt — and no empty span or leftover block standing in.
     expect(html).not.toContain(PRODUCER_NOTE.date_en);
-    expect(html).not.toContain("tabular-nums;color:var(--muted)\"></span>");
-    expect(html).not.toContain("<p style=\"margin:5px 0 0");
+    expect(clause).not.toContain("</span><span");
+    expect((clause.match(/<span/g) ?? []).length).toBe(1);
+    expect(receipt).toBeNull();
+    expect(html).not.toContain("obs-prophet-origination-receipt");
   });
 
   it("passes the row's copy straight through instead of looking anything up", () => {
