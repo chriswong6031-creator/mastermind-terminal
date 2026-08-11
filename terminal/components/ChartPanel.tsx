@@ -5607,8 +5607,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     //    visible one; a second double-click/tap restores the previous layout) ──
     // B1: synthetic-hover suppression — touch pointerdown records the timestamp; onPaneMove
     // ignores synthetic mousemove events fired ≤700ms after a touch (iOS sends them after lift).
+    // Gated on a touch having HAPPENED: the ref starts at 0 and `performance.now()` is measured
+    // from the page's time origin, so a bare `now() - 0 < 700` would also eat every hover in the
+    // first 700ms of the page's life (same gate as indicator-canvas/render.ts wireTooltipHitTest).
     onPaneMove = (e: MouseEvent) => {
-      if (performance.now() - lastTouchTsRef.current < 700) return;   // B1: skip synthetic mousemove after touch
+      if (lastTouchTsRef.current > 0 && performance.now() - lastTouchTsRef.current < 700) return;   // B1: skip synthetic mousemove after touch
       const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect(); const y = e.clientY - wr.top;
       let hk: string | null = null; for (const p of paneLayoutRef.current) { if (y >= p.top && y <= p.top + p.height) { hk = p.key; break; } }
       if (hk !== hoveredKeyRef.current) { hoveredKeyRef.current = hk; setHoveredKey(hk); }
@@ -5855,7 +5858,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     onSigHover = (e: PointerEvent) => {
       if (e.pointerType !== "mouse") return;                          // touch takes the tap path
-      if (performance.now() - lastTouchTsRef.current < 700) return;   // B1: synthetic post-touch move
+      if (lastTouchTsRef.current > 0 && performance.now() - lastTouchTsRef.current < 700) return;   // B1: synthetic post-touch move, gated on a touch having happened
       if (sigTipPinned) return;                     // a tapped tooltip is not chased by the cursor
       if (sigPointerDown) {
         if (e.buttons !== 0) { sigTipHide(); return; }   // mid press-drag → never chase a pan

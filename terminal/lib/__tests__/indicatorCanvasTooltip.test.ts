@@ -233,6 +233,27 @@ describe("indicator-canvas prim tooltips — the layer stays non-hit-testable", 
     expect(shown(wrap), "a mouse click froze hover — it set the touch-suppression window").toBe(true);
   });
 
+  it("hover is live in the first 700ms of the page's life, before any touch", () => {
+    const { wrap, svg } = mount();
+    renderPrims(svg, bundle(), mapper());
+    stubHost(wrap, svg);
+    const [first] = stubTips(wrap, { "t-buy": { x: 100, y: 100, w: 14, h: 14 } });
+
+    // Fake `performance` so now() reads ~0 — a freshly loaded page. No touch has happened, so the
+    // post-touch suppression window must NOT be armed: its timestamp starts at 0, and an ungated
+    // `now() - 0 < 700` reads true for the page's whole first 700ms. That shape shipped as a
+    // dead-on-load signal-marker hover path in ChartPanel's copy of this guard (found 2026-08-10
+    // reviewing PR #387); the copies' SHAPE is pinned by syntheticTouchHoverGuard.test.ts, the
+    // gated BEHAVIOR by this test — the ordinary hover tests can't, because a real clock is past
+    // 700ms by the time a worker reaches them, which makes the ungated guard read as gated.
+    vi.useFakeTimers({ toFake: ["performance"] });
+    try {
+      expect(performance.now(), "the faked clock must sit inside the 700ms window").toBeLessThan(700);
+      send(first, "pointermove", { clientX: 107, clientY: 107 });
+      expect(shown(wrap), "a hover in the page's first 700ms was eaten by an unarmed suppression window").toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("never chases a pan: a move with a button held hides the tooltip", () => {
     const { wrap, svg } = mount();
     renderPrims(svg, bundle(), mapper());
