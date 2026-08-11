@@ -14,6 +14,9 @@
  * `__snapshots__/prophetOriginationDisclosure.test.ts.snap` was generated from the
  * SignalCard as it stood BEFORE the disclosure shipped; the absent-case tests below
  * therefore fail on any markup drift at all, not merely on a leaked chip.
+ * (One deliberate re-pin since: the zh entry's P&L suffix, previously the hardcoded
+ * English "vs plan", became 较计划 when that label was routed through prophetStrings —
+ * the sole delta from the pre-disclosure render.)
  *
  * The rendered copy is never asserted against a literal written here — it is asserted
  * to be the row's own string. Wording lives upstream, in one place, on purpose.
