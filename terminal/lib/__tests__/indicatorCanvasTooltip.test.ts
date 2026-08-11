@@ -76,10 +76,13 @@ function stubRect(el: Element, b: Box): void {
   }) as DOMRect;
 }
 
-/** Stub the wrapper + overlay at the viewport origin so client coords and wrapper coords coincide. */
-function stubHost(wrap: HTMLElement, svg: SVGSVGElement): void {
-  stubRect(wrap, { x: 0, y: 0, w: 600, h: 400 });
-  stubRect(svg, { x: 0, y: 0, w: 600, h: 400 });
+/** Stub the wrapper + overlay. They are coincident (the overlay is `inset:0` inside the wrapper) and
+ *  default to the viewport origin, where client coords and SVG user units read the same — convenient
+ *  for the tests that are not about coordinate spaces. Pass an origin for the tests that ARE: in
+ *  production the chart sits below a header and right of a nav rail, never at 0,0. */
+function stubHost(wrap: HTMLElement, svg: SVGSVGElement, origin = { x: 0, y: 0 }): void {
+  stubRect(wrap, { x: origin.x, y: origin.y, w: 600, h: 400 });
+  stubRect(svg, { x: origin.x, y: origin.y, w: 600, h: 400 });
 }
 
 /** Give every tooltip'd prim a box, keyed by its tooltip id. */
@@ -92,7 +95,7 @@ function stubTips(wrap: HTMLElement, boxes: Record<string, Box>): Element[] {
   return out;
 }
 
-/** jsdom (v30) still ships no PointerEvent constructor, so the handlers are fed MouseEvents with
+/** jsdom 26 registers no PointerEvent interface at all, so the handlers are fed MouseEvents with
  *  the pointer fields defined on top — which is also why the hover path reads an ABSENT
  *  `pointerType` as a mouse. */
 function pointer(
@@ -193,6 +196,41 @@ describe("indicator-canvas prim tooltips — the layer stays non-hit-testable", 
 
     send(wrap, "pointermove", { clientX: 107, clientY: 107 });
     expect(shown(wrap), "an unknown tooltip id raised the shared node anyway").toBe(false);
+  });
+
+  it("hovers within the mouse slack, and not far past it", () => {
+    const { wrap, svg } = mount();
+    renderPrims(svg, bundle(), mapper());
+    stubHost(wrap, svg);
+    const [first] = stubTips(wrap, { "t-buy": { x: 100, y: 100, w: 14, h: 14 } });   // box x 100..114
+
+    // 2px outside the right edge — inside MARKER_HOVER_SLACK (3). These prims are 6–14px across, so
+    // a hit test with no forgiveness at all is unusable in the hand; both other hover tests probe
+    // box CENTRES, where a slack of zero would read identically.
+    send(first, "pointermove", { clientX: 116, clientY: 107 });
+    expect(shown(wrap), "the hover slack is not wired — only the box interior hits").toBe(true);
+    // …and the forgiveness is the MOUSE one, not the fingertip one: 16px out is empty chart.
+    send(first, "pointermove", { clientX: 130, clientY: 107 });
+    expect(shown(wrap), "the hover slack reaches far past the prim").toBe(false);
+  });
+
+  it("does not open a tooltip on a mouse click, and does not freeze hover with one", () => {
+    const { wrap, svg } = mount();
+    renderPrims(svg, bundle(), mapper());
+    stubHost(wrap, svg);
+    const [first] = stubTips(wrap, { "t-buy": { x: 100, y: 100, w: 14, h: 14 } });
+
+    // A still press-and-release with a MOUSE is a click on the chart, not a tooltip gesture: the
+    // cursor is already the hover affordance, and a pinned tooltip would have nothing to dismiss it
+    // except another click.
+    send(first, "pointerdown", { clientX: 107, clientY: 107, pointerType: "mouse", pointerId: 1 });
+    send(first, "pointerup", { clientX: 107, clientY: 107, pointerType: "mouse", pointerId: 1 });
+    expect(shown(wrap), "a mouse click pinned a tooltip the cursor cannot dismiss").toBe(false);
+
+    // …and it must not have stamped the post-touch suppression window on the way past, which would
+    // silently kill hover for 700ms after every click on the chart.
+    send(first, "pointermove", { clientX: 107, clientY: 107 });
+    expect(shown(wrap), "a mouse click froze hover — it set the touch-suppression window").toBe(true);
   });
 
   it("never chases a pan: a move with a button held hides the tooltip", () => {
@@ -296,6 +334,35 @@ describe("indicator-canvas prim tooltips — the layer stays non-hit-testable", 
     expect(shown(wrap)).toBe(false);
   });
 
+  it("gives a tap the FINGERTIP slack, which is wider than the cursor's", () => {
+    const { wrap, svg } = mount();
+    renderPrims(svg, bundle(), mapper());
+    stubHost(wrap, svg);
+    const [first] = stubTips(wrap, { "t-buy": { x: 100, y: 100, w: 14, h: 14 } });   // box x 100..114
+
+    // 7px past the right edge: inside MARKER_TAP_SLACK (10), OUTSIDE MARKER_HOVER_SLACK (3). A
+    // fingertip has no hover state to correct its aim with, so the tap box is deliberately the
+    // wider of the two — a tap path built on the hover slack would dead-end on a 14px prim.
+    send(first, "pointerdown", { clientX: 121, clientY: 107, pointerType: "touch", pointerId: 7 });
+    send(first, "pointerup", { clientX: 121, clientY: 107, pointerType: "touch", pointerId: 7 });
+    expect(shown(wrap), "a fingertip 7px off the prim missed — the tap used the cursor's slack")
+      .toBe(true);
+  });
+
+  it("ignores a release from a different finger than the one that pressed", () => {
+    const { wrap, svg } = mount();
+    renderPrims(svg, bundle(), mapper());
+    stubHost(wrap, svg);
+    const [first] = stubTips(wrap, { "t-buy": { x: 100, y: 100, w: 14, h: 14 } });
+
+    // Two-finger gestures are the chart's pinch-zoom. The second finger's release must not be read
+    // as the completion of the first finger's press, or a pinch that happens to start on a prim
+    // ends with a tooltip pinned over the chart the reader just zoomed.
+    send(first, "pointerdown", { clientX: 107, clientY: 107, pointerType: "touch", pointerId: 7 });
+    send(first, "pointerup", { clientX: 107, clientY: 107, pointerType: "touch", pointerId: 8 });
+    expect(shown(wrap), "a second finger's release opened the first finger's tooltip").toBe(false);
+  });
+
   it("reads a press that travels as a pan, not a tap", () => {
     const { wrap, svg } = mount();
     renderPrims(svg, bundle(), mapper());
@@ -341,27 +408,36 @@ describe("indicator-canvas prim tooltips — the layer stays non-hit-testable", 
     expect(tipOf(wrap)!.dataset.icTipFor).toBe("t-buy");
   });
 
-  it("clamps a partially clipped prim to the visible part of it", () => {
+  it("clamps a partially clipped prim to its visible part, in the overlay's OWN client origin", () => {
+    // THE TWO SPACES. A clipPath rect is written in SVG USER UNITS; a hit box is measured in CLIENT
+    // coordinates. They differ by the overlay's own client origin, and the overlay is never at 0,0
+    // in production — it sits below the header and right of the nav rail. A test that stubs the
+    // overlay at the viewport origin makes `sr.x + rx` and `rx` indistinguishable, so deleting the
+    // origin shift entirely would still read green while silently narrowing the wrong band on every
+    // real chart. Hence the deliberate 240,120 offset here: every clip number below is in user
+    // units and every pointer number is in client coordinates, and only the shift reconciles them.
+    const ORIGIN = { x: 240, y: 120 };
     const { wrap, svg } = mount();
     const defs = document.createElementNS(NS, "defs");
     const clip = document.createElementNS(NS, "clipPath");
     clip.setAttribute("id", "ic-price-clip-unit-2");
     const rect = document.createElementNS(NS, "rect");
-    rect.setAttribute("x", "0"); rect.setAttribute("y", "0");
-    rect.setAttribute("width", "600"); rect.setAttribute("height", "110");
+    rect.setAttribute("x", "0"); rect.setAttribute("y", "0");          // user units: the pane band…
+    rect.setAttribute("width", "600"); rect.setAttribute("height", "110");   // …is user y 0..110
     clip.appendChild(rect); defs.appendChild(clip); svg.appendChild(defs);
     const g = document.createElementNS(NS, "g") as SVGGElement;
     g.setAttribute("clip-path", "url(#ic-price-clip-unit-2)");
     svg.appendChild(g);
 
     renderPrims(g, bundle(), mapper());
-    stubHost(wrap, svg);
-    stubTips(wrap, { "t-buy": { x: 100, y: 90, w: 40, h: 40 } });   // band cuts it at y=110
+    stubHost(wrap, svg, ORIGIN);
+    // The prim spans user y 90..130 — half inside the band. In CLIENT coordinates that is
+    // 120+90 = 210 .. 120+130 = 250, and the band's cut lands at client y 120+110 = 230.
+    stubTips(wrap, { "t-buy": { x: ORIGIN.x + 100, y: ORIGIN.y + 90, w: 40, h: 40 } });
 
-    send(wrap, "pointermove", { clientX: 120, clientY: 100 });      // visible half
-    expect(shown(wrap)).toBe(true);
-    // 3px of hover slack past the cut still hits; well below it does not
-    send(wrap, "pointermove", { clientX: 120, clientY: 125 });      // hidden half
+    send(wrap, "pointermove", { clientX: ORIGIN.x + 120, clientY: 220 });   // visible half
+    expect(shown(wrap), "the visible half of a clipped prim did not answer a hover").toBe(true);
+    send(wrap, "pointermove", { clientX: ORIGIN.x + 120, clientY: 245 });   // past the cut + slack
     expect(shown(wrap), "the hidden half of a clipped prim answered a hover").toBe(false);
   });
 
