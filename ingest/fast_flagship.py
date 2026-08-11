@@ -4,9 +4,10 @@ Fetches live quotes from the local quote-hub for the 37 flagship symbols,
 splices a forming daily bar into each symbol's on-disk OHLC, recomputes
 confluence signals, and atomically patches the slice JSON + manifest row.
 
-The nightly backtest block inside each slice is NEVER modified — only the
-`indicator` block (signals/state) and the manifest row (last/chg/verdict/…) are
-updated. Writing is atomic (tmp-then-rename) so partial writes never corrupt.
+Every sibling block inside each slice is preserved — only the `indicator` block
+(signals/state) and the manifest row (last/chg/verdict/…) are updated. This includes
+the nightly `backtest` and independently-published blocks such as `opportunities`.
+Writing is atomic (tmp-then-rename) so partial writes never corrupt.
 
 Invocation (as module, from /opt/terminal):
   cd /opt/terminal && MACRO_REPO=/opt/macro /opt/macro/.venv/bin/python -m ingest.fast_flagship
@@ -210,6 +211,21 @@ def _merge_manifest(patched: dict, dry_run: bool) -> None:
             tmp.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+def _replace_indicator_preserving_siblings(existing_slice: dict, indicator: dict) -> dict:
+    """Return a slice with only ``indicator`` replaced.
+
+    The fast lane runs every five minutes, after slower nightly bridges may have
+    attached new sibling contracts.  Reconstructing a two-key slice here silently
+    erased every such contract.  A shallow root copy is sufficient because the
+    result is serialized immediately and no preserved child is mutated.
+    """
+    if not isinstance(existing_slice, dict):
+        raise TypeError("slice root must be an object")
+    updated = dict(existing_slice)
+    updated["indicator"] = indicator
+    return updated
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -477,11 +493,9 @@ def _main_locked(limit: int, syms_override: list[str] | None, dry_run: bool) -> 
         except Exception:
             pass  # grade carry-over is best-effort; never block the live refresh
 
-        # Build new slice: updated indicator + preserved backtest verbatim
-        new_slice = {
-            "indicator": ind,
-            "backtest":  backtest_block,   # verbatim from nightly
-        }
+        # Replace ONLY indicator. Backtest, opportunities, and future sibling
+        # contracts survive this frequent writer verbatim as JSON values.
+        new_slice = _replace_indicator_preserving_siblings(existing_slice, ind)
 
         if not dry_run:
             tmp = Path(str(slice_path) + f".tmp.{os.getpid()}")

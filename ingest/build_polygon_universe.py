@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from ingest.polygon_bars import fetch_daily, ohlc_json   # noqa: E402
+from ingest.slice_document import write_slice_preserving_siblings  # noqa: E402
 from signal_layer import confluence, contracts, backtest  # noqa: E402
 from signal_layer.confluence_v2 import reclaim_eligible  # noqa: E402
 
@@ -282,7 +283,15 @@ def main(syms: list[str]) -> None:
                 sym, "3D", bt,
                 honest_read="As-traded Polygon backtest after costs; significance verdict delegated to loop/harness.")
             slim = {"indicator": ind, "backtest": contracts.model_slice(btc)}
-            (OUT / f"{sym}.slice.json").write_text(json.dumps(slim, indent=2))
+            # A slice is a shared envelope. This flagship builder owns indicator/backtest,
+            # while slower bridges own siblings such as opportunities. Preserve those
+            # siblings so Phase 1 cannot make them disappear during the nightly marathon.
+            slim = write_slice_preserving_siblings(
+                OUT / f"{sym}.slice.json",
+                slim,
+                owned_fields={"indicator", "backtest"},
+                indent=2,
+            )
 
             # Write full backtest contract + equity curve (HANDOFF §7.3)
             write_backtest_artifact(sym, bt, btc, OUT)

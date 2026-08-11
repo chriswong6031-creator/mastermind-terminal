@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { pick, fmtPct, fmtDate } from "../../lib/finFormat"
 import { LineSeries } from "./FinCharts"
 import { getJSON } from "../../lib/dataCache"
-import { oracleVerdict, deskVerdict, signalKnownTs, isBlockedSignal, isRetroOverride, isStructureStop, retroLegendCopy, sliceSignalBasis } from "../../lib/signalVerdict"
+import { oracleVerdict, deskVerdict, signalKnownTs, isBlockedSignal, isBottomWatch, isRetroOverride, isStopSweepReclaim, isStructureStop, retroLegendCopy, sliceSignalBasis } from "../../lib/signalVerdict"
 import { computeTrendState } from "../../lib/trend"
 import { computeRatings, verdictFromScore } from "../../lib/techRating"
 import type { Bar } from "../../lib/fund"
@@ -91,6 +91,10 @@ interface Signal {
   basis?: "structure_stop" | string | null
   blocked?: boolean | null
   stop_level?: number | null
+  prior_stop_level?: number | null
+  sweep_low?: number | null
+  subtype?: string | null
+  risk_basis?: string | null
   // DISPLAY-ONLY retro projection: today's rule would have entered this pre-fence refusal.
   // Never an entry — it carries no entry quality, walks no position, and fires no alert.
   retro_override?: boolean | null
@@ -124,6 +128,29 @@ interface BacktestResult {
 interface Slice {
   indicator?: SliceIndicator
   backtest?: BacktestResult
+  opportunities?: {
+    schema?: string | null
+    as_of?: string | null
+    events?: OpportunityReceipt[] | null
+  } | null
+}
+
+interface OpportunityReceipt {
+  id?: string | null
+  system?: string | null
+  definition?: string | null
+  authority?: string | null
+  surfaced_at?: string | null
+  entry_date?: string | null
+  entry_basis?: string | null
+  entry_price?: number | null
+  rank?: number | null
+  tier?: string | null
+  state?: string | null
+  latest_price?: number | null
+  return_pct?: number | null
+  excess_pct?: number | null
+  sessions?: number | null
 }
 
 /* intel.analysis — narrow to consumed sub-shapes */
@@ -199,6 +226,7 @@ function fmtPctLocal(v: number | null | undefined, scale = false): string {
  *  BUY→--buy, SELL→--sell, REBUY→--rebuy (lime), CUT→--cut (orange). */
 function signalColor(type: string): string {
   const t = (type || "").toUpperCase()
+  if (t === "BOTTOM_WATCH") return "var(--signal)"
   if (t === "BUY") return "var(--buy)"
   if (t === "REBUY") return "var(--rebuy)"
   if (t === "CUT") return "var(--cut)"
@@ -218,8 +246,10 @@ function tierLabel(tier: string | null | undefined, zh: boolean): string {
 function qualityLabel(q: string | null | undefined, zh: boolean): string {
   const v = (q || "").toLowerCase()
   if (v === "take") return pick(zh, "Take", "采纳")
-  if (v === "block") return pick(zh, "Blocked", "拦截")
-  if (v === "pending") return pick(zh, "Pending", "待定")
+  // These keeper outcomes have always remained in the scored/backtested entry lane. Call
+  // them what the system actually does with them: reduced-size starters, not refusals.
+  if (v === "block") return pick(zh, "Starter — confirmation failed", "试仓 — 确认未通过")
+  if (v === "pending") return pick(zh, "Starter — awaiting hold", "试仓 — 等待企稳")
   // HK-O1: the zh label used to read 结构破位 — literally "structure break" — the SAME words as
   // the structure-stop SELL and the ⛔ structure-break warning below. A 200d/regime veto is a
   // different machine entirely, so it takes the regime gate's own name (matching signalVerdict).
@@ -236,7 +266,7 @@ function qualityLabel(q: string | null | undefined, zh: boolean): string {
 function qualityColor(q: string | null | undefined): string {
   const v = (q || "").toLowerCase()
   if (v === "take") return "var(--buy)"
-  if (v === "block") return "var(--sell)"
+  if (v === "block") return "var(--signal)"
   if (v === "pending") return "var(--signal)"
   if (v === "regime_blocked") return "var(--muted)"
   // amber, matching the ⊘ class and the chart outline: the verdict above already carries
@@ -554,6 +584,10 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
   // signals: most-recent first, ALL of them
   const sigs: Signal[] = [...(slice?.indicator?.signals ?? [])].reverse()
   const latestSig = sigs[0] ?? null   // freshest signal (already reversed → index 0)
+  // Append-only Prophet/reversal-board admissions. Kept outside `indicator.signals` so a
+  // candidate receipt can never repaint itself as an Oracle BUY or a Prophet trade plan.
+  const opportunities: OpportunityReceipt[] = [...(slice?.opportunities?.events ?? [])]
+    .sort((a, b) => String(b.surfaced_at ?? b.entry_date ?? "").localeCompare(String(a.surfaced_at ?? a.entry_date ?? "")))
 
   // GC v2 side channel: surface the freshest structure-break warning only when it POST-DATES the
   // latest signal (i.e. new information the last marker doesn't yet reflect). ts are "YYYY-MM-DD" → lexical compare is chronological.
@@ -794,6 +828,59 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
               <MarketRiskChip zh={zh} />
             </div>
 
+            {opportunities.length > 0 && (
+              <div className="od-sig-section" data-opportunity-receipts="1">
+                <div className="od-sec-h">
+                  {pick(zh, "Earlier system receipts", "更早的系统记录")}
+                  <span className="od-sig-count">{opportunities.length}</span>
+                </div>
+                <div className="sd-siglist">
+                  {opportunities.slice(0, 12).map((opp, i) => {
+                    const ts = opp.surfaced_at ?? opp.entry_date ?? ""
+                    const ret = typeof opp.return_pct === "number" && Number.isFinite(opp.return_pct)
+                      ? `${opp.return_pct >= 0 ? "+" : ""}${opp.return_pct.toFixed(1)}%`
+                      : null
+                    const system = String(opp.system || "prophet").toLowerCase().includes("reversal")
+                      ? pick(zh, "REVERSAL", "反转观察")
+                      : "PROPHET"
+                    const sourceLabel = opp.definition && opp.definition !== "legacy"
+                      ? opp.definition
+                      : String(opp.system || "").toLowerCase().includes("reversal")
+                        ? pick(zh, "reversal watch", "反转观察")
+                        : pick(zh, "Prophet board", "Prophet 榜单")
+                    return (
+                      <button
+                        key={opp.id ?? `${ts}-${i}`}
+                        className="sd-sigrow"
+                        onClick={() => ts && handleJump(ts)}
+                        title={pick(
+                          zh,
+                          `Candidate receipt from ${sourceLabel}; not a trade plan or Oracle call`,
+                          `来自 ${sourceLabel} 的候选记录；并非交易计划或神谕信号`,
+                        )}
+                      >
+                        <span className="sd-sig-badge" style={{ ["--sc" as any]: "#5b8cff" }}>{system}</span>
+                        <span className="sd-sig-q">{pick(zh, "candidate · not plan", "候选 · 非计划")}</span>
+                        <span className="sd-sig-date">{ts ? signalHistoryDate(ts, zh) : "—"}</span>
+                        <span className="sd-sig-price">
+                          {opp.entry_price != null ? opp.entry_price.toFixed(2) : "—"}
+                          {opp.rank != null ? ` · #${opp.rank}` : ""}
+                          {ret ? ` · ${ret}` : ""}
+                        </span>
+                      </button>
+                    )
+                  })}
+                  <div className="sd-sig-legend">
+                    {pick(
+                      zh,
+                      "These are dated candidate admissions from Prophet and reversal boards—not Golden Oracle calls or Prophet trade plans.",
+                      "这些是 Prophet 与反转榜单的候选入选记录，并非黄金神谕信号或 Prophet 交易计划。",
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Signal history — compact date · price rows, scrollable (slim dark scrollbar) */}
             <div className="od-sig-section">
               <div className="od-sec-h">
@@ -826,17 +913,25 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                     const isRetro = isRetroOverride(sig)
                     const isEntry = !isBlocked && (sig.type === "BUY" || sig.type === "REBUY")
                     const isReclaim = sig.type === "RECLAIM"
+                    const isBottom = isBottomWatch(sig)
+                    const isSweepReclaim = isStopSweepReclaim(sig)
+                    const isStarter = isEntry && (sig.quality === "block" || sig.quality === "pending")
                     const isStop = isStructureStop({ type: sig.type, basis: sliceSignalBasis(sig) })
                     // badge text stays inside the 58px pill and matches the on-chart glyph, so the
                     // list and the chart read as one system; the mechanic rides the qualifier + hover.
                     const badgeText = isRetro ? sig.type
                       : isBlocked ? pick(zh, "BLOCKED", "已拦截")
                         : isStop ? pick(zh, "STOP", "止损")
-                          : isReclaim ? pick(zh, "RE-ENTRY", "再入场") : sig.type
+                          : isBottom ? pick(zh, "EARLY", "底部观察")
+                            : isSweepReclaim ? pick(zh, "RECLAIM", "流动性收复")
+                              : isReclaim ? pick(zh, "RE-ENTRY", "再入场")
+                                : isStarter ? pick(zh, "STARTER", "试仓") : sig.type
                     const qualifier = isRetro ? pick(zh, "(retro)", "（事后重标）")
                       : isBlocked ? pick(zh, "not an entry", "非入场信号")
                         : isStop ? pick(zh, "swing-low break", "跌破前低")
-                          : isEntry ? qualityLabel(sig.quality, zh) : ""
+                          : isBottom ? pick(zh, "risk-defined · not confirmed", "风险限定 · 尚未确认")
+                            : isSweepReclaim ? pick(zh, "failed breakdown reclaimed", "假突破后收复")
+                              : isEntry ? qualityLabel(sig.quality, zh) : ""
                     const q = qualifier
                     const knownTs = signalKnownTs(sig) ?? sig.ts
                     const knownDate = signalHistoryDate(knownTs, zh)
@@ -866,6 +961,10 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                               ? pick(zh,
                                 `Structure stop — the daily close broke the prior swing low${sig.stop_level != null ? ` at ${sig.stop_level}` : ""}, not a momentum exit`,
                                 `结构止损 — 日线收盘跌破前低${sig.stop_level != null ? ` ${sig.stop_level}` : ""}，非动量离场`)
+                              : isBottom
+                                ? pick(zh,
+                                  `Bottom watch — risk-defined starter, not a confirmed buy${sig.stop_level != null ? `; stop reference ${sig.stop_level}` : ""}`,
+                                  `底部观察 — 风险限定试仓，尚非确认买入${sig.stop_level != null ? `；止损参考 ${sig.stop_level}` : ""}`)
                               : isReclaim ? (sig.quality_reason || dateTitle) : dateTitle
                         }
                       >
@@ -877,13 +976,13 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                             and a live-BUY pill would say the product did it. */}
                         <span
                           className={"sd-sig-badge" + (isReclaim || isBlocked || isRetro ? " hollow" : "")}
-                          style={{ ["--sc" as any]: isRetro ? "var(--signal)" : isBlocked ? "var(--muted)" : isReclaim ? "var(--buy)" : signalColor(sig.type) }}
+                          style={{ ["--sc" as any]: isRetro ? "var(--signal)" : isBlocked ? "var(--muted)" : isBottom || isStarter ? "var(--signal)" : isReclaim ? "var(--buy)" : signalColor(sig.type) }}
                         >
                           {badgeText}
                         </span>
                         {/* pre-promotion display-tier markers (scored:false) carry the unscored tag;
                             scored reclaim-lane events are normal position events and need none */}
-                        {isReclaim && sig.scored === false && <span className="sd-sig-q">{pick(zh, "unscored", "未计分")}</span>}
+                        {(isReclaim || isBottom) && sig.scored === false && <span className="sd-sig-q">{pick(zh, "unscored", "未计分")}</span>}
                         {q && <span className="sd-sig-q">{q}</span>}
                         <span className="sd-sig-date">{knownDate}</span>
                         <span className="sd-sig-price">{sig.price != null ? sig.price.toFixed(2) : "—"}</span>

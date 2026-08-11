@@ -135,6 +135,11 @@ run "$PY" ingest/pull_macro_washout.py
 run "$PY" ingest/pull_macro_washout_history.py
 # broad-universe confluence slices
 run "$PY" ingest/gen_slices_all.py
+# Durable Prophet/reversal-watch receipts. Macro owns the append-only opportunity timeline;
+# this bridge adds it as a sibling inside each existing <SYM>.slice.json. It MUST run after
+# every broad slice writer (which intentionally rebuilds the indicator document) and before
+# the final publish/verification gate. Missing/invalid source is last-good/no-op.
+run "$PY" ingest/pull_macro_opportunities.py
 # artifact freshness conformance
 run "$PY" -m ingest.artifact_conformance
 # pull macro dashboard intel bridge

@@ -72,7 +72,7 @@ import {
 import type { SuiteRenderBundle, SuiteTier, SuiteColors, CoordMapper, TableSpec } from "@/lib/indicator-canvas/types";
 import ChartTables from "@/components/ChartTables";
 import { crossUps, crossDowns, crossUpsBelow, crossDownsAbove } from "@/lib/crossSignals";
-import { SOFT_Q, anchorSignal, isBlockedSignal, isOverrideCandidate, isReclaimOverrideTake, isRetroOverride, isStructureStop, isWaivedEntry, markerTooltipCopy, sliceSignalBasis } from "@/lib/signalVerdict";
+import { SOFT_Q, anchorSignal, isBlockedSignal, isOverrideCandidate, isReclaimOverrideTake, isRetroOverride, isStopSweepReclaim, isStructureStop, isWaivedEntry, markerTooltipCopy, opportunityMarkerGlyph, sliceSignalBasis } from "@/lib/signalVerdict";
 import { makeNearestBarIndex } from "@/lib/barSnap";
 import { ichimoku, supertrend, avwap as computeAvwap, rollingVwap, weekAnchoredVwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
@@ -568,7 +568,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // regime_blocked BUY is a refused setup that must never wear buy geometry). Both are stamped
   // only on the slice path, where provenance is known — the client-Pine fallback leaves them
   // undefined so its genuinely momentum-sourced SELL is not relabelled a stop.
-  type SigMark = { t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null; reason?: string; basis?: string; blocked?: boolean; stopLevel?: number | null; overrideCandidate?: boolean; overrideTake?: boolean; overrideGroup?: string | null; overrideDd?: number | null;
+  type SigMark = { t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null; reason?: string; basis?: string; blocked?: boolean; scored?: boolean | null; subtype?: string | null; stopLevel?: number | null; priorStopLevel?: number | null; sweepLow?: number | null; riskBasis?: string | null; overrideCandidate?: boolean; overrideTake?: boolean; overrideGroup?: string | null; overrideDd?: number | null;
+    // durable cross-engine candidate receipt; never folded into Oracle's position walk
+    source?: string | null; definition?: string | null; rank?: number | null;
+    returnPct?: number | null; authority?: string | null;
     // the entry's waived leg was the KEEPER's 200-reclaim (era gc_v2_wo2), not the regime veto
     reclaimWaived?: boolean;
     // display-only RETRO PROJECTION: today's rule would have entered this pre-fence refusal
@@ -2284,13 +2287,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // O(signals × bars) Date-allocating scan is exactly what makeNearestBarIndex retires.
     const snap = (ts: string, type: string): SigMark | null => { let bar = byTime.get(ts); if (!bar) { const i = nearIdx(ts); if (i >= 0) bar = rows[i]; } if (!bar) return null; return { t: bar.time as string, type, price: type === "SELL" || type === "CUT" ? bar.h : bar.l }; };
     const sigs = slice?.indicator?.signals;
+    const marks: SigMark[] = [];
     if (Array.isArray(sigs) && sigs.length) {
-      const marks: SigMark[] = [];
       for (const s of sigs) {
         if (typeof s?.ts !== "string" || typeof s?.type !== "string" || s.ts > (lastDate as string)) continue;
         const m = snap(s.ts, s.type); if (!m) continue;
         m.quality = s.quality; m.tier = s.tier; m.reason = s.quality_reason;
+        m.scored = s.scored; m.subtype = s.subtype ?? null;
         m.basis = sliceSignalBasis(s); m.blocked = isBlockedSignal(s); m.stopLevel = s.stop_level ?? null;
+        m.priorStopLevel = s.prior_stop_level ?? null; m.sweepLow = s.sweep_low ?? null;
+        m.riskBasis = s.risk_basis ?? null;
         // the washout classes (emitter-stamped, never re-derived here): the display-tier
         // candidate — still a refusal — the TAKEN entry in either waived flavour (era
         // gc_v2_wo2), and the display-only RETRO projection. Mutually exclusive by
@@ -2307,14 +2313,36 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (m.retro) { m.overrideGroup = s.retro_ctx?.name ?? s.retro_ctx?.group_id ?? null; m.retroCtx = s.retro_ctx ?? null; }
         marks.push(m);
       }
-      // slice signals are chronological; snapping preserves order (the chip's fallback relies on it)
-      return marks;
+    } else {
+      const daily = dailyBarsRef.current.length ? dailyBarsRef.current : rows;
+      marks.push(...oracleSignals(daily)
+        .filter((s) => s.ts <= (lastDate as string))
+        .map((s) => snap(s.ts, s.type))
+        .filter(Boolean) as SigMark[]);
     }
-    const daily = dailyBarsRef.current.length ? dailyBarsRef.current : rows;
-    return oracleSignals(daily)
-      .filter((s) => s.ts <= (lastDate as string))
-      .map((s) => snap(s.ts, s.type))
-      .filter(Boolean) as SigMark[];
+
+    // Prophet board/reversal admissions are a distinct, append-only source receipt. They
+    // share the slice for delivery efficiency, but never enter indicator.signals and never
+    // become Oracle BUYs. Place them at their recorded entry when available, else the bar low.
+    const opps = slice?.opportunities?.events;
+    if (Array.isArray(opps)) {
+      for (const o of opps) {
+        const ts = typeof o?.surfaced_at === "string" ? o.surfaced_at
+          : typeof o?.entry_date === "string" ? o.entry_date : null;
+        if (!ts || ts > (lastDate as string)) continue;
+        const m = snap(ts, "PROPHET"); if (!m) continue;
+        if (typeof o.entry_price === "number" && Number.isFinite(o.entry_price)) m.price = o.entry_price;
+        m.source = String(o.system || "prophet");
+        m.definition = typeof o.definition === "string" ? o.definition : null;
+        m.rank = typeof o.rank === "number" ? o.rank : null;
+        m.returnPct = typeof o.return_pct === "number" ? o.return_pct : null;
+        m.authority = typeof o.authority === "string" ? o.authority : "candidate";
+        marks.push(m);
+      }
+    }
+    // Oracle and Prophet streams are each chronological; sort their union for replay/jump stability.
+    marks.sort((a, b) => a.t.localeCompare(b.t));
+    return marks;
   };
 
   // GC v2 side channels → bar-snapped marks. early_dots is a list of date strings (anticipation
@@ -2402,26 +2430,32 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const lastDate = typeof lastT === "string" ? lastT : lastT != null ? new Date((lastT as number) * 1000).toISOString().slice(0, 10) : null;
       let v = "—";
       let vBasis: string | undefined;
+      let vQuality: string | undefined;
       if (Array.isArray(sigs) && sigs.length) {
         const { anchor } = anchorSignal(sigs, lastDate);
-        if (anchor) { v = String(anchor.type).toUpperCase(); vBasis = sliceSignalBasis(anchor); }
+        if (anchor) { v = String(anchor.type).toUpperCase(); vBasis = sliceSignalBasis(anchor); vQuality = anchor.quality; }
       } else {
-        const sm = sigMarksRef.current;
-        if (sm.length) { v = sm[sm.length - 1].type; vBasis = sm[sm.length - 1].basis; }
+        const sm = sigMarksRef.current.filter((m) => m.type !== "PROPHET");
+        if (sm.length) { v = sm[sm.length - 1].type; vBasis = sm[sm.length - 1].basis; vQuality = sm[sm.length - 1].quality; }
       }
       const buy = v === "BUY" || v === "REBUY" || v === "RECLAIM";
+      const watch = v === "BOTTOM_WATCH";
+      const chipColor = watch ? t.signal : buy ? t.buy : t.sell;
       // HK-O1: a structure stop says STOP, not SELL. The chip is the glance tier — four
       // characters, inside the existing pill geometry at every breakpoint — and the full
       // "Structure stop — swing-low break" read lives on the rail card and the marker hover.
-      const vLabel = isStructureStop({ type: v, basis: vBasis }) ? "STOP" : v === "RECLAIM" ? "RE-ENTRY" : v;
+      const vLabel = isStructureStop({ type: v, basis: vBasis }) ? "STOP"
+        : v === "BOTTOM_WATCH" ? "EARLY"
+          : isStopSweepReclaim({ type: v, quality: vQuality }) ? "LIQUIDITY RECLAIM"
+            : v === "RECLAIM" ? "RE-ENTRY" : v;
       verdictRef.current.textContent = `GOLDEN ORACLE · ${vLabel}`;
-      verdictRef.current.style.color = buy ? t.buy : t.sell;
+      verdictRef.current.style.color = chipColor;
       const w = verdictRef.current.parentElement as HTMLElement;
       // Token-derived so the chip tracks the shell palette (byte-identical output on web, where
       // --buy/--sell still resolve to the locked v5 hexes).
       if (w) {
-        w.style.background = `color-mix(in srgb, ${buy ? t.buy : t.sell} 12%, transparent)`;
-        w.style.borderColor = `color-mix(in srgb, ${buy ? t.buy : t.sell} 30%, transparent)`;
+        w.style.background = `color-mix(in srgb, ${chipColor} 12%, transparent)`;
+        w.style.borderColor = `color-mix(in srgb, ${chipColor} 30%, transparent)`;
       }
     }
   };
@@ -3289,6 +3323,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // reclaim-lane re-entry (slice-sourced): ALWAYS hollow — the glyph law reserves the
         // solid star for the classic confluence entries even now that the lane is scored.
         RECLAIM: { dir: "up", fill: t2.buy,    tc: t2.buy,     txt: "RE-ENTRY", hollow: true },
+        BOTTOM_WATCH: { dir: "up", fill: t2.signal, tc: "#231800", txt: "EARLY" },
       };
       // HK-O1: a slice SELL is a TRAILING STRUCTURE STOP (armed distribution + a daily close
       // below the last confirmed swing low), never the MACD-RSI cross-down. It gets its own
@@ -3324,6 +3359,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       };
       while (layer.firstChild) layer.removeChild(layer.firstChild);
       if (priceProjHidden()) return;   // sub-pane maximized → price-anchored markers stay cleared
+
+      // Prophet receipts are deliberately outside the Oracle study toggle. A sapphire diamond
+      // says "another system surfaced this name here" without borrowing Oracle's star/pill grammar.
+      for (const m of sigMarksRef.current) {
+        if (m.type !== "PROPHET") continue;
+        const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
+        const cy = y + 22, r = 7, fill = "#5b8cff";
+        const glyph = opportunityMarkerGlyph(m.source);
+        const g = mk("g", { opacity: 0.96, "data-signal-source": glyph === "R" ? "reversal_watch" : "prophet_board" });
+        g.appendChild(mk("path", { d: `M${x} ${cy - r} L${x + r} ${cy} L${x} ${cy + r} L${x - r} ${cy} Z`, fill, stroke: "#9bb7ff", "stroke-width": 1 }));
+        const tEl = mk("text", { x, y: cy + 3.2, fill: "#fff", "font-size": 8.5, "font-weight": 900, "text-anchor": "middle", "font-family": "var(--font-ui)" });
+        tEl.textContent = glyph; g.appendChild(tEl);
+        addMarkerTitle(g, m); layer.appendChild(g);
+      }
 
       // ── Gap Zones premade indicator ──────────────────────────────────────────────
       // Independent of the oracle (drawn BEFORE the oracle gate below). Detects TRUE DAILY gaps — a day
@@ -3444,6 +3493,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // GC v2: fast-reversal CUT is a caution, NOT an exit — render a small orange "•caution" dot below
       // the bar instead of the old down-pointing CUT pill (the ✕/exit look). Everything else keeps the pill.
       for (const m of sigMarksRef.current) {
+        if (m.type === "PROPHET") continue;
         if (m.type === "CUT") {
           const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
           const cy = y + 16;
@@ -3485,7 +3535,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           continue;
         }
         const stop = isStructureStop(m);
-        const cfg = stop ? STOPCFG : SIGCFG[m.type]; if (!cfg) continue;
+        const starter = (m.quality === "block" || m.quality === "pending")
+          && (m.type === "BUY" || m.type === "REBUY");
+        const baseCfg = stop ? STOPCFG : SIGCFG[m.type]; if (!baseCfg) continue;
+        // Keeper block/pending has always been traded by the backtest/state/alerts. Render the
+        // authority it actually has: an amber starter, not a gray refused dot.
+        const cfg: SigCfg = starter
+          ? { dir: "up", fill: AMBER, tc: "#231800", txt: "STARTER" }
+          : baseCfg;
         const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
         const star = !!cfg.star;
         // GC v2 quality: take=solid, block=hollow outline, pending=dim gray.
@@ -3504,10 +3561,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // re-mark must not wear. Excluding retro here draws both as the entry the projection
         // says they would have been.
         const q = !m.retro && m.quality != null && SOFT_Q.has(m.quality) ? m.quality : undefined;
-        const hollow = q === "block" || !!cfg.hollow;
-        const dim = q === "pending";
-        const fill = q === "pending" ? t2.mut : cfg.fill;
-        const groupOp = dim ? 0.5 : 0.97;
+        const hollow = !!cfg.hollow;
+        const fill = cfg.fill;
+        const groupOp = starter ? 0.94 : 0.97;
         // tier badge ("A+"/"Q") shown only for TAKEN entries (quality take/undefined); suppressed on soft.
         const badge = (m.type === "BUY" || m.type === "REBUY") && q == null ? tierBadge(m.tier) : "";
         const w = star ? 19 : Math.max(20, 9 + cfg.txt.length * 7), h = 15, r = 4, ptr = 5, gap = 9;

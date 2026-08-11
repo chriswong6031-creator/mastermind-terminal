@@ -227,7 +227,8 @@ def indicator_contract(
 def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
     """Discrete events → the Opus-facing surface: the ONE UNIFIED signal stream.
 
-    The stream is ``BUY`` + ``REBUY`` + ``SELL`` only, ordered by ``bar_index``:
+    The stream is ordered by ``bar_index`` and carries scored position events plus explicit
+    display/watch events:
       * BUY   — from CB, exactly as before (keeper ``quality``/``tier``/``score`` stamped).
       * REBUY — from revBuy, exactly as before.
       * SELL  — from the v2 warn stream's CONFIRM events (``v2["sell_confirms"]``, the
@@ -235,6 +236,8 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
                 so it is a TRAILING STRUCTURE STOP and says so: every SELL carries
                 ``basis="structure_stop"`` + ``stop_level`` (the swing low its daily close
                 broke). Nothing in this stream is a momentum exit — do not label one as one.
+      * BOTTOM_WATCH — own-name washout candidate, always ``scored:false``.
+      * RECLAIM — validated repair-lane entries plus display-only ``stop_sweep_reclaim``.
 
     NOT in this stream anymore (display priority = tops/bottoms readability, not sim purity):
       * CS-based SELL entries — dropped; CS stays internal to the no-cut sim only.
@@ -342,6 +345,51 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
             ev["blocked"] = True
         out.append(ev)
 
+    # ── BOTTOM_WATCH: own-name washout candidates (display/watch, every market) ──
+    # These are intentionally distinct from BUY/REBUY. They make the early turn findable
+    # without pretending an unvalidated cross-market candidate was a scored entry.
+    bottom_watches = v2.get("bottom_watches") or []
+    if bottom_watches and len(sig):
+        sidx = sig.index
+        for watch in bottom_watches:
+            j = int(sidx.searchsorted(pd.Timestamp(watch["ts"]), side="right")) - 1
+            if j < 0:
+                continue
+            row = sig.iloc[j]
+            subtype = str(watch.get("kind") or "early_dot")
+            ev = {
+                "ts": watch["ts"],
+                "known_ts": _iso_date(watch.get("known_ts"), watch["ts"]),
+                "bar_index": j,
+                "type": "BOTTOM_WATCH",
+                "scored": False,
+                "subtype": subtype,
+                "quality": watch.get("quality") or "washout_early_watch",
+                "quality_reason": (
+                    "blocked Oracle turn inside a point-in-time own-name washout"
+                    if subtype == "blocked_trigger"
+                    else "early momentum turn inside a point-in-time own-name washout"
+                ),
+                "trigger_ts": watch.get("trigger_ts") or watch["ts"],
+                "trigger_known_ts": _iso_date(
+                    watch.get("trigger_known_ts"),
+                    _iso_date(watch.get("known_ts"), watch["ts"]),
+                ),
+                "strength": _strength(row),
+                "price": _num(watch.get("price")),
+                "reasons": (["bear_block", "own_name_washout", "raw_buy_trigger"]
+                            if subtype == "blocked_trigger"
+                            else ["bear_block", "own_name_washout", "early_momentum_turn"]),
+                "washout_ctx": dict(watch.get("washout_ctx") or {}),
+                "regime": {"weeklyBull": bool(row.get("w_bull")),
+                           "above200": bool(row.get("above200")),
+                           "monthlyBull": bool(row.get("mo_bull"))},
+            }
+            for key in ("sweep_low", "atr14", "stop_level", "risk_basis"):
+                if watch.get(key) is not None:
+                    ev[key] = (_num(watch[key]) if key != "risk_basis" else watch[key])
+            out.append(ev)
+
     # ── SELL from the v2 CONFIRM events (distribution armed + structure break) ──
     # Each confirm event is a DAILY-grid date; map it onto the containing / nearest-preceding
     # 3D row (open_date <= confirm_ts) so it renders on the 3D chart grid. strength/regime
@@ -395,29 +443,54 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
             j = int(sidx.searchsorted(pd.Timestamp(r["ts"]), side="right")) - 1
             if j < 0:
                 continue
-            row = sig.iloc[j]
             kind = r.get("kind", "reclaim")
-            out.append({
+            is_stop_sweep = kind == "stop_sweep_reclaim"
+            row = sig.iloc[j]
+            if is_stop_sweep and "known_ts" in sig.columns:
+                # A daily reclaim can land inside a 3D bar whose indicators are not yet
+                # closed. Render on that bar, but read strength/regime only from the latest
+                # 3D row already knowable on the reclaim session.
+                event_day = pd.Timestamp(r["ts"])
+                known = pd.to_datetime(sig["known_ts"], errors="coerce")
+                safe = np.flatnonzero((known <= event_day).fillna(False).to_numpy())
+                if len(safe):
+                    row = sig.iloc[int(safe[-1])]
+            ev = {
                 "ts": r["ts"],
                 "known_ts": _iso_date(r.get("known_ts"), r["ts"]),
                 "bar_index": j,
                 "type": "RECLAIM",
                 "strength": _strength(row),
-                "price": _num(row.get("close")),
-                "scored": bool(FLAGSHIP_PARAMS.get("reclaim_lane")),
-                "quality": kind,                        # reclaim | block_repair
+                # A stop-sweep reclaim is daily-grid, so use its own close rather than the
+                # containing 3D row's later close. Legacy repairs keep their old fallback.
+                "price": (_num(r.get("price")) if r.get("price") is not None
+                          else _num(row.get("close"))),
+                "scored": (False if is_stop_sweep
+                           else bool(FLAGSHIP_PARAMS.get("reclaim_lane"))),
+                "quality": kind,                 # reclaim | block_repair | stop_sweep_reclaim
                 "quality_reason": (
-                    f"trend reclaimed the {r.get('anchor_ts')} sell level"
-                    if kind == "reclaim"
-                    else f"bear-block legs repaired after the {r.get('anchor_ts')} blocked entry"
+                    f"price reclaimed the {r.get('anchor_ts')} structure-stop level within five sessions"
+                    if is_stop_sweep else
+                    (f"trend reclaimed the {r.get('anchor_ts')} sell level"
+                     if kind == "reclaim"
+                     else f"bear-block legs repaired after the {r.get('anchor_ts')} blocked entry")
                 ),
-                "reasons": (["close>sell_price", "weekly_bull", "above200", "debounced"]
-                            if kind == "reclaim"
-                            else ["bear_block_cleared", "macd_cross_still_live"]),
+                "reasons": (["close_reclaimed_stop_level", "within_5_sessions",
+                             "failed_breakdown"] if is_stop_sweep else
+                            (["close>sell_price", "weekly_bull", "above200", "debounced"]
+                             if kind == "reclaim"
+                             else ["bear_block_cleared", "macd_cross_still_live"])),
                 "regime": {"weeklyBull": bool(row.get("w_bull")),
                            "above200": bool(row.get("above200")),
                            "monthlyBull": bool(row.get("mo_bull"))},
-            })
+            }
+            if is_stop_sweep:
+                ev["anchor_ts"] = r.get("anchor_ts")
+                for key in ("prior_stop_level", "sweep_low", "atr14", "stop_level",
+                            "risk_basis"):
+                    if r.get(key) is not None:
+                        ev[key] = (_num(r[key]) if key != "risk_basis" else r[key])
+            out.append(ev)
 
     # keep the unified stream ordered by bar_index (BUY/REBUY were already in order;
     # SELLs/RECLAIMs are appended out of order). Stable sort preserves same-bar ordering.
@@ -435,8 +508,8 @@ def _strength(row) -> float:
 def _state(sig: pd.DataFrame, signals: list[dict]) -> dict:
     """Model-facing position state, derived from the UNIFIED signal stream.
 
-    The stream is BUY/REBUY/SELL only (CUT + CS-SELL are no longer emitted — see
-    ``_extract_signals``). ``last_signal`` / ``bars_since_signal`` echo the raw stream tail.
+    CUT + CS-SELL are no longer emitted (see ``_extract_signals``). ``last_signal`` /
+    ``bars_since_signal`` echo the raw stream tail, including display/watch events.
     ``position_hint`` / ``last_scored_signal`` / ``last_scored_ts`` walk the SCORED lane
     only: markers stamped ``quality='regime_blocked'`` are display artifacts the v2 entry
     logic refused ("never treat as an entry") and must not flip the position — a blocked
@@ -465,7 +538,7 @@ def _state(sig: pd.DataFrame, signals: list[dict]) -> dict:
     pos = None
     last_scored = None
     for s in reversed(signals):
-        if s["type"] == "RECLAIM" and not s.get("scored"):
+        if s["type"] in ("RECLAIM", "BOTTOM_WATCH") and not s.get("scored"):
             continue
         # a refused entry never walks the position — gate on the explicit ``blocked`` flag
         # AND the legacy quality string, so neither alone can re-open the 2026-07-15 hole.

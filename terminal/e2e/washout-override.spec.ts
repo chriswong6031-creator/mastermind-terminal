@@ -297,7 +297,7 @@ test("a non-qualifying ⊘ renders exactly as it does today", async ({ page }, t
   expect(title).not.toContain("洗盘");
   expect(title).not.toContain("+22%");
 
-  const marker = await page.locator("[data-sig-layer]").first().evaluate((svg) => {
+  const readMarker = () => page.locator("[data-sig-layer]").first().evaluate((svg) => {
     const g = [...svg.querySelectorAll("g")]
       .find((el) => el.querySelector('circle[fill="none"]') && el.querySelector("line"));
     if (!g) return null;
@@ -307,6 +307,8 @@ test("a non-qualifying ⊘ renders exactly as it does today", async ({ page }, t
       dots: g.querySelectorAll('circle:not([fill="none"])').length,
     };
   });
+  await expect.poll(readMarker).not.toBeNull();
+  const marker = await readMarker();
   expect(marker).not.toBeNull();
   expect(marker!.opacity).toBe("0.62");             // the dim slate background treatment
   expect(marker!.ringStroke).toBe("rgb(124, 138, 160)");   // #7c8aa0

@@ -102,6 +102,10 @@ interface OracleSlice {
     signals?: Array<{
       ts: string; known_ts?: string | null; type?: string; price?: number | null;
       quality?: string | null; quality_reason?: string | null; scored?: boolean | null;
+      subtype?: string | null;
+      prior_stop_level?: number | null;
+      sweep_low?: number | null;
+      risk_basis?: string | null;
       /** what machine produced the event — "structure_stop" on every SELL */
       basis?: string | null;
       /** the v2 regime gate REFUSED this entry; type still reads BUY/REBUY for back-compat */
@@ -145,6 +149,29 @@ const SELLISH = ["SELL", "CUT", "TRIM"];
 // stands behind. Its distinctness is carried by the amber outline and the disclosure line,
 // never by demoting the entry.
 export const SOFT_Q: ReadonlySet<string> = new Set(["pending", "block", "regime_blocked"]);
+
+/** A prominent, risk-defined bottom candidate. It is intentionally not a confirmed BUY:
+ *  the own-name washout context is present, but the classic trend gate has not cleared. */
+export function isBottomWatch(
+  s?: { type?: unknown } | null,
+): boolean {
+  return !!s && String(s.type ?? "").toUpperCase() === "BOTTOM_WATCH";
+}
+
+/** A fast thesis re-arm after price closes back above a freshly broken structure stop. */
+export function isStopSweepReclaim(
+  s?: { type?: unknown; quality?: unknown } | null,
+): boolean {
+  return !!s
+    && String(s.type ?? "").toUpperCase() === "RECLAIM"
+    && String(s.quality ?? "").toLowerCase() === "stop_sweep_reclaim";
+}
+
+/** Keep the two opportunity producers visually distinct without teaching the chart their
+ *  evolving definition slugs. Unknown/legacy sources retain the Prophet fallback. */
+export function opportunityMarkerGlyph(source?: unknown): "P" | "R" {
+  return String(source ?? "").toLowerCase().includes("reversal") ? "R" : "P";
+}
 
 /** HK-O1: the v2 regime gate REFUSED this entry. The emitter keeps `type` at BUY/REBUY so
  *  every pre-existing reader still parses, so THIS — never the type — is the render and
@@ -411,6 +438,16 @@ export function markerTooltipCopy(
     overrideCtx?: OverrideCtx | null;
     retroCtx?: { group_id?: string | null; name?: string | null; name_zh?: string | null } | null;
     basis?: string;
+    scored?: boolean | null;
+    subtype?: string | null;
+    priorStopLevel?: number | null;
+    sweepLow?: number | null;
+    riskBasis?: string | null;
+    source?: string | null;
+    definition?: string | null;
+    rank?: number | null;
+    returnPct?: number | null;
+    authority?: string | null;
   },
   zh: boolean,
 ): string | null {
@@ -420,6 +457,28 @@ export function markerTooltipCopy(
   const reason = m.reason
     ? (zh ? `（${m.reason}）` : ` — ${m.reason}`)
     : "";
+
+  // Prophet candidates are historical source receipts, never repainted as Oracle calls.
+  if (m.type === "PROPHET") {
+    const reversal = opportunityMarkerGlyph(m.source) === "R";
+    const rank = m.rank != null ? (zh ? ` · 排名 #${m.rank}` : ` · rank #${m.rank}`) : "";
+    const ret = m.returnPct != null ? ` · ${m.returnPct >= 0 ? "+" : ""}${m.returnPct.toFixed(1)}%` : "";
+    if (reversal) return zh
+      ? `${at}反转观察候选记录 — 非交易计划${rank}${ret}`
+      : `${at}Reversal-watch candidate receipt — not a trade plan${rank}${ret}`;
+    return zh
+      ? `${at}Prophet 候选记录 — 非交易计划${rank}${ret}`
+      : `${at}Prophet candidate receipt — not a trade plan${rank}${ret}`;
+  }
+
+  // The new glance-tier bottom lane: actionable as a risk-defined starter, but explicitly
+  // outside the confirmed/scored BUY track record.
+  if (isBottomWatch(m)) {
+    const stop = m.stopLevel != null ? (zh ? ` · 参考止损 ${m.stopLevel}` : ` · stop reference ${m.stopLevel}`) : "";
+    return zh
+      ? `${at}底部观察 — 风险限定试仓，尚非确认买入${stop}${reason}`
+      : `${at}bottom watch — risk-defined starter, not a confirmed buy${stop}${reason}`;
+  }
 
   // 1. a REFUSED entry (and its promoted washout-candidate flavour). Never a retro re-mark.
   if ((m.blocked || m.quality === "regime_blocked") && !m.retro) {
@@ -440,13 +499,22 @@ export function markerTooltipCopy(
   }
 
   // 3. the scored re-entry lane.
+  if (isStopSweepReclaim(m)) {
+    const old = m.priorStopLevel != null
+      ? (zh ? ` · 重新站上 ${m.priorStopLevel}` : ` · reclaimed ${m.priorStopLevel}`)
+      : "";
+    const stop = m.stopLevel != null ? (zh ? ` · 新止损参考 ${m.stopLevel}` : ` · new stop reference ${m.stopLevel}`) : "";
+    return zh
+      ? `${at}流动性收复 — 止损后快速收复结构，未计分再入场观察${old}${stop}`
+      : `${at}liquidity reclaim — structure recovered quickly after the stop; unscored re-entry watch${old}${stop}`;
+  }
   if (m.type === "RECLAIM") {
     const kind = m.quality === "block_repair"
       ? (zh ? "空头拦截已修复" : "bear-block repaired")
       : (zh ? "趋势重新收复" : "trend reclaim");
     return zh
-      ? `${at}再入场（${kind}）— 计分再入场通道`
-      : `${at}re-entry (${kind}) — scored reclaim lane`;
+      ? `${at}再入场（${kind}）— ${m.scored === false ? "未计分观察" : "计分再入场通道"}`
+      : `${at}re-entry (${kind}) — ${m.scored === false ? "unscored watch" : "scored reclaim lane"}`;
   }
 
   // 4. a TAKEN washout entry, in either waived flavour. Line + lead + the stop-out clause, which
@@ -468,8 +536,10 @@ export function markerTooltipCopy(
   //    together, which is the english-shaped-zh trap rather than a translation.
   if (m.quality != null && SOFT_Q.has(m.quality)) {
     const q = m.quality === "pending"
-      ? (zh ? "待定" : "pending")
-      : (zh ? "拦截" : "blocked");
+      ? (zh ? "试仓 — 等待确认" : "starter — awaiting confirmation")
+      : m.quality === "block"
+        ? (zh ? "试仓 — 确认条件未通过" : "starter — confirmation filter failed")
+        : (zh ? "拦截" : "blocked");
     return zh
       ? `${at}${m.type} — ${q}${m.reason ? `（${m.reason}）` : ""}`
       : `${at}${m.type} (${q})${reason}`;
@@ -574,6 +644,7 @@ function freshBlockedEntry<S extends { type?: unknown; ts?: unknown; known_ts?: 
 }
 
 function eventColor(u: string): string {
+  if (u === "BOTTOM_WATCH") return "var(--signal)";
   return BUYISH.includes(u) || u === "RECLAIM"
     ? "var(--buy)"
     : SELLISH.includes(u)
@@ -585,9 +656,12 @@ function eventColor(u: string): string {
  *  Glance tier stays inside the word budget; the swing-low mechanic lives in the note. */
 export const STRUCTURE_STOP_LABEL: [string, string] = ["Structure stop", "结构止损"];
 
-function eventLabel(u: string, zh: boolean, basis?: string | null): string {
+function eventLabel(u: string, zh: boolean, basis?: string | null, quality?: string | null): string {
   if (isStructureStop({ type: u, basis })) return zh ? STRUCTURE_STOP_LABEL[1] : STRUCTURE_STOP_LABEL[0];
-  if (u === "RECLAIM") return zh ? "重新入场" : "Re-entry";
+  if (u === "BOTTOM_WATCH") return zh ? "底部观察" : "Bottom watch";
+  if (u === "RECLAIM") return isStopSweepReclaim({ type: u, quality })
+    ? (zh ? "流动性收复" : "Liquidity reclaim")
+    : (zh ? "重新入场" : "Re-entry");
   if (zh) {
     const labels: Record<string, string> = {
       BUY: "买入",
@@ -680,18 +754,31 @@ export function oracleVerdict(
     // RECLAIM keeps the hollow (soft) glyph regardless of scoring — the glyph law says a
     // re-entry never wears the solid backtested star. The NOTE tells the scoring truth:
     // scored (reclaim_lane promoted 2026-07-16) vs legacy display-tier scored:false.
-    const soft = effU === "RECLAIM";
+    const soft = effU === "RECLAIM" || effU === "BOTTOM_WATCH";
     const notes: string[] = [horizon];
     if (eff.price != null) notes.push(`@ ${eff.price}`);
     // a stop-out must never be readable as an oracle-momentum call (forensic §1)
     if (stopped) notes.push(stopNote(eff.stop_level));
     const q = String(eff.quality || "").toLowerCase();
-    if (soft) {
+    // Keeper block/pending is position-backed but carries starter authority while
+    // confirmation is incomplete. It is neither a full green entry nor a regime refusal.
+    const keeperStarter = BUYISH.includes(effU) && (q === "block" || q === "pending");
+    if (effU === "BOTTOM_WATCH") {
+      notes.push(zh
+        ? "风险限定试仓观察 — 不计入确认买入战绩"
+        : "risk-defined starter watch — not in the confirmed-buy track record");
+      if (eff.stop_level != null) notes.push(`${zh ? "止损参考" : "stop reference"} ${eff.stop_level}`);
+    } else if (soft) {
       notes.push(eff.scored === false
         ? (zh ? "未计分再入场信号（不计入战绩）" : "unscored re-entry signal (not in the track record)")
         : (zh ? "再入场信号 — 计分回收通道" : "re-entry signal — scored reclaim lane"));
     }
-    if (SOFT_Q.has(q) && !soft) notes.push(String(eff.quality_reason || q));
+    if (keeperStarter) {
+      notes.push(q === "pending"
+        ? (zh ? "试仓 — 等待确认" : "starter — awaiting confirmation")
+        : (zh ? "试仓 — 确认条件未通过" : "starter — confirmation filter failed"));
+      if (eff.quality_reason) notes.push(String(eff.quality_reason));
+    } else if (SOFT_Q.has(q) && !soft) notes.push(String(eff.quality_reason || q));
     else if (soft && eff.quality_reason) notes.push(String(eff.quality_reason));
     // ── the washout-override ENTRY (era gc_v2_wo1) ──────────────────────────────────
     // It anchors like any entry, so the label and color below are the ordinary entry
@@ -725,8 +812,8 @@ export function oracleVerdict(
       );
     }
     return {
-      label: eventLabel(effU, zh, effBasis),
-      color: eventColor(effU),
+      label: keeperStarter ? (zh ? "试仓" : "Starter") : eventLabel(effU, zh, effBasis, eff.quality),
+      color: keeperStarter ? "var(--signal)" : eventColor(effU),
       raw: effU,
       sub: fmtDate(effKnownTs!, zh) + (freshBlock
         ? ` · ${zh ? "入场被拦截" : "entry blocked"} ${fmtDate(signalKnownTs(freshBlock)!, zh)}`

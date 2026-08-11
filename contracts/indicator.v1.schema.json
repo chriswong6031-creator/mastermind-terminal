@@ -129,7 +129,8 @@
               "EXIT",
               "REBUY",
               "CUT",
-              "RECLAIM"
+              "RECLAIM",
+              "BOTTOM_WATCH"
             ]
           },
           "strength": {
@@ -164,7 +165,33 @@
               "number",
               "null"
             ],
-            "description": "SELL only: the confirmed swing low whose break triggered the stop."
+            "description": "SELL: the confirmed swing low whose break triggered the stop. BOTTOM_WATCH/stop-sweep RECLAIM: a fresh ATR-derived risk stop below the sweep low when safely computable."
+          },
+          "prior_stop_level": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "stop_sweep_reclaim only: the structure-stop level price reclaimed."
+          },
+          "sweep_low": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Lowest point-in-time daily low in the candidate or failed-breakdown risk window."
+          },
+          "atr14": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "risk_basis": {
+            "enum": [
+              "daily_ohlc_atr14",
+              "close_proxy_atr14"
+            ]
           },
           "blocked": {
             "const": true,
@@ -201,7 +228,36 @@
               "boolean",
               "null"
             ],
-            "description": "RECLAIM only: false = pre-promotion display-tier marker."
+            "description": "False on display/watch-only events, including BOTTOM_WATCH and stop_sweep_reclaim."
+          },
+          "subtype": {
+            "enum": [
+              "early_dot",
+              "blocked_trigger"
+            ],
+            "description": "BOTTOM_WATCH only: anticipation-dot origin or raw blocked CB/revBuy origin."
+          },
+          "trigger_ts": {
+            "type": "string",
+            "description": "Chart coordinate of the bottom-watch trigger."
+          },
+          "trigger_known_ts": {
+            "type": "string",
+            "description": "Session on which the bottom-watch trigger became observable."
+          },
+          "anchor_ts": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a repair/reclaim event, the earlier stop or blocked-entry date it repairs."
+          },
+          "washout_ctx": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "BOTTOM_WATCH point-in-time own-name washout facts: frozen rule, trailing drawdown, prior-closed monthly oversold dwell and recent 3D oversold visit."
           },
           "override_candidate": {
             "const": true,

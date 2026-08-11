@@ -732,7 +732,9 @@ def evaluate(alert: dict, data: Data, flow: "Flow | None" = None):
             if str(sig.get("type") or "").upper() in want:
                 # a SELL here is the trailing structure stop, and the note says so — this text
                 # is stored verbatim and rendered to the user (AlertsView renders it lang="en").
+                quality = str(sig.get("quality") or "").lower()
                 kind = ("STRUCTURE STOP" if sig.get("basis") == "structure_stop"
+                        else "STARTER" if quality in {"block", "pending"}
                         else str(sig.get("type")))
                 return True, sig.get("price"), f"{kind} signal on {ts} (strength {sig.get('strength')})", None
         return False, None, "", None

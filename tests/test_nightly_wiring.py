@@ -35,10 +35,14 @@ NIGHTLY = ROOT / "ops" / "terminal-data"
 
 # The bridges the nightly must run, and the file each one writes. Adding a bridge without
 # adding it here is the mistake this table exists to make impossible.
-BRIDGES = [
+PRE_SLICE_BRIDGES = [
     ("ingest/pull_macro_washout.py", "washout_state.json"),
     ("ingest/pull_macro_washout_history.py", "washout_history.json"),
 ]
+POST_SLICE_BRIDGES = [
+    ("ingest/pull_macro_opportunities.py", "*.slice.json#opportunities"),
+]
+BRIDGES = PRE_SLICE_BRIDGES + POST_SLICE_BRIDGES
 
 
 @pytest.mark.parametrize("script,_out", BRIDGES, ids=[b[0] for b in BRIDGES])
@@ -67,8 +71,24 @@ def test_both_washout_bridges_run_before_the_slice_generator_that_consumes_them(
         raise AssertionError(f"{needle} not invoked in ops/terminal-data")
 
     consumer = line_of("ingest/gen_slices_all.py")
-    for script, _out in BRIDGES:
+    for script, _out in PRE_SLICE_BRIDGES:
         assert line_of(script) < consumer, f"{script} must run BEFORE gen_slices_all"
+
+
+def test_opportunity_bridge_runs_after_slice_generation_and_before_verification():
+    """A pre-generation embed is erased; a post-verification embed escapes the gate."""
+    body = NIGHTLY.read_text().splitlines()
+
+    def line_of(needle: str) -> int:
+        for i, ln in enumerate(body):
+            if ln.strip() in (f'run "$PY" {needle}', f'"$PY" {needle}; VRC=$?'):
+                return i
+        raise AssertionError(f"{needle} not invoked in ops/terminal-data")
+
+    producer = line_of("ingest/gen_slices_all.py")
+    bridge = line_of("ingest/pull_macro_opportunities.py")
+    verifier = line_of("ingest/verify_publish.py")
+    assert producer < bridge < verifier
 
 
 def test_each_bridges_DEFAULT_output_path_is_the_one_its_reader_defaults_to():
