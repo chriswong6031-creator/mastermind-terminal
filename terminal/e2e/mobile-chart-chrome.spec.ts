@@ -93,10 +93,12 @@ test("phone: the roller strip replaces the top toolbar row and the floating dock
   expect(wheels.size).toBeCloseTo(17, 0);
   expect(Number(wheels.weight)).toBeGreaterThanOrEqual(700);
 
-  // The wheels carry the live state: the charted symbol and the starred timeframes.
+  // The wheels carry the live state: the charted symbol and every timeframe this market can load.
+  // This is the phone's only timeframe control, so desktop favourites must never hide the granular
+  // second/minute/hour rows here.
   await expect(page.getByTestId("roller-symbol")).toHaveAttribute("aria-valuetext", "NVDA");
   expect(await page.getByTestId("roller-interval").locator(".mrs-wheel-item").allTextContents())
-    .toEqual(["D", "3D", "W", "1M"]);
+    .toEqual(["1s", "5s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "4h", "D", "2D", "3D", "W", "2W", "1M", "3M"]);
 
   // C25: the cluster scrolls under a leading fade and the anchored wheels never move with it.
   const before = (await page.getByTestId("roller-symbol").boundingBox())!.x;
@@ -129,9 +131,10 @@ test("phone: rolling the interval wheel commits the timeframe live", async ({ pa
   const wheel = page.getByTestId("roller-interval");
   await expect(wheel).toHaveAttribute("aria-valuetext", "3D");
   const box = (await wheel.boundingBox())!;
-  // One detent DOWN the wheel is the PREVIOUS favourite — the value commits per step, not on release.
+  // One detent DOWN the wheel is the previous granular interval — the value commits per step,
+  // not on release.
   await pointerDrag(page, '[data-testid="roller-interval"]', { x: box.x + box.width / 2, y: box.y + box.height / 2 }, 23);
-  await expect(wheel).toHaveAttribute("aria-valuetext", "D");
+  await expect(wheel).toHaveAttribute("aria-valuetext", "2D");
 });
 
 test("phone: the pencil opens the TV Drawings sheet and a tile arms the tool", async ({ page }) => {

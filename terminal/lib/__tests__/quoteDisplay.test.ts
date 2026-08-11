@@ -30,6 +30,30 @@ describe("regular-session quote display", () => {
     })).toEqual({ regularPrice: 195.04, regularChg: 2.65 });
   });
 
+  it("replaces the A-share primary lane with the opening-auction price before 09:30", () => {
+    expect(resolveRegularSessionDisplay({
+      market: "cn",
+      marketSession: "pre",
+      last: 11.74,
+      chg: 0,
+      close: 11.74,
+      prevClose: 11.74,
+      auctionPrice: 11.90,
+      auctionChg: 1.362862010221463,
+    })).toEqual({ regularPrice: 11.90, regularChg: 1.362862010221463 });
+  });
+
+  it("never interprets a US pre-market print as an A-share auction", () => {
+    expect(resolveRegularSessionDisplay({
+      market: "us",
+      marketSession: "pre",
+      last: 200.81,
+      chg: 2.96,
+      auctionPrice: 205.00,
+      auctionChg: 5.1,
+    })).toEqual({ regularPrice: 200.81, regularChg: 2.96 });
+  });
+
   it("never lets extended fields enter the primary lane", () => {
     const exposed = withRegularSessionDisplay({
       last: 200.81,

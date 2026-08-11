@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   START_TF_KEY, DEFAULT_START_TF, TF_CANONICAL_ORDER,
-  readStartTf, writeStartTf, resolveStartTf,
+  readStartTf, writeStartTf, resolveStartTf, mobileTimeframeOptions,
 } from "@/lib/startTf";
 
 // Minimal localStorage stand-in — the module only uses getItem/setItem.
@@ -81,5 +81,21 @@ describe("startTf", () => {
     expect(resolveStartTf(undefined, US_FUNCTIONAL)).toBe("3D");
     expect(resolveStartTf("4D", US_FUNCTIONAL)).toBe("3D");
     expect(resolveStartTf(5, US_FUNCTIONAL)).toBe("3D");
+  });
+
+  it("gives the phone wheel every functional granular interval, independent of favourites", () => {
+    expect(mobileTimeframeOptions(US_FUNCTIONAL, "3D")).toEqual([
+      "1m", "5m", "15m", "30m", "1h", "2h", "4h", "D", "2D", "3D", "W", "2W", "1M", "3M",
+    ]);
+  });
+
+  it("includes entitled second bars and excludes intervals the active market cannot load", () => {
+    const realtimeUs = new Set([...US_FUNCTIONAL, "1s", "5s", "15s", "30s"]);
+    expect(mobileTimeframeOptions(realtimeUs, "D").slice(0, 5)).toEqual(["1s", "5s", "15s", "30s", "1m"]);
+    expect(mobileTimeframeOptions(CA_FUNCTIONAL, "3D")).toEqual(DAILY);
+  });
+
+  it("retains the controlled current value during a cross-market transition", () => {
+    expect(mobileTimeframeOptions(CA_FUNCTIONAL, "5m")).toEqual(["5m", ...DAILY]);
   });
 });

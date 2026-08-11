@@ -30,7 +30,7 @@ import { flowGet } from "@/lib/flowClientCache";
 // a phone double-tap window eats the pane-maximize gesture (mobile-chart-chrome e2e,
 // cold-reproducible). A dot needs a per-row, jank-free paint path before it ships.
 import { parseGlanceState } from "@/lib/mscGlance";
-import { DEFAULT_START_TF, TF_CANONICAL_ORDER, readStartTf, resolveStartTf } from "@/lib/startTf";
+import { DEFAULT_START_TF, TF_CANONICAL_ORDER, mobileTimeframeOptions, readStartTf, resolveStartTf } from "@/lib/startTf";
 import { useMarketPrefs } from "@/lib/useMarketPrefs";
 import { FIN_PAGES, type FinPage } from "@/components/fin/MegaPane";
 import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
@@ -2725,16 +2725,16 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
 
   // ── phone roller strip + native bridge command surface ──────────────────────────────────────
   // The symbol wheel rotates the ACTIVE watchlist (the charted symbol appended when it is not a
-  // member); the interval wheel rotates the starred timeframes, falling back to the canonical list
-  // when the user has starred none. Both wheels always contain their current value.
+  // member). The interval wheel is the phone's ONLY timeframe picker, so it exposes every interval
+  // the active market can load; desktop/native favourites remain shortcuts, never a mobile filter.
+  // Both wheels always contain their current value.
   const stripSymbols = useMemo(() => {
     const list = wl.map((row) => row.symbol).filter(Boolean);
     return list.includes(active) ? list : [...list, active];
   }, [wl, active]);
   const stripTimeframes = useMemo(() => {
-    const base = favTfOrder.length ? favTfOrder : [...TF_CANONICAL_ORDER];
-    return base.includes(tf) ? base : [...base, tf].sort((a, b) => tfSortKey(a) - tfSortKey(b));
-  }, [favTfOrder, tf]);
+    return mobileTimeframeOptions(FUNCTIONAL, tf);
+  }, [FUNCTIONAL, tf]);
   const openDrawingsSheet = () => {
     setHubOpen(false);
     setDrawSheetOpen(true);
