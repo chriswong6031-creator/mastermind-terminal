@@ -1,0 +1,41 @@
+{
+  "SPY": [
+    {
+      "strike": 749,
+      "expiry": "2026-07-10",
+      "unusual": {
+        "call": { "ratio": 3.4, "median_vol_30d": 369, "samples": 22, "status": "unusual" },
+        "put": { "ratio": 1.98, "median_vol_30d": 1205, "samples": 22, "status": "normal" }
+      }
+    },
+    {
+      "strike": 750,
+      "expiry": "2026-07-10",
+      "unusual": {
+        "call": { "ratio": 2.66, "median_vol_30d": 600, "samples": 22, "status": "normal" },
+        "put": { "ratio": 3.2, "median_vol_30d": 60, "samples": 22, "status": "unusual" }
+      }
+    },
+    {
+      "strike": 751,
+      "expiry": "2026-07-10",
+      "unusual": {
+        "call": { "ratio": 3, "median_vol_30d": 240, "samples": 22, "status": "unusual" },
+        "put": null
+      }
+    }
+  ],
+  "QQQ": [
+    {
+      "strike": 470,
+      "expiry": "2026-07-10",
+      "unusual": {
+        "call": { "ratio": 2, "median_vol_30d": 13, "samples": 20, "status": "normal" },
+        "put": { "ratio": 2, "median_vol_30d": 25, "samples": 20, "status": "normal" }
+      }
+    }
+  ],
+  "IWM": [
+    { "strike": 285, "expiry": "2026-07-10", "unusual": null }
+  ]
+}

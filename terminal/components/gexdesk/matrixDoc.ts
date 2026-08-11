@@ -16,6 +16,29 @@
 import type { MatrixLevels } from "@/components/shared/StrikeExpiryMatrix";
 import type { HeatSeekerPick } from "./HeatSeekerCard";
 
+export const MATRIX_DOC_SCHEMA = "options_structure.matrix/v1" as const;
+
+export type MatrixUnusualStatus = "normal" | "unusual";
+
+/**
+ * One side's settled-session volume against its own exact-contract history.
+ *
+ * This is deliberately nested under call/put. A scalar ratio would erase the side
+ * identity and could make a quiet put look unusual because its call was busy (or the
+ * reverse). Values still cross an explicit runtime guard before the desk renders them.
+ */
+export interface MatrixUnusualSide {
+  ratio?: number | null;
+  median_vol_30d?: number | null;
+  samples?: number | null;
+  status?: MatrixUnusualStatus | string | null;
+}
+
+export interface MatrixUnusualSides {
+  call?: MatrixUnusualSide | null;
+  put?: MatrixUnusualSide | null;
+}
+
 /** One matrix cell. `gex` is net gamma exposure in WHOLE DOLLARS. */
 export interface MatrixDocCell {
   strike: number;
@@ -27,6 +50,11 @@ export interface MatrixDocCell {
   put_vol?: number | null;
   /** The builder publishes an OBJECT {call, put} (PIT-lagged ΔOI per leg). */
   delta_oi?: { call?: number | null; put?: number | null } | null;
+  /**
+   * Exact-side EOD volume baseline. `null` means neither side is eligible yet;
+   * absence means this older snapshot did not publish the baseline at all.
+   */
+  unusual?: MatrixUnusualSides | null;
 }
 
 export interface MatrixDoc {
@@ -47,6 +75,25 @@ export interface MatrixDoc {
   authority_tier?: string;
   /** Prod: the SESSION date; the top-level asof is the build timestamp. */
   _build_meta?: { asof_date?: string | null } | null;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Runtime envelope guard for the root-keyed matrix read.
+ *
+ * `safeFetch<T>` only narrows TypeScript; it does not validate network bytes. Refusing a
+ * wrong schema or root prevents a cached/substituted matrix from wearing the selected
+ * ticker's header. Cell-level optional fields remain guarded by their own consumers so
+ * one malformed optional annotation cannot discard an otherwise usable heatmap.
+ */
+export function isMatrixDocForRoot(value: unknown, expectedRoot: string): value is MatrixDoc {
+  if (!isRecord(value) || value.schema !== MATRIX_DOC_SCHEMA || !Array.isArray(value.cells)) {
+    return false;
+  }
+  const root = typeof value.root === "string" ? value.root.trim().toUpperCase() : "";
+  return root.length > 0 && root === expectedRoot.trim().toUpperCase();
 }
 
 /** The gex_state fields the levels merge reads. */

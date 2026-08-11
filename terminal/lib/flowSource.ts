@@ -37,6 +37,10 @@ const CHAINHEAT_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "chain
 const GEXSTATE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gexstate_fixture.json");
 const GEXSTATE_INDEX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gexstate_index_fixture.json");
 const MATRIX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "matrix_fixture.json");
+// Kept as a small companion because matrix_fixture.json is a generated, minified
+// multi-root snapshot. The fixture seam overlays ONLY exact (strike,expiry) `unusual`
+// annotations; production reads the publisher's flat MatrixDoc directly.
+const MATRIX_UNUSUAL_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "matrix_unusual_fixture.json");
 const MANIFEST_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "manifest.json");
 const PROPHET_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_fixture.json");
 const PROPHET_MARKS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_marks_fixture.json");
@@ -667,7 +671,32 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     try {
       const raw = await fs.readFile(MATRIX_FIXTURE_FILE, "utf8");
       const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-      return all[root] ?? {};
+      const entry = all[root];
+      if (!entry || !Array.isArray(entry.cells)) return {};
+      try {
+        const unusualRaw = await fs.readFile(MATRIX_UNUSUAL_FIXTURE_FILE, "utf8");
+        const unusualAll = JSON.parse(unusualRaw) as Record<string, unknown[]>;
+        const patches = Array.isArray(unusualAll[root]) ? unusualAll[root] : [];
+        const byIdentity = new Map<string, Record<string, unknown>>();
+        for (const patch of patches) {
+          if (!patch || typeof patch !== "object" || Array.isArray(patch)) continue;
+          const p = patch as Record<string, unknown>;
+          if (typeof p.strike !== "number" || !Number.isFinite(p.strike) || typeof p.expiry !== "string") continue;
+          byIdentity.set(`${p.expiry}|${p.strike}`, p);
+        }
+        return {
+          ...entry,
+          cells: entry.cells.map((cell) => {
+            if (!cell || typeof cell !== "object" || Array.isArray(cell)) return cell;
+            const c = cell as Record<string, unknown>;
+            const patch = byIdentity.get(`${String(c.expiry ?? "")}|${String(c.strike ?? "")}`);
+            return patch ? { ...c, unusual: patch.unusual } : c;
+          }),
+        };
+      } catch {
+        // Companion absence exercises the honest pre-baseline state; the matrix stays usable.
+        return entry;
+      }
     } catch { return {}; }
   }
   if (f === "manifest") {

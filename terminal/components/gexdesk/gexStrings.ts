@@ -488,6 +488,44 @@ const GEX_LEX = {
     "No strike × expiry matrix published for this root.",
     "该品种暂无行权价×到期日矩阵数据。",
   ],
+
+  // ── Exact-side settled-volume rail ────────────────────────────────────────
+  // This is an annotation over RAW contracts, not a fifth matrix lens. The heatmap
+  // continues to aggregate call+put and strike buckets exactly as before.
+  mtxUnusualAria:  ["Exact-side EOD volume baseline", "逐边收盘成交量基线"],
+  mtxUnusualTitle: ["Exact-side EOD baseline", "逐边收盘基线"],
+  mtxUnusualRule:  ["3× exact-side median · 10–30 observed days", "逐边中位数3倍 · 10–30个观测日"],
+  mtxUnusualAuthority: ["DISPLAY ONLY", "仅供展示"],
+  mtxUnusualExactNote: [
+    "All published expiries · raw cells · independent of heatmap controls.",
+    "覆盖全部已发布到期日 · 原始单元格 · 独立于热图控制项。",
+  ],
+  mtxUnusualCall:  ["CALL", "认购"],
+  mtxUnusualPut:   ["PUT", "认沽"],
+  mtxUnusualReceiptUnusual: ["UNUSUAL", "异常"],
+  mtxUnusualReceiptNormal: ["NORMAL", "正常"],
+  mtxUnusualReceiptUnavailable: ["UNAVAILABLE", "不可用"],
+  mtxUnusualReceiptWithheld: ["WITHHELD", "已隐藏"],
+  mtxUnusualCurrent: ["vol", "成交"],
+  mtxUnusualMedian:  ["median", "中位数"],
+  mtxUnusualSamples: ["observed days", "观测日"],
+  mtxUnusualFlagged: ["{n} exact contracts flagged", "{n}个精确合约触发"],
+  mtxUnusualUnavailable: [
+    "Baseline not published for this matrix session.",
+    "本矩阵交易日尚未发布基线。",
+  ],
+  mtxUnusualInsufficient: [
+    "Baseline present · no side published an eligible exact-contract baseline.",
+    "基线已接入 · 暂无逐边合约发布合格基线。",
+  ],
+  mtxUnusualClear: [
+    "Eligible baselines present · no exact side reached 3×.",
+    "已有合格基线 · 暂无逐边合约达到3倍。",
+  ],
+  mtxUnusualMalformed: [
+    "Baseline fields invalid · unusual read withheld.",
+    "基线字段无效 · 已隐藏异常读数。",
+  ],
   magnitudeFirst:  [
     "Sign is an assumption, not a fact. Magnitude is the reliable read.",
     "符号为假设而非事实。数量级才是可靠读数。",
