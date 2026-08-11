@@ -405,9 +405,10 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
         clause, receipt one hover away" shape, as the dashboard board's own footnote.
 
         `--c: var(--muted)` is the card's neutral token — `.obs-tag` derives both the
-        12% fill and the 30% ring from it, so this reads as a fact in both themes and
-        as an alarm in neither. It is deliberately NOT --warn: nothing is wrong with
-        the stock.
+        12% fill and the 30% ring from it, so this reads as a fact and not as an alarm.
+        It is deliberately NOT --warn: nothing is wrong with the stock. Naming only the
+        token (never a literal colour) is also what keeps it correct if the Terminal
+        ever stops being dark-only — see app/settings.css on why there is one theme.
 
         The chip WRAPS rather than truncating. It is a disclosure, so a narrow pane may
         cost it a second line but must never cost it half a sentence.
