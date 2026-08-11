@@ -24,6 +24,8 @@ interface OriginationNote {
   zh: string;
   tip_en?: string;
   tip_zh?: string;
+  date_en?: string;
+  date_zh?: string;
 }
 
 interface FixturePlan {
@@ -52,6 +54,17 @@ function planFor(asset: string): FixturePlan {
 /** The card for one ticker in the signal stream. */
 function card(page: Page, asset: string): Locator {
   return page.locator(".obs-prophet-signal").filter({ hasText: asset }).first();
+}
+
+/** The CENTER column — the detail panel for whichever plan is selected. */
+function panel(page: Page): Locator {
+  return page.locator(".obs-prophet-analysis");
+}
+
+/** Select a plan and wait for the panel to actually be showing it. */
+async function openPlan(page: Page, asset: string): Promise<void> {
+  await card(page, asset).click();
+  await expect(panel(page).getByText(asset, { exact: true }).first()).toBeVisible();
 }
 
 async function openProphet(page: Page, lang: "en" | "zh"): Promise<void> {
@@ -155,6 +168,133 @@ for (const lang of ["en", "zh"] as const) {
     }
   });
 }
+
+// ── The detail panel ──────────────────────────────────────────────────────────
+//
+// The card marks the pick for a reader who is scanning. The panel is where that reader
+// stops and reads, so the disclosure stops being a chip with the receipt behind a hover
+// and becomes a dated line with the receipt in the open — and it moves ABOVE the trade
+// geometry, because the rail, the phase and the phase-keyed brief are all timed from
+// the origination date. This spec proves both the copy and that ordering on the real
+// surface, at every house viewport.
+
+for (const lang of ["en", "zh"] as const) {
+  test(`Prophet's detail panel discloses the reconstruction in ${lang}, above the geometry`, async ({ page }, testInfo) => {
+    test.setTimeout(60_000);
+    await openProphet(page, lang);
+    await openPlan(page, "UBER");
+
+    const note = planFor("UBER").origination_note!;
+    const clause = lang === "zh" ? note.zh : note.en;
+    const stamp = (lang === "zh" ? note.date_zh : note.date_en)!;
+    const receipt = (lang === "zh" ? note.tip_zh : note.tip_en)!;
+
+    const disclosure = panel(page).locator(".obs-prophet-origination");
+    await expect(disclosure).toHaveCount(1);
+    await expect(disclosure).toBeVisible();
+    await expect(disclosure).toContainText(clause);
+    await expect(disclosure).toContainText(stamp);
+    // Tier 2 in the open: the receipt is READ here, not hovered for. A reader who has
+    // opened the plan has already asked the question the card's tooltip answers.
+    await expect(disclosure).toContainText(receipt);
+    await expect(page.locator("body")).not.toContainText("outage_backfill");
+
+    // The other language never leaks into this one.
+    await expect(disclosure).not.toContainText(lang === "zh" ? note.en : note.zh);
+
+    // PLACEMENT, MEASURED. The whole argument for putting it here rather than at the
+    // foot is that every window below it is timed from this date — so it has to be
+    // above the rail, and below the ticker it belongs to.
+    const noteBox = (await disclosure.boundingBox())!;
+    const railBox = (await panel(page).locator('[data-testid="geometry-rail"]').boundingBox())!;
+    const tickerBox = (await panel(page).getByText("UBER", { exact: true }).first().boundingBox())!;
+    expect(noteBox.y).toBeGreaterThan(tickerBox.y);
+    expect(noteBox.y + noteBox.height).toBeLessThanOrEqual(railBox.y);
+
+    // QUIET, MEASURED. Provenance is context, not an alarm: the clause runs a step
+    // below the plan's own ink and the note is nowhere near the ticker in size, and
+    // neither line may wear a directional or warning token.
+    const tone = await disclosure.evaluate((el) => {
+      const root = getComputedStyle(document.documentElement);
+      const lines = Array.from(el.querySelectorAll("span, p")) as HTMLElement[];
+      return {
+        sizes: lines.map((n) => parseFloat(getComputedStyle(n).fontSize)),
+        colors: lines.map((n) => getComputedStyle(n).color),
+        down: root.getPropertyValue("--down").trim(),
+        warn: root.getPropertyValue("--warn").trim(),
+      };
+    });
+    const tickerSize = await panel(page)
+      .getByText("UBER", { exact: true })
+      .first()
+      .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(tone.sizes.length).toBeGreaterThanOrEqual(3); // clause + stamp + receipt
+    for (const size of tone.sizes) expect(size).toBeLessThan(tickerSize / 2);
+    for (const color of tone.colors) {
+      expect(color).not.toBe(tone.down);
+      expect(color).not.toBe(tone.warn);
+    }
+
+    // The control: selecting a live plan leaves the panel exactly as it always was.
+    await openPlan(page, "NVDA");
+    await expect(panel(page).locator(".obs-prophet-origination")).toHaveCount(0);
+    await expect(panel(page)).not.toContainText(clause);
+
+    if (EVIDENCE) {
+      const stem = `${testInfo.project.name}-${lang}`;
+      await panel(page).screenshot({ path: path.join(CROP_DIR, `${stem}-panel-control-live-plan.png`) });
+      await openPlan(page, "UBER");
+      await panel(page).screenshot({ path: path.join(CROP_DIR, `${stem}-panel.png`) });
+
+      // The header-plus-note crop is a page clip, so the region has to be ON SCREEN
+      // first — at 390px the centre column is stacked below the stream and a clip
+      // reaching past the viewport silently returns a half-cut disclosure.
+      await panel(page).evaluate((el) => { el.scrollTop = 0; });
+      await panel(page).scrollIntoViewIfNeeded();
+      const box = (await disclosure.boundingBox())!;
+      const head = (await panel(page).locator("> div").first().boundingBox())!;
+      const vp = page.viewportSize()!;
+      const top = Math.max(0, head.y - 8);
+      await page.screenshot({
+        path: path.join(CROP_DIR, `${stem}-panel-disclosure.png`),
+        clip: {
+          x: Math.max(0, head.x - 8),
+          y: top,
+          width: Math.min(Math.max(head.width, box.width) + 16, vp.width - Math.max(0, head.x - 8)),
+          height: Math.min(box.y + box.height + 8 - top, vp.height - top),
+        },
+      });
+      // A clip the viewport truncated would quietly ship a cut-off disclosure as
+      // evidence, which is worse than no evidence.
+      expect(box.y + box.height + 8).toBeLessThanOrEqual(vp.height);
+      if (testInfo.project.name === "desktop") {
+        await openPlan(page, "PLTR");
+        await panel(page).locator(".obs-prophet-origination")
+          .screenshot({ path: path.join(CROP_DIR, `${stem}-panel-no-receipt.png`) });
+      }
+    }
+  });
+}
+
+test("the panel's disclosure shows the clause alone when the row has no receipt", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openProphet(page, "en");
+  await openPlan(page, "PLTR");
+
+  // Fail-soft, exactly as the producer is: an undatable row ships the clause and
+  // nothing else. No stamp, no receipt paragraph, and no empty shell standing in.
+  const undated = planFor("PLTR").origination_note!;
+  const disclosure = panel(page).locator(".obs-prophet-origination");
+  await expect(disclosure).toHaveCount(1);
+  await expect(disclosure).toHaveText(undated.en);
+  await expect(disclosure.locator("p")).toHaveCount(0);
+
+  // The dated row is the contrast — same block, three lines of content.
+  await openPlan(page, "UBER");
+  const dated = planFor("UBER").origination_note!;
+  await expect(disclosure).toContainText(dated.date_en!);
+  await expect(disclosure.locator("p")).toHaveCount(1);
+});
 
 test("a reconstructed plan with no receipt shows the chip and promises no hover", async ({ page }) => {
   test.setTimeout(60_000);

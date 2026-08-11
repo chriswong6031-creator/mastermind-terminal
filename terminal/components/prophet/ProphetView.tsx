@@ -29,7 +29,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { flowGet } from "@/lib/flowClientCache";
 import { useLang } from "@/lib/i18n";
 import { makeProphetT } from "./prophetStrings";
-import { SignalCard, phaseTone, planAsof, planConfidence, planPhase, planRecommendedAction } from "./SignalCard";
+import { SignalCard, phaseTone, planAsof, planConfidence, planOriginationNote, planPhase, planRecommendedAction } from "./SignalCard";
 import type { PlanSummary } from "./SignalCard";
 import { ConfidencePanel } from "./ConfidencePanel";
 import type { ConfidenceComponents } from "./ConfidencePanel";
@@ -458,9 +458,24 @@ function splitPositioning(text: string): { body: string; note: string | null } {
   return body && note ? { body, note } : { body: text, note: null };
 }
 
+/**
+ * The row's own origination datestamp in the reader's language, or null.
+ *
+ * `planOriginationNote` deliberately resolves only the chip and its receipt, because
+ * that is all the card needs. The panel is the one surface with room to date the
+ * reconstruction in the open, so it reads the field the card ignores. Row data as
+ * always — this repo neither words nor formats it, and a row the producer could not
+ * date simply has no stamp.
+ */
+function originationDate(plan: PlanSummary, lang: "en" | "zh"): string | null {
+  const note = plan.origination_note;
+  if (!note) return null;
+  return (lang === "zh" ? note.date_zh : note.date_en) || null;
+}
+
 // ── AnalysisPanel (CENTER column) ─────────────────────────────────────────────
 
-function AnalysisPanel({
+export function AnalysisPanel({
   plan,
   lang,
   t,
@@ -505,6 +520,11 @@ function AnalysisPanel({
   const thesis = (lang === "zh" && _planAny.thesis_zh) ? _planAny.thesis_zh : _planAny.thesis;
   const thesisParts = thesis ? splitPositioning(thesis) : null;
 
+  // Reconstruction disclosure — null on every live plan, so the panel below is
+  // untouched for all but the rebuilt cohort.
+  const origination = planOriginationNote(plan, lang);
+  const originationStamp = originationDate(plan, lang);
+
   return (
     <div style={ANALYSIS_SCROLL} className="obs-scroll obs-prophet-analysis">
       {/* ── Ticker header ── */}
@@ -528,6 +548,46 @@ function AnalysisPanel({
         </div>
         <span style={AUTH_CHIP}>{t("authorityLabel")}</span>
       </div>
+
+      {/*
+        Reconstruction disclosure — a footnote to the ticker header, ABOVE the rail.
+
+        WHY HERE, and why not where the card puts it. On the card the same disclosure
+        goes last and quietest, because a reader scanning the stream wants the plan
+        first and the accounting after. The panel inverts that for two reasons. This
+        header is already the panel's provenance zone — the display-only chip sits in
+        it — so the note is with its family rather than opening a third register at the
+        foot. And everything BELOW this line is timed from the origination date: the
+        rail's horizon, the phase the profit rows are keyed to, the brief that is keyed
+        to that phase. Disclosed underneath them, the date arrives after the numbers it
+        explains and the reader has to go back.
+
+        NOT A SECTION, and it must never grow into one. No fill, no radius, no rail —
+        the filled boxes below are the panel's content register, and provenance is not
+        content. Its whole separation from the header is one hairline, and its ink runs
+        --text-2 → --muted, one and two steps down from the plan it annotates. It is
+        deliberately not --warn: nothing is wrong with this stock.
+
+        THE RECEIPT IS INLINE, not a hover. This is a detail surface, so the fuller
+        text can simply be read; the card already carries the hover for the reader who
+        is still scanning. Putting a hover here would hide the answer behind a second
+        affordance from the one reader who has already asked for it.
+
+        Every string is the row's own — the producer ships finished EN/ZH copy so the
+        dashboard and the Terminal cannot describe the same plan differently. There is
+        no prophetStrings key here on purpose, and there must never be one.
+      */}
+      {origination && (
+        <div style={ORIGINATION_NOTE} className="obs-prophet-origination">
+          <div style={ORIGINATION_LEAD}>
+            <span style={ORIGINATION_CLAUSE}>{origination.chip}</span>
+            {/* Separated by ink and space, not by a glyph: a punctuation mark would be
+                this repo wording something, and it is the one thing this repo may not do. */}
+            {originationStamp && <span style={ORIGINATION_STAMP}>{originationStamp}</span>}
+          </div>
+          {origination.tip && <p style={ORIGINATION_RECEIPT}>{origination.tip}</p>}
+        </div>
+      )}
 
       {/* ── Trade geometry price rail ── */}
       <div style={{ marginBottom: 14 }}>
@@ -888,6 +948,64 @@ const AUTH_CHIP: React.CSSProperties = {
   padding: "3px 7px",
   whiteSpace: "nowrap",
   marginLeft: "auto",
+};
+
+/**
+ * Reconstruction disclosure — the header's footnote rule.
+ *
+ * One hairline and nothing else. The header above it already ends on its own 14px, so
+ * the rule reads as terminating that block; 10px below binds it to the note rather
+ * than to the rail. `marginBottom` matches the rail's, so a plan carrying the note
+ * spends exactly one block of height on it and a plan without it is untouched.
+ */
+const ORIGINATION_NOTE: React.CSSProperties = {
+  marginBottom: 14,
+  paddingTop: 10,
+  borderTop: "1px solid var(--hairline)",
+};
+
+const ORIGINATION_LEAD: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "baseline",
+  columnGap: 8,
+  rowGap: 2,
+};
+
+/**
+ * The clause carries the meaning, so it takes the note's strongest ink — but it is
+ * SECTION_LABEL's size and weight WITHOUT the uppercase and tracking, because that
+ * pair is what makes a section header here and this is not one. It is also producer
+ * copy: text-transforming a sentence someone else wrote is editing it.
+ */
+const ORIGINATION_CLAUSE: React.CSSProperties = {
+  font: "600 10.5px/1.45 var(--font-ui)",
+  color: "var(--text-2)",
+};
+
+/**
+ * The date is the fact the disclosure exists to deliver — every window below this line
+ * is measured from it — so it gets the panel's figure treatment (tabular, so a stamp
+ * lines up with the prices in the rail) and sits a step back in --muted, because the
+ * clause has to be read first for the date to mean anything.
+ */
+const ORIGINATION_STAMP: React.CSSProperties = {
+  font: "600 10.5px/1.45 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
+  color: "var(--muted)",
+};
+
+/**
+ * Matches `.obs-prophet-source` in observatory.css — the Prophet family's declared
+ * spec for provenance prose, down to the 64ch measure that keeps the line readable
+ * when the centre column stretches. Inline rather than by class only because every
+ * other style in this file is.
+ */
+const ORIGINATION_RECEIPT: React.CSSProperties = {
+  margin: "5px 0 0",
+  font: "500 10.5px/1.45 var(--font-ui)",
+  color: "var(--muted)",
+  maxWidth: "64ch",
 };
 
 const SECTION_BOX: React.CSSProperties = {
