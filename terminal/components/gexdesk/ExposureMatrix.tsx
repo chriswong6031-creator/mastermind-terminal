@@ -27,6 +27,13 @@ import React, { useMemo, useState } from "react";
 import { makeGexT, type GexDeskKey } from "./gexStrings";
 import type { Lang } from "@/lib/i18n";
 import type { MatrixDoc } from "./matrixDoc";
+import {
+  buildMatrixUnusualRail,
+  type ExactContractUnusualFlag,
+  type ExactSideReceipt,
+  type MatrixOptionSide,
+  type MatrixUnusualRailModel,
+} from "./matrixUnusual";
 import { MatrixConfluence } from "./MatrixConfluence";
 import {
   StrikeExpiryMatrix,
@@ -133,6 +140,10 @@ export function ExposureMatrix({
     [matrix, spot, levels.call_wall, levels.put_support, metric, range, effectiveCols, norm, scope]
   );
 
+  // IMPORTANT: raw cells, before buildMatrixGrid() coarsens strikes and sums sides.
+  // This is an annotation rail, never a scalar lens and never a heatmap input.
+  const unusualRail = useMemo(() => buildMatrixUnusualRail(matrix), [matrix]);
+
   const badgeLabel = (k: LevelBadgeKey) => t(k);
 
   // Provenance: the session the CELLS describe. The desk's asof chip above speaks for
@@ -140,7 +151,7 @@ export function ExposureMatrix({
   const matrixSession = grid?.sessionDate || (matrix?.asof ?? "").slice(0, 10);
 
   return (
-    <div style={OUTER}>
+    <div style={OUTER} className="obs-mtx-exposure">
       {/* ── Toolbar ─────────────────────────────────────────────────────── */}
       <div style={TOOLBAR}>
         <div style={CHIP_GROUP} role="group" aria-label={t("mtxModeAria")}>
@@ -254,6 +265,11 @@ export function ExposureMatrix({
         <div className="obs-note" style={BANNER}>{t("magnitudeFirst")}</div>
       )}
 
+      {/* Exact-side EOD baseline — deliberately outside the shared heatmap renderer. */}
+      {mode === "single" && matrix && (
+        <ExactSideUnusualRail model={unusualRail} lang={lang} t={t} />
+      )}
+
       {/* ── Body ────────────────────────────────────────────────────────── */}
       {mode === "confluence" ? (
         <MatrixConfluence fetchMatrix={fetchMatrix} metric={metric} lang={lang} />
@@ -315,6 +331,168 @@ export function ExposureMatrix({
   );
 }
 
+function fmtContracts(value: number, lang: Lang): string {
+  return value.toLocaleString(lang === "zh" ? "zh-CN" : "en-US", {
+    maximumFractionDigits: 2,
+  });
+}
+
+function stateCopyKey(state: MatrixUnusualRailModel["state"]): GexDeskKey {
+  switch (state) {
+    case "insufficient": return "mtxUnusualInsufficient";
+    case "clear": return "mtxUnusualClear";
+    case "malformed": return "mtxUnusualMalformed";
+    case "unavailable": return "mtxUnusualUnavailable";
+    case "flagged": return "mtxUnusualFlagged";
+  }
+}
+
+function receiptCopyKey(receipt: ExactSideReceipt): GexDeskKey {
+  if (receipt.availability !== "eligible") {
+    return receipt.availability === "unavailable"
+      ? "mtxUnusualReceiptUnavailable"
+      : "mtxUnusualReceiptWithheld";
+  }
+  return receipt.status === "unusual"
+    ? "mtxUnusualReceiptUnusual"
+    : "mtxUnusualReceiptNormal";
+}
+
+function ExactSideReceiptRow({
+  side,
+  receipt,
+  lang,
+  t,
+}: {
+  side: MatrixOptionSide;
+  receipt: ExactSideReceipt;
+  lang: Lang;
+  t: (key: GexDeskKey) => string;
+}) {
+  const sideKey = side === "call" ? "mtxUnusualCall" : "mtxUnusualPut";
+  const receiptState = receipt.availability === "eligible" ? receipt.status : receipt.availability;
+  return (
+    <div
+      className={`obs-mtx-unusual-receipt ${side} ${receiptState}`}
+      data-testid="matrix-unusual-side"
+      data-side={side}
+      data-status={receiptState}
+    >
+      <div className="obs-mtx-unusual-receipt-top">
+        <span
+          className="obs-tag obs-mtx-unusual-side"
+          style={{ "--c": side === "call" ? "var(--brand-2)" : "var(--ai)" } as React.CSSProperties}
+        >
+          {t(sideKey)}
+        </span>
+        <span className="obs-mtx-unusual-receipt-status">{t(receiptCopyKey(receipt))}</span>
+        {receipt.availability === "eligible" && (
+          <strong className="num obs-mtx-unusual-ratio">{receipt.ratio.toFixed(2)}×</strong>
+        )}
+      </div>
+      {receipt.availability === "eligible" && (
+        <div className="obs-mtx-unusual-meta">
+          {t("mtxUnusualCurrent")} <span className="num">{fmtContracts(receipt.currentVolume, lang)}</span>
+          {" · "}{t("mtxUnusualMedian")} <span className="num">{fmtContracts(receipt.medianVol30d, lang)}</span>
+          {" · "}<span className="num">{receipt.samples}</span> {t("mtxUnusualSamples")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExactContractFlagCard({
+  flag,
+  lang,
+  t,
+}: {
+  flag: ExactContractUnusualFlag;
+  lang: Lang;
+  t: (key: GexDeskKey) => string;
+}) {
+  return (
+    <article
+      className="obs-mtx-unusual-card"
+      data-testid="matrix-unusual-contract"
+      data-strike={String(flag.strike)}
+      data-expiry={flag.expiry}
+    >
+      <div className="obs-mtx-unusual-card-top">
+        <strong className="num obs-mtx-unusual-strike">
+          {flag.strike.toLocaleString(lang === "zh" ? "zh-CN" : "en-US", { maximumFractionDigits: 3 })}
+        </strong>
+        <span className="num obs-mtx-unusual-expiry">{flag.expiry}</span>
+      </div>
+      <div className="obs-mtx-unusual-receipts">
+        {(["call", "put"] as const).map((side) => (
+          <ExactSideReceiptRow
+            key={side}
+            side={side}
+            receipt={flag.sides[side]}
+            lang={lang}
+            t={t}
+          />
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function ExactSideUnusualRail({
+  model,
+  lang,
+  t,
+}: {
+  model: MatrixUnusualRailModel;
+  lang: Lang;
+  t: (key: GexDeskKey) => string;
+}) {
+  const stateText = model.state === "flagged"
+    ? t("mtxUnusualFlagged").replace("{n}", String(model.flags.length))
+    : t(stateCopyKey(model.state));
+
+  return (
+    <section
+      className="obs-mtx-unusual"
+      aria-label={t("mtxUnusualAria")}
+      data-testid="matrix-unusual-rail"
+      data-state={model.state}
+    >
+      <div className="obs-mtx-unusual-head">
+        <span className="obs-lbl">{t("mtxUnusualTitle")}</span>
+        <span className="obs-mtx-unusual-rule">{t("mtxUnusualRule")}</span>
+        <span
+          className="obs-tag obs-mtx-unusual-authority"
+          style={{ "--c": "var(--muted)" } as React.CSSProperties}
+        >
+          {t("mtxUnusualAuthority")}
+        </span>
+        <span className="obs-mtx-unusual-exact">{t("mtxUnusualExactNote")}</span>
+        {model.state === "flagged" && (
+          <span className="obs-mtx-unusual-summary" aria-live="polite">{stateText}</span>
+        )}
+      </div>
+
+      {model.state === "flagged" ? (
+        <div className="obs-mtx-unusual-track">
+          {model.flags.map((flag) => (
+            <ExactContractFlagCard
+              key={`${flag.expiry}|${flag.strike}`}
+              flag={flag}
+              lang={lang}
+              t={t}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className={`obs-mtx-unusual-state ${model.state}`} aria-live="polite">
+          {stateText}
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const OUTER: React.CSSProperties = {
@@ -322,7 +500,12 @@ const OUTER: React.CSSProperties = {
   minHeight: 0,
   display: "flex",
   flexDirection: "column",
-  overflow: "hidden",
+  // When the desktop desk has a short vertical budget, fixed honesty/rail/legend rows
+  // must not collapse the matrix to 0px. The desk grid keeps a small basis and this
+  // container scrolls the whole dossier; tablet/mobile still get the taller page band.
+  overflowX: "hidden",
+  overflowY: "auto",
+  overscrollBehavior: "contain",
   background: "var(--bg)",
 };
 

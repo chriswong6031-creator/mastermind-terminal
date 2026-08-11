@@ -2569,6 +2569,62 @@
 @media (max-width: 860px) {
   .obs-gexdesk-ladder-region { min-height: min(430px, 62dvh) !important; }
 }
+
+/* Exposure Matrix: exact-side EOD volume baseline rail.
+   This lives outside StrikeExpiryMatrix on purpose: the heatmap may bucket strikes and
+   sum call+put, while these cards preserve the producer's exact (expiry,strike,side)
+   identity. Horizontal overflow belongs to the rail, never to the document. */
+.obs-mtx-unusual{
+  display:flex;align-items:stretch;gap:8px;flex:none;min-width:0;padding:5px 8px;border-bottom:1px solid var(--line);
+  background:color-mix(in srgb,var(--panel) 90%,var(--bg));
+}
+.obs-mtx-unusual-head{display:flex;align-content:center;align-items:center;gap:5px;flex:0 0 310px;min-width:0;flex-wrap:wrap}
+.obs-mtx-unusual-rule{font:600 9.5px/1.25 var(--font-ui);color:var(--text-2);white-space:nowrap}
+.obs-mtx-unusual-authority{font-size:7.5px;padding:2px 6px;letter-spacing:.07em}
+.obs-mtx-unusual-exact{order:5;flex:1 0 100%;font:500 8.5px/1.2 var(--font-ui);color:var(--muted);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.obs-mtx-unusual-summary{font:650 9px/1.2 var(--font-ui);color:var(--text-2);white-space:nowrap}
+.obs-mtx-unusual-track{
+  display:flex;gap:6px;flex:1;min-width:0;margin:0;padding-bottom:1px;overflow-x:auto;overflow-y:hidden;
+  overscroll-behavior-x:contain;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;
+}
+.obs-mtx-unusual-card{
+  flex:0 0 310px;min-width:0;padding:4px 7px;border:1px solid var(--line-2);border-radius:var(--r-tile);
+  background:var(--bg);scroll-snap-align:start;
+}
+.obs-mtx-unusual-card-top{display:flex;align-items:center;gap:6px;min-width:0;padding-bottom:3px;border-bottom:1px solid var(--line)}
+.obs-mtx-unusual-side{font-size:7.5px;padding:2px 5px;letter-spacing:.06em;flex:none}
+.obs-mtx-unusual-strike{font:700 11px/1 var(--font-num);color:var(--text);flex:none}
+.obs-mtx-unusual-expiry{margin-left:auto;font:500 9px/1 var(--font-num);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.obs-mtx-unusual-receipts{display:grid;gap:3px;margin-top:3px}
+.obs-mtx-unusual-receipt{min-width:0;padding:2px 4px;border-left:2px solid var(--line-2);background:color-mix(in srgb,var(--panel) 56%,transparent)}
+.obs-mtx-unusual-receipt.call{border-left-color:color-mix(in srgb,var(--brand-2) 62%,transparent)}
+.obs-mtx-unusual-receipt.put{border-left-color:color-mix(in srgb,var(--ai) 62%,transparent)}
+.obs-mtx-unusual-receipt.withheld{border-left-color:color-mix(in srgb,var(--danger) 62%,transparent)}
+.obs-mtx-unusual-receipt-top{display:flex;align-items:center;gap:5px;min-width:0}
+.obs-mtx-unusual-receipt-status{font:650 7.5px/1 var(--font-ui);letter-spacing:.06em;color:var(--muted);white-space:nowrap}
+.obs-mtx-unusual-receipt.unusual .obs-mtx-unusual-receipt-status{color:var(--signal)}
+.obs-mtx-unusual-receipt.withheld .obs-mtx-unusual-receipt-status{color:var(--danger)}
+.obs-mtx-unusual-ratio{margin-left:auto;font:750 12px/1 var(--font-num);color:var(--signal);flex:none}
+.obs-mtx-unusual-receipt.normal .obs-mtx-unusual-ratio{color:var(--text-2)}
+.obs-mtx-unusual-meta{margin-top:2px;font:500 8px/1.2 var(--font-ui);color:var(--muted);white-space:nowrap}
+.obs-mtx-unusual-state{
+  flex:1;align-self:center;margin:0;padding:5px 7px;border-radius:var(--r-sm);font:500 9.5px/1.35 var(--font-ui);
+  color:var(--muted);background:color-mix(in srgb,var(--muted) 6%,transparent);
+}
+.obs-mtx-unusual-state.clear{color:var(--text-2)}
+.obs-mtx-unusual-state.malformed{color:var(--danger);background:color-mix(in srgb,var(--danger) 7%,transparent)}
+/* Preserve a usable matrix viewport when the desktop desk's fixed rows exceed its
+   short body track; ExposureMatrix owns the resulting outer dossier scroll. */
+.obs-mtx-exposure .obs-mtx-desk-grid{flex:1 0 140px!important;min-height:140px!important}
+@media (max-width:860px){
+  .obs-mtx-unusual{display:block;padding:7px 8px 8px}
+  .obs-mtx-unusual-head{display:flex;flex-basis:auto}
+  .obs-mtx-unusual-exact{order:5;flex:1 0 100%}
+  .obs-mtx-unusual-summary{order:6;flex:1 0 100%;margin-top:2px}
+  .obs-mtx-unusual-track{margin-top:5px;scroll-padding-left:1px}
+  .obs-mtx-unusual-state{margin-top:5px}
+  .obs-mtx-unusual-card{flex-basis:min(330px,86vw)}
+}
 /* Drawer variant for living INSIDE the left column's capped height budget
    (canonicalises the inline XDRAWER_ROOT/XDRAWER_BODY mechanics). */
 .obs-xdrawer--inline { display: flex; flex-direction: column; min-height: 0; flex-shrink: 1; }

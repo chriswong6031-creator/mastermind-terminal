@@ -585,14 +585,16 @@ test("Intraday Surface separates session, observed frames, and candle interval a
 });
 
 test("the retired ?tab=prism deep-link opens the Exposure matrix", async ({ page }, testInfo) => {
-  // The Exposure desk's content region collapses to 0px at 390px wide — pre-existing,
-  // reproduced identically on origin/master and filed as a follow-up in PR #344's body
-  // ("Exposure content region collapses at 390px"). The matrix cannot be asserted visible
-  // there until that lands; the deep-link contract itself is width-independent.
-  test.skip(
-    testInfo.project.name === "mobile",
-    "Exposure content region collapses at 390px — pre-existing, filed as follow-up in PR #344 body"
-  );
+  // Tablet runs the same responsive surface in Chinese; desktop/mobile stay English.
+  // This pins the LEX tuple on a real render instead of merely typechecking the keys.
+  const zh = testInfo.project.name === "tablet";
+  if (zh) {
+    await page.addInitScript(() => {
+      localStorage.setItem("mm.lang", "zh");
+      document.documentElement.setAttribute("data-lang", "zh");
+      document.documentElement.setAttribute("lang", "zh-CN");
+    });
+  }
 
   // §5.3 merged PRISM into the Exposure desk. The old deep-link must not 404 or dead-end
   // on the ladder: the TARGET side (GexDeskView) resolves the alias onto its matrix view.
@@ -600,7 +602,7 @@ test("the retired ?tab=prism deep-link opens the Exposure matrix", async ({ page
 
   // Named by its VISIBLE text. The chip deliberately carries no aria-label — one would
   // outrank the text in accessible-name computation and make this locator unmatchable.
-  const matrixChip = page.getByRole("button", { name: "Matrix", exact: true });
+  const matrixChip = page.getByRole("button", { name: zh ? "矩阵" : "Matrix", exact: true });
   await expect(matrixChip).toBeVisible({ timeout: 15_000 });
   await expect(matrixChip).toHaveAttribute("aria-pressed", "true");
 
@@ -611,11 +613,82 @@ test("the retired ?tab=prism deep-link opens the Exposure matrix", async ({ page
   // Nightly EOD provenance is stated on the view — never live chrome.
   await expect(page.getByTestId("matrix-asof")).toBeVisible();
 
+  // Desk-only exact-side rail. One card per exact cell carries BOTH side receipts in
+  // stable identity order; no fifth scalar lens appears in the matrix controls.
+  const unusualRail = page.getByRole("region", {
+    name: zh ? "逐边收盘成交量基线" : "Exact-side EOD volume baseline",
+  });
+  await expect(unusualRail).toBeVisible();
+  await expect(unusualRail).toHaveAttribute("data-state", "flagged");
+  await expect(unusualRail).toContainText(zh ? "逐边收盘基线" : "Exact-side EOD baseline");
+  await expect(unusualRail).toContainText(zh ? "独立于热图控制项" : "independent of heatmap controls");
+  await expect(unusualRail).toContainText(zh ? "仅供展示" : "DISPLAY ONLY");
+  await unusualRail.scrollIntoViewIfNeeded();
+  const visibleRail = await unusualRail.boundingBox();
+  const viewportHeight = await page.evaluate(() => window.innerHeight);
+  expect(visibleRail?.height ?? 0).toBeGreaterThan(40);
+  expect(visibleRail?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(viewportHeight);
+  expect((visibleRail?.y ?? 0) + (visibleRail?.height ?? 0)).toBeGreaterThan(0);
+  const exactContracts = unusualRail.getByTestId("matrix-unusual-contract");
+  await expect(exactContracts).toHaveCount(3);
+  expect(await exactContracts.evaluateAll((cards) => cards.map((card) => ({
+    strike: card.getAttribute("data-strike"),
+    expiry: card.getAttribute("data-expiry"),
+  })))).toEqual([
+    { strike: "749", expiry: "2026-07-10" },
+    { strike: "750", expiry: "2026-07-10" },
+    { strike: "751", expiry: "2026-07-10" },
+  ]);
+  expect(await exactContracts.evaluateAll((cards) => cards.map((card) =>
+    [...card.querySelectorAll<HTMLElement>("[data-testid='matrix-unusual-side']")].map((side) => ({
+      side: side.dataset.side,
+      status: side.dataset.status,
+    }))
+  ))).toEqual([
+    [{ side: "call", status: "unusual" }, { side: "put", status: "normal" }],
+    [{ side: "call", status: "normal" }, { side: "put", status: "unusual" }],
+    [{ side: "call", status: "unusual" }, { side: "put", status: "unavailable" }],
+  ]);
+  await expect(exactContracts.nth(0).locator("[data-side='put']")).toContainText("1.98×");
+  await expect(exactContracts.nth(1).locator("[data-side='call']")).toContainText("2.66×");
+  await expect(exactContracts.nth(2).locator("[data-side='put']"))
+    .toContainText(zh ? "不可用" : "UNAVAILABLE");
+  await expect(unusualRail.getByText("3.00×", { exact: true })).toBeVisible();
+
+  // The rail owns any horizontal overflow. On mobile it is intentionally swipeable;
+  // no width may leak into the page. The matrix keeps a real vertical viewport even on
+  // desktop's short two-pane track, where the whole dossier becomes locally scrollable.
+  const unusualTrack = unusualRail.locator(".obs-mtx-unusual-track");
+  const railGeometry = await unusualTrack.evaluate((el) => ({
+    clientWidth: el.clientWidth,
+    scrollWidth: el.scrollWidth,
+    overflowX: getComputedStyle(el).overflowX,
+  }));
+  expect(railGeometry.overflowX).toBe("auto");
+  expect(railGeometry.scrollWidth).toBeGreaterThanOrEqual(railGeometry.clientWidth);
+  if (testInfo.project.name === "mobile") {
+    expect(railGeometry.scrollWidth).toBeGreaterThan(railGeometry.clientWidth);
+    await unusualTrack.evaluate((el) => el.scrollTo({ left: el.scrollWidth }));
+    await expect.poll(() => unusualTrack.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+    await unusualTrack.evaluate((el) => el.scrollTo({ left: 0 }));
+    await expect.poll(() => unusualTrack.evaluate((el) => el.scrollLeft)).toBe(0);
+  }
+
   const matrix = page.locator("table").filter({
-    has: page.getByRole("columnheader", { name: "Strike", exact: true }),
+    has: page.getByRole("columnheader", { name: zh ? "行权价" : "Strike", exact: true }),
   });
   await expect(matrix).toBeVisible();
   await expect.poll(() => matrix.locator("tbody > tr").count()).toBeGreaterThanOrEqual(20);
+  const matrixViewport = page.locator(".obs-mtx-exposure .obs-mtx-desk-grid");
+  await expect(matrixViewport).toBeVisible();
+  expect(await matrixViewport.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(139);
+  if (testInfo.project.name === "desktop") {
+    const dossier = page.locator(".obs-mtx-exposure");
+    await expect.poll(() => dossier.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+    await dossier.evaluate((el) => el.scrollTo({ top: el.scrollHeight }));
+    await expect.poll(() => dossier.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    await dossier.evaluate((el) => el.scrollTo({ top: 0 }));
+  }
 
   const overflow = await page.evaluate(() => ({
     viewport: window.innerWidth,

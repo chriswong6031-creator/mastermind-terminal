@@ -43,3 +43,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# This hand-authored companion is a contract fixture, not a generated data cache.
+!public/data/matrix_unusual_fixture.json
