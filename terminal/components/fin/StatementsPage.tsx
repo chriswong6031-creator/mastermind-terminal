@@ -15,13 +15,22 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLang } from "../../lib/i18n";
-import { pick, fmtNum, fmtDate } from "../../lib/finFormat";
+import { pick, fmtNum, fmtDate, statementCurrencyLabel } from "../../lib/finFormat";
 import type { Fund, StatementPeriodSet } from "../../lib/fund";
 import { historySpan, vendorGapNotice } from "../../lib/finStatements";
 import {
+  comparablePeriodChanges,
   cumulativeQuarterNote,
+  incomeViewFamilyDisclosure,
   incomeChartValues,
+  incomeViewTopLineLabel,
   incomeView,
+  isIndustrialIncomeView,
+  incomeViewOperatingExpenseLabel,
+  resolveStatementBasis,
+  statementBasisAvailable,
+  statementCadenceLabel,
+  statementPeriodCountLabel,
   type IncomeView,
 } from "../../lib/finStatementMath";
 import { Bars, MiniTable, type Series, type MiniRow } from "./FinCharts";
@@ -46,7 +55,10 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
   const { lang } = useLang();
   const zh = lang === "zh";
   const [stmt, setStmt] = useState<Stmt>("income");
-  const [aq, setAQ] = useState<AQ>("annual");
+  const [requestedAQ, setAQ] = useState<AQ>("annual");
+  const annualAvailable = statementBasisAvailable(fund?.statements?.annual);
+  const interimAvailable = statementBasisAvailable(fund?.statements?.quarterly);
+  const aq: AQ = resolveStatementBasis(requestedAQ, annualAvailable, interimAvailable);
 
   // period-end → tx id. Quarterly columns match a quarter's end-date exactly.
   // Annual columns carry the fiscal-YEAR end (e.g. "2026-07-31") which need not
@@ -93,8 +105,11 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
     );
   }
 
-  const set: StatementPeriodSet | undefined = aq === "annual" ? fund.statements?.annual : fund.statements?.quarterly;
-  const periods = set?.periods ?? [];
+  const set: StatementPeriodSet | null | undefined = aq === "annual" ? fund.statements?.annual : fund.statements?.quarterly;
+  // Income columns come from the canonical view. The producer may call the interim set
+  // half-year, quarter or mixed; consumers never reinterpret those columns from display text.
+  const view: IncomeView = incomeView(sym, set, aq);
+  const periods = stmt === "income" ? view.periods : (set?.periods ?? []);
   const txForPeriod = (i: number): string | null => {
     const end = set?.period_end?.[i];
     if (!end) return null;
@@ -121,7 +136,6 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
   // table read a differenced copy, so a cumulative-YTD name plotted 82.9B in the strip and
   // printed 1.6B in the row beneath it. Both now read this object — see
   // lib/finStatementMath.incomeChartValues, whose arrays ARE the table's arrays.
-  const view: IncomeView = incomeView(sym, set, aq);
   const chartSeries: Series[] = buildChartSeries(stmt, set, view, zh).map((s) => ({
     ...s,
     values: s.values.slice(-CHART_CAP),
@@ -141,9 +155,9 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
   // actually files cumulative year-to-date interims, so the sentence can never describe a US
   // filer's numbers with somebody else's reporting convention.
   const cumNote = stmt === "income" ? cumulativeQuarterNote(view, zh) : null;
+  const familyNote = stmt === "income" ? incomeViewFamilyDisclosure(view, zh) : null;
 
-  const curLabel = `${pick(zh, "Currency:", "货币:")} ${fund.stmt_currency || "USD"}`;
-  const isEps = (label: string) => label.toLowerCase().includes("eps") || label.includes("每股");
+  const curLabel = statementCurrencyLabel(fund.stmt_currency, zh);
 
   // Header title tracks the selected statement so the chart above the pills is
   // never an unlabelled strip; the basis (A/Q + currency + as-of) rides the
@@ -155,11 +169,12 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
         ? pick(zh, "Balance sheet", "资产负债表")
         : pick(zh, "Cash flow", "现金流量表");
   const asofD = fund.asof ? fmtDate(fund.asof) : "";
-  const ccy = fund.stmt_currency || "USD";
+  const basis = statementCadenceLabel(set, aq, zh);
+  const ccyLabel = statementCurrencyLabel(fund.stmt_currency, zh);
   const basisLine = pick(
     zh,
-    `${aq === "annual" ? "Annual" : "Quarterly"} statements · ${ccy}${asofD ? ` · as of ${asofD}` : ""}`,
-    `${aq === "annual" ? "年度" : "季度"}报表 · ${ccy}${asofD ? ` · 截至 ${asofD}` : ""}`,
+    `${basis} statements · ${ccyLabel}${asofD ? ` · as of ${asofD}` : ""}`,
+    `${basis}报表 · ${ccyLabel}${asofD ? ` · 截至 ${asofD}` : ""}`,
   );
 
   return (
@@ -189,11 +204,15 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
           </button>
         </div>
         <div className="fin-toggle fin-aq">
-          <button className={aq === "annual" ? "on" : ""} onClick={() => setAQ("annual")}>
+          <button className={aq === "annual" ? "on" : ""} onClick={() => setAQ("annual")} disabled={!annualAvailable}>
             {pick(zh, "Annual", "年度")}
           </button>
-          <button className={aq === "quarterly" ? "on" : ""} onClick={() => setAQ("quarterly")}>
-            {pick(zh, "Quarterly", "季度")}
+          <button
+            className={aq === "quarterly" ? "on" : ""}
+            onClick={() => setAQ("quarterly")}
+            disabled={!interimAvailable}
+          >
+            {statementCadenceLabel(fund.statements?.quarterly, "quarterly", zh)}
           </button>
         </div>
       </div>
@@ -240,8 +259,8 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
             <span className="fin-sec-sub">
               {pick(
                 zh,
-                `${span.count} ${aq === "annual" ? "fiscal years" : "quarters"} · ${span.first}–${span.last}`,
-                `${span.count} 个${aq === "annual" ? "财年" : "季度"} · ${span.first}–${span.last}`,
+                `${statementPeriodCountLabel(set, aq, false)} · ${span.first}–${span.last}`,
+                `${statementPeriodCountLabel(set, aq, true)} · ${span.first}–${span.last}`,
               )}
             </span>
           )}
@@ -261,6 +280,11 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
         {cumNote && (
           <div className="fin-chart-note" style={{ marginBottom: 8, marginTop: 0 }}>
             {cumNote}
+          </div>
+        )}
+        {familyNote && (
+          <div className="fin-chart-note" style={{ marginBottom: 8, marginTop: 0 }}>
+            {familyNote}
           </div>
         )}
         <MiniTable
@@ -284,7 +308,7 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
 /* ── mini-chart series per statement type (§1.2) ── */
 function buildChartSeries(
   stmt: Stmt,
-  set: StatementPeriodSet | undefined,
+  set: StatementPeriodSet | null | undefined,
   view: IncomeView,
   zh: boolean,
 ): Series[] {
@@ -295,13 +319,20 @@ function buildChartSeries(
     // The NORMALIZED block — never `set.income`. These arrays are the same objects
     // buildRows prints, so the strip and the table cannot show different numbers.
     const inc = incomeChartValues(view);
-    return [
-      { name: pick(zh, "Total revenue", "总营收"), values: inc.revenue, color: "var(--brand)" },
-      { name: pick(zh, "Gross profit", "毛利"), values: inc.gross_profit, color: "var(--up)" },
+    const common: Series[] = [
+      { name: incomeViewTopLineLabel(view, zh), values: inc.revenue, color: "var(--brand)" },
       { name: pick(zh, "Operating income", "营业利润"), values: inc.op_income, color: "var(--warn)" },
       { name: pick(zh, "Pretax income", "税前利润"), values: inc.pretax_income, color: "var(--brand-2)" },
       { name: pick(zh, "Net income", "净利润"), values: inc.net_income, color: "var(--code-fn)" },
     ];
+    if (isIndustrialIncomeView(view)) {
+      common.splice(1, 0, {
+        name: pick(zh, "Gross profit", "毛利"),
+        values: inc.gross_profit,
+        color: "var(--up)",
+      });
+    }
+    return common;
   }
   if (stmt === "balance")
     return [
@@ -315,20 +346,10 @@ function buildChartSeries(
   ];
 }
 
-/* ── period-over-period % (annual) / YoY % (quarterly, lag 4) ── */
-function changeSeries(vals: (number | null)[], aq: AQ): (number | null)[] {
-  const lag = aq === "quarterly" ? 4 : 1;
-  return vals.map((v, i) => {
-    const prev = vals[i - lag];
-    if (v == null || prev == null || prev === 0) return null;
-    return ((v - prev) / Math.abs(prev)) * 100;
-  });
-}
-
 /* ── TV row taxonomy per statement (§4–6) ── */
 function buildRows(
   stmt: Stmt,
-  set: StatementPeriodSet | undefined,
+  set: StatementPeriodSet | null | undefined,
   view: IncomeView,
   aq: AQ,
   zh: boolean,
@@ -347,27 +368,38 @@ function buildRows(
   const mk = (label: string, values: (number | null)[], opts?: Partial<MiniRow>): MiniRow => ({
     label,
     values,
-    change: changeSeries(values, aq),
+    change: comparablePeriodChanges(values, set, aq),
     ...opts,
   });
 
   if (stmt === "income") {
-    const rows: MiniRow[] = [
-      mk(pick(zh, "Total revenue", "总营收"), inc.revenue, { bold: true }),
-      mk(pick(zh, "Cost of goods sold", "营业成本"), inc.cogs),
-      mk(pick(zh, "Gross profit", "毛利"), inc.gross_profit, { bold: true }),
-      mk(pick(zh, "Operating expenses (excl. COGS)", "营业费用（不含成本）"), view.opexExclCogs),
+    const rows: MiniRow[] = [mk(incomeViewTopLineLabel(view, zh), inc.revenue, { bold: true })];
+    if (isIndustrialIncomeView(view)) {
+      rows.push(
+        mk(pick(zh, "Cost of goods sold", "营业成本"), inc.cogs),
+        mk(pick(zh, "Gross profit", "毛利"), inc.gross_profit, { bold: true }),
+      );
+    }
+    rows.push(
+      mk(
+        incomeViewOperatingExpenseLabel(view, zh),
+        view.operatingExpenses,
+      ),
       mk(pick(zh, "Operating income", "营业利润"), inc.op_income, { bold: true }),
       mk(pick(zh, "Non-operating income (total)", "营业外收入（合计）"), inc.nonop_income),
       mk(pick(zh, "Pretax income", "税前利润"), inc.pretax_income, { bold: true }),
       mk(pick(zh, "Taxes", "税项"), inc.taxes),
       mk(pick(zh, "Net income", "净利润"), inc.net_income, { bold: true }),
-      mk(pick(zh, "EBITDA", "EBITDA"), inc.ebitda),
+    );
+    if (isIndustrialIncomeView(view)) {
+      rows.push(mk(pick(zh, "EBITDA", "EBITDA"), inc.ebitda));
+    }
+    rows.push(
       // EPS rows ride the same normalized block, so they stay internally consistent with
       // revenue / net income on a differenced cumulative-YTD statement.
       { label: pick(zh, "Basic EPS", "基本每股收益"), values: inc.eps_basic, fmt: epsFmt },
       { label: pick(zh, "Diluted EPS", "稀释每股收益"), values: inc.eps_diluted, fmt: epsFmt },
-    ];
+    );
     return rows;
   }
 

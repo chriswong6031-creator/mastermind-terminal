@@ -73,9 +73,51 @@ export interface CashflowBlock {
   fcf: NumArr;
 }
 
+export type StatementPeriodKind = "quarter" | "half_year" | "full_year" | "year_to_date";
+export type StatementReportingCadence = "annual" | "quarterly" | "semiannual" | "mixed";
+export type StatementNormalizationMethod =
+  | "as_reported"
+  | "as_reported_ytd"
+  | "difference_from_prior_ytd"
+  | "unavailable_missing_base";
+export type StatementSourceFamily =
+  | "industrial"
+  | "bank"
+  | "insurer"
+  | "financial_services"
+  /** One vendor row carries multiple complete statement formats; family-specific fields fail closed. */
+  | "ambiguous"
+  | "other";
+
 export interface StatementPeriodSet {
-  periods: string[]; // fiscal-year labels or "Q3 '26", oldest→newest
+  periods: string[]; // canonical display labels, oldest→newest (FY/Q/H/9M as applicable)
+  /** Canonical period start; derived periods begin the day after their cumulative base. */
+  period_start?: (string | null)[];
+  /** Vendor START_DATE before normalization, retained as source evidence. */
+  source_period_start?: (string | null)[];
   period_end: string[];
+  /** Explicit fiscal-cycle identity; avoids grouping a March-end FY by calendar year. */
+  fiscal_year?: string[];
+  /** Economic duration of each displayed column. A six-month value can never silently be a Q. */
+  period_kind?: StatementPeriodKind[];
+  /** Q=1..4, H=1..2; null for FY/YTD. Used for comparable-period YoY without label parsing. */
+  period_number?: (number | null)[];
+  /** Label of the vendor row before normalization (for example H1/FY behind displayed H1/H2). */
+  source_period_label?: string[];
+  /** Cadence represented by this transport set. `.quarterly` remains the v1 key for compatibility. */
+  reporting_cadence?: StatementReportingCadence;
+  /** Whether each SOURCE flow row was cumulative YTD before the producer adapter normalized it. */
+  is_cumulative?: boolean[];
+  /** Per-column producer normalization receipt. Presence makes the canonical values authoritative. */
+  normalization_method?: StatementNormalizationMethod[];
+  /** Basis of the emitted values. Canonical HK interim artifacts are discrete_period. */
+  flow_basis?: "as_reported" | "cumulative_ytd" | "discrete_period" | "mixed_period";
+  source_market?: "us" | "cn" | "hk" | "ca" | "intl" | "crypto";
+  source_family?: StatementSourceFamily;
+  /** Evidence used when Terminal supplies a conservative family for a legacy artifact. */
+  source_family_basis?: "profile_sector_absent_industrial_structure";
+  /** Historical vendor family, aligned per period; a minority of issuers change schema family. */
+  source_family_by_period?: StatementSourceFamily[];
   income: IncomeBlock;
   balance: BalanceBlock;
   cashflow: CashflowBlock;
@@ -114,8 +156,9 @@ export interface StatementPeriodSet {
 }
 
 export interface FundStatements {
-  annual: StatementPeriodSet;
-  quarterly: StatementPeriodSet;
+  /** A source gap can leave either basis unavailable; consumers must preserve that null honestly. */
+  annual: StatementPeriodSet | null;
+  quarterly: StatementPeriodSet | null;
 }
 
 export interface RatiosCurrent {
@@ -268,7 +311,7 @@ export interface Fund {
   ticker: string;
   asof: string;
   quote_currency: string; // trading currency (price/mktcap/dividends)
-  stmt_currency: string; // financial-reporting currency (statements/estimates)
+  stmt_currency: string | null; // financial-reporting currency (statements/estimates); null = unknown
   src: {
     statements: string;
     estimates: string | null;
@@ -446,6 +489,49 @@ function negMark(key: string): void {
   negCache.set(key, Date.now() + NEG_TTL);
 }
 
+function withFinancialFamilyFallback(set: StatementPeriodSet): StatementPeriodSet {
+  // Explicit producer taxonomy, especially a historical by-period receipt, always wins.
+  if (set.source_family != null || (set.source_family_by_period?.length ?? 0) > 0) return set;
+  // `Financial Services` is a broad profile sector: payment networks and exchanges can carry a
+  // conventional cost-of-revenue / gross-profit statement. Any sourced structural value keeps
+  // that set industrial-compatible; only a wholly absent industrial structure fails closed.
+  const hasIndustrialStructure = [set.income?.cogs, set.income?.gross_profit]
+    .some((values) => values?.some((value) => value != null && Number.isFinite(value)));
+  if (hasIndustrialStructure) return set;
+  return {
+    ...set,
+    source_family: "financial_services",
+    source_family_basis: "profile_sector_absent_industrial_structure",
+  };
+}
+
+/**
+ * Legacy US artifacts predate statement-family metadata. Combine their sourced profile sector
+ * with the statement's own structural evidence to fail closed for JPM/BAC-style statements while
+ * preserving V/MA/exchange-style industrial rows. This is deliberately a presentation
+ * classification, not an attempt to coerce bank/insurer statements into one industrial schema,
+ * and it never overrides producer-owned taxonomy.
+ */
+export function applyLegacyStatementFamilyFallback(fund: Fund): Fund {
+  if (fund.profile?.sector?.trim().toLowerCase() !== "financial services") return fund;
+  // Some valid source-gap artifacts carry a null annual or interim set even though the frozen
+  // v1 TypeScript shape predates that reality. Classify only sets that actually exist.
+  const annual = fund.statements?.annual;
+  const quarterly = fund.statements?.quarterly;
+  if (!annual && !quarterly) return fund;
+  const nextAnnual = annual ? withFinancialFamilyFallback(annual) : annual;
+  const nextQuarterly = quarterly ? withFinancialFamilyFallback(quarterly) : quarterly;
+  if (nextAnnual === annual && nextQuarterly === quarterly) return fund;
+  return {
+    ...fund,
+    statements: {
+      ...fund.statements,
+      ...(nextAnnual ? { annual: nextAnnual } : {}),
+      ...(nextQuarterly ? { quarterly: nextQuarterly } : {}),
+    },
+  };
+}
+
 /** getFund — <SYM>.fund.json, negative-cached against long-tail 404 storms. */
 export async function getFund(sym: string): Promise<Fund | null> {
   const key = "fund:" + sym;
@@ -455,7 +541,7 @@ export async function getFund(sym: string): Promise<Fund | null> {
     negMark(key);
     return null;
   }
-  return data;
+  return applyLegacyStatementFamilyFallback(data);
 }
 
 /** getOpts — <SYM>.opts.json, negative-cached (most symbols are not optionable). */

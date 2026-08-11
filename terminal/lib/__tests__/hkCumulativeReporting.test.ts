@@ -1,8 +1,9 @@
 /**
  * Is Hong Kong actually a cumulative-year-to-date market?
  *
- * `CUMULATIVE_YTD_MARKETS = ["cn", "hk"]` turns income differencing ON for every HK name, and
- * it shipped on the strength of a prose claim rather than a measurement. The doubt was
+ * `CUMULATIVE_YTD_MARKETS = ["cn", "hk"]` drives the conservative legacy fallback when producer
+ * metadata is absent. Canonical HK artifacts now carry an explicit flow basis and bypass that
+ * heuristic. The original doubt was
  * specific and reasonable: several HK issuers — Tencent is the usual example — publish
  * DISCRETE quarterly figures in their own results announcements, and `isCumulativeShape` can
  * be satisfied by any strictly-rising discrete series. If HK were discrete, differencing would
@@ -25,18 +26,29 @@
  * quarter Tencent published — the numbers below are lifted from the real payload and agree
  * with Tencent's reported figures to the cent. "hk" stays.
  *
- * The second suite pins the part that is NOT fine — see its own comment.
+ * The second suite pins the source-grounded semiannual contract and no-double-difference gate.
  */
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import {
   CUMULATIVE_YTD_MARKETS,
-  discreteQuarters,
   filesCumulativeQuarters,
   incomeView,
   isCumulativeShape,
+  comparablePeriodChanges,
+  statementCadenceLabel,
   statementMarket,
 } from "../finStatementMath";
-import type { IncomeBlock, StatementPeriodSet } from "../fund";
+import {
+  buildEpsDumbbell,
+  buildEpsFromStatements,
+  buildRevenueFromStatements,
+  default as EarningsPage,
+  formatSurprisePercent,
+  resolveEarningsMode,
+} from "../../components/fin/EarningsPage";
+import type { Fund, FundEstimates, IncomeBlock, StatementPeriodSet } from "../fund";
 
 function mkIncome(over: Partial<IncomeBlock> = {}): IncomeBlock {
   return {
@@ -125,65 +137,200 @@ describe("HK files cumulative year-to-date interims (verified against live paylo
   });
 });
 
-/**
- * KNOWN DEFECT, pinned deliberately so it cannot drift silently — NOT an endorsement.
- *
- * The measurement above also found the cadence: 92.0% of HK fiscal years carry only TWO rows
- * (interim + annual). HK issuers mostly file SEMI-ANNUALLY, which `gen_fund_hk.py` already
- * knows — its `build_earnings` docstring says so in as many words — but `_q_label` still labels
- * every row by the calendar month of its period end, so a semi-annual filer's two rows become
- * "Q2" and "Q4" and land in `statements.quarterly`.
- *
- * Run end-to-end through the real 0001.HK (CK Hutchison) payload, that produces:
- *   • every H1 column → a DASH, because its cumulative base sits in the prior fiscal year
- *     (6 of 12 columns blank), and
- *   • every "Q4" column → FY − H1, which is H2: a SIX-MONTH figure under a quarter label.
- *
- * The dashes are the house stance working as intended (no number we cannot stand behind). The
- * "Q4" label on a half-year figure is not — it is a real mislabeling of a published financial
- * figure, and it reaches ~92% of HK names. Fixing it means changing the period LABELS the
- * generator emits (and therefore every HK fund.json), which is a figures-affecting change that
- * belongs in its own reviewed PR, not smuggled into this one. Pinned here so the next person
- * finds it already measured.
- */
-const CKH_PERIODS = [
-  "Q2 2020", "Q4 2020", "Q2 2021", "Q4 2021", "Q2 2022", "Q4 2022",
-  "Q2 2023", "Q4 2023", "Q2 2024", "Q4 2024", "Q2 2025", "Q4 2025",
-];
-/** As filed, HKD, verbatim from the payload: H1 then FY, six times over — no Q1 or Q3 exists. */
-const CKH_AS_FILED: (number | null)[] = [
-  113_861_209_440, 224_209_529_440, 112_743_511_680, 229_620_507_200,
-  112_336_048_020, 234_480_695_190, 122_970_926_460, 249_731_576_500,
-  124_536_098_680, 260_542_280_040, 126_879_603_500, 252_934_115_920,
-];
+/** Producer-normalized 0001.HK-style H1/H2 series. The v1 transport key remains `quarterly`,
+ * but source-owned metadata—not the key or calendar month—defines its cadence and identity. */
+const CKH_PERIODS = ["H1 2023", "H2 2023", "H1 2024", "H2 2024", "H1 2025", "H2 2025"];
+const CKH_DISCRETE = [122_970_926_460, 126_760_650_040, 124_536_098_680, 136_006_181_360,
+  126_879_603_500, 126_054_512_420];
 
-describe("semi-annual HK filers — current behaviour, pinned as a known defect", () => {
-  it("has no Q1 or Q3 rows at all, only the H1 and FY filings", () => {
-    const quarters = new Set(CKH_PERIODS.map((p) => p.slice(0, 2)));
-    expect([...quarters].sort()).toEqual(["Q2", "Q4"]);
+function mkCanonicalSemiannual(): StatementPeriodSet {
+  return {
+    ...mkSet(CKH_PERIODS, CKH_DISCRETE),
+    fiscal_year: ["2023", "2023", "2024", "2024", "2025", "2025"],
+    period_kind: ["half_year", "half_year", "half_year", "half_year", "half_year", "half_year"],
+    period_number: [1, 2, 1, 2, 1, 2],
+    reporting_cadence: "semiannual",
+    flow_basis: "discrete_period",
+    is_cumulative: [true, true, true, true, true, true],
+    normalization_method: [
+      "as_reported_ytd", "difference_from_prior_ytd",
+      "as_reported_ytd", "difference_from_prior_ytd",
+      "as_reported_ytd", "difference_from_prior_ytd",
+    ],
+    source_family: "industrial",
+    income: mkIncome({
+      revenue: CKH_DISCRETE,
+      eps_basic: [4.01, null, 4.33, null, 4.17, null],
+    }),
+  } as StatementPeriodSet;
+}
+
+function mkEarningsFund(over: {
+  quarterly?: StatementPeriodSet | null;
+  q?: Fund["earnings"]["q"];
+  fy?: Fund["earnings"]["fy"];
+  estimates?: FundEstimates | null;
+}): Fund {
+  return {
+    ticker: "TEST.HK",
+    asof: "2026-08-11",
+    stmt_currency: "HKD",
+    statements: { quarterly: over.quarterly ?? null },
+    earnings: {
+      next_date: null,
+      next_period: null,
+      next_eps_est: null,
+      next_rev_est: null,
+      q: over.q ?? [],
+      fy: over.fy ?? [],
+    },
+    estimates: over.estimates ?? null,
+  } as unknown as Fund;
+}
+
+describe("source-grounded HK semiannual normalization", () => {
+  it("shows H1/H2 and reports the real cadence, never fabricated Q2/Q4", () => {
+    const set = mkCanonicalSemiannual();
+    const view = incomeView("0001.HK", set, "quarterly");
+    expect(view.periods).toEqual(CKH_PERIODS);
+    expect(view.periods.every((period) => !period.startsWith("Q"))).toBe(true);
+    expect(view.cadence).toBe("semiannual");
+    expect(statementCadenceLabel(set, "quarterly", false)).toBe("Semiannual");
+    expect(statementCadenceLabel(set, "quarterly", true)).toBe("半年度");
   });
 
-  it("blanks every H1 column and labels every H2 figure as Q4", () => {
-    const out = discreteQuarters(CKH_AS_FILED, CKH_PERIODS);
-
-    // H1 rows: no cumulative base inside their own fiscal year → dash. Correct, if unhelpful.
-    CKH_PERIODS.forEach((label, i) => {
-      if (label.startsWith("Q2")) expect(out[i]).toBeNull();
-    });
-    expect(out.filter((v) => v === null)).toHaveLength(6);
-
-    // "Q4" rows: FY − H1 = H2. Arithmetically right, but that is half a year under a
-    // quarter label — 2024 shows 136.01B for what the label calls a single quarter.
-    expect(out[CKH_PERIODS.indexOf("Q4 2024")]).toBe(260_542_280_040 - 124_536_098_680);
-    expect(out[CKH_PERIODS.indexOf("Q4 2024")]).toBe(136_006_181_360);
+  it("trusts the producer receipt and never differences a discrete series twice", () => {
+    const set = mkCanonicalSemiannual();
+    const view = incomeView("0001.HK", set, "quarterly");
+    expect(view.producerNormalized).toBe(true);
+    expect(view.cumulative).toBe(true); // describes the source rows, not a second frontend pass
+    expect(view.income.revenue).toBe(set.income.revenue);
+    expect(view.income.revenue).toEqual(CKH_DISCRETE);
+    expect(view.income.eps_basic).toEqual([4.01, null, 4.33, null, 4.17, null]);
   });
 
-  it("routes through incomeView the same way, so the defect is not a discreteQuarters artefact", () => {
-    const view = incomeView("0001.HK", mkSet(CKH_PERIODS, CKH_AS_FILED), "quarterly");
-    expect(view.cumulative).toBe(true);
-    expect(view.income.revenue[CKH_PERIODS.indexOf("Q2 2025")]).toBeNull();
-    expect(view.income.revenue[CKH_PERIODS.indexOf("Q4 2025")]).toBe(
-      252_934_115_920 - 126_879_603_500,
-    );
+  it("compares H1 with prior H1 and H2 with prior H2", () => {
+    const set = mkCanonicalSemiannual();
+    const changes = comparablePeriodChanges(set.income.revenue, set, "quarterly");
+    expect(changes[2]).toBeCloseTo((CKH_DISCRETE[2] / CKH_DISCRETE[0] - 1) * 100);
+    expect(changes[3]).toBeCloseTo((CKH_DISCRETE[3] / CKH_DISCRETE[1] - 1) * 100);
+    expect(changes[1]).toBeNull();
+  });
+
+  it("does not let an empty eps_q shell suppress the canonical H1/H2 fallback", () => {
+    const emptySeries = {
+      periods: ["Q1 2026"],
+      avg: [null],
+      high: [null],
+      low: [null],
+      n: [null],
+    };
+    const estimates = {
+      eps_q: emptySeries,
+      eps_fy: { ...emptySeries, periods: [] },
+      rev_fy: { ...emptySeries, periods: [] },
+      growth: { rev_yoy: null, eps_yoy: null },
+    } as FundEstimates;
+    expect(buildEpsDumbbell([], [], "quarterly", estimates)).toEqual([]);
+
+    const view = incomeView("0001.HK", mkCanonicalSemiannual(), "quarterly");
+    const fallback = buildEpsFromStatements(view);
+    expect(fallback.map((point) => point.label)).toEqual(CKH_PERIODS);
+    expect(fallback.map((point) => point.actual)).toEqual([4.01, null, 4.33, null, 4.17, null]);
+  });
+
+  it("does not let a future quarterly estimate replace reported H1/H2 history or cadence", () => {
+    const estimateSeries = {
+      periods: ["Q3 '26", "Q4 '26"],
+      avg: [0.426, 0.172],
+      high: [0.426, 0.172],
+      low: [0.426, 0.172],
+      n: [1, 1],
+    };
+    const estimates = {
+      eps_q: estimateSeries,
+      eps_fy: { ...estimateSeries, periods: [] },
+      rev_fy: { ...estimateSeries, periods: [] },
+      growth: { rev_yoy: null, eps_yoy: null },
+    } as FundEstimates;
+    const html = renderToStaticMarkup(createElement(EarningsPage, {
+      fund: mkEarningsFund({ quarterly: mkCanonicalSemiannual(), estimates }),
+      sym: "0005.HK",
+    }));
+
+    expect(html).toContain("Semiannual");
+    expect(html).toContain("4.17");
+    expect(html).not.toContain("Q3");
+    expect(html).not.toContain("0.43");
+    expect(html).not.toContain("No reported EPS history");
+  });
+
+  it("uses the same canonical H1/H2 axis for statement-backed revenue", () => {
+    const view = incomeView("0001.HK", mkCanonicalSemiannual(), "quarterly");
+    const fallback = buildRevenueFromStatements(view);
+    expect(fallback.map((point) => point.label)).toEqual(CKH_PERIODS);
+    expect(fallback.map((point) => point.actual)).toEqual(CKH_DISCRETE);
+  });
+
+  it("withholds YoY when a fiscal-year transition creates duplicate identities", () => {
+    const set = {
+      ...mkCanonicalSemiannual(),
+      periods: ["H1 2024 · 2023-09-30", "H1 2024 · 2024-06-30", "H1 2025"],
+      fiscal_year: ["2024", "2024", "2025"],
+      period_kind: ["half_year", "half_year", "half_year"],
+      period_number: [1, 1, 1],
+      income: mkIncome({ revenue: [100, 120, 150] }),
+    } as StatementPeriodSet;
+    expect(comparablePeriodChanges(set.income.revenue, set, "quarterly")).toEqual([
+      null, null, null,
+    ]);
+  });
+});
+
+describe("EarningsPage basis and signed-surprise states", () => {
+  it("defaults both modules to Annual when interim data is unavailable", () => {
+    expect(resolveEarningsMode("quarterly", false)).toBe("annual");
+    const html = renderToStaticMarkup(createElement(EarningsPage, {
+      fund: mkEarningsFund({
+        fy: [{
+          period: "2025",
+          eps_a: 1.25,
+          eps_e: null,
+          rev_a: 123_000_000,
+          rev_e: null,
+          surp_pct: null,
+        }],
+      }),
+      sym: "2720.HK",
+    }));
+
+    expect(html.match(/class="on">Annual/g)).toHaveLength(2);
+    expect(html).toContain("1.25");
+    expect(html).toContain("123.00M");
+    expect(html).not.toContain("No EPS data");
+    expect(html).not.toContain("No revenue for this basis");
+  });
+
+  it("preserves the minus sign for misses in both EPS and revenue tables", () => {
+    expect(formatSurprisePercent(-10)).toBe("−10.00%");
+    const html = renderToStaticMarkup(createElement(EarningsPage, {
+      fund: mkEarningsFund({
+        q: [{
+          period: "Q1 2026",
+          end: "2026-03-31",
+          report_date: "2026-04-30",
+          eps_a: 0.9,
+          eps_e: 1,
+          rev_a: 90,
+          rev_e: 100,
+          surp_pct: -10,
+          tx: "2026Q1",
+        }],
+      }),
+      sym: "MISS.HK",
+    }));
+
+    expect(html.match(/−10\.00%/g)).toHaveLength(2);
+    expect(html).not.toContain(">10.00%</span>");
   });
 });
