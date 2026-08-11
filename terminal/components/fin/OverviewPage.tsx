@@ -14,8 +14,38 @@
  */
 import { useState } from "react";
 import { useLang } from "../../lib/i18n";
-import { pick, fmtNum, fmtPct, fmtDate, currencySymbol } from "../../lib/finFormat";
-import type { Fund, StatementPeriodSet } from "../../lib/fund";
+import {
+  pick,
+  fmtNum,
+  fmtPct,
+  fmtDate,
+  currencySymbol,
+  statementCurrencyCode,
+  statementCurrencyLabel,
+} from "../../lib/finFormat";
+import type { Fund, IncomeBlock, StatementPeriodSet } from "../../lib/fund";
+// Every income series on this page is normalized ONCE (lib/finStatementMath): raw for a
+// discrete-quarter market, differenced for a cumulative year-to-date one. Reading `set.income`
+// straight made the Valuation, Performance and Waterfall cards disagree with the Statements tab —
+// and, on the same A/Q toggle, with each other.
+import {
+  cumulativeQuarterNote,
+  incomeViewFamilyDisclosure,
+  incomeViewFamilyMode,
+  incomeChartValues,
+  incomeViewTopLineLabel,
+  incomeView,
+  isIndustrialIncomeView,
+  resolveStatementBasis,
+  statementBasisAvailable,
+  statementCadenceLabel,
+} from "../../lib/finStatementMath";
+import {
+  incomeBridgeSteps,
+  netMarginPct,
+  priceToSalesSeries,
+  type IncomeBridgeKey,
+} from "../../lib/finSeries";
 import type { FinPage } from "./MegaPane";
 import {
   Donut,
@@ -85,19 +115,21 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
   const { lang } = useLang();
   const zh = lang === "zh";
   const [showMore, setShowMore] = useState(false);
-  const [valAQ, setValAQ] = useState<AQ>("annual");
-  const [perfAQ, setPerfAQ] = useState<AQ>("annual");
-  const [wfAQ, setWfAQ] = useState<AQ>("annual");
-  const [healthAQ, setHealthAQ] = useState<AQ>("annual");
+  const [requestedValAQ, setValAQ] = useState<AQ>("annual");
+  const [requestedPerfAQ, setPerfAQ] = useState<AQ>("annual");
+  const [requestedWfAQ, setWfAQ] = useState<AQ>("annual");
+  const [requestedHealthAQ, setHealthAQ] = useState<AQ>("annual");
 
   // quote_currency = price/mktcap side; stmt_currency = statement/estimate side.
   // For many HK names these differ (0700.HK: quote HKD vs stmt CNY) — NEVER mix
   // the two in a ratio or a combined chart, and label each section by its own.
   const quoteCur = fund?.quote_currency || "USD";
-  const stmtCur = fund?.stmt_currency || quoteCur;
-  const crossCur = quoteCur !== stmtCur;
+  const stmtCur = statementCurrencyCode(fund?.stmt_currency);
+  const statementCurrencyUnknown = stmtCur == null;
+  const crossCur = stmtCur != null && quoteCur !== stmtCur;
+  const comparisonSuppressed = statementCurrencyUnknown || crossCur;
   // statement-derived values (waterfall, revenue combo, health bars, segments)
-  const stmtSuffix = ` ${stmtCur}`;
+  const stmtSuffix = stmtCur ? ` ${stmtCur}` : "";
   const fmtV = (v: number) => fmtNum(v) + stmtSuffix;
 
   if (!fund) {
@@ -120,19 +152,25 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
   const r = fund.ratios;
   const ann = fund.statements?.annual;
   const qtr = fund.statements?.quarterly;
+  const annualAvailable = statementBasisAvailable(ann);
+  const interimAvailable = statementBasisAvailable(qtr);
+  const valAQ = resolveStatementBasis(requestedValAQ, annualAvailable, interimAvailable);
+  const perfAQ = resolveStatementBasis(requestedPerfAQ, annualAvailable, interimAvailable);
+  const wfAQ = resolveStatementBasis(requestedWfAQ, annualAvailable, interimAvailable);
+  const healthAQ = resolveStatementBasis(requestedHealthAQ, annualAvailable, interimAvailable);
 
   // ── provenance helpers (every data section dates itself — v7 honest chrome) ──
   // Everything here comes from the single fund snapshot, so `fund.asof` is the
   // one truthful date; the leading basis names WHICH slice the row covers.
   const asofD = fund.asof ? fmtDate(fund.asof) : "";
   const asofLine = (en: string, cn: string) => pick(zh, `${en} · as of ${asofD}`, `${cn} · 截至 ${asofD}`);
-  const aqEn = (a: AQ) => (a === "annual" ? "Annual" : "Quarterly");
-  const aqZh = (a: AQ) => (a === "annual" ? "年度" : "季度");
+  const aqEn = (a: AQ, set?: StatementPeriodSet | null) => statementCadenceLabel(set, a, false);
+  const aqZh = (a: AQ, set?: StatementPeriodSet | null) => statementCadenceLabel(set, a, true);
   /** "Annual statements 2020–2025 · as of …" — the period span is real data. */
-  const stmtAsof = (a: AQ, set?: StatementPeriodSet) => {
+  const stmtAsof = (a: AQ, set?: StatementPeriodSet | null) => {
     const ps = set?.periods ?? [];
     const rg = ps.length > 1 ? ` ${ps[0]}–${ps[ps.length - 1]}` : ps.length === 1 ? ` ${ps[0]}` : "";
-    return asofLine(`${aqEn(a)} statements${rg}`, `${aqZh(a)}报表${rg}`);
+    return asofLine(`${aqEn(a, set)} statements${rg}`, `${aqZh(a, set)}报表${rg}`);
   };
 
   // ── Key stats (headline KPI strip) ──
@@ -205,35 +243,49 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
   // currencies differ we have no FX rate in the contract, so the ratio is
   // meaningless — suppress the series and show a cross-currency empty state.
   const valSet = valAQ === "annual" ? ann : qtr;
-  const psLabels = valSet?.periods ?? [];
+  const valView = incomeView(sym, valSet, valAQ);
+  const psLabels = valView.periods;
+  const valFamilyMode = incomeViewFamilyMode(valView);
+  const valIsIndustrial = isIndustrialIncomeView(valView);
   const psSeries: Series[] = [
     {
       name: pick(zh, "P/S (at current mkt cap)", "市销率（按当前市值）"),
-      values: computePS(valSet, s?.mktcap ?? null),
+      // Normalized revenue: a market cap over a year-to-date total is a P/S no quarter ever had.
+      values: priceToSalesSeries(valView.income.revenue, s?.mktcap ?? null, psLabels),
       color: "var(--brand)",
     },
   ];
+  // Disclosure for a differenced quarterly statement — null unless this issuer's market actually
+  // files cumulative year-to-date interims, so it can never describe a US filer's numbers.
+  const valCumNote = cumulativeQuarterNote(valView, zh);
 
   // ── Performance combo (revenue bars + net income bars + net margin line) ──
   const perfSet = perfAQ === "annual" ? ann : qtr;
-  const perfLabels = perfSet?.periods ?? [];
+  const perfView = incomeView(sym, perfSet, perfAQ);
+  const perfLabels = perfView.periods;
+  const perfInc = incomeChartValues(perfView);
   const perfBars: Series[] = [
-    { name: pick(zh, "Revenue", "营收"), values: perfSet?.income?.revenue ?? [], color: "var(--brand)" },
-    { name: pick(zh, "Net income", "净利润"), values: perfSet?.income?.net_income ?? [], color: "var(--up)" },
+    { name: incomeViewTopLineLabel(perfView, zh), values: perfInc.revenue, color: "var(--brand)" },
+    { name: pick(zh, "Net income", "净利润"), values: perfInc.net_income, color: "var(--up)" },
   ];
   const perfLine: Series = {
     name: pick(zh, "Net margin %", "净利率 %"),
-    values: (perfSet?.income?.revenue ?? []).map((rev, i) => {
-      const ni = perfSet?.income?.net_income?.[i];
-      return rev && ni != null ? (ni / rev) * 100 : null;
-    }),
+    // Same normalized pair as the bars above it (lib/finSeries) — never a differenced net income
+    // over a cumulative revenue.
+    values: netMarginPct(perfInc.revenue, perfInc.net_income),
     color: "var(--warn)",
   };
 
   // ── Revenue → profit conversion waterfall (latest period) ──
   const wfSet = wfAQ === "annual" ? ann : qtr;
-  const wfIdx = lastFiniteIdx(wfSet?.income?.revenue);
-  const wfSteps: WaterfallStep[] = wfIdx == null ? [] : buildWaterfall(wfSet!, wfIdx, zh);
+  const wfView = incomeView(sym, wfSet, wfAQ);
+  const wfFamilyMode = incomeViewFamilyMode(wfView);
+  const wfIdx = lastFiniteIdx(wfView.income.revenue);
+  const wfSteps: WaterfallStep[] =
+    wfIdx == null || !isIndustrialIncomeView(wfView)
+      ? []
+      : buildWaterfall(wfView.income, wfIdx, zh);
+  const perfFamilyNote = incomeViewFamilyDisclosure(perfView, zh);
 
   // ── Revenue breakdown (R6: empty unless fund.segments present) ──
   const seg = fund.segments;
@@ -254,12 +306,17 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
 
   // ── Financial health: debt/fcf/cash bars + position bars ──
   const hSet = healthAQ === "annual" ? ann : qtr;
-  const hLabels = hSet?.periods ?? [];
+  const hView = incomeView(sym, hSet, healthAQ);
+  const hFamilyMode = incomeViewFamilyMode(hView);
+  const hIsIndustrial = isIndustrialIncomeView(hView);
+  const hLabels = hView.periods;
   // Balance-sheet categories are CATEGORICAL, not directional — never --up/--down
   // (those flip under the east red-up theme and carry price-direction meaning).
   const debtBars: Series[] = [
     { name: pick(zh, "Debt", "债务"), values: hSet?.balance?.debt ?? [], color: "var(--warn)" },
-    { name: pick(zh, "Free cash flow", "自由现金流"), values: hSet?.cashflow?.fcf ?? [], color: "var(--code-fn)" },
+    ...(hIsIndustrial
+      ? [{ name: pick(zh, "Free cash flow", "自由现金流"), values: hSet?.cashflow?.fcf ?? [], color: "var(--code-fn)" }]
+      : []),
     { name: pick(zh, "Cash & equivalents", "现金及等价物"), values: hSet?.balance?.cash ?? [], color: "var(--brand)" },
   ];
   const posIdx = lastFiniteIdx(hSet?.balance?.assets_st);
@@ -281,11 +338,17 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
   const posLabels = [pick(zh, "Short term", "短期"), pick(zh, "Long term", "长期")];
 
   // bilingual cross-currency explanation (P/S + capital-structure suppression)
-  const crossCurMsg = pick(
-    zh,
-    `Price is in ${quoteCur} but financials are reported in ${stmtCur}; this comparison is suppressed to avoid mixing currencies.`,
-    `股价以 ${quoteCur} 计价，而财报以 ${stmtCur} 列报；为避免货币混用，此项已隐藏。`,
-  );
+  const currencyComparisonMsg = statementCurrencyUnknown
+    ? pick(
+        zh,
+        "Statement currency is unavailable; this comparison is suppressed to avoid mixing price values with financials in an unverified unit.",
+        "报表货币不可用；为避免将股价数据与计价单位未经验证的财务数据混用，此项已隐藏。",
+      )
+    : pick(
+        zh,
+        `Price is in ${quoteCur} but financials are reported in ${stmtCur}; this comparison is suppressed to avoid mixing currencies.`,
+        `股价以 ${quoteCur} 计价，而财报以 ${stmtCur} 列报；为避免货币混用，此项已隐藏。`,
+      );
 
   return (
     <div className="fin-ov">
@@ -360,10 +423,10 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
           </div>
           <div className="fin-card">
             <div className="fin-card-h">{pick(zh, "Capital structure", "资本结构")}</div>
-            {crossCur ? (
+            {comparisonSuppressed ? (
               <div className="fin-empty fin-empty-lg" role="status">
                 <div className="fin-empty-title">{pick(zh, "Comparison suppressed", "该对比已隐藏")}</div>
-                <div className="fin-empty-why">{crossCurMsg}</div>
+                <div className="fin-empty-why">{currencyComparisonMsg}</div>
               </div>
             ) : (
               <CapitalStructure
@@ -391,12 +454,26 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
         />
         <div className="fin-card">
           <div className="fin-card-h">
-            {pick(zh, "Valuation ratios", "估值比率")} <AQToggle v={valAQ} onChange={setValAQ} zh={zh} />
+            {pick(zh, "Valuation ratios", "估值比率")} <AQToggle v={valAQ} onChange={setValAQ} zh={zh} annualAvailable={annualAvailable} interimSet={qtr} interimAvailable={interimAvailable} />
           </div>
-          {crossCur ? (
+          {comparisonSuppressed || !valIsIndustrial ? (
             <div className="fin-empty fin-empty-lg" role="status">
               <div className="fin-empty-title">{pick(zh, "Comparison suppressed", "该对比已隐藏")}</div>
-              <div className="fin-empty-why">{crossCurMsg}</div>
+              <div className="fin-empty-why">
+                {comparisonSuppressed
+                  ? currencyComparisonMsg
+                  : valFamilyMode === "mixed"
+                    ? pick(
+                        zh,
+                        "P/S is hidden because this history crosses industrial and financial-services statement formats, so its top-line values are not one comparable sales denominator.",
+                        "该历史区间跨越工业企业与金融服务报表格式，各期顶线口径不构成可比的销售额分母，因此不显示市销率。",
+                      )
+                    : pick(
+                        zh,
+                        "P/S is not shown for this financial-statement family because operating income is not an industrial sales denominator.",
+                        "该金融报表类型不显示市销率，因为营业收入并非工业企业销售额口径。",
+                      )}
+              </div>
             </div>
           ) : (
             <>
@@ -408,10 +485,11 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
                   "以当前市值除以各期营收计算，并非历史估值（无历史市值数据）。",
                 )}
               </div>
+              {valCumNote && <div className="fin-chart-note">{valCumNote}</div>}
             </>
           )}
         </div>
-        {fund.asof && !crossCur && <div className="fin-asof">{stmtAsof(valAQ, valSet)}</div>}
+        {fund.asof && !comparisonSuppressed && valIsIndustrial && <div className="fin-asof">{stmtAsof(valAQ, valSet)}</div>}
       </section>
 
       {/* ── GROWTH & PROFITABILITY ── */}
@@ -426,7 +504,7 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
         <div className="fin-grid2">
           <div className="fin-card">
             <div className="fin-card-h">
-              {pick(zh, "Performance", "业绩表现")} <AQToggle v={perfAQ} onChange={setPerfAQ} zh={zh} />
+              {pick(zh, "Performance", "业绩表现")} <AQToggle v={perfAQ} onChange={setPerfAQ} zh={zh} annualAvailable={annualAvailable} interimSet={qtr} interimAvailable={interimAvailable} />
             </div>
             <ComboChart
               labels={perfLabels}
@@ -441,24 +519,43 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
           <div className="fin-card">
             <div className="fin-card-h">
               {pick(zh, "Revenue to profit conversion", "营收到利润转换")}{" "}
-              <AQToggle v={wfAQ} onChange={setWfAQ} zh={zh} />
+              <AQToggle v={wfAQ} onChange={setWfAQ} zh={zh} annualAvailable={annualAvailable} interimSet={qtr} interimAvailable={interimAvailable} />
             </div>
             {wfSteps.length > 0 ? (
               <Waterfall steps={wfSteps} fmtY={fmtNum} zh={zh} height={210} />
             ) : (
               <div className="fin-empty fin-empty-lg" role="status">
-                <div className="fin-empty-title">{pick(zh, "No income statement", "暂无利润表")}</div>
+                <div className="fin-empty-title">
+                  {wfFamilyMode === "industrial"
+                    ? pick(zh, "No income statement", "暂无利润表")
+                    : wfFamilyMode === "mixed"
+                      ? pick(zh, "Industrial bridge not comparable", "工业利润桥不可比")
+                      : pick(zh, "Industrial bridge not applicable", "工业利润桥不适用")}
+                </div>
                 <div className="fin-empty-why">
-                  {pick(
-                    zh,
-                    `No ${aqEn(wfAQ).toLowerCase()} period on record carries revenue for ${sym}, so the conversion bridge has nothing to walk down.`,
-                    `${sym} 没有任何带营收的${aqZh(wfAQ)}期间记录，因此无法绘制利润转换瀑布图。`,
-                  )}
+                  {wfFamilyMode === "industrial"
+                    ? pick(
+                        zh,
+                        `No ${aqEn(wfAQ, wfSet).toLowerCase()} period on record carries revenue for ${sym}, so the conversion bridge has nothing to walk down.`,
+                        `${sym} 没有任何带营收的${aqZh(wfAQ, wfSet)}期间记录，因此无法绘制利润转换瀑布图。`,
+                      )
+                    : wfFamilyMode === "mixed"
+                      ? pick(
+                          zh,
+                          "This history crosses industrial and financial-services statement formats, so one industrial revenue-to-profit waterfall would combine non-comparable line items.",
+                          "该历史区间跨越工业企业与金融服务报表格式，单一工业企业营收到利润瀑布图会混合不可比项目。",
+                        )
+                      : pick(
+                          zh,
+                          "Banks, insurers and financial-services issuers use a different income-statement structure, so an industrial revenue-to-profit waterfall would be misleading.",
+                          "银行、保险及金融服务企业采用不同的利润表结构，因此工业企业的营收到利润瀑布图会造成误导。",
+                        )}
                 </div>
               </div>
             )}
           </div>
         </div>
+        {perfFamilyNote && <div className="fin-chart-note">{perfFamilyNote}</div>}
         {fund.asof && <div className="fin-asof">{stmtAsof(perfAQ, perfSet)}</div>}
       </section>
 
@@ -626,9 +723,24 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
           <div className="fin-card">
             <div className="fin-card-h">
               {pick(zh, "Debt level and coverage", "债务水平与覆盖")}{" "}
-              <AQToggle v={healthAQ} onChange={setHealthAQ} zh={zh} />
+              <AQToggle v={healthAQ} onChange={setHealthAQ} zh={zh} annualAvailable={annualAvailable} interimSet={qtr} interimAvailable={interimAvailable} />
             </div>
             <Bars labels={hLabels} series={debtBars} fmtY={fmtNum} zh={zh} height={200} />
+            {!hIsIndustrial && (
+              <div className="fin-chart-note">
+                {hFamilyMode === "mixed"
+                  ? pick(
+                      zh,
+                      "Free cash flow is omitted because this history crosses industrial and financial-services statement formats, so CFO less capex is not one comparable measure.",
+                      "该历史区间跨越工业企业与金融服务报表格式，经营现金流减资本开支不构成单一可比指标，因此不显示自由现金流。",
+                    )
+                  : pick(
+                      zh,
+                      "Free cash flow is omitted for financial-services statement formats because operating cash flow and capital expenditure do not form an industrially comparable FCF measure.",
+                      "金融服务报表中的经营现金流与资本开支不构成与工业企业可比的自由现金流指标，因此不显示。",
+                    )}
+              </div>
+            )}
           </div>
           <div className="fin-card">
             <div className="fin-card-h">{pick(zh, "Financial position analysis", "财务状况分析")}</div>
@@ -640,8 +752,8 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
                 <div className="fin-empty-why">
                   {pick(
                     zh,
-                    `No ${aqEn(healthAQ).toLowerCase()} period on record splits current from non-current assets for ${sym}.`,
-                    `${sym} 没有任何${aqZh(healthAQ)}期间记录区分流动与非流动资产。`,
+                    `No ${aqEn(healthAQ, hSet).toLowerCase()} period on record splits current from non-current assets for ${sym}.`,
+                    `${sym} 没有任何${aqZh(healthAQ, hSet)}期间记录区分流动与非流动资产。`,
                   )}
                 </div>
               </div>
@@ -652,8 +764,8 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
       </section>
 
       <div className="fin-ov-cur">
-        {pick(zh, "Statement values in", "报表数据计价")} {currencySymbol(stmtCur) || stmtCur} · {stmtCur}
-        {crossCur && (
+        {pick(zh, "Statement values", "报表数据")} · {statementCurrencyLabel(stmtCur, zh)}
+        {comparisonSuppressed && (
           <>
             {" · "}
             {pick(zh, "Price values in", "股价数据计价")} {currencySymbol(quoteCur) || quoteCur} · {quoteCur}
@@ -665,14 +777,28 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
 }
 
 /* ── A/Q toggle ── */
-function AQToggle({ v, onChange, zh }: { v: AQ; onChange: (a: AQ) => void; zh: boolean }) {
+function AQToggle({
+  v,
+  onChange,
+  zh,
+  annualAvailable,
+  interimSet,
+  interimAvailable,
+}: {
+  v: AQ;
+  onChange: (a: AQ) => void;
+  zh: boolean;
+  annualAvailable: boolean;
+  interimSet?: StatementPeriodSet | null;
+  interimAvailable: boolean;
+}) {
   return (
     <span className="fin-toggle fin-aq">
-      <button className={v === "annual" ? "on" : ""} onClick={() => onChange("annual")}>
+      <button className={v === "annual" ? "on" : ""} onClick={() => onChange("annual")} disabled={!annualAvailable}>
         {pick(zh, "Annual", "年度")}
       </button>
-      <button className={v === "quarterly" ? "on" : ""} onClick={() => onChange("quarterly")}>
-        {pick(zh, "Quarterly", "季度")}
+      <button className={v === "quarterly" ? "on" : ""} onClick={() => onChange("quarterly")} disabled={!interimAvailable}>
+        {statementCadenceLabel(interimSet, "quarterly", zh)}
       </button>
     </span>
   );
@@ -699,42 +825,39 @@ function lastFiniteIdx(arr?: (number | null)[]): number | null {
   return null;
 }
 
-function latestEps(set?: StatementPeriodSet): number | null {
+function latestEps(set?: StatementPeriodSet | null): number | null {
   return latestFinite(set?.income?.eps_basic);
 }
 
 /**
- * "P/S (at current mkt cap)" per period: CURRENT mktcap / revenue[i]. This is NOT
- * a historical valuation — past market caps aren't in the contract, so mktcap is
- * held constant. The series name + chart note make that basis explicit to the user.
+ * The bridge from revenue to net income for ONE period of an ALREADY-NORMALIZED income block.
+ *
+ * Takes `incomeView(...).income`, never a `StatementPeriodSet`: with no set in scope the bridge
+ * cannot reach a raw `set.income` array, so a cumulative year-to-date column can never be walked
+ * down as though it were the quarter. (P/S moved out entirely — lib/finSeries.priceToSalesSeries.)
+ *
+ * Each bridge movement is the exact delta between reported subtotals. That is more robust than
+ * trusting a vendor expense field whose scope varies, and it guarantees the bridge closes at
+ * every subtotal. Deltas remain signed: tax benefits and net operating credits rise rather than
+ * being forced into a fall with `Math.abs`.
  */
-function computePS(set: StatementPeriodSet | undefined, mktcap: number | null): (number | null)[] {
-  if (!set || mktcap == null) return set?.periods.map(() => null) ?? [];
-  return set.income.revenue.map((rev) => (rev && rev > 0 ? mktcap / rev : null));
-}
-
-function buildWaterfall(set: StatementPeriodSet, i: number, zh: boolean): WaterfallStep[] {
-  const inc = set.income;
-  const g = (a: (number | null)[]) => (a?.[i] != null && isFinite(a[i] as number) ? (a[i] as number) : null);
-  const rev = g(inc.revenue);
-  if (rev == null) return [];
-  const cogs = g(inc.cogs);
-  const gp = g(inc.gross_profit);
-  const opex = g(inc.opex);
-  const opInc = g(inc.op_income);
-  const nonop = g(inc.nonop_income);
-  const taxes = g(inc.taxes);
-  const ni = g(inc.net_income);
-  const steps: WaterfallStep[] = [{ label: pick(zh, "Revenue", "营收"), value: rev, total: true }];
-  if (cogs != null) steps.push({ label: pick(zh, "COGS", "成本"), value: -Math.abs(cogs) });
-  if (gp != null) steps.push({ label: pick(zh, "Gross profit", "毛利"), value: gp, total: true });
-  if (opex != null && cogs != null) steps.push({ label: pick(zh, "Op expenses", "营业费用"), value: -Math.abs(opex - cogs) });
-  else if (opex != null) steps.push({ label: pick(zh, "Op expenses", "营业费用"), value: -Math.abs(opex) });
-  if (opInc != null) steps.push({ label: pick(zh, "Op income", "营业利润"), value: opInc, total: true });
-  if (nonop != null) steps.push({ label: pick(zh, "Non-op & other", "营业外及其他"), value: nonop });
-  if (taxes != null) steps.push({ label: pick(zh, "Taxes & other", "税项及其他"), value: -Math.abs(taxes) });
-  if (ni != null) steps.push({ label: pick(zh, "Net income", "净利润"), value: ni, total: true });
-  return steps;
+function buildWaterfall(inc: IncomeBlock, i: number, zh: boolean): WaterfallStep[] {
+  const labels: Record<IncomeBridgeKey, string> = {
+    revenue: pick(zh, "Revenue", "营收"),
+    to_gross_profit: pick(zh, "COGS & gross adjustments", "成本及毛利调整"),
+    gross_profit: pick(zh, "Gross profit", "毛利"),
+    to_operating_income: pick(zh, "Operating expenses & other", "营业费用及其他"),
+    operating_income: pick(zh, "Op income", "营业利润"),
+    to_pretax_income: pick(zh, "Non-op & other", "营业外及其他"),
+    pretax_income: pick(zh, "Pretax income", "税前利润"),
+    to_net_income: pick(zh, "Taxes & other", "税项及其他"),
+    net_income: pick(zh, "Net income", "净利润"),
+  };
+  return incomeBridgeSteps(inc, i).map((step) => ({
+    label: labels[step.key],
+    value: step.value,
+    total: step.total,
+  }));
 }
 
 function segToSlices(seg: { periods: string[]; series: { name: string; values: (number | null)[] }[] }): DonutSlice[] {

@@ -11,7 +11,15 @@
  */
 import { useState } from "react"
 import type { Fund, RatiosCurrent } from "../../lib/fund"
-import { fmtDate, fmtNum, fmtPct, pick } from "../../lib/finFormat"
+import { fmtDate, fmtNum, fmtPct, pick, statementCurrencyLabel } from "../../lib/finFormat"
+import {
+  incomeView,
+  incomeViewFamilyMode,
+  isIndustrialIncomeView,
+  resolveStatementBasis,
+  statementBasisAvailable,
+  statementCadenceLabel,
+} from "../../lib/finStatementMath"
 import { Bars, type Series } from "./FinCharts"
 
 // ── prop types ──────────────────────────────────────────────────────────────
@@ -44,7 +52,10 @@ interface StatRow {
 // ── main component ──────────────────────────────────────────────────────────
 
 export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageProps) {
-  const [mode, setMode] = useState<Mode>("annual")
+  const [requestedMode, setMode] = useState<Mode>("annual")
+  const annualAvailable = statementBasisAvailable(fund?.statements?.annual)
+  const interimAvailable = statementBasisAvailable(fund?.statements?.quarterly)
+  const mode: Mode = resolveStatementBasis(requestedMode, annualAvailable, interimAvailable)
 
   if (!fund) {
     return (
@@ -62,6 +73,15 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
 
   const cur = fund.ratios?.current ?? ({} as RatiosCurrent)
   const isAnnual = mode === "annual"
+  const interimLabel = statementCadenceLabel(fund.statements?.quarterly, "quarterly", !!zh)
+  const familyReceipt = annualAvailable
+    ? fund.statements?.annual
+    : interimAvailable
+      ? fund.statements?.quarterly
+      : null
+  const annualIncomeView = incomeView(fund.ticker, familyReceipt, "annual")
+  const annualFamilyMode = incomeViewFamilyMode(annualIncomeView)
+  const industrialMetricsApply = !!familyReceipt && isIndustrialIncomeView(annualIncomeView)
 
   // ── top bar chart: P/E + P/S per period ──
   const rPeriods = fund.ratios?.periods ?? []
@@ -71,13 +91,15 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
       values: fund.ratios?.pe ?? [],
       color: "var(--brand)",
     },
-    {
-      // Valuation ratio — categorical, not directional. --brand-2 is locale-stable
-      // (--up would flip red under the east red-up theme for no semantic reason).
-      name: pick(!!zh, "Price to sales ratio", "市销率"),
-      values: fund.ratios?.ps ?? [],
-      color: "var(--brand-2)",
-    },
+    ...(industrialMetricsApply
+      ? [{
+          // Valuation ratio — categorical, not directional. --brand-2 is locale-stable
+          // (--up would flip red under the east red-up theme for no semantic reason).
+          name: pick(!!zh, "Price to sales ratio", "市销率"),
+          values: fund.ratios?.ps ?? [],
+          color: "var(--brand-2)",
+        }]
+      : []),
   ]
 
   // fund.json v1 carries ANNUAL ratio series only — there is no per-quarter ratio data. The toggle
@@ -89,14 +111,16 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
     ? peSeries
     : [
         { name: pick(!!zh, "Price to earnings ratio", "市盈率"), values: [], color: "var(--brand)" },
-        { name: pick(!!zh, "Price to sales ratio", "市销率"), values: [], color: "var(--brand-2)" },
+        ...(industrialMetricsApply
+          ? [{ name: pick(!!zh, "Price to sales ratio", "市销率"), values: [], color: "var(--brand-2)" }]
+          : []),
       ]
 
   // Whether ALL historical ratio series are null (common for CN / newly covered names).
   // In that case: collapse the top chart, hide historical year columns (show only Current).
   const hasHistoricalRatios = isAnnual && (
     (fund.ratios?.pe ?? []).some((v) => v != null && isFinite(v as number)) ||
-    (fund.ratios?.ps ?? []).some((v) => v != null && isFinite(v as number)) ||
+    (industrialMetricsApply && (fund.ratios?.ps ?? []).some((v) => v != null && isFinite(v as number))) ||
     (fund.ratios?.pb ?? []).some((v) => v != null && isFinite(v as number))
   )
 
@@ -115,19 +139,29 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
   // Build a "Current" column value from live ratios
   const valRows: StatRow[] = [
     { label: pick(!!zh, "Price to earnings ratio", "市盈率"), values: fund.ratios?.pe ?? [], current: cur.pe_ttm },
-    { label: pick(!!zh, "Price to sales ratio", "市销率"), values: fund.ratios?.ps ?? [], current: cur.ps },
+    ...(industrialMetricsApply
+      ? [{ label: pick(!!zh, "Price to sales ratio", "市销率"), values: fund.ratios?.ps ?? [], current: cur.ps }]
+      : []),
     { label: pick(!!zh, "Price to book ratio", "市净率"), values: fund.ratios?.pb ?? [], current: cur.pb },
     { label: pick(!!zh, "Price to cash flow ratio", "市现率"), values: fund.ratios?.pcf ?? [], current: null },
-    { label: pick(!!zh, "Enterprise value to EBITDA", "EV/EBITDA"), values: fund.ratios?.ev_ebitda ?? [], current: cur.ev_ebitda },
+    ...(industrialMetricsApply
+      ? [{ label: pick(!!zh, "Enterprise value to EBITDA", "EV/EBITDA"), values: fund.ratios?.ev_ebitda ?? [], current: cur.ev_ebitda }]
+      : []),
     { label: pick(!!zh, "Price to earnings forward", "预期市盈率"), values: [], current: cur.pe_fwd },
-    { label: pick(!!zh, "EV to sales", "EV/销售额"), values: [], current: cur.ev_sales },
+    ...(industrialMetricsApply
+      ? [{ label: pick(!!zh, "EV to sales", "EV/销售额"), values: [], current: cur.ev_sales }]
+      : []),
     { label: pick(!!zh, "EV to EBIT", "EV/息税前利润"), values: [], current: cur.ev_ebit },
-    { label: pick(!!zh, "Price to FCF", "价格/自由现金流"), values: [], current: cur.p_fcf },
+    ...(industrialMetricsApply
+      ? [{ label: pick(!!zh, "Price to FCF", "价格/自由现金流"), values: [], current: cur.p_fcf }]
+      : []),
   ]
 
   // ── Profitability rows from ratios.current (no period series in v1) ──
   const profRows: { label: string; value: string }[] = [
-    { label: pick(!!zh, "Gross margin", "毛利率"), value: cur.gross_margin != null ? fmtPct(cur.gross_margin) : "—" },
+    ...(industrialMetricsApply
+      ? [{ label: pick(!!zh, "Gross margin", "毛利率"), value: cur.gross_margin != null ? fmtPct(cur.gross_margin) : "—" }]
+      : []),
     { label: pick(!!zh, "Net margin", "净利率"), value: cur.net_margin != null ? fmtPct(cur.net_margin) : "—" },
     { label: pick(!!zh, "Return on equity", "净资产收益率"), value: cur.roe != null ? fmtPct(cur.roe) : "—" },
     { label: pick(!!zh, "Return on assets", "总资产收益率"), value: cur.roa != null ? fmtPct(cur.roa) : "—" },
@@ -138,7 +172,7 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
   ]
 
   // Currency label
-  const ccy = fund.stmt_currency ?? "USD"
+  const ccy = fund.stmt_currency
   // Provenance: every table on this page dates itself off the one snapshot date.
   const asofD = fund.asof ? fmtDate(fund.asof) : ""
   const asofTxt = asofD ? pick(!!zh, `as of ${asofD}`, `截至 ${asofD}`) : ""
@@ -154,11 +188,15 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
           {pick(!!zh, "Statistics", "统计数据")}
         </div>
         <div className="fin-toggle">
-          <button className={mode === "annual" ? "on" : ""} onClick={() => setMode("annual")}>
+          <button className={mode === "annual" ? "on" : ""} onClick={() => setMode("annual")} disabled={!annualAvailable}>
             {pick(!!zh, "Annual", "年度")}
           </button>
-          <button className={mode === "quarterly" ? "on" : ""} onClick={() => setMode("quarterly")}>
-            {pick(!!zh, "Quarterly", "季度")}
+          <button
+            className={mode === "quarterly" ? "on" : ""}
+            onClick={() => setMode("quarterly")}
+            disabled={!interimAvailable}
+          >
+            {interimLabel}
           </button>
         </div>
       </div>
@@ -178,10 +216,15 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
       {!hasHistoricalRatios && isAnnual && (
         <div className="fin-sec">
           <div className="fin-chart-note" style={{ marginTop: 0 }}>
-            {pick(!!zh,
-              "Historical ratio series (P/E, P/S, P/B) are not yet available for this security.",
-              "该证券历史估值比率（市盈率、市销率、市净率）数据暂不可用。"
-            )}
+            {industrialMetricsApply
+              ? pick(!!zh,
+                  "Historical ratio series (P/E, P/S, P/B) are not yet available for this security.",
+                  "该证券历史估值比率（市盈率、市销率、市净率）数据暂不可用。"
+                )
+              : pick(!!zh,
+                  "Historical P/E and P/B series are not yet available for this security.",
+                  "该证券历史估值比率（市盈率、市净率）数据暂不可用。"
+                )}
           </div>
         </div>
       )}
@@ -236,23 +279,41 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
         {/* the old header meta line reads as provenance — it now sits below the
             data it describes, as the standard as-of row */}
         <div className="fin-stats-meta fin-asof">
-          <span className="fin-stats-ccy">{pick(!!zh, "Currency: " + ccy, "货币: " + ccy)}</span>
+          <span className="fin-stats-ccy">{statementCurrencyLabel(ccy, !!zh)}</span>
           {asofTxt && <span>{asofTxt}</span>}
         </div>
       </div>
 
       {/* ── Valuation ratios (annual series + live Current column) ── */}
       <div className="fin-sec">
+        {isAnnual && !industrialMetricsApply && (
+          <div className="fin-chart-note" style={{ marginTop: 0, marginBottom: 8 }}>
+            {!familyReceipt
+              ? pick(!!zh,
+                  "Sales-, EBITDA- and free-cash-flow-based ratios are omitted because no statement-family receipt is available.",
+                  "由于暂无报表类型来源凭证，因此不显示基于销售额、EBITDA 及自由现金流的估值比率。"
+                )
+              : annualFamilyMode === "mixed"
+              ? pick(!!zh,
+                  "Sales-, EBITDA- and free-cash-flow-based ratios are omitted because this history crosses industrial and financial-services statement formats.",
+                  "该历史区间跨越工业企业与金融服务报表格式，因此不显示基于销售额、EBITDA 及自由现金流的估值比率。"
+                )
+              : pick(!!zh,
+                  "Sales-, EBITDA- and free-cash-flow-based ratios are omitted for financial-services statement formats.",
+                  "金融服务报表格式不显示基于销售额、EBITDA 及自由现金流的估值比率。"
+                )}
+          </div>
+        )}
         {/* v1 has no quarterly ratio series — show honest empty state in quarterly mode */}
         {!isAnnual ? (
           <div className="fin-empty fin-empty-lg" role="status">
             <span className="fin-empty-title">
-              {pick(!!zh, "No quarterly valuation ratios", "暂无季度估值比率")}
+              {zh ? `暂无${interimLabel}估值比率` : `No ${interimLabel.toLowerCase()} valuation ratios`}
             </span>
             <span className="fin-empty-why">
               {pick(!!zh,
                 "The fundamentals feed publishes valuation ratios on annual fiscal periods only — switch to Annual to see the series.",
-                "基本面数据源仅按年度财季发布估值比率 — 切换到年度视图即可查看该序列。"
+                "基本面数据源仅按年度报告期发布估值比率——切换到年度视图即可查看该序列。"
               )}
             </span>
           </div>
@@ -316,6 +377,24 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
 
       {/* ── Profitability ratios ── */}
       <div className="fin-sec">
+        {!industrialMetricsApply && (
+          <div className="fin-chart-note" style={{ marginTop: 0, marginBottom: 8 }}>
+            {!familyReceipt
+              ? pick(!!zh,
+                  "Gross margin is omitted because no statement-family receipt is available to establish an industrial COGS and gross-profit structure.",
+                  "由于暂无报表类型来源凭证，无法确认工业企业的营业成本与毛利结构，因此不显示毛利率。"
+                )
+              : annualFamilyMode === "mixed"
+              ? pick(!!zh,
+                  "Gross margin is omitted because this history crosses statement formats without one comparable COGS and gross-profit structure.",
+                  "该历史区间跨越不同报表格式，不存在单一可比的营业成本与毛利结构，因此不显示毛利率。"
+                )
+              : pick(!!zh,
+                  "Gross margin is omitted for financial-services statement formats because industrial COGS and gross profit do not apply.",
+                  "金融服务报表格式不适用工业企业的营业成本与毛利结构，因此不显示毛利率。"
+                )}
+          </div>
+        )}
         <div className="fin-table-scroll">
           <table className="fin-table fin-stats-tbl">
             <thead>

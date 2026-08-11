@@ -14,8 +14,17 @@
  */
 import { useState } from "react"
 import type { Fund, SegmentSeries } from "../../lib/fund"
-import { fmtNum, fmtPct, fmtDate, pick } from "../../lib/finFormat"
+import { fmtNum, fmtPct, fmtDate, pick, statementCurrencyLabel } from "../../lib/finFormat"
 import { historySpan, revenueCoverage, revenueHistory } from "../../lib/finStatements"
+import {
+  cumulativeQuarterNote,
+  incomeViewFamilyDisclosure,
+  incomeViewTopLineLabel,
+  incomeView,
+  resolveStatementBasis,
+  statementCadenceLabel,
+  statementPeriodCountLabel,
+} from "../../lib/finStatementMath"
 import { Bars, MiniTable, StackedBars, type MiniRow, type Series } from "./FinCharts"
 
 export interface RevenuePageProps {
@@ -46,7 +55,7 @@ function SegmentModule({
   eyebrow: string
   title: string
   seg: SegmentSeries
-  ccy: string
+  ccy: string | null
   zh?: boolean
 }) {
   const periods = seg.periods ?? []
@@ -89,7 +98,7 @@ function SegmentModule({
       {/* Segment table: full history */}
       <div className="fin-earn-meta">
         <span>{pick(!!zh, "Metrics", "指标")}</span>
-        <span className="fin-earn-ccy">{pick(!!zh, "Currency: " + ccy, "货币: " + ccy)}</span>
+        <span className="fin-earn-ccy">{statementCurrencyLabel(ccy, !!zh)}</span>
       </div>
       <div className="fin-table-scroll">
         <table className="fin-table">
@@ -146,16 +155,26 @@ function SegmentModule({
  * treatment the Statements tab uses — rather than a second row.
  */
 function RevenueHistory({ fund, zh }: { fund: Fund; zh?: boolean }) {
-  const [aq, setAQ] = useState<"annual" | "quarterly">("annual")
-  const points = revenueHistory(fund, aq)
+  const [requestedAQ, setAQ] = useState<"annual" | "quarterly">("annual")
+  const annualPoints = revenueHistory(fund, "annual")
+  const interimPoints = revenueHistory(fund, "quarterly")
+  const annualAvailable = revenueCoverage(annualPoints) >= 2
+  const interimAvailable = revenueCoverage(interimPoints) >= 2
+  const aq = resolveStatementBasis(requestedAQ, annualAvailable, interimAvailable)
+  const set = aq === "annual" ? fund.statements?.annual : fund.statements?.quarterly
+  const view = incomeView(fund.ticker, set, aq)
+  const points = aq === "annual" ? annualPoints : interimPoints
   // Two real figures is the floor for a series; below that the Statements tab is the
   // honest place to read one number, and this module stays out of the way.
-  if (revenueCoverage(points) < 2) return null
+  if (!annualAvailable && !interimAvailable) return null
 
   const periods = points.map((p) => p.period)
   const values = points.map((p) => p.value)
-  const span = historySpan(aq === "annual" ? fund.statements?.annual : fund.statements?.quarterly)
-  const ccy = fund.stmt_currency ?? "USD"
+  const span = historySpan(set)
+  const ccy = fund.stmt_currency
+  const topLine = incomeViewTopLineLabel(view, !!zh)
+  const cumulativeNote = cumulativeQuarterNote(view, !!zh)
+  const familyNote = incomeViewFamilyDisclosure(view, !!zh)
 
   // Same windowing rationale as StatementsPage: annual sets run ~17 periods and deserve to
   // be seen whole; 60+ quarterly bars would crush the axis.
@@ -163,7 +182,7 @@ function RevenueHistory({ fund, zh }: { fund: Fund; zh?: boolean }) {
   const chartLabels = periods.slice(-cap)
   const chartSeries: Series[] = [
     {
-      name: pick(!!zh, "Total revenue", "总营收"),
+      name: topLine,
       values: values.slice(-cap),
       color: "var(--brand)",
     },
@@ -171,7 +190,7 @@ function RevenueHistory({ fund, zh }: { fund: Fund; zh?: boolean }) {
 
   const rows: MiniRow[] = [
     {
-      label: pick(!!zh, "Total revenue", "总营收"),
+      label: topLine,
       values,
       change: points.map((p) => p.yoy),
       bold: true,
@@ -185,13 +204,13 @@ function RevenueHistory({ fund, zh }: { fund: Fund; zh?: boolean }) {
         className="fin-sec-h fin-rail fin-rule"
         style={{ "--rail": "var(--brand)" } as React.CSSProperties}
       >
-        {pick(!!zh, "Total revenue", "总营收")}
+        {topLine}
         {span && (
           <span className="fin-sec-sub">
             {pick(
               !!zh,
-              `${span.count} ${aq === "annual" ? "fiscal years" : "quarters"} · ${span.first}–${span.last}`,
-              `${span.count} 个${aq === "annual" ? "财年" : "季度"} · ${span.first}–${span.last}`,
+              `${statementPeriodCountLabel(set, aq, false)} · ${span.first}–${span.last}`,
+              `${statementPeriodCountLabel(set, aq, true)} · ${span.first}–${span.last}`,
             )}
           </span>
         )}
@@ -203,11 +222,19 @@ function RevenueHistory({ fund, zh }: { fund: Fund; zh?: boolean }) {
 
       <div className="fin-stmt-ctrl">
         <div className="fin-toggle fin-aq">
-          <button className={aq === "annual" ? "on" : ""} onClick={() => setAQ("annual")}>
+          <button
+            className={aq === "annual" ? "on" : ""}
+            onClick={() => setAQ("annual")}
+            disabled={!annualAvailable}
+          >
             {pick(!!zh, "Annual", "年度")}
           </button>
-          <button className={aq === "quarterly" ? "on" : ""} onClick={() => setAQ("quarterly")}>
-            {pick(!!zh, "Quarterly", "季度")}
+          <button
+            className={aq === "quarterly" ? "on" : ""}
+            onClick={() => setAQ("quarterly")}
+            disabled={!interimAvailable}
+          >
+            {statementCadenceLabel(fund.statements?.quarterly, "quarterly", !!zh)}
           </button>
         </div>
       </div>
@@ -219,8 +246,11 @@ function RevenueHistory({ fund, zh }: { fund: Fund; zh?: boolean }) {
         showChange
         pageSize={6}
         zh={zh}
-        cornerLabel={pick(!!zh, "Currency: " + ccy, "货币: " + ccy)}
+        cornerLabel={statementCurrencyLabel(ccy, !!zh)}
       />
+
+      {cumulativeNote && <div className="fin-chart-note">{cumulativeNote}</div>}
+      {familyNote && <div className="fin-chart-note">{familyNote}</div>}
 
       <div className="fin-asof">
         {pick(
@@ -246,7 +276,7 @@ function EstimatesSection({
   if (!est?.rev_fy) return null
   const { periods, avg, high, low, n } = est.rev_fy
   if (!periods || periods.length === 0) return null
-  const ccy = fund.stmt_currency ?? "USD"
+  const ccy = fund.stmt_currency
 
   return (
     <div className="fin-sec">
@@ -259,7 +289,7 @@ function EstimatesSection({
       </div>
       <div className="fin-earn-meta">
         <span>{pick(!!zh, "Metrics", "指标")}</span>
-        <span className="fin-earn-ccy">{pick(!!zh, "Currency: " + ccy, "货币: " + ccy)}</span>
+        <span className="fin-earn-ccy">{statementCurrencyLabel(ccy, !!zh)}</span>
       </div>
       <div className="fin-table-scroll">
         <table className="fin-table">
@@ -364,7 +394,7 @@ export default function RevenuePage({ fund, zh, sym }: RevenuePageProps) {
   }
 
   const segs = fund.segments
-  const ccy = fund.stmt_currency ?? "USD"
+  const ccy = fund.stmt_currency
 
   // ── Segments present → full Revenue segmentation page ──
   if (segs && (segs.by_source || segs.by_country)) {

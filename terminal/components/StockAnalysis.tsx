@@ -4,6 +4,17 @@ import { useLang } from "@/lib/i18n";
 import { daysUntil, pick as pickI18n, fmtPct } from "@/lib/finFormat";
 import type { Fund, Opts, Bar } from "@/lib/fund";
 import { buildKeyStatRows, formatCompactStat } from "@/lib/keyStats";
+// Income series are normalized ONCE, in the shared statement math — never read off `set.income`
+// (see lib/finStatementMath's header); the margin line rides the same normalized pair.
+import {
+  incomeChartValues,
+  incomeViewTopLineLabel,
+  incomeView,
+  resolveStatementBasis,
+  statementBasisAvailable,
+  statementCadenceLabel,
+} from "@/lib/finStatementMath";
+import { netMarginPct } from "@/lib/finSeries";
 import { computeRatings } from "@/lib/techRating";
 import { realizedVolCone } from "@/lib/realizedVol";
 import { Dumbbell, ComboChart, LineSeries, type Series } from "@/components/fin/FinCharts";
@@ -176,21 +187,40 @@ const STMT_KEYS = ["income", "balance", "cashflow"] as const;
 type StmtKey = typeof STMT_KEYS[number];
 
 /** Financials mini: ComboChart driven by a statement dropdown + A/Q toggle. */
-function FinancialsMini({ fund, pick, onOpen }: { fund: Fund | null; pick: Pick; onOpen?: () => void }) {
+function FinancialsMini({ fund, pick, zh, onOpen }: { fund: Fund | null; pick: Pick; zh: boolean; onOpen?: () => void }) {
   const [stmt, setStmt] = useState<StmtKey>("income");
   const [annual, setAnnual] = useState(true);
-  const ps = annual ? fund?.statements?.annual : fund?.statements?.quarterly;
+  const annualAvailable = statementBasisAvailable(fund?.statements?.annual);
+  const interimAvailable = statementBasisAvailable(fund?.statements?.quarterly);
+  // Keep a valid basis when the selected symbol has annual statements only (or when navigation
+  // replaces an interim-capable symbol while this mounted rail still has the interim toggle set).
+  const effectiveAnnual = resolveStatementBasis(
+    annual ? "annual" : "quarterly",
+    annualAvailable,
+    interimAvailable,
+  ) === "annual";
+  const ps = effectiveAnnual ? fund?.statements?.annual : fund?.statements?.quarterly;
   if (!ps || !ps.periods?.length) return null;
-  const labels = ps.periods.map((p) => periodShort(p));
+  const timeframe = effectiveAnnual ? "annual" : "quarterly";
+  const view = incomeView(fund?.ticker, ps, timeframe);
+  const labels = (stmt === "income" ? view.periods : ps.periods).map((p) => periodShort(p));
   let barsSeries: Series[] = [];
   let line: Series = { name: "", values: [] };
   if (stmt === "income") {
-    const rev = ps.income.revenue, ni = ps.income.net_income;
+    // ONE normalization, the same one the Statements tab prints (lib/finStatementMath): raw for a
+    // discrete-quarter market, differenced for a cumulative year-to-date one. Reading `ps.income`
+    // here plotted a CN/HK name's year-to-date totals in this rail while the Statements tab showed
+    // the discrete quarter — same quarter, two numbers, two tabs. `fund.ticker` is the symbol this
+    // widget has (same source lib/finStatements.revenueHistory uses); the timeframe follows the A/Q
+    // toggle, so the annual set is never differenced.
+    const { revenue: rev, net_income: ni } = incomeChartValues(view);
     barsSeries = [
-      { name: pick("Revenue", "营收"), values: rev, color: "var(--brand-2)" },
+      { name: incomeViewTopLineLabel(view, zh), values: rev, color: "var(--brand-2)" },
       { name: pick("Income", "净利润"), values: ni, color: "var(--signal)" },
     ];
-    line = { name: pick("Margin %", "净利率%"), values: rev.map((r, i) => (r && ni[i] != null ? (ni[i]! / r) * 100 : null)), color: "var(--warn)" };
+    // The margin rides the SAME normalized pair (lib/finSeries) — never a differenced net income
+    // over a cumulative revenue, which is a margin no period ever had.
+    line = { name: pick("Margin %", "净利率%"), values: netMarginPct(rev, ni), color: "var(--warn)" };
   } else if (stmt === "balance") {
     barsSeries = [
       { name: pick("Total assets", "总资产"), values: ps.balance.assets, color: "#9d86ff" },
@@ -201,7 +231,16 @@ function FinancialsMini({ fund, pick, onOpen }: { fund: Fund | null; pick: Pick;
     // cash flow: three lines (operating / investing / financing) — no bars
     return (
       <Section title={pick("Financials", "财务")}>
-        <FinMiniControls stmt={stmt} setStmt={setStmt} annual={annual} setAnnual={setAnnual} pick={pick} />
+        <FinMiniControls
+          stmt={stmt}
+          setStmt={setStmt}
+          annual={effectiveAnnual}
+          setAnnual={setAnnual}
+          annualAvailable={annualAvailable}
+          interimLabel={statementCadenceLabel(fund?.statements?.quarterly, "quarterly", zh)}
+          interimAvailable={interimAvailable}
+          pick={pick}
+        />
         <LineSeries labels={labels} markers refLine={0}
           series={[
             { name: pick("Operating", "经营"), values: ps.cashflow.cfo, color: "#f06bd0" },
@@ -215,14 +254,23 @@ function FinancialsMini({ fund, pick, onOpen }: { fund: Fund | null; pick: Pick;
   }
   return (
     <Section title={pick("Financials", "财务")}>
-      <FinMiniControls stmt={stmt} setStmt={setStmt} annual={annual} setAnnual={setAnnual} pick={pick} />
+      <FinMiniControls
+        stmt={stmt}
+        setStmt={setStmt}
+        annual={effectiveAnnual}
+        setAnnual={setAnnual}
+        annualAvailable={annualAvailable}
+        interimLabel={statementCadenceLabel(fund?.statements?.quarterly, "quarterly", zh)}
+        interimAvailable={interimAvailable}
+        pick={pick}
+      />
       <ComboChart labels={labels} bars={barsSeries} line={line} fmtBar={MB} vw={300} vh={170} />
       {onOpen && <button className="sa-more-btn" onClick={onOpen}>{pick("More financials", "更多财务")} ›</button>}
     </Section>
   );
 }
 
-function FinMiniControls({ stmt, setStmt, annual, setAnnual, pick }: { stmt: StmtKey; setStmt: (s: StmtKey) => void; annual: boolean; setAnnual: (a: boolean) => void; pick: Pick }) {
+function FinMiniControls({ stmt, setStmt, annual, setAnnual, annualAvailable, interimLabel, interimAvailable, pick }: { stmt: StmtKey; setStmt: (s: StmtKey) => void; annual: boolean; setAnnual: (a: boolean) => void; annualAvailable: boolean; interimLabel: string; interimAvailable: boolean; pick: Pick }) {
   const label: Record<StmtKey, string> = {
     income: pick("Income statement", "利润表"),
     balance: pick("Balance sheet", "资产负债表"),
@@ -234,8 +282,14 @@ function FinMiniControls({ stmt, setStmt, annual, setAnnual, pick }: { stmt: Stm
         {STMT_KEYS.map((k) => <option key={k} value={k}>{label[k]}</option>)}
       </select>
       <div className="sa-fin-aq">
-        <button className={annual ? "on" : ""} onClick={() => setAnnual(true)}>{pick("Annual", "年度")}</button>
-        <button className={!annual ? "on" : ""} onClick={() => setAnnual(false)}>{pick("Quarterly", "季度")}</button>
+        <button className={annual ? "on" : ""} onClick={() => setAnnual(true)} disabled={!annualAvailable}>{pick("Annual", "年度")}</button>
+        <button
+          className={!annual ? "on" : ""}
+          onClick={() => setAnnual(false)}
+          disabled={!interimAvailable}
+        >
+          {interimLabel}
+        </button>
       </div>
     </div>
   );
@@ -571,7 +625,7 @@ export default function StockAnalysis({
       <KeyStats fund={fund} bars={bars} pick={pick} />
       <EarningsMini fund={fund} pick={pick} onOpen={onOpenPane && (() => onOpenPane("earnings"))} />
       <DividendsMini fund={fund} pick={pick} />
-      <FinancialsMini fund={fund} pick={pick} onOpen={onOpenPane && (() => onOpenPane("statements"))} />
+      <FinancialsMini fund={fund} pick={pick} zh={zh} onOpen={onOpenPane && (() => onOpenPane("statements"))} />
       <PerfGrid bars={bars} pick={pick} />
     </>
   ) : null;

@@ -104,6 +104,23 @@ export function currencySymbol(currency?: string | null): string {
 }
 
 /**
+ * Normalize an optional statement-currency receipt without inventing one. The
+ * statement payload is allowed to say "unknown" with null; callers must not
+ * replace that missing receipt with the quote currency or a market default.
+ */
+export function statementCurrencyCode(currency?: string | null): string | null {
+  const code = currency?.trim();
+  return code ? code.toUpperCase() : null;
+}
+
+/** Shared bilingual label for every statement-derived table and chart. */
+export function statementCurrencyLabel(currency: string | null | undefined, zh: boolean): string {
+  const code = statementCurrencyCode(currency);
+  if (code) return pick(zh, `Currency: ${code}`, `货币：${code}`);
+  return pick(zh, "Statement currency unavailable", "报表货币不可用");
+}
+
+/**
  * signColor — CSS color token for a signed value (green up / red down / neutral zero-or-null).
  * Returns a var() so callers stay theme-driven.
  */

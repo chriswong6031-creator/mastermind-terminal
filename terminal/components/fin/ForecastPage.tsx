@@ -30,6 +30,7 @@ import {
   fmtDate,
   pick,
   signColor,
+  statementCurrencyLabel,
 } from "../../lib/finFormat";
 import {
   Dumbbell,
@@ -41,6 +42,7 @@ import {
 } from "./FinCharts";
 import { ArcGauge, type ArcState } from "../ui/ArcGauge";
 import type { FundEarnings, AnalystDist } from "../../lib/fund";
+import { incomeViewTopLineLabel, incomeView, isIndustrialIncomeView } from "../../lib/finStatementMath";
 
 interface ForecastPageProps {
   sym: string;
@@ -161,7 +163,7 @@ function ForecastPage({ sym, fund, bars = [], zh = false, loading = false }: For
   }
 
   const ccy = fund?.quote_currency ?? "USD";
-  const stmtCcy = fund?.stmt_currency ?? ccy;
+  const stmtCcy = fund?.stmt_currency ?? null;
   const est = fund?.estimates ?? null;
   const analyst = fund?.analyst ?? null;
 
@@ -225,7 +227,7 @@ function PriceTargetTab({
   bars: Bar[];
   lastPrice: number | null;
   ccy: string;
-  stmtCcy: string;
+  stmtCcy: string | null;
   analyst: Fund["analyst"];
   est: Fund["estimates"];
   epsFreq: "A" | "Q";
@@ -319,7 +321,7 @@ function PriceTargetTab({
         est={est}
         freq={epsFreq}
         setFreq={setEpsFreq}
-        ccy={ccy}
+        ccy={stmtCcy}
         zh={zh}
       />
 
@@ -673,7 +675,7 @@ function EstimateBarSection({
   est: Fund["estimates"];
   freq: "A" | "Q";
   setFreq: (f: "A" | "Q") => void;
-  ccy: string;
+  ccy: string | null;
   zh: boolean;
 }) {
   // Actuals from fund.earnings (fy annual / q quarterly); forecast tail from estimates.
@@ -747,7 +749,7 @@ function EstimateBarSection({
             fmt={fmtV}
             pageSize={10}
             zh={zh}
-            cornerLabel={pick(zh, `Currency: ${ccy}`, `货币：${ccy}`)}
+            cornerLabel={statementCurrencyLabel(ccy, zh)}
           />
         </>
       )}
@@ -836,7 +838,7 @@ function ActualsTab({
   est: Fund["estimates"];
   stmt: "income" | "balance" | "cashflow";
   setStmt: (s: "income" | "balance" | "cashflow") => void;
-  ccy: string;
+  ccy: string | null;
   zh: boolean;
 }) {
   const built = useMemo(() => buildActualsTable(fund, est, stmt, zh), [fund, est, stmt, zh]);
@@ -937,7 +939,7 @@ function ActualsTab({
           fmt={(v) => fmtNum(v)}
           pageSize={8}
           zh={zh}
-          cornerLabel={pick(zh, `Currency: ${ccy}`, `货币：${ccy}`)}
+          cornerLabel={statementCurrencyLabel(ccy, zh)}
         />
         <EstimatesAsOf fund={fund} zh={zh} />
       </div>
@@ -1024,6 +1026,7 @@ function buildActualsTable(fund: Fund | null, est: Fund["estimates"], stmt: "inc
 
   // Statement line items (actuals only; ` E` columns show —).
   const ann = fund?.statements?.annual;
+  const annualView = incomeView(fund?.ticker, ann, "annual");
   const alignActual = (series: (number | null)[] | undefined) => {
     const out = new Array(periods.length).fill(null) as (number | null)[];
     if (!series || !ann) return out;
@@ -1037,13 +1040,23 @@ function buildActualsTable(fund: Fund | null, est: Fund["estimates"], stmt: "inc
   const lineItems: [string, string, (number | null)[] | undefined][] =
     stmt === "income"
       ? [
-          ["Total revenue", "营业总收入", ann?.income.revenue],
-          ["Cost of goods sold", "营业成本", ann?.income.cogs],
-          ["Gross profit", "毛利润", ann?.income.gross_profit],
-          ["Operating income", "营业利润", ann?.income.op_income],
-          ["Pretax income", "税前利润", ann?.income.pretax_income],
-          ["EBITDA", "息税折旧摊销前利润", ann?.income.ebitda],
-          ["Net income", "净利润", ann?.income.net_income],
+          [
+            incomeViewTopLineLabel(annualView, false),
+            incomeViewTopLineLabel(annualView, true),
+            annualView.income.revenue,
+          ],
+          ...(isIndustrialIncomeView(annualView)
+            ? [
+                ["Cost of goods sold", "营业成本", annualView.income.cogs],
+                ["Gross profit", "毛利润", annualView.income.gross_profit],
+              ] as [string, string, (number | null)[]][]
+            : []),
+          ["Operating income", "营业利润", annualView.income.op_income],
+          ["Pretax income", "税前利润", annualView.income.pretax_income],
+          ...(isIndustrialIncomeView(annualView)
+            ? [["EBITDA", "息税折旧摊销前利润", annualView.income.ebitda]] as [string, string, (number | null)[]][]
+            : []),
+          ["Net income", "净利润", annualView.income.net_income],
         ]
       : stmt === "balance"
         ? [

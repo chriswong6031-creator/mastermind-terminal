@@ -20,7 +20,7 @@
  * whose fund.json predates this pass simply reports no gaps and a shorter history.
  */
 import type { Fund, StatementPeriodSet } from "./fund";
-import { incomeView } from "./finStatementMath";
+import { comparablePeriodChanges, incomeView } from "./finStatementMath";
 
 /** Contract field keys the vendor payload cannot fill, by statement block. */
 export type VendorGaps = Record<string, string[]>;
@@ -63,7 +63,7 @@ export interface GapNotice {
  * would send the reader hunting for rows that are not on screen.
  */
 export function vendorGapNotice(
-  set: StatementPeriodSet | undefined,
+  set: StatementPeriodSet | null | undefined,
   block: "income" | "balance" | "cashflow",
   zh: boolean,
 ): GapNotice | null {
@@ -90,7 +90,7 @@ export function vendorGapNotice(
 
 /** Span summary for a period set: count + first/last label. Null when empty. */
 export function historySpan(
-  set: StatementPeriodSet | undefined,
+  set: StatementPeriodSet | null | undefined,
 ): { count: number; first: string; last: string } | null {
   const periods = set?.periods ?? [];
   if (periods.length === 0) return null;
@@ -107,10 +107,10 @@ export interface RevenuePoint {
 /**
  * Total-revenue history with YoY, oldest→newest.
  *
- * `lag` is 1 for annual and 4 for quarterly so "year over year" means the same thing on
- * both — a quarterly series compared to the prior QUARTER would be seasonality, not growth.
- * Periods whose revenue is null keep their slot (the axis must not silently close a gap)
- * and yield a null YoY on both sides of the hole.
+ * Year-over-year comparison follows the producer's fiscal identity: the same period kind and
+ * period number in the prior fiscal year. That works for quarter, half-year and mixed-cadence
+ * issuers without inventing a four-column lag. Legacy artifacts with no identity metadata retain
+ * the old annual/quarterly fallback. Null periods keep their slot and yield a null comparison.
  *
  * NORMALIZATION: revenue comes from `finStatementMath.incomeView`, the same call the
  * Statements tab makes, NOT from `set.income.revenue` raw. Reading it raw was a live
@@ -123,16 +123,14 @@ export function revenueHistory(
   timeframe: "annual" | "quarterly" = "annual",
 ): RevenuePoint[] {
   const set = timeframe === "annual" ? fund?.statements?.annual : fund?.statements?.quarterly;
-  const periods = set?.periods ?? [];
-  const revenue = incomeView(fund?.ticker, set, timeframe).income.revenue;
+  const view = incomeView(fund?.ticker, set, timeframe);
+  const periods = view.periods;
+  const revenue = view.income.revenue;
   if (periods.length === 0) return [];
-  const lag = timeframe === "quarterly" ? 4 : 1;
+  const changes = comparablePeriodChanges(revenue, set, timeframe);
   return periods.map((period, i) => {
     const value = revenue[i] ?? null;
-    const prev = revenue[i - lag] ?? null;
-    const yoy =
-      value != null && prev != null && prev !== 0 ? ((value - prev) / Math.abs(prev)) * 100 : null;
-    return { period, value, yoy };
+    return { period, value, yoy: changes[i] ?? null };
   });
 }
 

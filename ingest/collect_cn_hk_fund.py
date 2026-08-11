@@ -48,7 +48,7 @@ Run with the macro venv (pandas + TUSHARE_TOKEN in <Macro Dashboard>/.env):
         [--market cn|hk|all] [--only 600519.SH,0700.HK] [--limit N] \
         [--periods 28] [--stale-days 7] [--skip-stmt] [--skip-div] [--force]
         [--skip-consensus] [--skip-reports] [--skip-company] [--skip-holders]
-        [--skip-disclosure] [--shard i/N]
+        [--skip-disclosure] [--shard i/N] [--statements-only]
 
 --shard i/N (1-based) takes every N-th name of the sorted HK universe so N processes can run the
 per-ticker HK collection in parallel against one shared cache dir (writes are per-ticker atomic).
@@ -77,7 +77,13 @@ HK_DEEP = OUT / "hk_deep.parquet"
 
 
 # ─────────────────────────────── Tushare REST ───────────────────────────────
+TOKEN: str | None = None
+
+
 def _token() -> str:
+    global TOKEN
+    if TOKEN:
+        return TOKEN
     t = (os.environ.get("TUSHARE_TOKEN") or "").strip()
     if not t:
         env = MACRO / ".env"
@@ -87,15 +93,13 @@ def _token() -> str:
                     t = line.split("=", 1)[1].strip().strip('"').strip("'")
     if not t:
         sys.exit("no TUSHARE_TOKEN (env or Macro Dashboard/.env)")
+    TOKEN = t
     return t
-
-
-TOKEN = _token()
 
 
 def ts_call(api: str, params: dict, fields: str = "", retries: int = 4):
     """Tushare REST → (fields, items). Retries on rate-limit (频率超限). Returns ([],[]) on hard error."""
-    body = json.dumps({"api_name": api, "token": TOKEN, "params": params, "fields": fields}).encode()
+    body = json.dumps({"api_name": api, "token": _token(), "params": params, "fields": fields}).encode()
     for attempt in range(retries):
         try:
             req = urllib.request.Request("http://api.tushare.pro", data=body,
@@ -381,7 +385,12 @@ def _ak_stock(sym: str) -> str:
 
 
 def _hk_report(sym: str, cn_label: str) -> list[dict]:
-    """akshare long-format HK report → [{end, date_type, items:{code:amount}}], newest→oldest."""
+    """akshare HK report with source period and taxonomy identity preserved.
+
+    `START_DATE` distinguishes cumulative YTD from a discrete period; `STD_ITEM_NAME` is the audit
+    receipt for the 001/002/003/004 family adapters. Discarding both forced downstream month/amount
+    guesses, which is how H1/FY became Q2/Q4.
+    """
     import akshare as ak
     code = _ak_stock(sym)
     df = ak.stock_financial_hk_report_em(stock=code, symbol=cn_label, indicator="报告期")
@@ -389,14 +398,38 @@ def _hk_report(sym: str, cn_label: str) -> list[dict]:
         return []
     out: dict[str, dict] = {}
     for r in df.to_dict("records"):
-        rd = str(r.get("REPORT_DATE") or "")[:10]
+        report_raw = r.get("REPORT_DATE")
+        rd = "" if pd.isna(report_raw) else str(report_raw)[:10]
         if not rd:
             continue
-        rec = out.setdefault(rd, {"end": rd, "date_type": r.get("DATE_TYPE_CODE"), "items": {}})
+        start_raw = r.get("START_DATE")
+        start = None if pd.isna(start_raw) else (str(start_raw)[:10] or None)
+        date_type_raw = r.get("DATE_TYPE_CODE")
+        fiscal_year_raw = r.get("FISCAL_YEAR")
+        date_type = None if pd.isna(date_type_raw) else str(date_type_raw)
+        fiscal_year_end = None if pd.isna(fiscal_year_raw) else str(fiscal_year_raw)
+        rec = out.setdefault(rd, {
+            "end": rd,
+            "start": start,
+            "date_type": date_type,
+            "fiscal_year_end": fiscal_year_end,
+            "items": {},
+            "item_names": {},
+        })
+        if rec.get("start") is None and start:
+            rec["start"] = start
+        if rec.get("date_type") is None and date_type:
+            rec["date_type"] = date_type
+        if rec.get("fiscal_year_end") is None and fiscal_year_end:
+            rec["fiscal_year_end"] = fiscal_year_end
         code_i = str(r.get("STD_ITEM_CODE") or "")
         amt = _f(r.get("AMOUNT"))
         if code_i:
             rec["items"][code_i] = amt
+            name_raw = r.get("STD_ITEM_NAME")
+            name = "" if pd.isna(name_raw) else str(name_raw).strip()
+            if name:
+                rec["item_names"][code_i] = name
     rows = sorted(out.values(), key=lambda x: x["end"])
     return rows
 
@@ -464,7 +497,33 @@ def _hk_yf(sym: str) -> dict:
     return out
 
 
-def _fetch_hk(sym: str) -> dict | None:
+def _meaningful_value(value) -> bool:
+    """Whether a vendor value carries information rather than an empty response shell."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(_meaningful_value(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_meaningful_value(item) for item in value)
+    return True
+
+
+def _meaningful_yf(value: dict | None) -> bool:
+    return bool(value) and _meaningful_value(value)
+
+
+def _merge_yf(previous: dict | None, fresh: dict | None) -> dict:
+    """Overlay meaningful fresh fields without erasing good fields during partial outages."""
+    merged = dict(previous or {})
+    for key, value in (fresh or {}).items():
+        if _meaningful_value(value) or key not in merged:
+            merged[key] = value
+    return merged
+
+
+def _fetch_hk(sym: str, *, fetch_yf: bool = True) -> dict | None:
     fin: dict[str, list] = {}
     for kind, label in HK_STMTS.items():
         try:
@@ -472,15 +531,17 @@ def _fetch_hk(sym: str) -> dict | None:
         except Exception:
             fin[kind] = []
         time.sleep(0.6)   # serial akshare etiquette
-    yf = _hk_yf(sym)
-    if not any(fin.values()) and not yf:
+    yf = _hk_yf(sym) if fetch_yf else {}
+    if not any(fin.values()) and not _meaningful_yf(yf):
         return None
     return {"ticker": sym, "financials": fin, "yf": yf}
 
 
-def collect_hk_fund(syms: list[str], force: bool, stale_days: int = 7) -> None:
+def collect_hk_fund(
+    syms: list[str], force: bool, stale_days: int = 7, *, statements_only: bool = False,
+) -> None:
     HK_OUT.mkdir(parents=True, exist_ok=True)
-    done = ok = healed = 0
+    done = ok = healed = preserved_blocks = 0
     try:
         for sym in syms:
             cache = HK_OUT / f"{sym}.json"
@@ -497,10 +558,15 @@ def collect_hk_fund(syms: list[str], force: bool, stale_days: int = 7) -> None:
                         rec = json.loads(cache.read_text())
                     except Exception:
                         rec = None
-                    if rec and any((rec.get("financials") or {}).values()) and not rec.get("yf"):
+                    current_yf = (rec or {}).get("yf") or {}
+                    needs_yf_heal = (
+                        not _meaningful_yf(current_yf)
+                        or not _meaningful_value(current_yf.get("financial_currency"))
+                    )
+                    if rec and any((rec.get("financials") or {}).values()) and needs_yf_heal:
                         yf = _hk_yf(sym)
-                        if yf:
-                            rec["yf"] = yf
+                        if _meaningful_yf(yf):
+                            rec["yf"] = _merge_yf(current_yf, yf)
                             _atomic_write(cache, _strict_json_dumps(rec))
                             healed += 1
                         done += 1
@@ -509,16 +575,50 @@ def collect_hk_fund(syms: list[str], force: bool, stale_days: int = 7) -> None:
                         done += 1
                         continue
                     # corrupt cache or both blocks hollow → fall through to a full re-fetch
-            rec = _fetch_hk(sym)
+            preserved_yf = {}
+            preserved_financials: dict[str, list] = {}
+            if cache.exists():
+                try:
+                    previous = json.loads(cache.read_text())
+                    preserved_financials = previous.get("financials") or {}
+                    preserved_yf = previous.get("yf") or {}
+                except Exception:
+                    preserved_yf = {}
+                    preserved_financials = {}
+            rec = _fetch_hk(sym, fetch_yf=not statements_only)
             done += 1
             if rec:
+                if statements_only:
+                    rec["yf"] = preserved_yf
+                else:
+                    # yfinance fields fail independently and an empty `info` response is often a
+                    # truthy dictionary of nulls. Keep prior sourced values unless the refresh
+                    # provides a meaningful replacement for that exact field.
+                    rec["yf"] = _merge_yf(preserved_yf, rec.get("yf"))
+                fresh_financials = rec.setdefault("financials", {})
+                # Each vendor endpoint fails independently. Never let one transient empty
+                # response erase a valid cached income/balance/cash-flow history while the
+                # other two endpoints refresh successfully. This applies to the ordinary stale
+                # refresh too, not only the one-off statements-only migration.
+                for kind in HK_STMTS:
+                    if not fresh_financials.get(kind) and preserved_financials.get(kind):
+                        fresh_financials[kind] = preserved_financials[kind]
+                        preserved_blocks += 1
                 _atomic_write(cache, _strict_json_dumps(rec))
                 ok += 1
             if done % 25 == 0 or done == len(syms):
-                print(f"  hk_fund: {done}/{len(syms)} done, {ok} newly cached, {healed} yf-healed", flush=True)
+                print(
+                    f"  hk_fund: {done}/{len(syms)} done, {ok} newly cached, "
+                    f"{healed} yf-healed, {preserved_blocks} statement blocks preserved",
+                    flush=True,
+                )
     except KeyboardInterrupt:
         print("  interrupted — per-ticker caches already on disk (resumable)", flush=True)
-    print(f"hk_fund: {ok} names newly cached, {healed} yf-healed into {HK_OUT}", flush=True)
+    print(
+        f"hk_fund: {ok} names newly cached, {healed} yf-healed, "
+        f"{preserved_blocks} statement blocks preserved into {HK_OUT}",
+        flush=True,
+    )
 
 
 # ─────────────────────────────── EastMoney consensus (cn_consensus.parquet) ───────────────────────────────
@@ -820,6 +920,7 @@ def main(argv: list[str]) -> None:
     skip_holders = "--skip-holders" in argv
     skip_disclosure = "--skip-disclosure" in argv
     force = "--force" in argv
+    statements_only = "--statements-only" in argv
 
     only_set = set(s.strip() for s in only.split(",")) if only else None
     t0 = time.time()
@@ -877,7 +978,7 @@ def main(argv: list[str]) -> None:
             hk = hk[i - 1::n]
             print(f"=== HK shard {i}/{n} ===", flush=True)
         print(f"=== HK ({len(hk)} names) ===", flush=True)
-        collect_hk_fund(hk, force, stale_days)
+        collect_hk_fund(hk, force, stale_days, statements_only=statements_only)
 
     print(f"done in {time.time() - t0:.0f}s", flush=True)
 
