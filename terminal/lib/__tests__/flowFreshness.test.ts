@@ -18,7 +18,7 @@ const META_V2 = {
   asof: "2026-08-10T20:26:00Z",
   poll_floor_sec: 120,
   cycle_started_at: "2026-08-10T19:18:00Z",
-  cycle_start_interval_sec_observed: 4073.6,
+  observed_start_to_start_sec: 4073.6,
   source_response_at_first: "2026-08-10T19:19:00Z",
   source_response_at_last: "2026-08-10T20:24:00Z",
 };
@@ -45,12 +45,19 @@ describe("live_flow.meta/v2 timing parser", () => {
     })).toBeNull();
   });
 
+  it("accepts only Macro's canonical observed start-to-start field", () => {
+    const noncanonical = { ...META_V2 } as Record<string, unknown>;
+    delete noncanonical.observed_start_to_start_sec;
+    noncanonical.cycle_start_interval_sec_observed = 4073.6;
+    expect(parseLiveFlowMetaTiming(noncanonical)).toBeNull();
+  });
+
   it.each([
     "asof",
     "cycle_started_at",
     "source_response_at_first",
     "source_response_at_last",
-    "cycle_start_interval_sec_observed",
+    "observed_start_to_start_sec",
   ])("fails a partial v2 with missing %s", (key) => {
     const partial = { ...META_V2 } as Record<string, unknown>;
     delete partial[key];
@@ -60,7 +67,7 @@ describe("live_flow.meta/v2 timing parser", () => {
   it("accepts an explicit null observed interval on the first cycle", () => {
     expect(parseLiveFlowMetaTiming({
       ...META_V2,
-      cycle_start_interval_sec_observed: null,
+      observed_start_to_start_sec: null,
     })?.observedCycleSec).toBeNull();
   });
 
@@ -72,7 +79,7 @@ describe("live_flow.meta/v2 timing parser", () => {
     })).toBeNull();
     expect(parseLiveFlowMetaTiming({
       ...META_V2,
-      cycle_start_interval_sec_observed: 0,
+      observed_start_to_start_sec: 0,
     })).toBeNull();
   });
 });

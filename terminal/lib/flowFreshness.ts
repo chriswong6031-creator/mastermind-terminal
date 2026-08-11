@@ -71,8 +71,8 @@ export function parseLiveFlowMetaTiming(value: unknown): LiveFlowMetaTiming | nu
 
   // Null is the honest first-cycle value. Missing, zero, negative, or non-finite
   // values are malformed rather than a reason to fall back to the poll floor.
-  if (!("cycle_start_interval_sec_observed" in raw)) return null;
-  const observed = raw.cycle_start_interval_sec_observed;
+  if (!("observed_start_to_start_sec" in raw)) return null;
+  const observed = raw.observed_start_to_start_sec;
   if (observed !== null && (typeof observed !== "number" || !Number.isFinite(observed) || observed <= 0)) {
     return null;
   }

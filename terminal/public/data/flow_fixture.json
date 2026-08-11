@@ -486,7 +486,7 @@
     "asof": "2026-07-05T15:42:00Z",
     "poll_floor_sec": 120,
     "cycle_started_at": "2026-07-05T14:34:06Z",
-    "cycle_start_interval_sec_observed": 4073.6,
+    "observed_start_to_start_sec": 4073.6,
     "fetch_compute_sec": 4068.3,
     "source_response_at_first": "2026-07-05T14:34:51Z",
     "source_response_at_last": "2026-07-05T15:40:32Z",
