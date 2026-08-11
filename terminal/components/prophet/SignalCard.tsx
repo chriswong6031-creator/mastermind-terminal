@@ -19,6 +19,7 @@ import { useState } from "react";
 import { makeProphetT } from "./prophetStrings";
 import { OptionCard } from "./OptionCard";
 import type { OptionContractPayload } from "./OptionCard";
+import { Tip } from "@/components/ui/Tip";
 import type { Lang } from "@/lib/i18n";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -91,6 +92,40 @@ export interface PlanSummary {
     action: string;
     status: "ACTIVE" | "PENDING" | "DONE";
   }> | null;
+  /**
+   * Machine tag for how the plan was originated, e.g. "outage_backfill_2026_08_09".
+   * Present only on reconstructed rows — it exists so the cohort can be filtered, and
+   * is never rendered: the internal name of the event is not reader-facing copy.
+   */
+  origination_mode?: string | null;
+  /**
+   * Reconstruction disclosure, present only on a plan the macro builder rebuilt after
+   * an outage instead of originating live. Absent on every live plan, which is what
+   * makes a card without it render exactly as it did before this shipped.
+   */
+  origination_note?: OriginationNote | null;
+}
+
+/**
+ * FINISHED bilingual copy, shipped on the row by the producer
+ * (macro `engine/prophet_bridge.py`), not a key to look up.
+ *
+ * Both surfaces that draw these plans — the dashboard board and this Terminal — read
+ * the same strings off the same row precisely so the wording cannot drift between
+ * them. `tip_*` is optional: a row whose origination date will not parse ships the
+ * chip with no receipt rather than a receipt with a blank day.
+ */
+export interface OriginationNote {
+  /** Tier 1 chip copy, English. */
+  en: string;
+  /** Tier 1 chip copy, Chinese. */
+  zh: string;
+  /** Tier 2 receipt, English — absent when the producer could not date the row. */
+  tip_en?: string | null;
+  /** Tier 2 receipt, Chinese — absent when the producer could not date the row. */
+  tip_zh?: string | null;
+  date_en?: string | null;
+  date_zh?: string | null;
 }
 
 /** Return ISO date string from either flat (_signal_date) or nested (asof) shape. */
@@ -111,6 +146,30 @@ export function planPhase(plan: PlanSummary): string | null {
 /** Return recommended_action from either flat or nested shape. */
 export function planRecommendedAction(plan: PlanSummary): string | null {
   return plan.recommended_action ?? plan.state?.recommended_action ?? null;
+}
+
+/**
+ * The row's reconstruction disclosure in the reader's language — chip (Tier 1) plus
+ * receipt (Tier 2) — or `null` when the plan was originated live.
+ *
+ * EVERY STRING IS THE ROW'S OWN. This repo words none of it and must never start:
+ * the producer ships finished EN/ZH copy on the row so the dashboard and the Terminal
+ * cannot say different things about the same plan. That is also why there is no
+ * `prophetStrings` key here — a key each surface words for itself is the second place
+ * for the wording to drift.
+ *
+ * Fail-soft on the receipt, exactly as the producer is: no tip means chip only, never
+ * a chip promising a hover that has nothing behind it.
+ */
+export function planOriginationNote(
+  plan: PlanSummary,
+  lang: Lang,
+): { chip: string; tip: string | null } | null {
+  const note = plan.origination_note;
+  if (!note) return null;
+  const chip = lang === "zh" ? note.zh : note.en;
+  if (!chip) return null;
+  return { chip, tip: (lang === "zh" ? note.tip_zh : note.tip_en) || null };
 }
 
 interface SignalCardProps {
@@ -220,6 +279,9 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
   const phaseColor = phaseTone(currentPhase);
 
   const dirColor = isBear ? "var(--down)" : "var(--up)";
+
+  // Reconstruction disclosure — null for every live plan, which is every plan today.
+  const origination = planOriginationNote(plan, lang);
 
   return (
     <div
@@ -333,6 +395,39 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
         </div>
       )}
 
+      {/*
+        Reconstruction disclosure — provenance, never stance.
+
+        LAST on purpose, and the quietest chip on the card. How a pick was originated
+        does not change what to do about it today, so it must not compete with the
+        direction badge or the phase chip above it; a reader scanning the stream gets
+        the plan first and this accounting after. Same reasoning, and the same "quiet
+        clause, receipt one hover away" shape, as the dashboard board's own footnote.
+
+        `--c: var(--muted)` is the card's neutral token — `.obs-tag` derives both the
+        12% fill and the 30% ring from it, so this reads as a fact in both themes and
+        as an alarm in neither. It is deliberately NOT --warn: nothing is wrong with
+        the stock.
+
+        The chip WRAPS rather than truncating. It is a disclosure, so a narrow pane may
+        cost it a second line but must never cost it half a sentence.
+      */}
+      {origination && (
+        <div style={{ ...ORIGINATION_ROW, paddingRight: plan.option_contract ? 22 : 0 }}>
+          {origination.tip ? (
+            <Tip label={origination.tip} size="card">
+              <span className="obs-tag" style={ORIGINATION_CHIP_TIP} tabIndex={0}>
+                {origination.chip}
+              </span>
+            </Tip>
+          ) : (
+            <span className="obs-tag" style={ORIGINATION_CHIP}>
+              {origination.chip}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Expand toggle for OptionCard */}
       {plan.option_contract && (
         <button
@@ -381,6 +476,34 @@ const CHIP_BASE: React.CSSProperties = {
   fontWeight: 600,
   padding: "3px 8px",
   gap: 3,
+};
+
+const ORIGINATION_ROW: React.CSSProperties = {
+  display: "flex",
+  marginTop: 8,
+};
+
+/**
+ * Subordinate by every lever the card has: the neutral token, the smallest chip size
+ * already in use here (the phase chip's 9px), and normal rather than semibold weight.
+ * `lineHeight` is set because `.obs-tag` ships `/1` for a chip that never wraps, and
+ * this one may.
+ */
+const ORIGINATION_CHIP: React.CSSProperties = {
+  ...CHIP_BASE,
+  "--c": "var(--muted)",
+  fontSize: 9,
+  fontWeight: 500,
+  lineHeight: 1.35,
+  whiteSpace: "normal",
+  textAlign: "left",
+} as React.CSSProperties;
+
+/** Same chip, plus the house "there is a receipt here" affordance. */
+const ORIGINATION_CHIP_TIP: React.CSSProperties = {
+  ...ORIGINATION_CHIP,
+  cursor: "help",
+  outline: "none",
 };
 
 const FACT: React.CSSProperties = {
