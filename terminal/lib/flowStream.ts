@@ -23,9 +23,10 @@
  * Flow Desk paints from the hub's already-received feed instead of waiting up to a
  * full push interval for the next one.
  *
- * Returns { data, live, error }:
+ * Returns { data, connected, error }:
  *   - data:  latest payload (null until the first message)
- *   - live:  true while the SSE connection is open (drives an optional "LIVE" badge)
+ *   - connected: true while the SSE transport is open. This says nothing about
+ *                producer cadence or source freshness.
  *   - error: true after the stream errored and before it recovered
  *
  * SSR-safe: no EventSource touched on the server; the connection opens in useEffect.
@@ -35,14 +36,14 @@ import { flowGet } from "@/lib/flowClientCache";
 
 export interface FlowStreamResult<T> {
   data: T | null;
-  live: boolean;
+  connected: boolean;
   error: boolean;
 }
 
 /** What every subscriber of a key sees. Replaced wholesale on each change. */
 interface Snapshot {
   data: unknown;
-  live: boolean;
+  connected: boolean;
   error: boolean;
 }
 
@@ -91,7 +92,7 @@ function openConn(f: string, c: Conn): void {
       if (CONNS.get(f) !== c) return;
       c.errCount = 0;
       stopPolling(c); // SSE recovered — drop the fallback poll
-      publish(c, { live: true, error: false });
+      publish(c, { connected: true, error: false });
     };
     es.onmessage = (ev) => {
       if (CONNS.get(f) !== c) return;
@@ -101,7 +102,7 @@ function openConn(f: string, c: Conn): void {
     };
     es.onerror = () => {
       if (CONNS.get(f) !== c) return;
-      publish(c, { live: false, error: true });
+      publish(c, { connected: false, error: true });
       // EventSource auto-reconnects; if it keeps failing, fall back to polling
       // so the consumer still updates while SSE is unavailable.
       if (++c.errCount >= 3) startPolling(f, c);
@@ -122,7 +123,7 @@ function subscribeFlow(f: string, pollMs: number, fn: Listener): () => void {
   if (!c) {
     c = {
       es: null, pollTimer: null, pollMs, errCount: 0, refs: 0,
-      snap: { data: null, live: false, error: false },
+      snap: { data: null, connected: false, error: false },
       subs: new Set<Listener>(),
     };
     CONNS.set(f, c);
@@ -150,7 +151,7 @@ function subscribeFlow(f: string, pollMs: number, fn: Listener): () => void {
   };
 }
 
-const EMPTY: Snapshot = { data: null, live: false, error: false };
+const EMPTY: Snapshot = { data: null, connected: false, error: false };
 
 export function useFlowStream<T = unknown>(
   f: string | null,
@@ -162,8 +163,8 @@ export function useFlowStream<T = unknown>(
   useEffect(() => {
     if (!f) {
       // Key went null (e.g. left the tab). Keep the last payload so cross-tab
-      // consumers still resolve, but stop claiming the stream is live.
-      setSnap((s) => (s.live ? { ...s, live: false } : s));
+      // consumers still resolve, but stop claiming the transport is connected.
+      setSnap((s) => (s.connected ? { ...s, connected: false } : s));
       return;
     }
     // New subscription key — clear the previous feed's data so a consumer never
@@ -176,5 +177,5 @@ export function useFlowStream<T = unknown>(
     return () => { cancelled = true; unsub(); };
   }, [f, pollMs]);
 
-  return { data: snap.data as T | null, live: snap.live, error: snap.error };
+  return { data: snap.data as T | null, connected: snap.connected, error: snap.error };
 }

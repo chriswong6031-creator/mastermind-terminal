@@ -36,6 +36,37 @@ test("seven-category Options IA stays addressable, honest, and contained", async
   await expect(page.locator("#wtab-vol")).toBeVisible();
   await expect(page.locator("#wtab-surface")).toBeVisible();
 
+  // Flow timing is display-only provenance. An open EventSource says Connected;
+  // snapshot/source age and cycle come only from strict live_flow.meta/v2 clocks.
+  // The historical fixture deliberately exercises the outside-RTH posture.
+  const freshness = page.locator(".options-flow-freshness");
+  await expect(freshness).toHaveAttribute("data-flow-freshness", "measured", { timeout: 15_000 });
+  await expect(freshness).toHaveAttribute("data-flow-timing-contract", "live_flow.meta/v2");
+  await expect(freshness).toHaveAttribute("data-flow-timing-authority", "display_only");
+  await expect(freshness).toHaveAttribute("data-flow-session", "last_session");
+  await expect(freshness.locator('[data-flow-transport="connected"]')).toContainText(zh ? "已连接" : "Connected");
+  await expect(freshness).toContainText(zh ? "市场休市" : "Market closed");
+  await expect(freshness).toContainText(zh ? "上一交易时段" : "Last session");
+  await expect(freshness).toContainText(zh ? "快照" : "Snapshot");
+  await expect(freshness).toContainText(zh ? "源响应" : "Source responses");
+  await expect(freshness).toContainText(zh ? "实测周期" : "Observed cycle");
+  await expect(freshness).not.toContainText("2-min");
+  await expect(freshness).not.toContainText("120");
+  const freshnessContainment = await page.evaluate(() => {
+    const receipt = document.querySelector<HTMLElement>(".options-flow-freshness");
+    return {
+      viewport: window.innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      receiptRight: receipt?.getBoundingClientRect().right ?? Infinity,
+    };
+  });
+  expect(freshnessContainment.documentWidth).toBeLessThanOrEqual(freshnessContainment.viewport + 1);
+  expect(freshnessContainment.receiptRight).toBeLessThanOrEqual(freshnessContainment.viewport + 1);
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-options-flow-freshness.png`),
+    fullPage: false,
+  });
+
   // A category selects its deterministic home and exposes only its owned views.
   await page.locator("#wtab-cat-exposure").click();
   await expect(page).toHaveURL(/\/options\?tab=gex$/);

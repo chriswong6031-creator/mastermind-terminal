@@ -8,7 +8,7 @@
  *   Right  — InspectorPane + ChainHeatRail
  *
  * State owned here:
- *   - feed / tide / chainHeat polling (~30s via setInterval)
+ *   - feed transport + tide / chainHeat watcher intervals (not producer cadence)
  *   - selectedEvent for inspector
  *   - tickerCtx fetch (on selection)
  *   - watchlist (localStorage "flowdesk.watchlist")
@@ -23,6 +23,7 @@ import { flowGet } from "../../lib/flowClientCache";
 import { useFlowStream } from "../../lib/flowStream";
 import { useLang } from "../../lib/i18n";
 import { makeFlowT } from "../../lib/flowdeskStrings";
+import { artifactSourceAgeMs } from "../../lib/flowFreshness";
 import { WatchlistRail } from "./WatchlistRail";
 import { RadarStrip } from "./RadarStrip";
 import { FlowGauge } from "./FlowGauge";
@@ -30,6 +31,7 @@ import { FeedPane, type FlowEvent, type FeedPayload, type EnrichPayload, normali
 import { InspectorPane } from "./InspectorPane";
 import { DEFAULT_FILTERS, type FlowFilters } from "./FiltersPanel";
 import { TutorialOverlay } from "../tutorial/TutorialOverlay";
+import { ArtifactSourceReceipt } from "./FlowFreshnessReceipt";
 
 const TUTORIAL_KEY = "flowdesk.tutorial";
 /** Written the moment the auto-prompt fires so it never re-fires on future visits,
@@ -82,6 +84,8 @@ interface ChainHeatCampaign {
 
 interface ChainHeatPayload {
   schema?: string; asof: string; session_date?: string;
+  source_asof?: string;
+  built_at?: string;
   threshold_mn?: number;
   note_en?: string; note_zh?: string;
   campaigns: ChainHeatCampaign[];
@@ -169,6 +173,7 @@ function ChainHeatRail({ data, lang }: ChainHeatRailProps) {
     <div className="obs-card obs-fd-chain obs-scroll" data-tut="chain-heat">
       <div className="obs-card-hd">
         <span className="obs-lbl">{t("chainHeatTitle")}</span>
+        <ArtifactSourceReceipt artifact={data} lang={lang} sessionDate={data.session_date} />
         <span className="obs-lbl" style={{ color: "var(--muted)" }}>
           {zh ? `≥$${threshold}M` : `≥$${threshold}M cumul`}
         </span>
@@ -287,13 +292,14 @@ export function FlowDeskView() {
   const { lang } = useLang();
 
   // ── Data state ──────────────────────────────────────────────────────────────
-  // The order-flow tape rides the SSE live spine (push) instead of a 30s poll; the
+  // The order-flow tape rides the SSE transport (push) instead of a 30s poll; the
   // hook falls back to flowGet polling if SSE is unavailable, so this is never worse
-  // than before. feedLive drives the toolbar LIVE badge — honest here because this is
-  // session-intraday order flow (unlike the EOD gex desk). The SSE endpoint already
+  // than before. `feedConnected` describes only that transport; measured source
+  // timing comes from live_flow.meta/v2 and is rendered separately. The SSE endpoint
   // pushes only on change (asof+size signature), so the old client-side asof dedup is
   // no longer needed.
-  const { data: feed, live: feedLive } = useFlowStream<FeedPayload>("feed");
+  const { data: feed, connected: feedConnected } = useFlowStream<FeedPayload>("feed");
+  const { data: flowMeta } = useFlowStream<unknown>("meta", { pollMs: 60_000 });
   const [tide,      setTide]      = useState<TidePayload | null>(null);
   const [chainHeat, setChainHeat] = useState<ChainHeatPayload | null>(null);
   const [enrich,    setEnrich]    = useState<EnrichPayload | null>(null);
@@ -344,10 +350,12 @@ export function FlowDeskView() {
 
   /** Fetch enrich artifact — fail-soft (absent/stale → null → v1 fallback in UI)
    *
-   * Stale rule: asof >16h old → treat as absent (v1 fallback, tier chips hidden).
+   * Stale rule: source_asof >16h old → treat as absent (v1 fallback, tier chips hidden).
+   * `asof` and `built_at` are never freshness fallbacks: older publishers rewrote
+   * those build clocks while the source feed stayed unchanged.
    * Exception: source === "fixture" → skip stale gate (dev mode fixture data
    * carries a fixed historical asof but is always current for UI testing).
-   * Live stale artifacts are detected by the route emitting `stale: true`.
+   * Published stale artifacts are detected by the route emitting `stale: true`.
    */
   const fetchEnrich = useCallback(async () => {
     if (document.visibilityState === "hidden") return;
@@ -356,10 +364,11 @@ export function FlowDeskView() {
     if (!raw) return;
     let normalized: EnrichPayload;
     try { normalized = normalizeEnrichPayload(raw); } catch { return; }
+    const sourceAgeMs = artifactSourceAgeMs(normalized, Date.now());
+    if (sourceAgeMs === null) { setEnrich(null); return; }
     const src = (raw as Record<string, unknown>).source as string | undefined;
     if (src === "fixture") { setEnrich(normalized); return; }
-    const asof = normalized.asof ? new Date(normalized.asof).getTime() : 0;
-    const ageH = asof > 0 ? (Date.now() - asof) / 3_600_000 : 0;
+    const ageH = sourceAgeMs / 3_600_000;
     if (ageH > 16) { setEnrich(null); return; }
     setEnrich(normalized);
   }, []);
@@ -404,14 +413,19 @@ export function FlowDeskView() {
         let normalizedEn: EnrichPayload | null = null;
         try { normalizedEn = normalizeEnrichPayload(en); } catch { /* ignore */ }
         if (!normalizedEn) return;
+        const sourceAgeMs = artifactSourceAgeMs(normalizedEn, Date.now());
+        if (sourceAgeMs === null) {
+          setEnrich(null);
+          return;
+        }
         const src = (en as Record<string, unknown>).source as string | undefined;
         if (src === "fixture") {
           setEnrich(normalizedEn);
           return;
         }
-        const asof = normalizedEn.asof ? new Date(normalizedEn.asof).getTime() : 0;
-        const ageH = asof > 0 ? (Date.now() - asof) / 3_600_000 : 0;
+        const ageH = sourceAgeMs / 3_600_000;
         if (ageH <= 16) setEnrich(normalizedEn);
+        else setEnrich(null);
       })();
     });
 
@@ -560,7 +574,8 @@ export function FlowDeskView() {
         {/* FeedPane takes full center column height */}
         <FeedPane
           feed={feed}
-          live={feedLive}
+          connected={feedConnected}
+          flowMeta={flowMeta}
           enrich={enrich}
           lang={lang}
           selectedId={selectedEvent?.id ?? null}
