@@ -2,6 +2,8 @@
   "schema": "flow.enrich/v1",
   "source": "fixture",
   "asof": "2026-07-09T16:00:00Z",
+  "source_asof": "2026-07-09T16:00:00Z",
+  "built_at": "2026-07-09T16:03:00Z",
   "session_date": "2026-07-09",
   "thresholds": {
     "elite": 69,

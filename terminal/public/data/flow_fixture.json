@@ -482,15 +482,17 @@
     ]
   },
   "meta": {
-    "schema": "live_flow.meta/v1",
+    "schema": "live_flow.meta/v2",
     "asof": "2026-07-05T15:42:00Z",
-    "cadence_sec_target": 60,
-    "cadence_sec_measured": 58.4,
-    "universe_n": 3200,
-    "roots_polled": 3200,
-    "requests_last_cycle": 48,
-    "cycle_sec": 58.4,
+    "poll_floor_sec": 120,
+    "cycle_started_at": "2026-07-05T14:34:06Z",
+    "observed_start_to_start_sec": 4073.6,
+    "fetch_compute_sec": 4068.3,
+    "source_response_at_first": "2026-07-05T14:34:51Z",
+    "source_response_at_last": "2026-07-05T15:40:32Z",
+    "roots_requested": 53,
+    "roots_with_source_payload": 53,
     "delta_mode": "time_window",
-    "notes": ["Fixture data — not live"]
+    "notes": ["Fixture timing contract — display only"]
   }
 }

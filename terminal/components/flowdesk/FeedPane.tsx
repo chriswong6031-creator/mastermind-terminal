@@ -20,6 +20,8 @@ import type { FlowFilters } from "./FiltersPanel";
 import { trackSearch } from "@/lib/searchTrack";
 import { pick } from "@/lib/finFormat";
 import { FD } from "@/lib/flowdeskStrings";
+import { usOptionsSessionState } from "@/lib/flowFreshness";
+import { FlowFreshnessReceipt } from "./FlowFreshnessReceipt";
 
 // ── Re-export shared types so FlowCard / FiltersPanel import from one place ──
 
@@ -119,6 +121,8 @@ export interface EnrichThresholds {
 export interface EnrichPayload {
   schema?: string;
   asof: string;
+  source_asof?: string;
+  built_at?: string;
   session_date?: string;
   thresholds: EnrichThresholds;
   /** keyed by event id (normalized from list) */
@@ -203,6 +207,8 @@ export function normalizeEnrichPayload(raw: any): EnrichPayload {
   return {
     schema: raw.schema,
     asof: raw.asof ?? "",
+    source_asof: typeof raw.source_asof === "string" ? raw.source_asof : undefined,
+    built_at: typeof raw.built_at === "string" ? raw.built_at : undefined,
     session_date: raw.session_date,
     thresholds,
     events: eventsDict,
@@ -278,8 +284,10 @@ function presetFilters(preset: ViewPreset): Partial<FlowFilters> {
 
 interface FeedPaneProps {
   feed: FeedPayload | null;
-  /** SSE live-connection state (from useFlowStream). Drives the toolbar LIVE badge. */
-  live?: boolean;
+  /** SSE transport state only; never interpreted as producer freshness. */
+  connected?: boolean;
+  /** Strict measured timing is accepted only from live_flow.meta/v2. */
+  flowMeta?: unknown;
   enrich: EnrichPayload | null;
   lang: "en" | "zh";
   selectedId: string | null;
@@ -292,7 +300,8 @@ interface FeedPaneProps {
 
 export function FeedPane({
   feed,
-  live,
+  connected,
+  flowMeta,
   enrich,
   lang,
   selectedId,
@@ -301,18 +310,6 @@ export function FeedPane({
   onFiltersChange,
 }: FeedPaneProps) {
   const zh = lang === "zh";
-
-  // LIVE = an open SSE connection AND session-current data (same ET calendar day).
-  // Gating on freshness means the badge never contradicts the STALE/asof indicators
-  // and correctly stays dark on old fixture / EOD payloads — it only claims "live"
-  // when we're genuinely streaming today's session flow.
-  const feedSessionCurrent = (() => {
-    const a = feed?.asof ? Date.parse(feed.asof) : 0;
-    if (!a) return false;
-    const etDay = (t: number) =>
-      new Date(t).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-    return etDay(a) === etDay(Date.now());
-  })();
 
   // Persist preset + sort across page loads
   const [prefs, setPrefs] = useState<PersistedPrefs>(() => loadPrefs());
@@ -562,25 +559,6 @@ export function FeedPane({
               {zh ? "数据较旧" : "STALE"}
             </span>
           )}
-          {/* LIVE — the tape rides an open SSE connection AND the data is session-current.
-              --brand-2 (cyan) is non-directional so it never flips in East-Asian mode.
-              Gated on freshness so LIVE never contradicts STALE / an old asof. */}
-          {live && feedSessionCurrent && !feed?.stale && (
-            <span
-              style={{
-                marginLeft: 6, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
-                color: "var(--brand-2)", display: "inline-flex", alignItems: "center", gap: 3,
-              }}
-            >
-              <span
-                style={{
-                  width: 6, height: 6, borderRadius: "50%", display: "inline-block",
-                  background: "var(--brand-2)", boxShadow: "0 0 5px var(--brand-2)",
-                }}
-              />
-              {zh ? "实时" : "LIVE"}
-            </span>
-          )}
         </div>
 
         {/* Ticker search */}
@@ -623,6 +601,14 @@ export function FeedPane({
         </button>
       </div>
 
+      <FlowFreshnessReceipt
+        meta={flowMeta}
+        connected={connected}
+        lang={lang}
+        sessionDate={feed?.session_date}
+        className="obs-fd-freshness"
+      />
+
       {/* ── View presets ── */}
       <div className="obs-fd-preset-bar">
         {(["ALL", "ELITE", "WHALES", "0DTE", "SWEEPS"] as ViewPreset[]).map((p) => (
@@ -660,6 +646,7 @@ export function FeedPane({
             zh={zh}
             hasFilters={isFiltersDirty(effectiveFilters) || search.length > 0}
             stale={feed.stale === true}
+            sessionDate={feed.session_date}
           />
         )}
 
@@ -703,29 +690,9 @@ export function FeedPane({
 
 // ── Empty / loading states ────────────────────────────────────────────────────
 
-/**
- * Display-only read of the US options session clock in ET. Pure — no fetch, no
- * state; it exists so the empty state can name the real reason ("market closed"
- * vs "session open but quiet") instead of a bare "no data".
- * Holidays are not modelled, so the copy for an open session stays hedged.
- */
-function isMarketOpenET(now: Date = new Date()): boolean {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
-    }).formatToParts(now);
-    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-    const wd = get("weekday");
-    if (wd === "Sat" || wd === "Sun") return false;
-    const mins = Number(get("hour")) * 60 + Number(get("minute"));
-    if (!Number.isFinite(mins)) return true;
-    return mins >= 9 * 60 + 30 && mins < 16 * 60; // 09:30–16:00 ET
-  } catch {
-    return true; // never claim "closed" on an environment we can't read
-  }
-}
-
+// Empty-state session tone is resolved by the pure flowFreshness helper using
+// both the ET window and payload session_date, so pre-open/closed/holiday data
+// stays explicitly on the last-session path.
 function LoadingState({ zh }: { zh: boolean }) {
   return (
     <>
@@ -739,7 +706,17 @@ function LoadingState({ zh }: { zh: boolean }) {
   );
 }
 
-function EmptyState({ zh, hasFilters, stale }: { zh: boolean; hasFilters: boolean; stale: boolean }) {
+function EmptyState({
+  zh,
+  hasFilters,
+  stale,
+  sessionDate,
+}: {
+  zh: boolean;
+  hasFilters: boolean;
+  stale: boolean;
+  sessionDate?: string;
+}) {
   // Honest "why": the component states which of the three it can actually tell —
   // filters exclude everything / the payload is stale / the tape is closed or quiet.
   const title = hasFilters ? FD.feedEmptyFiltered : FD.feedEmptyQuiet;
@@ -747,7 +724,7 @@ function EmptyState({ zh, hasFilters, stale }: { zh: boolean; hasFilters: boolea
     ? FD.feedEmptyFilteredWhy
     : stale
     ? FD.feedEmptyStaleWhy
-    : isMarketOpenET()
+    : usOptionsSessionState(sessionDate, new Date()) === "regular"
     ? FD.feedEmptyOpenWhy
     : FD.feedEmptyClosedWhy;
 

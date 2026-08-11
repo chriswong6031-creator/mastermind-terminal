@@ -13,6 +13,7 @@ import { abbrevSector } from "@/lib/sectorAbbrev";
 import { windowGexRows } from "@/lib/windowGexRows.mjs";
 import { flowGet, flowInvalidate, flowPrefetch } from "@/lib/flowClientCache";
 import { useFlowStream } from "@/lib/flowStream";
+import { usOptionsSessionState } from "@/lib/flowFreshness";
 import { trackSearch } from "@/lib/searchTrack";
 import { normalizeVolUnits } from "@/lib/eodContext";
 import {
@@ -37,6 +38,7 @@ import {
 import { VolRegimeChip } from "@/components/eodcontext/VolRegimeChip";
 import { OptionsCsvExportButton } from "@/components/options/OptionsCsvExportButton";
 import { OptionsFlowBoardView } from "@/components/options/OptionsFlowBoardView";
+import { FlowFreshnessReceipt } from "@/components/flowdesk/FlowFreshnessReceipt";
 // Shared SVG chart primitives — measured 1:1 viewBox, nice ticks, pixel-gap label
 // thinning, padded domains. The hygiene rules live in that module's header.
 import {
@@ -558,24 +560,6 @@ function fmtAsof(iso: string): string {
 
 function isStale(iso: string): boolean {
   try { return Date.now() - new Date(iso).getTime() > 10 * 60 * 1000; } catch { return false; }
-}
-
-// Approx US regular-hours check in America/New_York (holidays not handled — used
-// only to choose feed-status tone: an empty/stale tape during RTH means the live
-// feed is stalled; outside RTH it's the expected intraday-only gap, not a fault).
-function isUsMarketHoursNow(): boolean {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York", weekday: "short",
-      hour: "2-digit", minute: "2-digit", hour12: false,
-    }).formatToParts(new Date());
-    const wd = parts.find((p) => p.type === "weekday")?.value ?? "";
-    if (wd === "Sat" || wd === "Sun") return false;
-    const hh = Number(parts.find((p) => p.type === "hour")?.value ?? "0") % 24;
-    const mm = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
-    const mins = hh * 60 + mm;
-    return mins >= 9 * 60 + 30 && mins < 16 * 60;
-  } catch { return false; }
 }
 
 function fmtContract(right: "C" | "P", exp: string, strike: number): string {
@@ -1581,7 +1565,9 @@ export default function OptionsHubView({
   // unchanged asof can no longer be silently dropped. Subscribed unconditionally:
   // `feed` also drives cross-tab consumers (unusual_names → ticker candidates)
   // and the shared freshness chrome, so it must stay fresh off the Tape tab too.
-  const { data: feed, error: fetchError } = useFlowStream<FeedPayload>("feed");
+  const { data: feed, connected: feedConnected, error: fetchError } = useFlowStream<FeedPayload>("feed");
+  const flowTimingTab = activeTab === "tape" || activeTab === "zero_dte" || activeTab === "largest" || activeTab === "tide";
+  const { data: flowMeta } = useFlowStream<unknown>(flowTimingTab ? "meta" : null, { pollMs: 60_000 });
   const lastFeedTs = feed?.asof ?? "";
   const [heat, setHeat] = useState<HeatPayload | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1605,7 +1591,7 @@ export default function OptionsHubView({
   // (so the cross-tab top-net-impact memos below still resolve) and reconnects on
   // re-entry. This also fixes a latent bug: the old 45s poll never actually refreshed
   // tide — fetchTide short-circuited on `if (tideData) return` after the first load.
-  const { data: tideData, error: tideStreamError } = useFlowStream<TidePayload>(
+  const { data: tideData, connected: tideConnected, error: tideStreamError } = useFlowStream<TidePayload>(
     activeTab === "tide" ? "tide" : null,
   );
   const [dteTide, setDteTide] = useState<DteTidePayload | null>(null);
@@ -1692,9 +1678,9 @@ export default function OptionsHubView({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fetch tide when tab is activated, then keep it fresh while the tab is open —
-  // the header shows a "Live" indicator, so the data must actually refresh (it
-  // previously fetched once and went stale). Poll stops when leaving the tab.
+  // Fetch tide when the tab activates. The transport and measured producer timing
+  // are disclosed separately; neither the watcher interval nor an open SSE claims
+  // source freshness.
   useEffect(() => {
     if (activeTab !== "tide") return;
     void fetchDte();
@@ -1822,19 +1808,18 @@ export default function OptionsHubView({
   }, [feed]);
   const hasHighlights = highlights.biggest.length > 0 || highlights.repeats.length > 0;
 
-  // ── Live-feed health — distinguish an outage/delay from a genuinely quiet tape
+  // ── Source health — distinguish an outage/delay from a genuinely quiet tape
   // so an empty Tape/Tide isn't silently shown as "no events match these filters".
   const rawTapeCount = feed?.events?.length ?? 0;
-  const marketOpenNow = isUsMarketHoursNow();
   const feedUnavailable = fetchError && !feed;        // couldn't load the feed at all
   const feedDelayed = !!feed && dataStale;            // have data, but it isn't fresh
   // ── Active-tab freshness ──────────────────────────────────────────────────
   // The status row + banner below are SHARED by the Tape and Tide tabs, but the
-  // Tide tab renders tideData — a SEPARATE stream. Its live/as-of/delayed state
+  // Tide tab renders tideData — a SEPARATE stream. Its source/as-of/delayed state
   // must come from tideData.asof, NOT the tape feed; otherwise the Tide tab shows
   // the tape's clock (and tape-specific "the tape may not be refreshing" copy)
   // over an independently-fresh series. `active*` resolves to the tape-derived
-  // values off the Tide tab, so the Tape tab is byte-identical to before.
+  // values off the Tide tab, preserving each tab's independent source clock.
   const onTide = activeTab === "tide";
   const onTapeFeed = activeTab === "tape" || activeTab === "zero_dte" || activeTab === "largest";
   const tideAsof = tideData?.asof ?? "";
@@ -1845,8 +1830,10 @@ export default function OptionsHubView({
   const activeDelayed     = onTide ? tideDelayed     : feedDelayed;
   const activeAsof        = onTide ? tideAsof         : lastFeedTs;
   const activeStale       = onTide ? tideStale        : dataStale;
-  const activeProblem     = activeUnavailable || (activeDelayed && marketOpenNow);
   const activeSessionDate = onTide ? tideData?.session_date : feed?.session_date;
+  const activeConnected   = onTide ? tideConnected : feedConnected;
+  const marketOpenNow     = usOptionsSessionState(activeSessionDate, new Date()) === "regular";
+  const activeProblem     = activeUnavailable || (activeDelayed && marketOpenNow);
   const activeUpdatedLabel = activeAsof
     ? `${activeSessionDate ? activeSessionDate + " · " : ""}${fmtAsof(activeAsof)} ET`
     : "";
@@ -1929,7 +1916,7 @@ export default function OptionsHubView({
         ) : (
           <>
             <div className="fin-empty-title" style={{ fontSize: 12.5 }}>{lang === "zh" ? sessionZh : sessionEn}</div>
-            {/* Why: nightly dataset vs a live-but-quiet session vs a closed market. */}
+            {/* Why: nightly dataset vs a quiet current snapshot vs the last session. */}
             <div className="fin-empty-why" style={{ margin: "6px auto 0" }}>
               {screenerPreset === "doi" || screenerPreset === "hot"
                 ? (lang === "zh"
@@ -1937,11 +1924,11 @@ export default function OptionsHubView({
                     : "This view is built from the nightly close — it refreshes after tonight’s run.")
                 : marketOpenNow
                 ? (lang === "zh"
-                    ? "本时段进行中 — 达标成交出现后即会显示。"
-                    : "The session is live — rows appear as qualifying prints arrive.")
+                    ? "当前常规交易时段仍在进行 — 达标成交进入新的源数据快照后显示。"
+                    : "The regular-hours session is current — rows appear in new published source snapshots.")
                 : (lang === "zh"
-                    ? "市场休市 — 实时盘口 9:30 ET 恢复。"
-                    : "Market closed — the live tape resumes at 9:30 ET.")}
+                    ? "市场休市 — 显示上一交易时段；下次开盘后恢复新的源数据快照。"
+                    : "Market closed — showing the last session; new source snapshots resume after the next open.")}
             </div>
           </>
         )}
@@ -2230,25 +2217,25 @@ export default function OptionsHubView({
           .main2 (see Wrapper above) so a crash surfaces the error boundary in-place. */}
       <Wrapper {...wrapperProps}>
 
-        {/* ── Tab bar (Observatory pill-nav) + live-feed status ──
+        {/* ── Tab bar (Observatory pill-nav) + source timing status ──
             In CONTROLLED mode (page-driven) the page renders WorkspaceTabs above
             this engine, so the internal strip is suppressed — but the live-feed
             status row still shows (it is view-state coupled, not tab chrome). The
             strip is also suppressed when hideTabStrip is set.
-            The whole row collapses when there is neither a strip NOR live-feed
+            The whole row collapses when there is neither a strip NOR source timing
             status to show (e.g. a Discover single-tab Leaders/Radar mount), so it
             doesn't leave an empty bordered bar. */}
         {(() => {
           const showStrip = !controlled && !hideTabStrip;
-          const showLive = (onTapeFeed || onTide) && !activeUnavailable && !activeDelayed;
+          const showFlowTiming = onTapeFeed || onTide;
           // Vol-regime chip (OEU T-E): hub-wide settled vol weather, so it belongs to the
           // hub's own header wherever the hub is acting as a HUB — standalone or inside the
           // workspace. A Discover single-tab embed (one allowed tab) is a bare mount of one
           // surface, not a hub header, and must stay bare.
           const showVol = stripTabs.length > 1;
-          if (!showStrip && !showLive && !activeAsof && !showVol) return null;
+          if (!showStrip && !showFlowTiming && !activeAsof && !showVol) return null;
           return (
-        <div style={{ display: "flex", alignItems: "center", padding: "8px 14px", borderBottom: "1px solid var(--line)", flexShrink: 0, gap: 8 }}>
+        <div className="options-flow-status-row" style={{ display: "flex", alignItems: "center", padding: "8px 14px", borderBottom: "1px solid var(--line)", flexShrink: 0, gap: 8 }}>
           {showStrip && (
             <nav className="obs-pillnav" aria-label={lang === "zh" ? "期权工具选项卡" : "Options Hub tabs"}>
               {stripTabs.map((tb) => (
@@ -2269,12 +2256,16 @@ export default function OptionsHubView({
               its one-line read, passed through verbatim. Sits BEFORE the live-status cluster
               so the header reads left-to-right from slowest cadence to fastest. */}
           {showVol && <VolRegimeChip lang={lang} />}
-          {/* Live status area (relocated out of the topbar chrome; view-state coupled) */}
-          {showLive && (
-            <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-2)" }}>
-              <span className="obs-live-dot" />
-              {lang === "zh" ? "实时" : "Live"}
-            </span>
+          {/* Transport and producer timing are separate claims. Connected means
+              EventSource-open only; source ages require strict live_flow.meta/v2. */}
+          {showFlowTiming && (
+            <FlowFreshnessReceipt
+              meta={flowMeta}
+              connected={activeConnected}
+              lang={lang}
+              sessionDate={activeSessionDate}
+              className="options-flow-freshness"
+            />
           )}
           {activeAsof && (
             <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
@@ -2290,7 +2281,7 @@ export default function OptionsHubView({
           );
         })()}
 
-        {/* ── Live-feed status banner (Tape + Tide are intraday-live) ── */}
+        {/* ── Source status banner (Tape + Tide are intraday session artifacts) ── */}
         {(onTapeFeed || onTide) && (activeUnavailable || activeDelayed) && (
           <div
             role="status"
@@ -2306,15 +2297,15 @@ export default function OptionsHubView({
             <span>
               {activeUnavailable
                 ? (lang === "zh"
-                    ? `${onTide ? "实时市场潮汐" : "实时期权流"}不可用 — 暂时无法连接数据源。`
-                    : `${onTide ? "Live market tide" : "Live options feed"} unavailable — can’t reach the data source right now.`)
+                    ? `${onTide ? "市场潮汐" : "期权流"}不可用 — 暂时无法连接数据源。`
+                    : `${onTide ? "Market tide" : "Options flow"} unavailable — can’t reach the data source right now.`)
                 : marketOpenNow
                 ? (lang === "zh"
-                    ? `${onTide ? "实时市场潮汐" : "实时期权流"}延迟 — 最近更新 ${activeUpdatedLabel}，${onTide ? "潮汐" : "盘口"}可能未在刷新。`
-                    : `${onTide ? "Live market tide" : "Live options feed"} delayed — last update ${activeUpdatedLabel}; ${onTide ? "the tide" : "the tape"} may not be refreshing.`)
+                    ? `${onTide ? "市场潮汐" : "期权流"}延迟 — 最近源快照 ${activeUpdatedLabel}，${onTide ? "潮汐" : "盘口"}可能未在刷新。`
+                    : `${onTide ? "Market tide" : "Options flow"} delayed — last source snapshot ${activeUpdatedLabel}; ${onTide ? "the tide" : "the tape"} may not be refreshing.`)
                 : (lang === "zh"
-                    ? `市场休市 — 显示上一交易时段（${activeUpdatedLabel}）。实时${onTide ? "潮汐" : "盘口"} 9:30 ET 恢复。`
-                    : `Market closed — showing the last session (${activeUpdatedLabel}). Live ${onTide ? "tide" : "tape"} resumes at 9:30 ET.`)}
+                    ? `市场休市 — 显示上一交易时段（${activeUpdatedLabel}）。下次开盘后恢复新的源数据快照。`
+                    : `Market closed — showing the last session (${activeUpdatedLabel}). New source snapshots resume after the next open.`)}
             </span>
           </div>
         )}
@@ -2598,9 +2589,9 @@ export default function OptionsHubView({
                                 {rawTapeCount > 0
                                   ? (lang === "zh" ? "暂无符合条件的记录。" : "No events match these filters.")
                                   : feedDelayed && marketOpenNow
-                                  ? (lang === "zh" ? "实时盘口暂未刷新。" : "Live feed isn’t updating right now.")
+                                  ? (lang === "zh" ? "源数据快照暂未刷新。" : "The source snapshot isn’t updating right now.")
                                   : feedDelayed
-                                  ? (lang === "zh" ? "市场休市 — 实时盘口 9:30 ET 恢复。" : "Market closed — live tape resumes at 9:30 ET.")
+                                  ? (lang === "zh" ? "市场休市 — 显示上一交易时段。" : "Market closed — showing the last session.")
                                   : (lang === "zh" ? "本时段暂无异常期权流。" : "No unusual options flow yet this session.")}
                               </div>
                               {/* Why: every empty tape states which of filters / stalled feed /
@@ -2617,8 +2608,8 @@ export default function OptionsHubView({
                                   : feedDelayed
                                   ? (lang === "zh" ? "显示上一完整交易时段。" : "Showing the last completed session.")
                                   : (lang === "zh"
-                                      ? "盘口正常，只是暂时清淡 — 达标大单出现后即时显示。"
-                                      : "The tape is live and quiet — qualifying prints appear as they cross.")}
+                                      ? "最新源数据快照暂时清淡 — 达标大单进入后显示。"
+                                      : "The latest source snapshot is quiet — qualifying prints appear when published.")}
                               </div>
                             </td>
                           </tr>
@@ -2753,7 +2744,7 @@ export default function OptionsHubView({
                 tideUnavailable ? (
                   <div className="fin-empty fin-empty-lg" role="status">
                     <div className="fin-empty-title">
-                      {lang === "zh" ? "实时市场潮汐不可用。" : "Live market tide unavailable."}
+                      {lang === "zh" ? "市场潮汐不可用。" : "Market tide unavailable."}
                     </div>
                     <div className="fin-empty-why">
                       {lang === "zh"

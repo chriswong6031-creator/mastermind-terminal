@@ -1,6 +1,8 @@
 {
   "schema": "options_flow.chain_heat/v1",
-  "asof": "2026-07-07T16:02:00-04:00",
+  "asof": "2026-07-07T16:00:00-04:00",
+  "source_asof": "2026-07-07T16:00:00-04:00",
+  "built_at": "2026-07-07T16:02:00-04:00",
   "session_date": "2026-07-07",
   "threshold_mn": 3,
   "note_en": "DISPLAY-ONLY — intraday chain-heat snapshot. Not investment advice.",

@@ -110,7 +110,7 @@ export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onP
           <span className="obs-lbl">{pick(zh, FD.sessionOverview.en, FD.sessionOverview.zh)}</span>
           <span style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
             <span className="obs-lbl" style={{ color: "var(--muted)" }}>
-              {pick(zh, "nightly + live", "夜盘+实时")}
+              {pick(zh, "nightly + intraday", "夜盘+盘中")}
             </span>
             {onOpenTutorial && (
               <button

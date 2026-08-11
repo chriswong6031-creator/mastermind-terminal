@@ -261,12 +261,12 @@ export const FD = {
   ),
   feedEmptyQuiet: bi("No signals yet", "暂无信号"),
   feedEmptyClosedWhy: bi(
-    "US options are closed right now. This feed fills from live prints during regular hours (09:30–16:00 ET) and resumes at the next open.",
-    "美股期权当前休市。本信息流在常规交易时段（美东 09:30–16:00）从实时成交中累积，将于下次开盘后恢复。",
+    "Market closed — showing the last session outside US options regular hours (09:30–16:00 ET). New source snapshots resume after the next open.",
+    "市场休市 — 美股期权常规交易时段（美东 09:30–16:00）之外显示上一交易时段。下次开盘后恢复新的源数据快照。",
   ),
   feedEmptyOpenWhy: bi(
-    "The session is open but nothing has cleared the desk's magnitude bar yet. The tape refreshes about every 120 s.",
-    "当前处于交易时段，但尚无事件达到本台的规模门槛。磁带约每 120 秒刷新一次。",
+    "The regular-hours session is current, but nothing has cleared the desk's magnitude bar in the latest published source snapshot.",
+    "当前常规交易时段仍在进行，但最新发布的源数据快照中尚无事件达到本台的规模门槛。",
   ),
   feedEmptyStaleWhy: bi(
     "The last payload is stale, so this is the previous session's tape rather than today's.",

@@ -66,6 +66,10 @@ export default defineConfig({
       TERMINAL_E2E_FIXTURE: "1",
       TERMINAL_E2E_EMAIL: "responsive@example.com",
       TERMINAL_E2E_ENTITLEMENT: "unlimited",
+      // All browser projects share one loopback IP. The fully-parallel matrix can
+      // legitimately open hundreds of fixture feed + meta streams, so keep the
+      // origin's production anti-scrape budget out of this deterministic test seam.
+      RATE_LIMIT_MAX: "100000",
       // Exercise the second-resolution UI in deterministic route fixtures. Production remains
       // controlled by the server-only operator flag; this value exists only in the test process.
       HUB_REALTIME_QUOTES: "1",
