@@ -4541,24 +4541,15 @@ html[data-shell="app"] .cfb-chip.dis{display:none}
 html[data-shell="app"] .cfb-gear{position:relative}
 html[data-shell="app"] .cfb-gear::before{content:""; position:absolute; inset:-9px; border-radius:12px}
 
-/* ── D9 — last-price axis badge: single line.
-   C10/CHART-07 revision: D9 hid the countdown outright, which ALSO overrode the user's
-   chartSettings.countdownVisible toggle — the setting was inert in the app. The badge already
-   measures 19px against TV's 17, so the countdown was never the size outlier. Lift it OUT of the
-   badge (absolute against .mm-ptag) instead of suppressing it, so the badge stays single-line and
-   the toggle works again.
-   CRITICAL: renderPriceTag sets `tagCd.style.display` INLINE — this rule must NOT declare
-   `display` at all, or it fights the inline value and breaks the gate in the other direction.
-   The `font:` shorthand IS set inline (createElement + cssText), so !important is required there
-   by the same rule D9 states for .lg-row. ── */
+/* ── D9 — unified 17px price row + 14px countdown row.
+   The web and native shell now share this TradingView geometry. `renderPriceTags` writes display
+   inline from countdownVisible, so this rule deliberately does not declare display. ── */
 html[data-shell="app"] .mm-ptag-cd{
-  position:absolute; top:100%; right:0; margin-top:2px;
-  font:700 10px/1 var(--font-num)!important; color:#b1b5be; background:transparent;
+  position:absolute; top:100%; right:0; margin:0;
+  font:500 12px/14px var(--font-num)!important; color:#fff; background:inherit;
 }
-/* the `font:` shorthand is also set inline on these two (createElement + cssText), so — by the
-   same rule the spec states for .lg-row — !important is required for the size bump to land. */
-html[data-shell="app"] .mm-ptag-px{font:700 12px/1.25 var(--font-num)!important;font-variant-numeric:tabular-nums!important}
-html[data-shell="app"] .mm-ptag-sym{font:700 11px/1 var(--font-num)!important;font-variant-numeric:tabular-nums!important}
+html[data-shell="app"] .mm-ptag-px{font:600 12px/17px var(--font-num)!important;font-variant-numeric:tabular-nums!important}
+html[data-shell="app"] .mm-ptag-sym{font:600 12px/17px var(--font-num)!important;font-variant-numeric:tabular-nums!important}
 
 /* ── D11 — tray mode (?tray=1, the embedded symbol-preview sheet).
    One time control, zero duplicated identity, all controls reachable without scrolling. ── */

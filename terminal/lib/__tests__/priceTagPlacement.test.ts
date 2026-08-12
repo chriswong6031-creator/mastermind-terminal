@@ -1,72 +1,84 @@
-import { describe, it, expect } from "vitest";
-import { priceTagTop, crosshairLabelHalf, TAG_DODGE_GAP } from "../priceTagPlacement";
+import { describe, expect, it } from "vitest";
+import {
+  PRICE_TAG_ROW_HEIGHT,
+  PRICE_TAG_TIME_HEIGHT,
+  PRICE_TAG_MIN_VALUE_WIDTH,
+  priceTagRowTop,
+  priceScaleDisplayValue,
+  secondaryPriceTagTop,
+} from "../priceTagPlacement";
 
-// Shipped geometry: 12px axis font → an 11px label half-height; the web badge measures ~13px
-// each side of its anchor (symbol + price + countdown on one line).
-const HALF = crosshairLabelHalf(12);
-const TAG = { up: 13, down: 13 };
-const PANE = 556;                 // price-pane height measured at 1440×900 with one sub-pane
-const top = (anchor: number, crossY: number | null, tag = TAG, paneH = PANE) =>
-  priceTagTop(anchor, crossY, tag, HALF, paneH);
+const place = (
+  primaryY: number,
+  secondaryY: number,
+  paneHeight = 556,
+  primaryHeight = PRICE_TAG_ROW_HEIGHT + PRICE_TAG_TIME_HEIGHT,
+) => secondaryPriceTagTop({ primaryY, secondaryY, paneHeight, primaryHeight });
 
-describe("crosshairLabelHalf", () => {
-  it("matches lightweight-charts' label box (fs + 2×3/12·fs + 2×2/12·fs, halved)", () => {
-    expect(crosshairLabelHalf(12)).toBeCloseTo(11, 10);
-    expect(crosshairLabelHalf(13)).toBeCloseTo(13 * 11 / 12, 10);
+describe("persistent price-tag geometry", () => {
+  it("locks the compact TradingView row and numeric-lane dimensions", () => {
+    expect(PRICE_TAG_ROW_HEIGHT).toBe(17);
+    expect(PRICE_TAG_TIME_HEIGHT).toBe(14);
+    expect(PRICE_TAG_MIN_VALUE_WIDTH).toBe(66);
   });
-  it("falls back to the 12px default for a missing font size", () => {
-    expect(crosshairLabelHalf(0)).toBeCloseTo(11, 10);
+
+  it("centres the 17px price row on its real coordinate using integer pixels", () => {
+    expect(priceTagRowTop(190)).toBe(182);
+    expect(priceTagRowTop(190.49)).toBe(182);
+    expect(priceTagRowTop(190.51)).toBe(183);
   });
 });
 
-describe("priceTagTop", () => {
-  it("keeps the badge on the price when no crosshair is on the pane", () => {
-    expect(top(190, null)).toBe(190);
+describe("priceScaleDisplayValue", () => {
+  it("matches percentage and IndexedTo100 scale units", () => {
+    expect(priceScaleDisplayValue(120, 80, 2)).toBe(50);
+    expect(priceScaleDisplayValue(120, 80, 3)).toBe(150);
   });
 
-  it("keeps the badge on the price when the crosshair label clears it", () => {
-    // clearance = tag.up + HALF + gap = 13 + 11 + 3 = 27
-    expect(top(190, 190 - 28)).toBe(190);
-    expect(top(190, 190 + 28)).toBe(190);
+  it("keeps Normal/Logarithmic values raw and fails safely without a usable base", () => {
+    expect(priceScaleDisplayValue(120, 80, 0)).toBe(120);
+    expect(priceScaleDisplayValue(120, 80, 1)).toBe(120);
+    expect(priceScaleDisplayValue(120, 0, 2)).toBe(120);
+    expect(priceScaleDisplayValue(120, null, 3)).toBe(120);
+  });
+});
+
+describe("secondaryPriceTagTop", () => {
+  it("docks an equal/near extended price immediately above the pinned current row", () => {
+    const primaryTop = priceTagRowTop(190);
+    expect(place(190, 190)).toBe(primaryTop - PRICE_TAG_ROW_HEIGHT);
+    expect(place(190, 175)).toBe(primaryTop - PRICE_TAG_ROW_HEIGHT);
+    // Half-open rows: exactly touching at 17px separation is not an overlap.
+    expect(place(190, 173)).toBe(priceTagRowTop(173));
   });
 
-  it("moves the badge below a colliding label — including a dead-on hover", () => {
-    const expected = 190 + HALF + TAG_DODGE_GAP + TAG.up;   // 217
-    expect(top(190, 190)).toBeCloseTo(expected, 10);
-    // the badge's top edge sits exactly `gap` under the label's bottom edge
-    expect(top(190, 190) - TAG.up - (190 + HALF)).toBeCloseTo(TAG_DODGE_GAP, 10);
+  it("leaves a diverged extended price on its natural projected coordinate", () => {
+    expect(place(190, 150)).toBe(priceTagRowTop(150));
+    expect(place(190, 240)).toBe(priceTagRowTop(240));
   });
 
-  it("dodges a label that overlaps from either side", () => {
-    expect(top(190, 175)).toBeCloseTo(175 + HALF + TAG_DODGE_GAP + TAG.up, 10);
-    expect(top(190, 205)).toBeCloseTo(205 + HALF + TAG_DODGE_GAP + TAG.up, 10);
+  it("puts a lower extended price below the complete current price + time footprint", () => {
+    const primaryTop = priceTagRowTop(190);
+    expect(place(190, 200)).toBe(primaryTop + PRICE_TAG_ROW_HEIGHT + PRICE_TAG_TIME_HEIGHT);
   });
 
-  it("flips above the label when there is no room below", () => {
-    const anchor = PANE - 8;                                 // last price pinned to the pane floor
-    const placed = top(anchor, anchor);
-    expect(placed).toBeCloseTo(anchor - HALF - TAG_DODGE_GAP - TAG.down, 10);
-    expect(placed + TAG.down).toBeLessThanOrEqual(anchor - HALF);   // clear of the label
-    expect(placed - TAG.up).toBeGreaterThanOrEqual(0);              // still inside the pane
+  it("uses only the price-row footprint when countdown display is disabled", () => {
+    const primaryTop = priceTagRowTop(190);
+    expect(place(190, 200, 556, PRICE_TAG_ROW_HEIGHT)).toBe(primaryTop + PRICE_TAG_ROW_HEIGHT);
   });
 
-  it("stays below when neither side fits (pane shorter than the two boxes)", () => {
-    const tiny = 30;
-    expect(top(15, 15, TAG, tiny)).toBeCloseTo(15 + HALF + TAG_DODGE_GAP + TAG.up, 10);
+  it("flips the secondary row below when the primary is against the pane top", () => {
+    const primaryTop = priceTagRowTop(10);
+    expect(place(10, 10, 100)).toBe(primaryTop + PRICE_TAG_ROW_HEIGHT + PRICE_TAG_TIME_HEIGHT);
   });
 
-  it("honours an asymmetric badge box (shell mode lifts the countdown below the badge)", () => {
-    const shellTag = { up: 9, down: 23 };                    // countdown hangs outside the badge
-    // below-placement anchors off `up`, above-placement off `down`
-    expect(top(190, 190, shellTag)).toBeCloseTo(190 + HALF + TAG_DODGE_GAP + shellTag.up, 10);
-    const anchor = PANE - 8;
-    expect(top(anchor, anchor, shellTag)).toBeCloseTo(anchor - HALF - TAG_DODGE_GAP - shellTag.down, 10);
-    // an asymmetric box still collides on the side its long tail reaches
-    expect(top(190, 190 + 33, shellTag)).not.toBe(190);
-    expect(top(190, 190 - 33, shellTag)).toBe(190);
+  it("flips the secondary row above when the primary footprint reaches the pane floor", () => {
+    const primaryTop = priceTagRowTop(95);
+    expect(place(95, 96, 100)).toBe(primaryTop - PRICE_TAG_ROW_HEIGHT);
   });
 
-  it("ignores a non-finite crosshair coordinate", () => {
-    expect(top(190, NaN)).toBe(190);
+  it("clamps a naturally off-pane secondary row without moving the primary", () => {
+    expect(place(190, -50, 300)).toBe(0);
+    expect(place(190, 500, 300)).toBe(300 - PRICE_TAG_ROW_HEIGHT);
   });
 });

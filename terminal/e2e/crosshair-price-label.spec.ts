@@ -1,117 +1,316 @@
 import { expect, test, type Page } from "@playwright/test";
-import { crosshairLabelHalf } from "@/lib/priceTagPlacement";
+import { PRICE_TAG_MIN_VALUE_WIDTH, PRICE_TAG_ROW_HEIGHT, PRICE_TAG_TIME_HEIGHT } from "@/lib/priceTagPlacement";
 import { settled } from "./settle";
 
-// The last-price badge is a DOM overlay on the right scale; the crosshair's price label is painted
-// on the axis canvas UNDER it. Before this contract the badge covered the label outright, so the
-// hovered price — the whole point of the crosshair — was unreadable at the last-price level.
-const LABEL_HALF = crosshairLabelHalf(12);   // shipped axis font
+type LabelState = {
+  primaryTop: number | null;
+  primaryAnchorY: number | null;
+  pricePaneTop: number;
+  extendedTop: number | null;
+  extendedNaturalTop: number | null;
+  extendedAnchorY: number | null;
+  extendedDocked: boolean;
+  hoverTop: number | null;
+  hoverText: string;
+};
 
-type Box = { top: number; bottom: number };
-/** The dodge coordinates PLUS the badge's occupied band, read together — see `shot`. */
-type Shot = { crossY: number | null; tagTop: number | null } & Box;
+const labels = (page: Page): Promise<LabelState> => page.evaluate(() =>
+  (window as Window & { __mmPriceLabels?: () => LabelState }).__mmPriceLabels?.() ?? {
+    primaryTop: null,
+    primaryAnchorY: null,
+    pricePaneTop: 0,
+    extendedTop: null,
+    extendedNaturalTop: null,
+    extendedAnchorY: null,
+    extendedDocked: false,
+    hoverTop: null,
+    hoverText: "",
+  });
 
-// The crosshair is canvas-drawn and its coordinate lives in a ref: a synthetic pointer move gives
-// the test no signal that it REGISTERED, so waiting on a timeout raced (a CI tablet run read the
-// badge one frame before the crosshair landed). __mmCrosshairDodge exposes the two numbers the
-// placement is computed from, so every assertion below waits for the state it is asserting about.
-//
-// Both of those numbers and the badge's occupied band come back from ONE evaluate. Read separately
-// they straddled frames, and the pane can drop a crosshair between two reads (see the nudge note in
-// the test): the band would then be measured against a coordinate that no longer existed, and
-// `crossY` would arrive null into arithmetic that silently produces NaN comparisons.
-//
-// The band is the union of the badge and its countdown caption, which the shell rule lifts out of
-// the badge's own box.
-const shot = (page: Page): Promise<Shot> => page.evaluate(() => {
-  const dodge = (window as Window & { __mmCrosshairDodge?: () => { crossY: number | null; tagTop: number | null } })
-    .__mmCrosshairDodge?.() ?? { crossY: null, tagTop: null };
-  const tag = document.querySelector<HTMLElement>(".mm-ptag")!;
-  const wrapTop = tag.parentElement!.getBoundingClientRect().top;
-  const r = tag.getBoundingClientRect();
-  const cd = tag.querySelector<HTMLElement>(".mm-ptag-cd");
-  const rc = cd && cd.style.display !== "none" ? cd.getBoundingClientRect() : null;
-  return {
-    ...dodge,
-    top: Math.min(r.top, rc?.top ?? r.top) - wrapTop,
-    bottom: Math.max(r.bottom, rc?.bottom ?? r.bottom) - wrapTop,
-  };
-});
-
-// "Stopped moving", to the pixel: the dodge displaces the badge by ~27px, so a pixel of slack is far
-// inside the signal and absorbs the anchor drifting under a quote that lands mid-test.
-const stillAt = (a: Shot, b: Shot) =>
-  a.crossY === b.crossY && Math.abs((a.tagTop ?? 0) - (b.tagTop ?? 0)) <= 1;
-
-async function chartGeom(page: Page) {
-  return page.evaluate(() => {
-    const wrap = document.querySelector<HTMLElement>(".mm-ptag")!.parentElement!.getBoundingClientRect();
-    return { wrapTop: wrap.top, wrapLeft: wrap.left, wrapWidth: wrap.width };
+async function routePremarket(page: Page, extPrice: number) {
+  await page.route("**/api/quote?**", async (route) => {
+    const url = new URL(route.request().url());
+    const syms = (url.searchParams.get("syms") || "NVDA").split(",").filter(Boolean);
+    const quotes = Object.fromEntries(syms.map((sym) => [sym, sym === "NVDA" ? {
+      sym,
+      last: 192.53,
+      close: 192.53,
+      prevClose: 195.74,
+      regularPrice: 192.53,
+      regularChg: -1.64,
+      regularSessionDate: "2026-06-26",
+      basis: "DELAYED_15M",
+      marketSession: "pre",
+      extPrice,
+      extChg: ((extPrice - 192.53) / 192.53) * 100,
+      extTs: 1_786_550_400,
+      extSession: "pre",
+    } : null]));
+    await route.fulfill({ json: { quotes } });
   });
 }
 
-test("the last-price badge yields the axis to the crosshair's price label", async ({ page }) => {
-  await page.goto("/terminal?symbol=NVDA");
+async function chartReady(page: Page) {
   await expect(page.locator(".chart-wrap canvas").first()).toBeVisible({ timeout: 45_000 });
   await expect(page.locator(".mm-ptag")).toBeVisible({ timeout: 45_000 });
-  await expect.poll(async () => (await shot(page)).tagTop ?? 0, { timeout: 45_000 }).toBeGreaterThan(0);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("mm:set-eth", { detail: { on: true } })));
+  await expect(page.locator(".mm-exttag")).toBeVisible({ timeout: 45_000 });
+  await expect.poll(async () => (await labels(page)).primaryAnchorY, { timeout: 45_000 }).not.toBeNull();
+}
 
-  const geom = await chartGeom(page);
-  const x = geom.wrapLeft + geom.wrapWidth * 0.55;              // inside the plot, clear of the axis
-  const offChart = () => page.mouse.move(geom.wrapLeft + 4, 4); // above the pane → crosshair cleared
+test("the crosshair stays foreground while current and near-premarket labels remain pinned", async ({ page }) => {
+  await routePremarket(page, 192.53); // exact collision: PRE must dock above yesterday's close
+  await page.goto("/terminal?symbol=NVDA");
+  await chartReady(page);
 
-  // Anchors are re-measured with the crosshair CLEARED rather than reused across steps: a quote
-  // landing mid-test moves the last price (and with it the badge) by a few pixels, which an
-  // absolute comparison would read as a dodge that never happened.
-  await offChart();
-  await expect.poll(async () => (await shot(page)).crossY, { timeout: 10_000 }).toBeNull();
-  const anchor = (await shot(page)).tagTop!;
+  const initial = await labels(page);
+  expect(initial.primaryTop).not.toBeNull();
+  expect(initial.primaryAnchorY).not.toBeNull();
+  expect(initial.extendedDocked).toBe(true);
+  expect(initial.extendedTop).toBe(initial.primaryTop! - PRICE_TAG_ROW_HEIGHT);
 
-  // The pane can DROP a crosshair it has already registered. Sampled under a throttled main thread,
-  // `crossY` goes null a few hundred ms after the pointer lands — with no pointer event behind it —
-  // and the badge re-renders back onto the price:
-  //
-  //     crossY  [122, 122, null, null, … null]      tagTop [149, 149, 122, 122, … 122]
-  //
-  // and it never comes back: the 1s badge tick re-runs the placement against a coordinate that is
-  // now null, so only another pointer move restores the dodge. So the nudge is not just for LANDING
-  // the crosshair; it has to keep running until the dodged state repeats. Waiting longer was never
-  // the fix — the flake reported the badge back at EXACTLY the anchor, which is a dodge that had
-  // been undone, not one still in flight. A repeat move to the SAME coordinate fires no event at
-  // all, hence the two-step nudge.
-  const nudgeTo = (y: number, via: number) => async () => {
-    await page.mouse.move(x, geom.wrapTop + via);
+  const compact = await page.evaluate(() => {
+    const box = (selector: string) => document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+    const tag = box(".mm-ptag");
+    const sym = box(".mm-ptag-sym");
+    const val = box(".mm-ptag-val");
+    const cd = box(".mm-ptag-cd");
+    const ext = box(".mm-exttag");
+    const extValue = box(".mm-exttag-val");
+    return {
+      tagHeight: tag.height,
+      extHeight: ext.height,
+      valueWidth: val.width,
+      seam: val.left - sym.right,
+      countdownHeight: cd.height,
+      countdownTop: cd.top,
+      tagBottom: tag.bottom,
+      numericSpineDelta: extValue.left - val.left,
+      countdown: document.querySelector(".mm-ptag-cd")?.textContent ?? "",
+    };
+  });
+  expect(compact.tagHeight).toBeCloseTo(PRICE_TAG_ROW_HEIGHT, 0);
+  expect(compact.extHeight).toBeCloseTo(PRICE_TAG_ROW_HEIGHT, 0);
+  // 66px is the compact floor. The shared lane may grow by a pixel or two when the live clock's
+  // current glyphs need it; clipping prevention is part of the contract, exact width is not.
+  expect(compact.valueWidth).toBeGreaterThanOrEqual(PRICE_TAG_MIN_VALUE_WIDTH);
+  expect(compact.valueWidth).toBeLessThanOrEqual(PRICE_TAG_MIN_VALUE_WIDTH + 4);
+  expect(compact.seam).toBeCloseTo(1, 0);
+  expect(compact.countdownHeight).toBeCloseTo(PRICE_TAG_TIME_HEIGHT, 0);
+  expect(compact.countdownTop).toBeCloseTo(compact.tagBottom, 0);
+  expect(compact.numericSpineDelta).toBeCloseTo(0, 0);
+  expect(compact.countdown).toMatch(/^(?:\d+d \d+h|\d{2}:\d{2}(?::\d{2})?)$/);
+
+  const geom = await page.locator(".mm-ptag").evaluate((tag) => {
+    const wrap = tag.parentElement!.getBoundingClientRect();
+    return { wrapTop: wrap.top, wrapLeft: wrap.left, wrapRight: wrap.right, wrapWidth: wrap.width };
+  });
+  const x = geom.wrapLeft + geom.wrapWidth * 0.55;
+  const y = initial.primaryAnchorY!;
+  const nudge = async () => {
+    await page.mouse.move(x, geom.wrapTop + y - 40);
     await page.mouse.move(x, geom.wrapTop + y);
   };
-
-  // 1. the crosshair sitting on the last price pushes the badge fully clear of the label box.
   const onPrice = await settled({
-    drive: nudgeTo(anchor, anchor - 40),
-    read: () => shot(page),
-    ok: (s) => s.crossY != null && Math.abs(s.crossY - anchor) <= 2,
-    same: stillAt,
-    message: "the crosshair should settle on the last price",
+    drive: nudge,
+    read: async () => ({ state: await labels(page), cross: await page.evaluate(() => (window as any).__mmCrosshairDodge?.().crossY ?? null) }),
+    ok: ({ cross }) => cross != null && Math.abs(cross - y) <= 2,
+    same: (a, b) => a.cross === b.cross && Math.abs((a.state.primaryTop ?? 0) - (b.state.primaryTop ?? 0)) <= 1,
+    message: "the crosshair should settle on the current price without moving persistent labels",
   });
-  expect(onPrice.tagTop ?? 0).toBeGreaterThan(anchor);
-  expect(onPrice.top >= onPrice.crossY! + LABEL_HALF || onPrice.bottom <= onPrice.crossY! - LABEL_HALF).toBe(true);
+  expect(onPrice.state.primaryTop).toBeCloseTo(initial.primaryTop!, 0);
+  expect(onPrice.state.extendedTop).toBeCloseTo(initial.extendedTop!, 0);
 
-  // 2. a crosshair that never touched the badge leaves it on the price.
-  //    Move AWAY from the badge in whichever direction the pane has room: at 390×844 the last
-  //    price sits ~80px from the pane top, so a fixed "80px above" walks off the pane entirely,
-  //    clears the crosshair, and asserts nothing.
-  await offChart();
-  await expect.poll(async () => (await shot(page)).crossY, { timeout: 10_000 }).toBeNull();
-  const anchorNow = (await shot(page)).tagTop!;
-  const away = anchorNow > 120 ? -80 : 80;                    // ≫ the 27px collision band either way
-  // A crosshair the pane has dropped ALSO leaves the badge on the price, so this step settles on a
-  // reading that still carries a live coordinate well clear of the badge — otherwise "the badge did
-  // not move" would pass for the wrong reason, proving nothing about the collision rule.
-  const clearOfBadge = await settled({
-    drive: nudgeTo(anchorNow + away, anchorNow + away * 0.5),
-    read: () => shot(page),
-    ok: (s) => s.crossY != null && Math.abs(s.crossY - anchorNow) > 40,
-    same: stillAt,
-    message: "the crosshair should settle clear of the badge",
+  await expect(page.locator(".mm-hovertag")).toBeVisible();
+  // The pointer price is its own top-layer label. It may cover the persistent numeric cell, but it
+  // is excluded from persistent collision layout and therefore cannot translate either badge.
+  const foreground = await page.locator(".mm-hovertag").evaluate((el) => {
+    const hover = el.getBoundingClientRect();
+    const primary = document.querySelector<HTMLElement>(".mm-ptag-val")!.getBoundingClientRect();
+    const extended = document.querySelector<HTMLElement>(".mm-exttag-val")!.getBoundingClientRect();
+    return {
+      z: getComputedStyle(el).zIndex,
+      coversPrimaryNumericLane: hover.left <= primary.left + 0.5 && hover.right >= primary.right - 0.5,
+      abovePrimary: Number(getComputedStyle(el).zIndex) > Number(getComputedStyle(document.querySelector<HTMLElement>(".mm-ptag")!).zIndex),
+      aboveExtended: Number(getComputedStyle(el).zIndex) > Number(getComputedStyle(document.querySelector<HTMLElement>(".mm-exttag")!).zIndex),
+      overlapsARequiredPersistentLane: !(hover.bottom <= primary.top || hover.top >= primary.bottom)
+        || !(hover.bottom <= extended.top || hover.top >= extended.bottom),
+    };
   });
-  expect(Math.abs((clearOfBadge.tagTop ?? -999) - anchorNow)).toBeLessThanOrEqual(1);
+  expect(foreground).toEqual({
+    z: "6",
+    coversPrimaryNumericLane: true,
+    abovePrimary: true,
+    aboveExtended: true,
+    overlapsARequiredPersistentLane: true,
+  });
+});
+
+test("a diverged premarket label remains on its true projected price", async ({ page }) => {
+  await routePremarket(page, 220);
+  await page.goto("/terminal?symbol=NVDA");
+  await chartReady(page);
+
+  const state = await labels(page);
+  expect(state.extendedDocked).toBe(false);
+  expect(state.extendedTop).toBeCloseTo(state.extendedNaturalTop!, 0);
+  expect(Math.abs(state.extendedAnchorY! - state.primaryAnchorY!)).toBeGreaterThanOrEqual(PRICE_TAG_ROW_HEIGHT);
+});
+
+test("persistent and hover labels follow the price pane when a study moves above it", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Pane move controls are a desktop interaction.");
+  await page.addInitScript(() => localStorage.setItem("mm.inds", JSON.stringify(["rsi"])));
+  await routePremarket(page, 192.53);
+  await page.goto("/terminal?symbol=NVDA");
+  await chartReady(page);
+
+  const rsiLegend = page.locator(".lg-block").filter({ hasText: "RSI" }).first();
+  await expect(rsiLegend).toBeVisible({ timeout: 20_000 });
+  await rsiLegend.hover();
+  const moveUp = page.getByRole("button", { name: "Move pane up" });
+  await expect(moveUp).toBeVisible();
+  await moveUp.click();
+
+  await expect.poll(async () => (await labels(page)).pricePaneTop, { timeout: 10_000 }).toBeGreaterThan(20);
+  const state = await labels(page);
+  expect(state.pricePaneTop).toBeGreaterThan(20);
+  expect(state.primaryTop).toBeCloseTo(state.pricePaneTop + Math.round(state.primaryAnchorY! - 8), 0);
+  expect(state.extendedTop).toBeCloseTo(state.primaryTop! - PRICE_TAG_ROW_HEIGHT, 0);
+
+  const wrap = await page.locator(".chart-wrap").boundingBox();
+  expect(wrap).not.toBeNull();
+  const pointerX = wrap!.x + wrap!.width * 0.55;
+  const pointerY = wrap!.y + state.pricePaneTop + state.primaryAnchorY!;
+  await page.mouse.move(pointerX, pointerY - 35);
+  await page.mouse.move(pointerX, pointerY);
+  await expect(page.locator(".mm-hovertag")).toBeVisible();
+  const hover = await page.locator(".mm-hovertag").boundingBox();
+  expect(hover).not.toBeNull();
+  expect(hover!.y).toBeGreaterThan(wrap!.y + state.pricePaneTop);
+});
+
+test("a four-digit premarket quote expands the compact numeric lane instead of clipping", async ({ page }) => {
+  await routePremarket(page, 1_322.30);
+  await page.goto("/terminal?symbol=NVDA");
+  await chartReady(page);
+
+  const fit = await page.evaluate(() => {
+    const slot = document.querySelector<HTMLElement>(".mm-exttag-slot")!;
+    const value = document.querySelector<HTMLElement>(".mm-exttag-val")!;
+    const wrap = document.querySelector<HTMLElement>(".chart-wrap")!.getBoundingClientRect();
+    const rect = value.getBoundingClientRect();
+    return {
+      text: value.textContent,
+      fitsSlot: value.scrollWidth <= slot.clientWidth,
+      insideChart: rect.left >= wrap.left && rect.right <= wrap.right,
+    };
+  });
+  expect(fit).toMatchObject({ text: "1,322.30", fitsSlot: true, insideChart: true });
+});
+
+test("left-side and percentage scales keep the foreground label on the active axis with correct units", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("mm.chartSettings", JSON.stringify({ scaleLeft: true, mode: 2, scaleFontSize: 16 })));
+  await routePremarket(page, 192.53);
+  await page.goto("/terminal?symbol=NVDA");
+  await chartReady(page);
+
+  const state = await labels(page);
+  const wrap = await page.locator(".chart-wrap").boundingBox();
+  expect(wrap).not.toBeNull();
+  for (const selector of [".mm-ptag", ".mm-exttag"]) {
+    const box = await page.locator(selector).boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeCloseTo(wrap!.x + 1, 0);
+  }
+
+  const x = wrap!.x + wrap!.width * 0.55;
+  await page.mouse.move(x, wrap!.y + state.primaryAnchorY! - 35);
+  await page.mouse.move(x, wrap!.y + state.primaryAnchorY!);
+  await expect(page.locator(".mm-hovertag")).toBeVisible();
+  await expect(page.locator(".mm-hovertag")).toContainText(/%$/);
+  const hover = await page.locator(".mm-hovertag").boundingBox();
+  expect(hover).not.toBeNull();
+  expect(hover!.x).toBeCloseTo(wrap!.x + 1, 0);
+  expect(hover!.height).toBeGreaterThanOrEqual(28); // covers LWC's full 16px-font crosshair label
+  const hoverFits = await page.locator(".mm-hovertag").evaluate((el) => el.scrollWidth <= el.clientWidth);
+  expect(hoverFits).toBe(true);
+});
+
+test("Magnet follows the nearest transformed price-pane series instead of the raw candle close", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Magnet pointer geometry is covered once on desktop.");
+  await page.addInitScript(() => {
+    localStorage.setItem("mm.ct", "heikin");
+    localStorage.setItem("mm.inds", JSON.stringify(["ema"]));
+    localStorage.setItem("mm.chartSettings", JSON.stringify({ crosshairMode: 1 }));
+  });
+  await routePremarket(page, 220);
+  await page.goto("/terminal?symbol=NVDA");
+  await chartReady(page);
+
+  const wrap = await page.locator(".chart-wrap").boundingBox();
+  expect(wrap).not.toBeNull();
+  const probe = await page.evaluate(() => {
+    const canvases = [...document.querySelectorAll<HTMLCanvasElement>(".chart-wrap canvas")];
+    const plot = canvases.find((canvas) => canvas.getBoundingClientRect().width > 200);
+    const wrapRect = document.querySelector<HTMLElement>(".chart-wrap")!.getBoundingClientRect();
+    if (!plot) return null;
+    const rect = plot.getBoundingClientRect();
+    return { x: rect.left + rect.width * 0.48, paneTop: rect.top - wrapRect.top, paneHeight: rect.height };
+  });
+  expect(probe).not.toBeNull();
+
+  let snapped: LabelState | null = null;
+  for (let offset = 0.25; offset <= 0.75; offset += 0.04) {
+    const pointerY = probe!.paneTop + probe!.paneHeight * offset;
+    await page.mouse.move(probe!.x, wrap!.y + pointerY - 12);
+    await page.mouse.move(probe!.x, wrap!.y + pointerY);
+    const state = await labels(page);
+    if (state.hoverTop != null && Math.abs((state.hoverTop + 10.5) - pointerY) > 3) { snapped = state; break; }
+  }
+  expect(snapped, "Magnet should move the foreground tag onto a real series value").not.toBeNull();
+  expect(snapped!.hoverText).not.toBe("");
+});
+
+test("a stationary foreground label refreshes when the price scale changes underneath it", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Wheel-on-axis is a desktop/trackpad gesture.");
+  await routePremarket(page, 220);
+  await page.goto("/terminal?symbol=NVDA");
+  await chartReady(page);
+
+  const wrap = await page.locator(".chart-wrap").boundingBox();
+  expect(wrap).not.toBeNull();
+  const state = await labels(page);
+  const pointerY = state.primaryAnchorY!;
+  const pointerX = wrap!.x + wrap!.width * 0.55;
+  const nudge = async () => {
+    await page.mouse.move(pointerX, wrap!.y + pointerY - 35);
+    await page.mouse.move(pointerX, wrap!.y + pointerY);
+  };
+  await settled({
+    drive: nudge,
+    read: () => page.evaluate(() => ({
+      crossY: (window as any).__mmCrosshairDodge?.().crossY ?? null,
+      hover: document.querySelector<HTMLElement>(".mm-hovertag")?.textContent ?? "",
+    })),
+    ok: (value) => value.crossY != null && Math.abs(value.crossY - pointerY) <= 2 && !!value.hover,
+    same: (a, b) => a.crossY === b.crossY && a.hover === b.hover,
+    message: "the stationary crosshair should settle before the scale changes",
+  });
+  const hover = page.locator(".mm-hovertag");
+  await expect(hover).toBeVisible();
+  const before = await hover.textContent();
+  const topBefore = (await hover.boundingBox())!.y;
+
+  // Dispatch a scale-wheel frame at another y without moving the real pointer. The price at the
+  // stationary crosshair changes, so the foreground value must update in the same render frame.
+  await page.locator(".chart-wrap").dispatchEvent("wheel", {
+    deltaY: -600,
+    deltaMode: 0,
+    clientX: wrap!.x + wrap!.width - 6,
+    clientY: wrap!.y + (pointerY > 120 ? pointerY - 80 : pointerY + 80),
+    bubbles: true,
+    cancelable: true,
+  });
+  await expect.poll(() => hover.textContent()).not.toBe(before);
+  expect((await hover.boundingBox())!.y).toBeCloseTo(topBefore, 0);
 });

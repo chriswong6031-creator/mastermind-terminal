@@ -496,7 +496,7 @@ test.describe("TV chart-surface parity (shell)", () => {
     expect(geom.off).toBe("none");
     expect(geom.on).toBe("block");
     expect(geom.position).toBe("absolute");
-    expect(geom.size).toBeCloseTo(10, 0);
+    expect(geom.size).toBeCloseTo(12, 0);
     expect(geom.top).toBeGreaterThanOrEqual(geom.tagBottom - 1);   // sits BELOW the badge, not inside it
   });
 
