@@ -1,4 +1,22 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function armTerminalVisualReady(page: Page) {
+  await page.addInitScript(() => {
+    const readyWindow = window as Window & { __mmWatchlistVisualReady?: boolean };
+    readyWindow.__mmWatchlistVisualReady = false;
+    window.addEventListener("mm:terminal-visual-ready", () => {
+      readyWindow.__mmWatchlistVisualReady = true;
+    }, { once: true });
+  });
+}
+
+async function waitForTerminalVisualReady(page: Page) {
+  await expect.poll(
+    () => page.evaluate(() =>
+      Boolean((window as Window & { __mmWatchlistVisualReady?: boolean }).__mmWatchlistVisualReady)),
+    { message: "the interactive Terminal should finish hydrating", timeout: 15_000 },
+  ).toBe(true);
+}
 
 test("Ext price and Ext % are independent, persistent watchlist columns", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "the watchlist rail is intentionally desktop-only");
@@ -30,7 +48,9 @@ test("Ext price and Ext % are independent, persistent watchlist columns", async 
     ])) } });
   });
 
+  await armTerminalVisualReady(page);
   await page.goto("/terminal?symbol=NVDA");
+  await waitForTerminalVisualReady(page);
 
   const nvda = page.locator(".wl-row", { has: page.locator(".tk", { hasText: /^NVDA$/ }) });
   const extPctHeader = page.locator('.wl-cols [data-watchlist-column="extPct"]');
@@ -69,6 +89,7 @@ test("Ext price and Ext % are independent, persistent watchlist columns", async 
   })).toEqual({ ext: true, extPct: false });
 
   await page.reload();
+  await waitForTerminalVisualReady(page);
   await expect(extHeader).toHaveText("Ext");
   await expect(extPctHeader).toHaveCount(0);
 });
