@@ -356,6 +356,8 @@ svg{display:block}
 .wl-bar{display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--line);flex:none}
 .wl-select{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 9px;border-radius:var(--r-md);color:var(--text);font:650 13px/1 var(--font-ui)}
 .wl-select:hover{background:var(--panel-2)}.wl-select svg{width:12px;height:12px;stroke:var(--muted);fill:none;stroke-width:2.2}
+.wl-selection-summary{display:flex;align-items:center;gap:5px;min-width:0;height:28px;padding:0 5px 0 9px;border:1px solid color-mix(in srgb,var(--brand-2) 38%,var(--line));border-radius:var(--r-pill);background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand-2);font:650 11px/1 var(--font-ui);white-space:nowrap}
+.wl-selection-summary>span{min-width:0;overflow:hidden;text-overflow:ellipsis}.wl-selection-summary button{display:grid;place-items:center;flex:none;width:22px;height:22px;border-radius:50%;color:currentColor}.wl-selection-summary button:hover{background:color-mix(in srgb,var(--brand-2) 15%,transparent)}.wl-selection-summary svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2.2}
 .wl-acts{margin-left:auto;display:flex;gap:1px}
 .wl-acts button{width:28px;height:28px;border-radius:var(--r);display:grid;place-items:center;color:var(--muted)}
 .wl-acts button:hover{background:var(--panel-2);color:var(--text)}.wl-acts svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8}
@@ -398,8 +400,9 @@ svg{display:block}
 .wl-sec-new input{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line-3);border-radius:var(--r);padding:6px 8px;font:500 12px/1.2 var(--font-ui);color:var(--text)}
 .wl-sec-new input:focus{outline:none;border-color:var(--brand)}
 .wl-sec-new button{flex:none;background:var(--brand);border:0;border-radius:var(--r);padding:6px 10px;font:600 11.5px/1.2 var(--font-ui);color:#fff;cursor:pointer}
-.wl-row{display:grid;grid-template-columns:1fr 80px 70px;gap:8px;align-items:center;padding:0 12px;height:46px;cursor:pointer;border-bottom:1px solid var(--line-2);transition:background var(--t)}
-.wl-row:hover{background:var(--panel-2)}.wl-row.on{background:rgba(41,98,255,.08)}
+.wl-row{position:relative;display:grid;grid-template-columns:1fr 80px 70px;gap:8px;align-items:center;padding:0 12px;height:46px;cursor:pointer;border-bottom:1px solid var(--line-2);transition:background var(--t)}
+.wl-row:hover{background:var(--panel-2)}.wl-row.on{background:rgba(41,98,255,.08)}.wl-row.selected{background:color-mix(in srgb,var(--brand) 15%,var(--panel));box-shadow:inset 3px 0 0 var(--brand-2)}.wl-row.selected:hover{background:color-mix(in srgb,var(--brand) 20%,var(--panel-2))}.wl-row.selected:focus-visible{outline:1px solid var(--brand-2);outline-offset:-2px}
+.wl-drag-handle{position:absolute;left:2px;top:50%;z-index:2;display:grid;place-items:center;width:16px;height:28px;transform:translateY(-50%);border-radius:4px;color:var(--text-dim);cursor:grab;opacity:0;touch-action:none}.wl-row:hover .wl-drag-handle,.wl-drag-handle:focus-visible{opacity:1}.wl-drag-handle:hover,.wl-drag-handle:focus-visible{background:var(--panel-3);color:var(--text)}.wl-drag-handle:active{cursor:grabbing}.wl-drag-handle svg{width:12px;height:14px;fill:currentColor;stroke:none}
 .wl-row .s{display:flex;align-items:center;gap:9px;min-width:0}
 .wl-row .ic{width:24px;height:24px;border-radius:50%;flex:none;display:grid;place-items:center;font:800 9px/1 var(--font-ui);color:#04130a}
 .asset-logo{position:relative;display:grid;place-items:center;flex:none;border-radius:50%;overflow:hidden;border:1px solid rgba(255,255,255,.12);color:#fff;font:800 9px/1 var(--font-ui);isolation:isolate}
@@ -1667,6 +1670,16 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .ctx-menu .ctx-grp:hover{background:transparent}
 /* sub-item indent */
 .ctx-menu .ctx-sub{padding-left:20px}
+
+/* Watchlist bulk-action menu is portalled to <body>: fixed positioning escapes the rail's
+   nested scrollers and is clamped to the viewport in TerminalShell. */
+.wl-bulk-menu{position:fixed;z-index:260;min-width:260px;width:min(290px,calc(100vw - 16px));max-width:calc(100vw - 16px);max-height:min(70dvh,520px);transform-origin:top right}
+.wl-bulk-menu .ctx-row{width:100%;border:0;background:transparent;text-align:left;font-family:var(--font-ui)}
+.wl-bulk-menu svg{stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.wl-bulk-menu-head{display:flex;align-items:center;gap:7px;min-height:36px;padding:4px 8px 7px;margin-bottom:3px;border-bottom:1px solid var(--line);color:var(--text);font:650 12px/1 var(--font-ui)}
+.wl-bulk-back{display:grid;place-items:center;width:27px;height:27px;border-radius:var(--r);color:var(--text-2)}.wl-bulk-back:hover{background:var(--pop-hover);color:var(--text)}.wl-bulk-back svg{width:14px;height:14px}
+.wl-bulk-chevron{flex:none;margin-left:auto;color:var(--text-dim);font-size:18px;line-height:1}
+.wl-bulk-form{display:flex;flex-direction:column;gap:8px;padding:9px}.wl-bulk-form label{font:650 11px/1.2 var(--font-ui);color:var(--text-2)}.wl-bulk-form input{width:100%;height:34px;padding:0 9px;border:1px solid var(--line-3);border-radius:var(--r);background:var(--inset);color:var(--text);font:500 12.5px/1 var(--font-ui);outline:none}.wl-bulk-form input:focus{border-color:var(--brand-2);box-shadow:0 0 0 2px color-mix(in srgb,var(--brand-2) 15%,transparent)}.wl-bulk-form button{align-self:flex-end;height:31px;padding:0 12px;border-radius:var(--r);background:var(--brand);color:#fff;font:650 11.5px/1 var(--font-ui)}.wl-bulk-form button:disabled{opacity:.4;cursor:not-allowed}
 
 /* D3 Chart Table View */
 .ctv-root{display:flex;flex-direction:column;height:100%;background:var(--bg);overflow:hidden}
