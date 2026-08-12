@@ -2,18 +2,18 @@ import { expect, test, type Page } from "@playwright/test";
 
 const SEED = {
   lists: {
-    Default: [
+    Default: [],
+    "Bulk Test": [
       { symbol: "AAPL", section: "Core" },
       { symbol: "MSFT", section: "Core" },
       { symbol: "NVDA", section: "Growth" },
       { symbol: "AMD", section: "Growth" },
     ],
-    Archive: [],
   },
-  active: "Default",
+  active: "Bulk Test",
   meta: {
-    Default: { sections: ["Core", "Growth", "Archive"], collapsed: [] },
-    Archive: { sections: ["Archive"], collapsed: [] },
+    Default: { sections: [], collapsed: [] },
+    "Bulk Test": { sections: ["Core", "Growth", "Archive"], collapsed: [] },
   },
 };
 
@@ -21,6 +21,8 @@ async function boot(page: Page) {
   await page.addInitScript((seed) => localStorage.setItem("mm.wls", JSON.stringify(seed)), SEED);
   await page.goto("/terminal?symbol=AAPL");
   await expect(page.locator(".mm-ptag")).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator(".wl-select")).toContainText("Bulk Test");
+  await expect(page.locator(".wl-row")).toHaveCount(4);
 }
 
 const row = (page: Page, symbol: string) => page.locator(`[data-watchlist-symbol="${symbol}"]`);
@@ -73,7 +75,7 @@ test("right-click moves, deletes, and creates a watchlist from the selected symb
   }
   await expect.poll(() => page.evaluate(() => {
     const saved = JSON.parse(localStorage.getItem("mm.wls") || "{}");
-    return saved.lists.Default.filter((item: { section: string }) => item.section === "Archive").length;
+    return saved.lists["Bulk Test"].filter((item: { section: string }) => item.section === "Archive").length;
   })).toBe(3);
 
   await row(page, "AAPL").click({ modifiers: ["ControlOrMeta"] });
@@ -126,7 +128,7 @@ test("a row can be dragged out of its original section into an empty section", a
   await expect(source).toHaveAttribute("data-watchlist-section", "Archive");
   await expect.poll(() => page.evaluate(() => {
     const saved = JSON.parse(localStorage.getItem("mm.wls") || "{}");
-    return saved.lists.Default.find((item: { symbol: string }) => item.symbol === "AMD")?.section;
+    return saved.lists["Bulk Test"].find((item: { symbol: string }) => item.symbol === "AMD")?.section;
   })).toBe("Archive");
 });
 
