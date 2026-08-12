@@ -1998,7 +1998,7 @@ export const LEX: Record<string, [string, string]> = {
   // ---- chart panel, frame bar, day stats, shell ----
   cpAddAlertOn: ["Add alert on", "添加提醒："],
   cpBackToDaily: ["Back to Daily", "返回日线"],
-  cpOracleToggle: ["Toggle refused setups, early dots & structure-break warnings", "开关被拒入场、早期信号点与结构破位提示"],
+  cpOracleToggle: ["Toggle early dots & structure-break warnings", "开关早期信号点与结构破位提示"],
   cfbExtendedHours: ["Extended trading hours", "盘前盘后交易时段"],
   dsDayStats: ["Day Stats", "当日数据"],
   shResizeSidebar: ["Resize sidebar", "调整侧栏宽度"],
