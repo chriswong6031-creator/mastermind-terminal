@@ -143,23 +143,24 @@ function parseLocalWatchlists(raw: string | null): LocalWatchlists | null {
 }
 
 /**
- * Additive local/server reconciliation, writing neither source. W1b split this in two along the
- * same line the shell now draws:
+ * Additive local/server reconciliation, writing neither source.
  *
- *   `Default`  — UNCHANGED local-wins merge. This is the read-side mirror of TerminalShell's
- *                TRAP-1 reconcile, and for the same reason: the server row knows MEMBERSHIP, not
- *                ORDER, so letting it win would render a user's reordered Default in an order
- *                they never chose. Local order + local-only rows first, missing server rows append.
- *   named list — SERVER-CANONICAL once it exists on the server, i.e. once W1b's one-time migration
- *                has run. Server `position` order wins for rows on both sides and local-only rows
- *                append after them (the collision rule in `lib/watchlists.ts#mergeListSymbols`).
- *                Signed-in named lists are server-backed now; `mm.wls` is an optimistic cache.
- *   local-only — still rendered exactly as before. A list that has not migrated yet (or whose
- *                migration failed and will retry) is real user state, never hidden.
- *   server-only— kept and appended, as before.
+ * ORDER-SEMANTICS RULING (commissioning session, W1b round 2): named lists mirror `Default`'s
+ * proven local-wins semantics. Membership and section are server-synced write-through; ORDER is
+ * local-wins everywhere in the Terminal until a position-write path ships (a W5 line item). So
+ * every name-matched list reconciles the SAME way here — local order and local rows first, server
+ * -only rows appended — and there is no per-list special case to get wrong. `lib/watchlists.ts
+ * #adoptServerSymbols` is the live-state twin of this read-side rule.
  *
- * This is the shrunken remainder of the old local-wins-everywhere merge; the surface stops
- * rendering watchlists at all in W5, at which point the guest-shell path is all that is left.
+ * The reason is the one this file already recorded for Default: the server row knows MEMBERSHIP,
+ * not ORDER. `position` exists but nothing in the Terminal writes it after the initial insert.
+ *
+ *   local-only  — still rendered exactly as before. A list that has not migrated yet (or whose
+ *                 migration failed and will retry) is real user state, never hidden.
+ *   server-only — kept and appended, as before.
+ *
+ * The surface stops rendering watchlists at all in W5, at which point the guest-shell path is all
+ * that is left.
  */
 export function resolvePortfolioWatchlists(
   serverLists: readonly PortfolioWatchlist[],
@@ -185,12 +186,12 @@ export function resolvePortfolioWatchlists(
     const server = serverByName.get(list.name);
     if (!server) return { id: localId(list.name), name: list.name, symbols: list.symbols };
     usedServerIds.add(server.id);
+    // ONE rule for every list, Default and named alike (see the ruling in the doc comment above):
+    // local order wins, server-only rows append. No per-list special case.
     return {
       id: server.id,
       name: server.name,
-      symbols: list.name === DEFAULT_LIST
-        ? uniqueSymbols([...list.symbols, ...server.symbols])    // TRAP-1 mirror: local order wins
-        : uniqueSymbols([...server.symbols, ...list.symbols]),   // migrated list: server is canonical
+      symbols: uniqueSymbols([...list.symbols, ...server.symbols]),
     };
   });
   for (const server of cleanServer) {

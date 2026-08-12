@@ -3,8 +3,9 @@ import {
   addSymbols,
   createList,
   deleteList,
+  adoptServerSymbols,
+  chunkSymbols,
   listWatchlists,
-  mergeListSymbols,
   moveSymbols,
   normalizeListName,
   normalizeSection,
@@ -57,6 +58,21 @@ describe("list CRUD (the paths that did not exist before W1b)", () => {
     expect(lists.map((list) => list.name)).toEqual(["Default", "Gold Miners", "Space"]);
     expect(lists.map((list) => list.position)).toEqual([0, 1, 2]);
     expect(third.list?.id).toBe(lists[2].id);
+  });
+
+  it("deletes and renames by EXACT NAME too, for a client that does not know the id yet (F4)", async () => {
+    const { list } = await createList(db(), owner, "Swing");
+    await addSymbols(db(), list!.id, ["TSLA"], "Tactical");
+
+    const byName = await resolveTargetList(db(), owner, { listName: "Swing" });
+    expect(byName?.id).toBe(list!.id);
+    expect(await renameList(db(), owner, byName!.id, "Tactical")).toEqual({ ok: true });
+
+    const renamed = await resolveTargetList(db(), owner, { listName: "Tactical" });
+    expect(await deleteList(db(), owner, renamed!.id)).toEqual({ ok: true });
+    expect((await listWatchlists(db(), owner)).map((row) => row.name)).toEqual(["Default"]);
+    // A name that no longer exists resolves to null rather than to Default.
+    expect(await resolveTargetList(db(), owner, { listName: "Tactical" })).toBeNull();
   });
 
   it("renames, refuses a name clash, and 404s a list the caller does not own", async () => {
@@ -136,6 +152,18 @@ describe("symbol ops target a LIST, not 'the first row'", () => {
     // Case-sensitive, and never silently redirected to another list.
     expect(await resolveTargetList(db(), owner, { listName: "swing" })).toBeNull();
     expect(await resolveTargetList(db(), "another-user", { listId: list!.id })).toBeNull();
+    // NIT: a target that WAS supplied but is unusable resolves to null — never to the first list.
+    // Falling back there would silently reinstate the first-list soloism this wave retires.
+    for (const input of [
+      { listName: "" }, { listName: "   " }, { listName: "\u0000bad" }, { listName: "x".repeat(81) },
+      { listName: 42 }, { listId: "" }, { listId: "   " }, { listId: 7 },
+      // An explicit null was SENT, so it is a supplied-but-unusable target, not the legacy shape.
+      { listName: null }, { listId: null },
+    ]) {
+      expect(await resolveTargetList(db(), owner, input)).toBeNull();
+    }
+    // Only the genuinely legacy shape — no target key at all — still resolves the first list.
+    expect(await resolveTargetList(db(), owner, {})).toMatchObject({ name: "Default" });
   });
 });
 
@@ -197,16 +225,55 @@ describe("planWatchlistMigration", () => {
   });
 });
 
-describe("mergeListSymbols (signed-in read model)", () => {
-  it("server position wins for shared rows; local-only rows append in local order", () => {
-    expect(mergeListSymbols(
-      [{ symbol: "NEM", section: "Miners" }, { symbol: "AEM", section: "Miners" }],
-      [{ symbol: "AEM", section: "Local" }, { symbol: "GOLD", section: "Pending" }],
-    )).toEqual([
-      { symbol: "NEM", section: "Miners" },
-      { symbol: "AEM", section: "Miners" },
-      { symbol: "GOLD", section: "Pending" },
+describe("adoptServerSymbols — the ORDER-SEMANTICS RULING", () => {
+  const local = [{ symbol: "AEM", section: "Local" }, { symbol: "GOLD", section: "Pending" }];
+  const server = [{ symbol: "NEM", section: "Miners" }, { symbol: "AEM", section: "Miners" }];
+
+  it("keeps local order, keeps local sections, drops nothing, and appends server-only rows", () => {
+    expect(adoptServerSymbols(local, server)).toEqual([
+      { symbol: "AEM", section: "Local" },      // local section SURVIVES a differing server section
+      { symbol: "GOLD", section: "Pending" },   // local-only row is never dropped
+      { symbol: "NEM", section: "Miners" },     // genuinely server-only, appended last
     ]);
+  });
+
+  it("never reorders local rows to match the server", () => {
+    const reordered = [{ symbol: "GOLD", section: "P" }, { symbol: "AEM", section: "P" }];
+    expect(adoptServerSymbols(reordered, [{ symbol: "AEM", section: "M" }, { symbol: "GOLD", section: "M" }]))
+      .toEqual(reordered);
+  });
+
+  it("F1 PROBE: a row removed while the read was in flight is NOT replayed back", () => {
+    // The user deleted AEM after the GET went out. `alreadyLocal` is the pre-read membership, so
+    // the stale response cannot resurrect it — while a truly new server row still arrives.
+    const afterDelete = [{ symbol: "GOLD", section: "Pending" }];
+    const beforeRead = new Set(["AEM", "GOLD"]);
+    expect(adoptServerSymbols(afterDelete, server, beforeRead)).toEqual([
+      { symbol: "GOLD", section: "Pending" },
+      { symbol: "NEM", section: "Miners" },
+    ]);
+  });
+
+  it("ACCEPTED TRADEOFF: a delete made BEFORE the read can still resurrect", () => {
+    // Absent from the pre-read snapshot => indistinguishable from a row another device added.
+    // Documented in the PR body; write-through sync makes the window rare.
+    expect(adoptServerSymbols([{ symbol: "GOLD", section: "P" }], server, new Set(["GOLD"])))
+      .toEqual([
+        { symbol: "GOLD", section: "P" },
+        { symbol: "NEM", section: "Miners" },
+        { symbol: "AEM", section: "Miners" },
+      ]);
+  });
+});
+
+describe("chunkSymbols (F6)", () => {
+  it("passes a sub-cap batch through whole and splits anything larger at the cap", () => {
+    expect(chunkSymbols([])).toEqual([]);
+    expect(chunkSymbols(["A", "B"])).toEqual([["A", "B"]]);
+    const big = Array.from({ length: 1201 }, (_, i) => `S${i}`);
+    const chunks = chunkSymbols(big);
+    expect(chunks.map((chunk) => chunk.length)).toEqual([500, 500, 201]);
+    expect(chunks.flat()).toEqual(big);       // nothing dropped, order preserved
   });
 });
 

@@ -5,8 +5,18 @@
 -- (`fsldfzlxyavsuwqbceod`) since <= 2026-07-18, but its CREATE TABLE was never version
 -- controlled in ANY repository — only its RLS policies were, in the macro repo's
 -- `templates/uwp_supabase.sql`. This file gives the table a home so a fresh environment can
--- be stood up from source. Against live production every statement below is a NO-OP
--- (`create table if not exists` + policies wrapped in duplicate_object handlers).
+-- be stood up from source.
+--
+-- Against live production the table, RLS and policy statements are NO-OPS (`create table if not
+-- exists`, an already-enabled `enable row level security`, and policies wrapped in
+-- duplicate_object handlers). ONE statement is NOT provably a no-op: the
+-- `create index if not exists portfolio_positions_user` below. Index existence is not
+-- introspectable through PostgREST with a publishable key, so whether it already exists is
+-- UNKNOWN — see the asserted-not-introspectable list further down, which it belongs to. If it is
+-- absent, applying this file would CREATE it. That is a safe, non-blocking, additive index on the
+-- column every read in the estate already filters by, but it is a write, and calling it a no-op
+-- would have been false.
+--
 -- Nothing here was applied to production by the session that wrote it, and nothing needs to be.
 --
 -- Schema authority for the shared user-data plane is THIS directory (packet section 3);
@@ -51,7 +61,9 @@
 -- NOT ANONYMOUSLY INTROSPECTABLE (asserted from the writer contract, flagged for operator
 -- confirmation against the live catalog, and harmless either way because this file is
 -- `if not exists`): NOT NULL flags, column DEFAULTS, the primary key, the FK to
--- `auth.users`, and any numeric precision/scale or CHECK constraint. They are written here
+-- `auth.users`, any numeric precision/scale or CHECK constraint, and THE EXISTENCE OF THE
+-- `portfolio_positions_user` INDEX — the one statement in this file that could be a real write
+-- rather than a no-op (see the header). They are written here
 -- to match how the estate actually uses the table:
 --   * macro `templates/watchstore.js` inserts {user_id, ticker, shares, entry_price,
 --     entry_date, notes, status, updated_at} and never supplies `id` -> `id` has a
@@ -83,6 +95,8 @@ create table if not exists public.portfolio_positions (
 );
 
 -- Owner lookups: every read in the estate is `where user_id = auth.uid() order by created_at`.
+-- NOT a proven no-op against prod: index existence could not be introspected with a publishable
+-- key. Additive and non-blocking if it does get created; listed above as asserted, not verified.
 create index if not exists portfolio_positions_user on public.portfolio_positions(user_id);
 
 -- ====================== Row-Level Security ======================

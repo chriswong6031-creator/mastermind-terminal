@@ -153,22 +153,38 @@ export async function getOwnedListByName(
   return id ? { id, name: text(row?.name) ?? name } : null;
 }
 
+/** Did the caller name a target list at all? Distinguishes "no target supplied" (the legacy
+ *  pre-W1b shape) from "target supplied but unusable" — which must NEVER degrade into the first
+ *  list. Presence is the test, not usability: `JSON.parse` never yields `undefined` for a key that
+ *  was sent, so an explicit `null` counts as SUPPLIED and resolves to no list rather than to
+ *  Default. Nothing legitimately sends `null` here; a client bug that did would otherwise write to
+ *  somebody's Default and report success. */
+export function hasListTarget(input: { listId?: unknown; listName?: unknown }): boolean {
+  return input.listId !== undefined || input.listName !== undefined;
+}
+
 /**
- * The list a request targets: explicit id, else exact name, else — for the pre-W1b call shape
- * that sent neither — the first list by position. The fallback is what keeps every already-
- * deployed client (and the Default fire-and-forget syncs) working unchanged while list-targeted
- * callers stop being silently redirected onto list #1.
+ * The list a request targets: explicit id, else exact name, else — ONLY when the caller supplied
+ * neither, the pre-W1b call shape — the first list by position.
+ *
+ * A SUPPLIED-BUT-UNUSABLE target resolves to `null`, never to the first list. Falling back there
+ * would silently reinstate exactly the first-list soloism this wave retires: a caller that meant
+ * "Gold Miners" and fat-fingered the name would write to Default instead, and the write would
+ * report success. The bare-fallback branch is reachable only when no target key was sent at all.
  */
 export async function resolveTargetList(
   db: WatchlistDb,
   userId: string,
   input: { listId?: unknown; listName?: unknown },
 ): Promise<{ id: string; name: string } | null> {
-  if (typeof input.listId === "string" && input.listId.trim()) {
-    return getOwnedList(db, userId, input.listId.trim());
+  if (input.listId !== undefined) {
+    const listId = typeof input.listId === "string" ? input.listId.trim() : "";
+    return listId ? getOwnedList(db, userId, listId) : null;
   }
-  const name = input.listName === undefined || input.listName === null ? null : normalizeListName(input.listName);
-  if (name) return getOwnedListByName(db, userId, name);
+  if (input.listName !== undefined) {
+    const name = normalizeListName(input.listName);
+    return name ? getOwnedListByName(db, userId, name) : null;
+  }
   const row = one(await db.from("watchlists")
     .select("id,name").eq("user_id", userId).order("position").limit(1).maybeSingle());
   const id = row ? text(row.id) : null;
@@ -388,25 +404,57 @@ export function planWatchlistMigration(
 }
 
 /**
- * Read model for a signed-in named list (packet section 4 collision rules): the server row order
- * is canonical for symbols that exist on both sides, and local-only rows append afterwards in
- * local order. Sections follow the same rule — server wins where the row exists on the server.
+ * ORDER-SEMANTICS RULING (commissioning session, W1b round 2) — the one rule the whole Terminal
+ * obeys, and the generalisation of what `Default` has always done:
+ *
+ *   Terminal named lists mirror Default's proven local-wins live semantics, scoped as follows.
+ *   Membership and section are server-synced write-through (write paths exist); ORDER is
+ *   local-wins everywhere in the Terminal until a position-write path ships (that path is a W5
+ *   line item, not W1b's). The mount-time server-adopt is ADDITIVE-ONLY for lists that exist
+ *   locally: add server-only symbols, never drop a local row, never reorder local rows, never
+ *   overwrite a local section. Lists absent locally adopt wholesale (they are new from another
+ *   device or from the Macro side).
+ *
+ * The reason is the one already recorded for Default in `lib/portfolioWatchlists.ts`: the server
+ * row knows MEMBERSHIP, not ORDER. `watchlist_symbols.position` exists, but nothing in the
+ * Terminal writes it after the initial insert, so treating it as canonical renders a user's
+ * reordered list in an order they never chose — and, worse, replays their just-deleted rows and
+ * their pre-drag sections back over live local state.
+ *
+ * `alreadyLocal` is the local membership snapshot taken BEFORE the inventory request went out. A
+ * server row named there is one the user removed while the request was in flight, so the response
+ * is simply stale about it and it must not be re-appended. (An offline-window delete made BEFORE
+ * mount is absent from that snapshot and CAN still resurrect — an accepted, documented W1b
+ * tradeoff.)
  */
-export function mergeListSymbols(
-  server: readonly { symbol: string; section: string }[],
+export function adoptServerSymbols(
   local: readonly { symbol: string; section: string }[],
+  server: readonly { symbol: string; section: string }[],
+  alreadyLocal?: ReadonlySet<string>,
 ): { symbol: string; section: string }[] {
-  const merged: { symbol: string; section: string }[] = [];
+  const adopted: { symbol: string; section: string }[] = [];
   const seen = new Set<string>();
-  for (const row of server) {
-    if (!row?.symbol || seen.has(row.symbol)) continue;
-    seen.add(row.symbol);
-    merged.push({ symbol: row.symbol, section: row.section || DEFAULT_SECTION });
-  }
+  // Local rows first, untouched: same order, same section. Nothing here may be dropped.
   for (const row of local) {
     if (!row?.symbol || seen.has(row.symbol)) continue;
     seen.add(row.symbol);
-    merged.push({ symbol: row.symbol, section: row.section || DEFAULT_SECTION });
+    adopted.push({ symbol: row.symbol, section: row.section || DEFAULT_SECTION });
   }
-  return merged;
+  // Then the genuinely server-only rows, appended in server order.
+  for (const row of server) {
+    if (!row?.symbol || seen.has(row.symbol)) continue;
+    if (alreadyLocal?.has(row.symbol)) continue;   // removed locally while the read was in flight
+    seen.add(row.symbol);
+    adopted.push({ symbol: row.symbol, section: row.section || DEFAULT_SECTION });
+  }
+  return adopted;
+}
+
+/** Split a batch at the API's per-request cap so a large list is never silently truncated (the
+ *  pre-W1b per-symbol fan-out had no size limit; `normalizeSymbols` returns [] above the cap). */
+export function chunkSymbols<T>(rows: readonly T[], size = MAX_BATCH): T[][] {
+  if (rows.length <= size) return rows.length ? [[...rows]] : [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < rows.length; i += size) chunks.push(rows.slice(i, i + size));
+  return chunks;
 }

@@ -6,6 +6,7 @@ import {
   addSymbols,
   createList,
   deleteList,
+  hasListTarget,
   listWatchlists,
   moveSymbols,
   normalizeListName,
@@ -72,17 +73,18 @@ export async function POST(req: Request) {
     if (!list) return fail(error || "create failed", 500);
     return NextResponse.json({ ok: true, list });
   }
-  if (action === "renameList") {
-    const listId = typeof body.listId === "string" ? body.listId.trim() : "";
-    if (!listId) return fail("listId required", 400);
-    const result = await renameList(db, userId, listId, body.name as string);
-    if (!result.ok) return fail(result.error || "watchlist update failed", result.status || 500);
-    return NextResponse.json({ ok: true });
-  }
-  if (action === "deleteList") {
-    const listId = typeof body.listId === "string" ? body.listId.trim() : "";
-    if (!listId) return fail("listId required", 400);
-    const result = await deleteList(db, userId, listId);
+  // rename/delete accept `listId` OR an exact `listName`. Name resolution matters because a client
+  // can legitimately not know the id yet — a list created locally while the inventory request was
+  // in flight, or a delete issued before the one-time migration finished. What they must NEVER do
+  // is fall back to "the first list": `hasListTarget` makes a missing target a 400 and an unusable
+  // or unknown one a 404, so a destructive action can never land on Default by accident.
+  if (action === "renameList" || action === "deleteList") {
+    if (!hasListTarget(body)) return fail("listId required", 400);
+    const target = await resolveTargetList(db, userId, { listId: body.listId, listName: body.listName });
+    if (!target) return fail("list not found", 404);
+    const result = action === "renameList"
+      ? await renameList(db, userId, target.id, body.name as string)
+      : await deleteList(db, userId, target.id);
     if (!result.ok) return fail(result.error || "watchlist update failed", result.status || 500);
     return NextResponse.json({ ok: true });
   }

@@ -55,7 +55,7 @@ describe("portfolio watchlist source contract", () => {
     });
   });
 
-  it("W1b: a MIGRATED named list reads server-canonical; Default keeps the TRAP-1 local order", () => {
+  it("W1b ruling: EVERY name-matched list reconciles local-wins — named lists included", () => {
     const resolved = resolvePortfolioWatchlists(
       [
         { id: "default", name: "Default", symbols: ["NVDA", "AAPL"] },
@@ -73,10 +73,13 @@ describe("portfolio watchlist source contract", () => {
     );
 
     expect(resolved.lists).toEqual([
-      // Default: the server knows MEMBERSHIP, not ORDER — local order still wins.
+      // The server knows MEMBERSHIP, not ORDER. That was always true of Default...
       { id: "default", name: "Default", symbols: ["AAPL", "NVDA"] },
-      // Named list: server position wins for shared rows, local-only rows append after them.
-      { id: "gold", name: "Gold Miners", symbols: ["NEM", "AEM", "GOLD"] },
+      // ...and the round-2 ruling makes it true of named lists too: local order and local rows
+      // first (AEM ahead of GOLD, as the user has them), server-only NEM appended last. A
+      // server-canonical read would have rendered ["NEM","AEM","GOLD"] — an order the user never
+      // chose — and would have hidden the not-yet-synced GOLD behind rows it did not write.
+      { id: "gold", name: "Gold Miners", symbols: ["AEM", "GOLD", "NEM"] },
     ]);
     expect(resolved.preferredActiveId).toBe("gold");
   });

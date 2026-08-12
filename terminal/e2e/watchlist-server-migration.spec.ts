@@ -130,6 +130,70 @@ test("a partially-recorded marker retries only the lists it does not name", asyn
   expect(symbolsOf(healed, "Default")).toEqual(SERVER_DEFAULT);
 });
 
+// F1 PROBE (commissioning round 2). The reviewer parked the inventory GET for 9s, deleted a row
+// locally in that window, and watched the stale response replay it back into BOTH localStorage and
+// the rail. Under the ORDER-SEMANTICS RULING the adopt step is additive-only for a list that
+// exists locally, and the pre-read membership snapshot makes a row removed mid-flight ineligible
+// for re-appending — so a stale read can no longer revert live local state.
+test("F1 probe: an inventory read parked mid-flight cannot revert a live local delete", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Context menu is a desktop pointer workflow.");
+  // This test deliberately spends 9s holding a response, on top of two full shell mounts. Under
+  // the parallel matrix that overruns the 30s default and reports as a flake rather than as the
+  // regression it exists to catch, so it gets its own budget.
+  test.setTimeout(120_000);
+  await boot(page);   // first mount migrates Gold Miners = [NEM, AEM] onto the server
+  expect(symbolsOf(await inventory(page), "Gold Miners")).toEqual(["NEM", "AEM"]);
+
+  // Park ONLY the shell's next inventory GET. The response is CAPTURED FIRST and delivered late,
+  // which is what makes it genuinely stale — sleeping before `route.continue()` merely delays the
+  // request, so the server would answer with post-delete state and the probe would prove nothing.
+  // Everything else — the delete POST, and this spec's own reads — passes through untouched.
+  let parkedOnce = false;
+  let parkedBody: string | null = null;
+  let delivered = false;
+  await page.route("**/api/watchlist", async (route) => {
+    if (parkedOnce || route.request().method() !== "GET") { await route.continue(); return; }
+    parkedOnce = true;
+    const captured = await route.fetch();               // pre-delete snapshot, taken NOW
+    parkedBody = await captured.text();
+    await new Promise((resolve) => setTimeout(resolve, 9_000));
+    await route.fulfill({ response: captured, body: parkedBody });   // delivered late, still saying AEM
+    delivered = true;
+  });
+
+  await page.reload();
+  await expect(page.locator(".mm-ptag")).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator(".wl-select")).toContainText("Gold Miners");
+
+  // Delete AEM while the shell is still waiting on that parked read.
+  await page.locator('[data-watchlist-symbol="AEM"]').click();
+  await page.locator('[data-watchlist-symbol="AEM"]').click({ button: "right" });
+  const menu = page.getByRole("menu", { name: "Selected ticker actions" });
+  await expect(menu).toBeVisible();
+  await menu.getByRole("menuitem", { name: /Delete 1 symbol/ }).click();
+  await expect(page.locator('[data-watchlist-symbol="AEM"]')).toHaveCount(0);
+
+  // Wait for the STALE response to actually be delivered — the marker is no signal here, it was
+  // already written by the first mount. Then give the adopt step room to run.
+  await expect.poll(() => delivered, { timeout: 30_000 }).toBe(true);
+  await page.waitForTimeout(2_000);
+  // The response the shell received really did still list AEM; without this the probe could pass
+  // by never having presented stale data at all.
+  expect(JSON.parse(parkedBody!).lists.find((l: { name: string }) => l.name === "Gold Miners")
+    .symbols.map((r: { symbol: string }) => r.symbol)).toEqual(["NEM", "AEM"]);
+
+  // The rail DOM never gets AEM back...
+  await expect(page.locator('[data-watchlist-symbol="AEM"]')).toHaveCount(0);
+  // ...nor does the localStorage cache...
+  expect(await page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem("mm.wls") || "{}");
+    return (saved.lists?.["Gold Miners"] ?? []).map((row: { symbol: string }) => row.symbol);
+  })).toEqual(["NEM"]);
+  // ...and F2 means the delete reached the server during the window (by exact NAME — no id was
+  // known yet, because the very read that registers ids was the one parked).
+  expect(symbolsOf(await inventory(page), "Gold Miners")).toEqual(["NEM"]);
+});
+
 test("a server-only list is kept, and a symbol edit on a NAMED list now reaches the server", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "The bulk context menu is a desktop pointer workflow.");
   await boot(page);

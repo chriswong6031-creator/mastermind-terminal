@@ -9,13 +9,19 @@ import type { Page, TestInfo } from "@playwright/test";
  * while the suite is fullyParallel across three viewport projects — without a key per test, one
  * spec's deletes become another spec's re-inserts and the rail order stops being deterministic.
  *
- * The retry index is part of the key too, so a retried test never inherits the failed run's rows.
  * Specs that seed nothing need no isolation: with only `Default` present the migration plans
  * nothing at all.
  */
+// F9: `reuseExistingServer: !CI` means a second local run usually attaches to the FIRST run's
+// dev server — and the fixture store is process-global, so without this nonce run N+1 inherits
+// run N's rows and a clean branch fails on nothing. The module loads once per worker process, so
+// the value is stable within a run and fresh across runs; `repeatEachIndex` separates --repeat-each
+// copies of one title inside a single run, and `retry` separates a retry from the attempt it follows.
+const RUN_NONCE = `${process.env.TEST_WORKER_INDEX ?? "0"}${Math.random().toString(36).slice(2, 8)}`;
+
 export async function isolateWatchlistStore(page: Page, testInfo: TestInfo, baseURL?: string) {
-  const key = `${testInfo.project.name}-${testInfo.title}-${testInfo.retry}`
-    .toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 90);
+  const key = `${testInfo.project.name}-${testInfo.title}-${testInfo.repeatEachIndex}-${testInfo.retry}-${RUN_NONCE}`
+    .toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 110);
   await page.context().addCookies([{
     name: "mm_e2e_wl",
     value: key,
