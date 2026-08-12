@@ -202,6 +202,12 @@ async function openTerminal(page: Page, opts: { zh: boolean; zhPreseed?: boolean
   await page.goto("/terminal?symbol=COST");
   await expect(page.locator(".workspace")).toBeVisible();
   await waitForTerminalVisualReady(page);
+  // The control refusal is intentionally absent from a normal chart. Opt into diagnostics so
+  // this forensic three-state comparison can still inspect refusal vs retro vs live entry.
+  const diagnostics = page.locator('.statusline .mm[role="button"]');
+  await expect(diagnostics).toBeVisible();
+  await diagnostics.click();
+  await expect(diagnostics).toHaveText("⚠ detail");
   if (opts.zh && !opts.zhPreseed) await applyZh(page);
   if (opts.zhPreseed) await expect(page.locator("html")).toHaveAttribute("data-lang", "zh");
 }
