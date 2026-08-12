@@ -6,6 +6,7 @@ export type WatchlistSettings = {
     change: boolean;
     volume: boolean;
     ext: boolean;
+    extPct: boolean;
   };
   disp: string;
   logo: boolean;
@@ -24,6 +25,7 @@ export const DEFAULT_WATCHLIST_SETTINGS: WatchlistSettings = {
     change: false,
     volume: false,
     ext: true,
+    extPct: true,
   },
   disp: "symbol",
   logo: true,
