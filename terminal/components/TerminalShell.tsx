@@ -4,10 +4,10 @@ import { useIsMobile, useIsPhone } from "@/lib/useMediaQuery";
 import MobileSheet from "@/components/ui/MobileSheet";
 import { DndContext, PointerSensor, KeyboardSensor, useDroppable, useSensor, useSensors, closestCenter, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
-import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import dynamic from "next/dynamic";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
@@ -127,6 +127,13 @@ import {
 } from "@/lib/watchlistSettings";
 import { resolveRegularSessionDisplay } from "@/lib/quoteDisplay";
 import { useAdaptiveToolbar } from "@/lib/useAdaptiveToolbar";
+import {
+  copyWatchlistSelection,
+  moveWatchlistSelection,
+  pruneWatchlistSelection,
+  resolveWatchlistContextSelection,
+  resolveWatchlistSelection,
+} from "@/lib/watchlistSelection";
 
 type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -196,6 +203,7 @@ function WlSectionHeader({ name, count, collapsed, minWidth, onToggle, onRename,
     <div
       ref={setNodeRef}
       className={`wl-sec${collapsed ? " collapsed" : ""}${isOver ? " over" : ""}`}
+      data-watchlist-section-header={name}
       style={{ minWidth }}
       onClick={onToggle}
       role="button"
@@ -222,15 +230,27 @@ function WlSectionHeader({ name, count, collapsed, minWidth, onToggle, onRename,
 // Drag-sortable wrapper for a watchlist row. Whole-row draggable with a distance
 // activation constraint so a plain click still selects (pick) and only a >6px drag
 // starts a reorder. Lifted-row polish (opacity/shadow/scale) via isDragging.
-function SortableWlRow({ sym, className, style, onClick, onMouseEnter, children }: {
+function SortableWlRow({ sym, section, selected, dragLabel, className, style, onClick, onContextMenu, onKeyDown, onMouseEnter, children }: {
   sym: string;
+  section: string;
+  selected: boolean;
+  dragLabel: string;
   className: string;
   style: React.CSSProperties;
-  onClick: () => void;
+  onClick: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   onMouseEnter: () => void;
   children: React.ReactNode;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: sym });
+  const forwardDndKey = (event: React.KeyboardEvent<HTMLElement>) => {
+    event.stopPropagation();
+    if (event.key === " " && event.code !== "Space") {
+      Object.defineProperty(event.nativeEvent, "code", { configurable: true, value: "Space" });
+    }
+    listeners?.onKeyDown?.(event);
+  };
   return (
     <div
       ref={setNodeRef}
@@ -238,6 +258,8 @@ function SortableWlRow({ sym, className, style, onClick, onMouseEnter, children 
       // between SSR and client — a benign, dev-only hydration mismatch.
       suppressHydrationWarning
       className={className}
+      data-watchlist-symbol={sym}
+      data-watchlist-section={section}
       style={{
         ...style,
         transform: DndCSS.Transform.toString(transform),
@@ -248,14 +270,176 @@ function SortableWlRow({ sym, className, style, onClick, onMouseEnter, children 
           : {}),
       }}
       onClick={onClick}
+      onContextMenu={onContextMenu}
+      onKeyDown={onKeyDown}
       onMouseEnter={onMouseEnter}
-      {...attributes}
-      tabIndex={-1}
-      {...listeners}
+      role="option"
+      aria-selected={selected}
+      tabIndex={0}
     >
+      <span
+        suppressHydrationWarning
+        {...attributes}
+        className="wl-drag-handle"
+        aria-label={dragLabel}
+        title={dragLabel}
+        role="button"
+        tabIndex={0}
+        onClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          listeners?.onPointerDown?.(event);
+        }}
+        onKeyDown={forwardDndKey}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="5" cy="4" r="1" /><circle cx="11" cy="4" r="1" /><circle cx="5" cy="8" r="1" /><circle cx="11" cy="8" r="1" /><circle cx="5" cy="12" r="1" /><circle cx="11" cy="12" r="1" /></svg>
+      </span>
       {children}
     </div>
   );
+}
+
+type WlContextPoint = { x: number; y: number; symbol: string };
+
+function WlBulkContextMenu({
+  point,
+  count,
+  sections,
+  listNames,
+  onClose,
+  onMove,
+  onMoveNew,
+  onCreateList,
+  onDelete,
+}: {
+  point: WlContextPoint;
+  count: number;
+  sections: string[];
+  listNames: string[];
+  onClose: () => void;
+  onMove: (section: string) => void;
+  onMoveNew: (section: string) => void;
+  onCreateList: (name: string) => void;
+  onDelete: () => void;
+}) {
+  const t = useT();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState<"main" | "sections" | "new-section" | "new-list">("main");
+  const [name, setName] = useState("");
+  const [position, setPosition] = useState({ left: point.x, top: point.y });
+  const normalized = name.trim();
+  const invalidSection = !normalized || sections.includes(normalized);
+  const invalidList = !normalized || listNames.includes(normalized);
+
+  useEffect(() => {
+    const id = window.requestAnimationFrame(() => {
+      const el = rootRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const margin = 8;
+      setPosition({
+        left: Math.max(margin, Math.min(point.x, window.innerWidth - rect.width - margin)),
+        top: Math.max(margin, Math.min(point.y, window.innerHeight - rect.height - margin)),
+      });
+      (el.querySelector<HTMLElement>('.wl-bulk-form input:not(:disabled)')
+        ?? el.querySelector<HTMLElement>('button:not(:disabled)'))?.focus();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [point.x, point.y, view, sections.length]);
+
+  useEffect(() => {
+    const close = (event?: Event) => {
+      if (event?.type === "scroll" && event.target instanceof Node && rootRef.current?.contains(event.target)) return;
+      onClose();
+    };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [onClose]);
+
+  const back = () => { setView("main"); setName(""); };
+  const onMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); return; }
+    if ((event.target as HTMLElement).tagName === "INPUT") return;
+    if (event.key === "ArrowLeft" && view !== "main") { event.preventDefault(); back(); return; }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const controls = [...(rootRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') ?? [])];
+    if (!controls.length) return;
+    event.preventDefault();
+    const current = controls.indexOf(document.activeElement as HTMLElement);
+    const next = event.key === "Home" ? 0
+      : event.key === "End" ? controls.length - 1
+        : event.key === "ArrowDown" ? (current + 1 + controls.length) % controls.length
+          : (current - 1 + controls.length) % controls.length;
+    controls[next]?.focus();
+  };
+
+  const iconMove = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h11M12 3l4 4-4 4M19 17H8M12 13l-4 4 4 4" /></svg>;
+  const iconList = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M4 12h10M4 18h10M19 8v8M15 12h8" /></svg>;
+  const iconTrash = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></svg>;
+  const iconBack = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>;
+
+  const menu = (
+    <div
+      ref={rootRef}
+      className="ctx-menu wl-bulk-menu"
+      style={{ left: position.left, top: position.top }}
+      role="menu"
+      aria-label={t("wlBulkActions")}
+      onClick={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.preventDefault()}
+      onKeyDown={onMenuKeyDown}
+    >
+      <div className="wl-bulk-menu-head">
+        {view !== "main" && <button type="button" className="wl-bulk-back" aria-label={t("back")} onClick={back}>{iconBack}</button>}
+        <span>{t("wlSymbolsSelected").replace("{n}", String(count))}</span>
+      </div>
+      {view === "main" && <>
+        <button type="button" role="menuitem" className="ctx-row" onClick={() => setView("sections")}>
+          <span className="ctx-ico">{iconMove}</span><span className="ctx-lbl">{t("wlMoveToSection")}</span><span className="wl-bulk-chevron">›</span>
+        </button>
+        <button type="button" role="menuitem" className="ctx-row" onClick={() => setView("new-list")}>
+          <span className="ctx-ico">{iconList}</span><span className="ctx-lbl">{t("wlCreateFromSelection")}</span>
+        </button>
+        <div className="sep" />
+        <button type="button" role="menuitem" className="ctx-row ctx-danger" onClick={onDelete}>
+          <span className="ctx-ico">{iconTrash}</span><span className="ctx-lbl">{t("wlDeleteSymbols").replace("{n}", String(count))}</span>
+        </button>
+      </>}
+      {view === "sections" && <>
+        <div className="ctx-grp">{t("wlMoveToSection")}</div>
+        {sections.map((section) => (
+          <button type="button" role="menuitem" className="ctx-row ctx-sub" key={section} onClick={() => onMove(section)}>
+            <span className="ctx-lbl">{section}</span>
+          </button>
+        ))}
+        <div className="sep" />
+        <button type="button" role="menuitem" className="ctx-row" onClick={() => { setName(""); setView("new-section"); }}>
+          <span className="ctx-ico">+</span><span className="ctx-lbl">{t("wlNewSection")}</span>
+        </button>
+      </>}
+      {(view === "new-section" || view === "new-list") && <form className="wl-bulk-form" onSubmit={(event) => {
+        event.preventDefault();
+        if (view === "new-section" ? invalidSection : invalidList) return;
+        if (view === "new-section") onMoveNew(normalized);
+        else onCreateList(normalized);
+      }}>
+        <label htmlFor="wl-bulk-name">{view === "new-section" ? t("wlNewSection") : t("wlCreateFromSelection")}</label>
+        <input
+          id="wl-bulk-name"
+          value={name}
+          maxLength={80}
+          placeholder={view === "new-section" ? t("addSectionPrompt") : t("newWatchlistPrompt")}
+          onChange={(event) => setName(event.target.value)}
+        />
+        <button type="submit" disabled={view === "new-section" ? invalidSection : invalidList}>{t("create")}</button>
+      </form>}
+    </div>
+  );
+  return createPortal(menu, document.body);
 }
 const CHART_TYPE_GROUPS: [string, string[]][] = [
   ["ctGroupCandles", ["candles", "hollow", "heikin"]],
@@ -358,6 +542,12 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const [secName, setSecName] = useState("");
   const [activeList, setActiveList] = useState("Default");
   const [wlMenuOpen, setWlMenuOpen] = useState(false);
+  const [wlSelected, setWlSelected] = useState<Set<string>>(() => new Set());
+  const [wlContext, setWlContext] = useState<WlContextPoint | null>(null);
+  const [wlSyncFailed, setWlSyncFailed] = useState(false);
+  const wlAnchorRef = useRef<string | null>(null);
+  const wlContextFocusRef = useRef<HTMLElement | null>(null);
+  const wlSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Memoized so its identity is stable: `lists[activeList] || []` allocated a fresh [] on every
   // render whenever the list was missing, which re-ran every useMemo downstream of `wl`.
   const wl = useMemo(() => lists[activeList] || [], [lists, activeList]);
@@ -367,18 +557,23 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-  // Reorder within a section only (Crypto rows stay with Crypto, etc). Order is the
-  // wl array, which auto-persists to localStorage (mm.wls) via the existing effect.
+  // Reorder within and across sections. Order is the wl array, which auto-persists to
+  // localStorage (mm.wls) via the existing effect.
   const onWlDragEnd = useCallback((e: DragEndEvent) => {
     const { active, over } = e;
-    if (!over || active.id === over.id) return;
+    if (!over) return;
+    const fromRow = wl.find((row) => row.symbol === active.id);
+    const overId = String(over.id);
+    if (active.id === over.id) return;
+    const targetSection = overId.startsWith(SEC_DROP_PREFIX)
+      ? overId.slice(SEC_DROP_PREFIX.length)
+      : wl.find((row) => row.symbol === overId)?.section;
     setWl((prev: { symbol: string; section: string }[]) => {
       const from = prev.findIndex((x) => x.symbol === active.id);
       if (from < 0) return prev;
       // Dropping ON a section header re-files the row into that section and parks it at the end
       // of that group. Sections are user-made now, so a row must be able to LEAVE the section it
       // was born in — previously any cross-section drop was rejected outright.
-      const overId = String(over.id);
       if (overId.startsWith(SEC_DROP_PREFIX)) {
         const sec = overId.slice(SEC_DROP_PREFIX.length);
         if (prev[from].section === sec) return prev;
@@ -398,7 +593,20 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       moved[at] = { ...moved[at], section: prev[to].section };
       return moved;
     });
-  }, [activeList]);
+    if (!!email && activeList === "Default" && fromRow && targetSection && fromRow.section !== targetSection) {
+      fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "move", symbols: [fromRow.symbol], section: targetSection }),
+      }).then((response) => {
+        if (!response.ok) throw new Error(`watchlist sync ${response.status}`);
+      }).catch(() => {
+        setWlSyncFailed(true);
+        if (wlSyncTimerRef.current) clearTimeout(wlSyncTimerRef.current);
+        wlSyncTimerRef.current = setTimeout(() => setWlSyncFailed(false), 5000);
+      });
+    }
+  }, [activeList, email, wl]);
   // Market preference — ONE instance for the whole shell, so the Markets settings pane and the
   // search results are always reading the same object. Backed by Supabase user_metadata, which
   // is the same store the macro site's onboarding writes, on the same Supabase project.
@@ -1705,7 +1913,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     return () => clearInterval(playRef.current);
   }, [replayOn, playing, total, speed]);
 
-  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setWlMenuOpen(false); setSnapOpen(false); setToolbarMoreOpen(false); setToolbarMoreView("main"); };
+  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setWlMenuOpen(false); setSnapOpen(false); setToolbarMoreOpen(false); setToolbarMoreView("main"); setWlContext(null); };
   useEffect(() => { const h = () => closeAll(); window.addEventListener("click", h); return () => window.removeEventListener("click", h); }, []);
 
   // ── Sections ────────────────────────────────────────────────────────────────────────────
@@ -1736,7 +1944,95 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     for (const r of wl) (o[r.section] ||= []).push(r.symbol);
     return o;
   }, [wl, sectionOrder]);
+  const visibleWlOrder = useMemo(
+    () => sectionOrder.flatMap((section) => collapsed.has(section) ? [] : (sections[section] ?? [])),
+    [sectionOrder, collapsed, sections],
+  );
+  const selectedWlRows = useMemo(
+    () => copyWatchlistSelection(wl, wlSelected, visibleWlOrder),
+    [wl, wlSelected, visibleWlOrder],
+  );
+  const selectedWlCount = selectedWlRows.length;
   const inWl = useMemo(() => new Set(wl.map((s) => s.symbol)), [wl]);
+
+  useEffect(() => {
+    setWlSelected((current) => {
+      const next = pruneWatchlistSelection(current, wl);
+      if (next.size === current.size && [...next].every((symbol) => current.has(symbol))) return current;
+      return next;
+    });
+    if (wlAnchorRef.current && !wl.some((row) => row.symbol === wlAnchorRef.current)) wlAnchorRef.current = null;
+  }, [wl]);
+
+  const closeWlContext = useCallback(() => {
+    setWlContext(null);
+    const focusTarget = wlContextFocusRef.current;
+    wlContextFocusRef.current = null;
+    window.requestAnimationFrame(() => {
+      if (focusTarget?.isConnected) focusTarget.focus();
+      else document.querySelector<HTMLElement>(".wl-row")?.focus();
+    });
+  }, []);
+
+  const clearWlSelection = useCallback(() => {
+    setWlSelected(new Set());
+    closeWlContext();
+    wlAnchorRef.current = null;
+  }, [closeWlContext]);
+
+  const syncDefaultWatchlist = useCallback((action: "move" | "remove", symbolsToSync: string[], section?: string) => {
+    if (!loggedIn || activeList !== "Default" || !symbolsToSync.length) return;
+    fetch("/api/watchlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, symbols: symbolsToSync, ...(section ? { section } : {}) }),
+    }).then((response) => {
+      if (!response.ok) throw new Error(`watchlist sync ${response.status}`);
+    }).catch(() => {
+      setWlSyncFailed(true);
+      if (wlSyncTimerRef.current) clearTimeout(wlSyncTimerRef.current);
+      wlSyncTimerRef.current = setTimeout(() => setWlSyncFailed(false), 5000);
+    });
+  }, [activeList, loggedIn]);
+
+  const openWlContext = useCallback((symbol: string, event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    wlContextFocusRef.current = event.currentTarget;
+    setWlSelected((current) => resolveWatchlistContextSelection(current, symbol));
+    wlAnchorRef.current = symbol;
+    setWlContext({ symbol, x: event.clientX, y: event.clientY });
+  }, []);
+
+  const moveWlSelected = useCallback((section: string, createSection = false) => {
+    const symbolsToMove = selectedWlRows.map((row) => row.symbol);
+    if (!symbolsToMove.length) return;
+    if (createSection && !sectionOrder.includes(section)) {
+      editMeta((meta) => ({ ...meta, sections: [...meta.sections.filter((value) => value !== section), section] }));
+    }
+    setWl((rows: { symbol: string; section: string }[]) =>
+      moveWatchlistSelection(rows, new Set(symbolsToMove), section, visibleWlOrder));
+    syncDefaultWatchlist("move", symbolsToMove, section);
+    clearWlSelection();
+  }, [selectedWlRows, sectionOrder, visibleWlOrder, syncDefaultWatchlist, clearWlSelection]);
+
+  const deleteWlSelected = useCallback(() => {
+    const symbolsToDelete = selectedWlRows.map((row) => row.symbol);
+    if (!symbolsToDelete.length) return;
+    setWl((rows: { symbol: string; section: string }[]) => rows.filter((row) => !symbolsToDelete.includes(row.symbol)));
+    syncDefaultWatchlist("remove", symbolsToDelete);
+    clearWlSelection();
+  }, [selectedWlRows, syncDefaultWatchlist, clearWlSelection]);
+
+  const createListFromWlSelected = useCallback((name: string) => {
+    const rows = selectedWlRows.map((row) => ({ ...row }));
+    if (!rows.length || lists[name]) return;
+    const sectionsForList = sectionOrder.filter((section) => rows.some((row) => row.section === section));
+    setLists((current) => ({ ...current, [name]: rows }));
+    setListMeta((current) => ({ ...current, [name]: { sections: sectionsForList, collapsed: [] } }));
+    setActiveList(name);
+    clearWlSelection();
+  }, [selectedWlRows, lists, sectionOrder, clearWlSelection]);
   const activeIsComposite = isComposite(active);
   const activeLegs = activeIsComposite ? (parseComposite(active) ?? []) : [];
   const m = activeIsComposite ? undefined : man?.symbols?.[active];
@@ -1899,10 +2195,13 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   }
   async function removeSymbol(sym: string) {
     setWl((w: any[]) => w.filter((s) => s.symbol !== sym));
+    setWlSelected((current) => { const next = new Set(current); next.delete(sym); return next; });
+    if (wlAnchorRef.current === sym) wlAnchorRef.current = null;
+    setWlContext(null);
     if (activeList === "Default") fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: sym }) }).catch(() => {});
   }
   // watchlist management (client-side; guests get real switch/create/rename/delete via localStorage)
-  function switchList(name: string) { if (lists[name]) setActiveList(name); setWlMenuOpen(false); }
+  function switchList(name: string) { if (lists[name]) { setActiveList(name); clearWlSelection(); } setWlMenuOpen(false); }
   // Inline create used by the search-hub rail + add-to-list picker (no window.prompt — name is
   // supplied by the caller's inline input). Returns the created/normalized name, or null if the
   // name is empty/duplicate so the caller can keep its input open. Does NOT switch active list —
@@ -1943,7 +2242,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     if (typeof window !== "undefined" && !window.confirm(t("deleteWatchlistConfirm"))) return;
     setLists((l) => { const n = { ...l }; delete n[name]; return n; });
     setListMeta((m) => { const n = { ...m }; delete n[name]; return n; });
-    if (activeList === name) setActiveList(Object.keys(lists).filter((k) => k !== name)[0] || "Default");
+    if (activeList === name) { setActiveList(Object.keys(lists).filter((k) => k !== name)[0] || "Default"); clearWlSelection(); }
   }
 
   // ── list menu: copy / clear / sort ─────────────────────────────────────────────────────
@@ -1964,6 +2263,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     if (typeof window !== "undefined" && !window.confirm(t("clearWatchlistConfirm"))) return;
     setWlMenuOpen(false);
     setLists((l) => ({ ...l, [name]: [] }));
+    if (name === activeList) clearWlSelection();
     if (name === "Default") {
       for (const r of lists[name] || []) {
         fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: r.symbol }) }).catch(() => {});
@@ -2058,7 +2358,9 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   function renameSection(from: string) {
     const to = (typeof window !== "undefined" ? window.prompt(t("renameSectionPrompt"), from) : "")?.trim();
     if (!to || to === from || sectionOrder.includes(to)) return;
+    const affected = wl.filter((row) => row.section === from).map((row) => row.symbol);
     setWl((prev: { symbol: string; section: string }[]) => prev.map((r) => (r.section === from ? { ...r, section: to } : r)));
+    syncDefaultWatchlist("move", affected, to);
     editMeta((m) => ({
       sections: m.sections.map((s) => (s === from ? to : s)),
       collapsed: m.collapsed.map((s) => (s === from ? to : s)),
@@ -2071,7 +2373,9 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   function deleteSection(name: string) {
     const idx = sectionOrder.indexOf(name);
     const fallback = sectionOrder[idx - 1] ?? sectionOrder.find((s) => s !== name) ?? "Watchlist";
+    const affected = wl.filter((row) => row.section === name).map((row) => row.symbol);
     setWl((prev: { symbol: string; section: string }[]) => prev.map((r) => (r.section === name ? { ...r, section: fallback } : r)));
+    syncDefaultWatchlist("move", affected, fallback);
     editMeta((m) => ({
       sections: m.sections.filter((s) => s !== name),
       collapsed: m.collapsed.filter((s) => s !== name),
@@ -2079,6 +2383,13 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   }
 
   function toggleSection(name: string) {
+    const hiding = !collapsed.has(name);
+    if (hiding) {
+      const hidden = new Set(sections[name] ?? []);
+      setWlSelected((current) => new Set([...current].filter((symbol) => !hidden.has(symbol))));
+      if (wlAnchorRef.current && hidden.has(wlAnchorRef.current)) wlAnchorRef.current = null;
+      setWlContext(null);
+    }
     editMeta((m) => ({
       ...m,
       collapsed: m.collapsed.includes(name) ? m.collapsed.filter((s) => s !== name) : [...m.collapsed, name],
@@ -2478,6 +2789,26 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     else if (panes[activePane] !== sym) setPanes((p) => p.map((s, i) => (i === activePane ? sym : s)));
     setReplayOn(false); setReplayIdx(null); setPlaying(false); setCompare([]);
   }, [activePane, panes]);
+  const selectWlRow = useCallback((symbol: string, event: Pick<React.MouseEvent, "shiftKey" | "metaKey" | "ctrlKey">) => {
+    const toggle = event.metaKey || event.ctrlKey;
+    if (event.shiftKey || toggle) {
+      setWlSelected((current) => resolveWatchlistSelection({
+        current,
+        anchor: wlAnchorRef.current,
+        target: symbol,
+        visualOrder: visibleWlOrder,
+        range: event.shiftKey,
+        toggle,
+      }));
+      if (!event.shiftKey || !wlAnchorRef.current) wlAnchorRef.current = symbol;
+      setWlContext(null);
+      return;
+    }
+    setWlSelected(new Set());
+    setWlContext(null);
+    wlAnchorRef.current = symbol;
+    pick(symbol);
+  }, [pick, visibleWlOrder]);
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { toggleCompare(sym); } else pick(sym); };
 
   // The dashboard keeps one warm iframe alive between launches. A later ticker click
@@ -3314,6 +3645,14 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           <div className="board wl-board">
             <div className="wl-bar pophost">
               <button className="wl-select" onClick={(e) => { e.stopPropagation(); const willOpen = !wlMenuOpen; closeAll(); setWlMenuOpen(willOpen); }}>{activeList} <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></button>
+              {selectedWlCount >= 2 && (
+                <div className="wl-selection-summary" role="status" aria-live="polite" data-testid="watchlist-selection-count">
+                  <span>{t("wlSymbolsSelected").replace("{n}", String(selectedWlCount))}</span>
+                  <button type="button" title={t("wlClearSelection")} aria-label={t("wlClearSelection")} onClick={(event) => { event.stopPropagation(); clearWlSelection(); }}>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                  </button>
+                </div>
+              )}
               <div className={`pop wl-lists${wlMenuOpen ? " show" : ""}`} style={{ top: 40, left: 6, minWidth: 210 }} onClick={(e) => e.stopPropagation()}>
                 <div className="set-grp">{t("watchlists")}</div>
                 {Object.keys(lists).map((name) => (
@@ -3352,7 +3691,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                 <div className="menu-row" onClick={() => importList()}><svg viewBox="0 0 24 24"><path d="M12 15V3M8 7l4-4 4 4M4 19h16" /></svg>{t("importCsv")}</div>
                 <div className="menu-row danger" onClick={() => clearList(activeList)}><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></svg>{t("clearWatchlist")}</div>
               </div>
-              <div className="wl-acts">
+              <div className={`wl-acts${selectedWlCount >= 2 ? " wl-acts-selection" : ""}`}>
                 <button title={t("addSymbol")} onClick={(e) => { e.stopPropagation(); setSeed(""); setAddSymOpen(true); }}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
                 <button title={t("settings")} onClick={(e) => { e.stopPropagation(); const willOpen = !wlSetOpen; closeAll(); setWlSetOpen(willOpen); }}><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg></button>
               </div>
@@ -3377,8 +3716,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                 {dataCols.map(([k, l]) => <span key={k} data-watchlist-column={k} className="wl-col"><span className="wl-col-l">{l}</span><i className="wl-rz" title={t("resizeCol")} onMouseDown={(e) => startResize(k, e)} /></span>)}
                 <span />
               </div>
-              <div className="wl-list">
-                <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={onWlDragEnd} modifiers={[restrictToVerticalAxis, restrictToParentElement]}>
+              <div className="wl-list" role="listbox" aria-label={t("watchlists")} aria-multiselectable="true">
+                <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={onWlDragEnd} modifiers={[restrictToVerticalAxis]}>
                 {sectionOrder.map((sec) => {
                   const rows = sections[sec] ?? [];
                   const isCollapsed = collapsed.has(sec);
@@ -3428,7 +3767,30 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                       const secondary = set.disp === "both" ? nm : set.disp === "name" ? sym : (set.tableView ? "" : nm);
                       const flagColor = flags[sym];
                       return (
-                        <SortableWlRow key={sym} sym={sym} className={`wl-row${sym === active ? " on" : ""}${set.tableView ? " tv" : ""}`} style={{ gridTemplateColumns: wlGrid, minWidth: wlMinW, height: set.tableView ? 32 : 46 }} onClick={() => pick(sym)} onMouseEnter={() => { if (!isCompSym) { prefetch(`/data/${sym}.json`); prefetch(`/data/${sym}.slice.json`); prefetch(`/data/${sym}.intel.json`); } }}>
+                        <SortableWlRow
+                          key={sym}
+                          sym={sym}
+                          section={sec}
+                          selected={wlSelected.has(sym)}
+                          dragLabel={t("wlDragSymbol").replace("{symbol}", sym)}
+                          className={`wl-row${sym === active ? " on" : ""}${wlSelected.has(sym) ? " selected" : ""}${set.tableView ? " tv" : ""}`}
+                          style={{ gridTemplateColumns: wlGrid, minWidth: wlMinW, height: set.tableView ? 32 : 46 }}
+                          onClick={(event) => selectWlRow(sym, event)}
+                          onContextMenu={(event) => openWlContext(sym, event)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") { event.preventDefault(); selectWlRow(sym, event); }
+                            else if (event.key === " ") { event.preventDefault(); selectWlRow(sym, { shiftKey: event.shiftKey, metaKey: true, ctrlKey: event.ctrlKey }); }
+                            else if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                              event.preventDefault();
+                              const rect = event.currentTarget.getBoundingClientRect();
+                              wlContextFocusRef.current = event.currentTarget;
+                              setWlSelected((current) => resolveWatchlistContextSelection(current, sym));
+                              wlAnchorRef.current = sym;
+                              setWlContext({ symbol: sym, x: rect.left + Math.min(36, rect.width / 2), y: rect.top + Math.min(32, rect.height) });
+                            }
+                          }}
+                          onMouseEnter={() => { if (!isCompSym) { prefetch(`/data/${sym}.json`); prefetch(`/data/${sym}.slice.json`); prefetch(`/data/${sym}.intel.json`); } }}
+                        >
                           {/* F1 flag slot — click to apply lastFlagColor; hover when already set shows palette */}
                           <WlFlagSlot sym={sym} color={flagColor} onSet={(c) => setFlag(sym, c)} onRemove={() => removeFlag(sym)} lastColor={lastFlagColor} />
                           <div className="s">{set.logo && !isCompSym && <AssetLogo className="ic" symbol={sym} name={nm} market={r?.mkt || r?.sec} color={r?.col} size={set.tableView ? 18 : 24} />}
@@ -3453,6 +3815,20 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                 </DndContext>
               </div>
             </div>
+            {wlContext && selectedWlCount > 0 && (
+              <WlBulkContextMenu
+                key={`${wlContext.symbol}:${wlContext.x}:${wlContext.y}`}
+                point={wlContext}
+                count={selectedWlCount}
+                sections={sectionOrder}
+                listNames={Object.keys(lists)}
+                onClose={closeWlContext}
+                onMove={(section) => moveWlSelected(section)}
+                onMoveNew={(section) => moveWlSelected(section, true)}
+                onCreateList={createListFromWlSelected}
+                onDelete={deleteWlSelected}
+              />
+            )}
           </div>
 
           <div className="board detail-board">
@@ -3704,6 +4080,12 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         <div className="undo-toast" role="status" style={{ position: "fixed", bottom: 96, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--line-3)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 51, display: "flex", alignItems: "center", gap: 12 }}>
           <span>{gateNudge}</span>
           <a href="/login" style={{ color: "#4d82ff", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>{t("gateSignupCta")}</a>
+        </div>
+      )}
+
+      {wlSyncFailed && (
+        <div className="undo-toast" role="alert" style={{ position: "fixed", bottom: 136, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--warn)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 52 }}>
+          {t("wlSyncFailed")}
         </div>
       )}
 

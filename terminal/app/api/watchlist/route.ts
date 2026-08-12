@@ -1,22 +1,53 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-// Add/remove a symbol on the user's first watchlist (RLS-scoped to the owner).
+const MAX_BATCH = 500;
+
+function cleanSymbols(value: unknown): string[] {
+  const raw = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const symbols = [...new Set(raw
+    .filter((symbol): symbol is string => typeof symbol === "string")
+    .map((symbol) => symbol.trim().toUpperCase())
+    .filter((symbol) => !!symbol && symbol.length <= 128 && !/[\u0000-\u001f\u007f]/.test(symbol)))];
+  return symbols.length <= MAX_BATCH ? symbols : [];
+}
+
+// Add/remove/move symbols on the user's first watchlist (RLS-scoped to the owner).
 export async function POST(req: Request) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
 
-  const { action, symbol, section = "Watchlist" } = await req.json();
-  if (!symbol) return NextResponse.json({ error: "symbol required" }, { status: 400 });
+  const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body) return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
+  const action = body.action;
+  const symbols = cleanSymbols(body.symbols ?? body.symbol);
+  const section = typeof body.section === "string" ? body.section.trim() : "Watchlist";
+  if (!symbols.length) return NextResponse.json({ error: "symbol required or batch too large" }, { status: 400 });
+  if (!section || section.length > 80 || /[\u0000-\u001f\u007f]/.test(section)) {
+    return NextResponse.json({ error: "invalid section" }, { status: 400 });
+  }
 
   const { data: wl } = await supabase.from("watchlists").select("id").eq("user_id", user.id).order("position").limit(1).single();
   if (!wl) return NextResponse.json({ error: "no watchlist" }, { status: 400 });
 
   if (action === "remove") {
-    await supabase.from("watchlist_symbols").delete().eq("watchlist_id", wl.id).eq("symbol", symbol);
+    let q = supabase.from("watchlist_symbols").delete().eq("watchlist_id", wl.id);
+    q = symbols.length === 1 ? q.eq("symbol", symbols[0]) : q.in("symbol", symbols);
+    const { error } = await q;
+    if (error) return NextResponse.json({ error: "watchlist update failed" }, { status: 500 });
     return NextResponse.json({ ok: true });
   }
+  if (action === "move") {
+    let q = supabase.from("watchlist_symbols").update({ section }).eq("watchlist_id", wl.id);
+    q = symbols.length === 1 ? q.eq("symbol", symbols[0]) : q.in("symbol", symbols);
+    const { error } = await q;
+    if (error) return NextResponse.json({ error: "watchlist update failed" }, { status: 500 });
+    return NextResponse.json({ ok: true });
+  }
+  if (action !== "add") return NextResponse.json({ error: "unsupported action" }, { status: 400 });
+  if (symbols.length !== 1) return NextResponse.json({ error: "add accepts one symbol" }, { status: 400 });
+  const symbol = symbols[0];
   // add (dedupe)
   const { data: ex } = await supabase.from("watchlist_symbols").select("id").eq("watchlist_id", wl.id).eq("symbol", symbol).maybeSingle();
   if (!ex) {
