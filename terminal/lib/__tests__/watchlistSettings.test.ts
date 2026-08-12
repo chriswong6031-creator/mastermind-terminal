@@ -46,6 +46,7 @@ describe("resolveWatchlistSettings", () => {
         change: false,
         volume: true,
         ext: true,
+        extPct: true,
       },
       colW: { sym: 180 },
       disp: "name",
@@ -58,5 +59,31 @@ describe("resolveWatchlistSettings", () => {
 
     expect(result.migrated).toBe(true);
     expect(result.settings).toEqual(DEFAULT_WATCHLIST_SETTINGS);
+  });
+
+  it("adds Ext % to a current-version workspace without changing explicit column choices", () => {
+    const result = resolveWatchlistSettings({
+      ...DEFAULT_WATCHLIST_SETTINGS,
+      cols: {
+        last: true,
+        changePct: true,
+        change: false,
+        volume: false,
+        ext: false,
+      },
+    }, WATCHLIST_SETTINGS_VERSION);
+
+    expect(result.migrated).toBe(false);
+    expect(result.settings.cols.ext).toBe(false);
+    expect(result.settings.cols.extPct).toBe(true);
+  });
+
+  it("preserves an explicit Ext %-off choice", () => {
+    const result = resolveWatchlistSettings({
+      ...DEFAULT_WATCHLIST_SETTINGS,
+      cols: { ...DEFAULT_WATCHLIST_SETTINGS.cols, extPct: false },
+    }, WATCHLIST_SETTINGS_VERSION);
+
+    expect(result.settings.cols.extPct).toBe(false);
   });
 });

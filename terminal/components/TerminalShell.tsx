@@ -330,7 +330,7 @@ const DET_TKEY: Record<string, string> = { trendlines: "autoTrendlines", fib: "a
 // `ext` matches `last` (82, not the old 72): the column now carries a PRICE of the same
 // magnitude as Last rather than a two-digit percentage, so the narrower default clipped it.
 // A user who has already dragged the column keeps their own width (set.colW wins).
-const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, changePct: 76, volume: 80, ext: 82 };
+const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, changePct: 76, volume: 80, ext: 82, extPct: 76 };
 // ── Boot-trace helper (?boottrace=1) ────────────────────────────────────────
 // Wraps performance.mark so profiling is zero-cost unless the flag is set.
 // Each mark is also console.log'd with a wall-clock delta from the first mark
@@ -1433,14 +1433,16 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     const syms: string[] = [];
     // Always poll the active symbol for the pane-card secondary block (item-25)
     if (!isComposite(active) && classify(active) === "us") syms.push(active);
-    // Add watchlist US singles when Ext column is enabled (item-26)
-    if (set.cols.ext) {
+    // Add watchlist US singles when either extended-hours column is enabled. Ext % is an
+    // independent presentation of the same typed quote packet, so turning Ext price off must
+    // not silently stop its data lane.
+    if (set.cols.ext || set.cols.extPct) {
       for (const { symbol } of wl) {
         if (!isComposite(symbol) && classify(symbol) === "us") syms.push(symbol);
       }
     }
     return syms.filter((v, i, a) => a.indexOf(v) === i).join(",");
-  }, [wl, active, set.cols.ext]);
+  }, [wl, active, set.cols.ext, set.cols.extPct]);
   const extSymsKeyRef = useRef(extSymsKey);
   extSymsKeyRef.current = extSymsKey;
   const extAliveRef = useRef(true);
@@ -2589,7 +2591,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     setLayoutOpen(false); }
   function delLayout(id: string) { fetch(`/api/layouts?id=${id}`, { method: "DELETE" }).then(() => setLayouts((ls) => ls.filter((x) => x.id !== id))); }
 
-  const colList = (): [string, string][] => { const a: [string, string][] = [["last", t("colLast")]]; if (set.cols.change) a.push(["change", t("colChgShort")]); if (set.cols.changePct) a.push(["changePct", t("colChgPctShort")]); if (set.cols.volume) a.push(["volume", t("colVolShort")]); if (set.cols.ext) a.push(["ext", t("colExtShort")]); return a; };
+  const colList = (): [string, string][] => { const a: [string, string][] = [["last", t("colLast")]]; if (set.cols.change) a.push(["change", t("colChgShort")]); if (set.cols.changePct) a.push(["changePct", t("colChgPctShort")]); if (set.cols.volume) a.push(["volume", t("colVolShort")]); if (set.cols.ext) a.push(["ext", t("colExtShort")]); if (set.cols.extPct) a.push(["extPct", t("colExtPctShort")]); return a; };
   // Plain-word label for an ext window. The hub's classification when it has one; "Overnight"
   // is both the third value and the honest fallback when the hub does not say which window.
   const extSessionLabel = (s?: ExtSession) =>
@@ -2639,6 +2641,13 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       const eq = extQuotes[sym];
       if (!eq || eq.extPrice == null || !isFinite(eq.extPrice)) return "—";
       return fmt(eq.extPrice, eq.extPrice < 10 ? 4 : 2);
+    }
+    // extChg is already percentage-points versus the Quote Hub's authoritative close
+    // reference. Display it directly; recomputing from Last would mix regular and ext lanes.
+    if (key === "extPct") {
+      const eq = extQuotes[sym];
+      if (!eq || eq.extChg == null || !isFinite(eq.extChg)) return "—";
+      return `${eq.extChg >= 0 ? "+" : ""}${fmt(eq.extChg)}%`;
     }
     return "";
   };
@@ -3355,7 +3364,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                 ))}
                 {/* item-26: Extended Hours column — dash for composites/non-US/no print */}
                 <div className="set-grp">{t("extColumns")}</div>
-                <div className={`set-row${set.cols.ext ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, cols: { ...s.cols, ext: !s.cols.ext } }))}><span className="cbx"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>{t("colExt")}</div>
+                <div data-watchlist-setting="ext" className={`set-row${set.cols.ext ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, cols: { ...s.cols, ext: !s.cols.ext } }))}><span className="cbx"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>{t("colExt")}</div>
+                <div data-watchlist-setting="extPct" className={`set-row${set.cols.extPct ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, cols: { ...s.cols, extPct: !s.cols.extPct } }))}><span className="cbx"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>{t("colExtPct")}</div>
                 <div className="set-grp">{t("symbolDisplay")}</div>
                 <div className={`set-row${set.logo ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, logo: !s.logo }))}><span className="cbx"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>{t("logo")}</div>
                 {([["symbol", t("dispSymbol")], ["name", t("dispName")], ["both", t("dispBoth")]] as [string, string][]).map(([d, l]) => <div key={d} className={`set-row${set.disp === d ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, disp: d }))}><span className="rdo" />{l}</div>)}
@@ -3364,7 +3374,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
             <div className="wl-scroll">
               <div className="wl-cols" style={{ gridTemplateColumns: wlGrid, minWidth: wlMinW }}>
                 <span className="wl-col">{t("symbol")}<i className="wl-rz" title={t("resizeCol")} onMouseDown={(e) => startResize("sym", e)} /></span>
-                {dataCols.map(([k, l]) => <span key={k} className="wl-col"><span className="wl-col-l">{l}</span><i className="wl-rz" title={t("resizeCol")} onMouseDown={(e) => startResize(k, e)} /></span>)}
+                {dataCols.map(([k, l]) => <span key={k} data-watchlist-column={k} className="wl-col"><span className="wl-col-l">{l}</span><i className="wl-rz" title={t("resizeCol")} onMouseDown={(e) => startResize(k, e)} /></span>)}
                 <span />
               </div>
               <div className="wl-list">
@@ -3426,11 +3436,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                             <span className="nm"><span className="tk">{isCompSym ? sym.split("+").slice(0, 2).join("+") + (sym.split("+").length > 2 ? "+…" : "") : primary}</span>{secondary && !isCompSym && <span className={set.tableView ? "tk-sub" : "sub"}>{secondary}</span>}</span></div>
                           {dataCols.map(([k]) => {
                             const isChg = k === "changePct" || k === "change";
-                            const isExt = k === "ext";
+                            const isExt = k === "ext" || k === "extPct";
                             const eq = isExt ? extQuotes[sym] : null;
                             const extUp = eq && eq.extChg != null ? eq.extChg >= 0 : null;
                             const cls = isChg ? (u ? "up" : "down") : isExt && extUp != null ? (extUp ? "up" : "down") : "";
-                            return <span key={k} className={`c num ${cls}`} title={isExt ? extTitle(sym) : undefined}>{colVal(sym, r, k)}</span>;
+                            return <span key={k} data-watchlist-column={k} className={`c num ${cls}`} title={isExt ? extTitle(sym) : undefined}>{colVal(sym, r, k)}</span>;
                           })}
                           <span className="rm" title={t("remove")} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); removeSymbol(sym); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span>
                         </SortableWlRow>
