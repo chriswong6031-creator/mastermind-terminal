@@ -15,7 +15,7 @@ import {
   CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries, BaselineSeries,
   createSeriesMarkers, type ISeriesMarkersPluginApi,
   createTextWatermark,
-  CrosshairMode, ColorType, LineStyle, LineType, PriceScaleMode, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
+  CrosshairMode, ColorType, LineStyle, LineType, MismatchDirection, PriceScaleMode, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
 } from "lightweight-charts";
 import { createEngine, type ChartEngine } from "@/lib/chart-engine";
 import {
@@ -41,7 +41,14 @@ import { calculateAnchoredVwap, calculateFixedRangeVolumeProfile, calculateRegre
 import { cloneDrawing, constrainScreenAngle, translateDrawingAnchors } from "@/lib/drawing-engine/interaction";
 import { calculatePositionMetrics, fibonacciSettings, positionSettings, type FibonacciLabelMode } from "@/lib/drawing-engine/settings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
-import { priceTagTop, crosshairLabelHalf } from "@/lib/priceTagPlacement";
+import {
+  PRICE_TAG_ROW_HEIGHT,
+  PRICE_TAG_TIME_HEIGHT,
+  PRICE_TAG_MIN_VALUE_WIDTH,
+  priceTagRowTop,
+  priceScaleDisplayValue,
+  secondaryPriceTagTop,
+} from "@/lib/priceTagPlacement";
 import { setActivePaneCoords, getActivePaneCoords } from "@/lib/paneCoords";
 import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataCache";
 import { parseComposite, alignAndSum } from "@/lib/composite";
@@ -329,16 +336,17 @@ export function periodCloseTs(tf: string, nowSec: number, market: Market): numbe
 }
 
 /** Format a bar-close countdown (seconds), TradingView-style, tiered by timeframe. */
-export function fmtCountdown(remaining: number, intraday: boolean): string {
+export function fmtCountdown(remaining: number, _intraday: boolean): string {
   let r = Math.max(0, Math.floor(remaining));
   const d = Math.floor(r / 86400); r -= d * 86400;
   const h = Math.floor(r / 3600); r -= h * 3600;
   const m = Math.floor(r / 60); const s = r - m * 60;
   const p2 = (n: number) => String(n).padStart(2, "0");
   if (d > 0) return `${d}d ${h}h`;
-  if (intraday) return h > 0 ? `${h}:${p2(m)}:${p2(s)}` : `${p2(m)}:${p2(s)}`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+  // TradingView keeps second resolution on the current bar even for a daily candle. Besides being
+  // more useful, the fixed clock shape gives the compact 66px value cell a stable width.
+  if (h > 0) return `${p2(h)}:${p2(m)}:${p2(s)}`;
+  return `${p2(m)}:${p2(s)}`;
 }
 
 const EMPTY_SET: Set<string> = new Set();
@@ -622,6 +630,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const cancelPendingDrawingRef = useRef<() => void>(() => {});
   const cancelMediaToolRef = useRef<(activeTool?: DrawKind | null) => void>(() => {});
   const renderTagRef = useRef<(() => void) | null>(null);   // updates the last-price + bar-close-countdown axis tag
+  const renderHoverTagRef = useRef<((y: number | null, price?: number | null) => void) | null>(null);
   const symbolRef = useRef(symbol);                          // current symbol (Effect 1 mounts once; symbol changes in Effect 2)
   const companyNameRef = useRef(companyName);                 // proper name for the snapshot header (zh preferred over English)
   const renderSignalsRef = useRef<() => void>(() => {});
@@ -739,9 +748,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const textEditRef = useRef<HTMLInputElement | null>(null);
   const sigRef = useRef<SVGSVGElement | null>(null);
   const priceTagRef = useRef<HTMLDivElement | null>(null);  // TradingView-style last-price + countdown tag on the right axis
+  const extendedTagRef = useRef<HTMLDivElement | null>(null); // PRE/AH/ON badge; shares the DOM scale layer with the primary tag
+  const hoverTagRef = useRef<HTMLDivElement | null>(null);   // pointer price; foreground and excluded from persistent collisions
   const tagTimerRef = useRef<number | null>(null);          // 1s ticker so the bar-close countdown stays live
-  // y (price-pane coords) of the crosshair's axis price label, null when no crosshair is on the price
-  // pane — renderPriceTag slides the badge clear of it so the hovered price is never covered.
+  // y (price-pane coords) of the crosshair's axis price label. Persistent badges never consume
+  // this coordinate: an independent foreground DOM label follows it. The ref remains observable
+  // for crosshair-continuity tests and mirrored panes.
   const crossLabelYRef = useRef<number | null>(null);
   const watermarkPluginRef = useRef<{ applyOptions: (opts: Record<string, any>) => void } | null>(null); // v5 text watermark plugin
   const brandBugRef = useRef<HTMLDivElement | null>(null);  // C5 — shell-only DOM brand bug (never created on web)
@@ -792,6 +804,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     }
   };
   const clearExtendedPriceLine = () => {
+    if (extendedTagRef.current) extendedTagRef.current.style.display = "none";
     const line = extendedPriceLineRef.current;
     if (!line) return;
     try { priceSeriesRef.current?.removePriceLine(line); } catch {}
@@ -812,16 +825,18 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       : quote.extSession === "post"
         ? settings.postMarketColor || "#2962ff"
         : settings.overnightColor || "#9c27b0";
-    const title = quote.extSession === "pre" ? "PRE" : quote.extSession === "post" ? "AH" : "ON";
     try {
       extendedPriceLineRef.current = priceSeries.createPriceLine({
         price: quote.extPrice,
         color,
         lineWidth: 1,
         lineStyle: LineStyle.Dotted,
-        axisLabelVisible: true,
-        title,
+        // The native canvas label cannot collide with our DOM current-price badge. Keep the true
+        // price line native and render both persistent labels in one DOM scale layer instead.
+        axisLabelVisible: false,
+        title: "",
       });
+      renderTagRef.current?.();
     } catch {}
   };
   // Session shading primitive attached to the candle series (intraday + market has sessions + dayMode).
@@ -1999,13 +2014,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ind fills, price tag) — they gate themselves off while a sub-pane is maximized and must clear/
   // restore NOW, not on the next pan/zoom.
   const rerenderOverlays = () => { try { renderSignalsRef.current(); renderRef.current(); renderTagRef.current?.(); } catch {} };
-  const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { if (panesMeta.current.length <= 1) return; ctl.maximized = key; ctl.collapsed.delete(key); } applyStretch(); rerenderOverlays(); requestAnimationFrame(measure); };
-  const doCollapse = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; ctl.maximized = null; if (ctl.collapsed.has(key)) ctl.collapsed.delete(key); else ctl.collapsed.add(key); applyStretch(); rerenderOverlays(); requestAnimationFrame(measure); };
+  const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { if (panesMeta.current.length <= 1) return; ctl.maximized = key; ctl.collapsed.delete(key); } applyStretch(); rerenderOverlays(); requestAnimationFrame(() => { measure(); rerenderOverlays(); }); };
+  const doCollapse = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; ctl.maximized = null; if (ctl.collapsed.has(key)) ctl.collapsed.delete(key); else ctl.collapsed.add(key); applyStretch(); rerenderOverlays(); requestAnimationFrame(() => { measure(); rerenderOverlays(); }); };
   // applyStretch() after the swap re-runs applyMaximizeDom so the row-hiding tracks the panes'
   // NEW positions if anything ever moves a pane while maximized (the ops buttons are gated off
   // in that state, but programmatic paths stay safe).
-  const doMove = (pi: number, dir: -1 | 1) => { const ch = chartRef.current; if (!ch) return; const tgt = pi + dir; let n = 1; try { n = ch.panes().length; } catch {} if (tgt < 0 || tgt >= n) return; try { ch.swapPanes(pi, tgt); } catch {  rerenderOverlays();   // pane y-bands changed — suite prims must remap (review W2-1)
-  } applyStretch(); requestAnimationFrame(measure); };
+  const doMove = (pi: number, dir: -1 | 1) => { const ch = chartRef.current; if (!ch) return; const tgt = pi + dir; let n = 1; try { n = ch.panes().length; } catch {} if (tgt < 0 || tgt >= n) return; try { ch.swapPanes(pi, tgt); } catch {} applyStretch(); rerenderOverlays(); requestAnimationFrame(() => { measure(); rerenderOverlays(); }); };
   // moves are disabled while a pane is maximized: the overlay layout is filtered to the single
   // visible pane then (up/down would disagree), and reordering an invisible stack is meaningless.
   const canMoveUp = (pi: number) => !paneCtl.current.maximized && pi > 0;
@@ -3022,17 +3036,31 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           }),
         };
       };
-      // Crosshair-dodge test hook. The crosshair is canvas-drawn and its coordinate lives in a
-      // ref, so a test driving it with synthetic pointer moves has no way to know the move
-      // REGISTERED — it can only sleep and hope. That raced on CI (a tablet run asserted the
-      // dodge one frame before the crosshair landed and read the badge still on the price).
-      // Exposing the two numbers the dodge is computed from lets the test wait for the state
-      // it is asserting about instead of a timeout.
+      // Crosshair continuity test hook. The historical name is retained because marker/primitive
+      // interaction specs use it to tell a registered canvas crosshair from a dropped pointer move.
+      // It no longer controls persistent-label placement.
       (window as any).__mmCrosshairDodge = () => {
         const tag = priceTagRef.current;
         return {
           crossY: crossLabelYRef.current,                          // null = no crosshair on the price pane
-          tagTop: tag ? parseFloat(tag.style.top || "0") : null,   // pane-space anchor the badge renders at
+          tagTop: tag ? parseFloat(tag.style.top || "0") : null,   // pinned price-row top
+        };
+      };
+      (window as any).__mmPriceLabels = () => {
+        const primary = priceTagRef.current;
+        const extended = extendedTagRef.current;
+        return {
+          primaryTop: primary ? parseFloat(primary.style.top || "0") : null,
+          primaryAnchorY: primary?.dataset.anchorY ? Number(primary.dataset.anchorY) : null,
+          pricePaneTop: primary?.dataset.paneTop ? Number(primary.dataset.paneTop) : 0,
+          extendedTop: extended && extended.style.display !== "none" ? parseFloat(extended.style.top || "0") : null,
+          extendedNaturalTop: extended?.dataset.naturalTop ? Number(extended.dataset.naturalTop) : null,
+          extendedAnchorY: extended?.dataset.anchorY ? Number(extended.dataset.anchorY) : null,
+          extendedDocked: extended?.dataset.docked === "true",
+          hoverTop: hoverTagRef.current && hoverTagRef.current.style.display !== "none"
+            ? parseFloat(hoverTagRef.current.style.top || "0")
+            : null,
+          hoverText: hoverTagRef.current?.textContent ?? "",
         };
       };
       // Pane-maximize test hook. Double-tap is a gesture the pane can legitimately DROP — the two
@@ -3165,71 +3193,150 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       wrap.appendChild(bug); brandBugRef.current = bug;
     }
 
-    // ── last-price tag (symbol · price · bar-close countdown) on the right axis ──
-    // Replaces lightweight-charts' built-in last-value label (disabled on the price series). The
-    // countdown differs per timeframe: exact for intraday, calendar-boundary for daily+ (see periodCloseTs).
-    // D9: classNames only — every cssText string is unchanged, so web renders identically; the
-    // shell block in globals.css uses these hooks to collapse the badge to TV's single line.
+    // ── persistent price-scale labels ──
+    // Both persistent labels live in the same z=5 DOM layer. The pointer price is a separate z=6
+    // overlay, so it can win the collision without ever participating in persistent placement.
     const priceTag = document.createElement("div");
     priceTag.className = "mm-ptag";
-    priceTag.style.cssText = "position:absolute;z-index:5;right:1px;display:none;flex-direction:row;align-items:center;gap:2px;pointer-events:none;transform:translateY(-50%);white-space:nowrap";
+    priceTag.style.cssText = `position:absolute;z-index:5;right:1px;display:none;grid-template-columns:auto ${PRICE_TAG_MIN_VALUE_WIDTH}px;grid-template-areas:"sym val";column-gap:1px;align-items:start;height:${PRICE_TAG_ROW_HEIGHT}px;pointer-events:none;white-space:nowrap`;
     const tagSym = document.createElement("div");
     tagSym.className = "mm-ptag-sym";
-    tagSym.style.cssText = "padding:2px 5px;border-radius:3px;color:#fff;font:700 10px/1 var(--font-num);letter-spacing:.02em;font-variant-numeric:tabular-nums";
+    tagSym.style.cssText = `grid-area:sym;box-sizing:border-box;height:${PRICE_TAG_ROW_HEIGHT}px;padding:0 5px;border-radius:2px 0 0 2px;color:#fff;display:flex;align-items:center;font:600 12px/${PRICE_TAG_ROW_HEIGHT}px var(--font-num);font-variant-numeric:tabular-nums`;
     const tagVal = document.createElement("div");
     tagVal.className = "mm-ptag-val";
-    tagVal.style.cssText = "display:flex;flex-direction:column;align-items:flex-end;padding:2px 6px;border-radius:3px;color:#fff;text-align:right";
+    tagVal.style.cssText = `grid-area:val;position:relative;box-sizing:border-box;width:${PRICE_TAG_MIN_VALUE_WIDTH}px;height:${PRICE_TAG_ROW_HEIGHT}px;border-radius:0 2px 0 0;color:#fff;text-align:right`;
     const tagPrice = document.createElement("div");
     tagPrice.className = "mm-ptag-px";
-    tagPrice.style.cssText = "font:700 11px/1.15 var(--font-num);font-variant-numeric:tabular-nums";
+    tagPrice.style.cssText = `box-sizing:border-box;height:${PRICE_TAG_ROW_HEIGHT}px;padding:0 5px;display:flex;align-items:center;justify-content:flex-end;font:600 12px/${PRICE_TAG_ROW_HEIGHT}px var(--font-num);font-variant-numeric:tabular-nums`;
     const tagCd = document.createElement("div");
     tagCd.className = "mm-ptag-cd";
-    tagCd.style.cssText = "font:600 9px/1.15 var(--font-num);opacity:.85;font-variant-numeric:tabular-nums";
+    tagCd.style.cssText = `position:absolute;box-sizing:border-box;top:100%;right:0;width:${PRICE_TAG_MIN_VALUE_WIDTH}px;height:${PRICE_TAG_TIME_HEIGHT}px;padding:0 5px;border-radius:0 0 2px 2px;background:inherit;color:#fff;text-align:right;font:500 12px/${PRICE_TAG_TIME_HEIGHT}px var(--font-num);font-variant-numeric:tabular-nums`;
     tagVal.appendChild(tagPrice); tagVal.appendChild(tagCd);
     priceTag.appendChild(tagSym); priceTag.appendChild(tagVal);
     wrap.appendChild(priceTag); priceTagRef.current = priceTag;
+
+    // Extended-hours tag: a shared minimum-width numeric lane keeps its orange value's LEFT edge on
+    // the same spine as the current-price cell. It expands only when a large quote needs the room,
+    // while short values end early as TradingView's do. The native dotted line stays at true price.
+    const extendedTag = document.createElement("div");
+    extendedTag.className = "mm-exttag";
+    extendedTag.style.cssText = `position:absolute;z-index:5;right:1px;display:none;grid-template-columns:auto ${PRICE_TAG_MIN_VALUE_WIDTH}px;grid-template-areas:"kind slot";column-gap:1px;align-items:start;height:${PRICE_TAG_ROW_HEIGHT}px;pointer-events:none;white-space:nowrap`;
+    const extendedKind = document.createElement("div");
+    extendedKind.className = "mm-exttag-kind";
+    extendedKind.style.cssText = `grid-area:kind;box-sizing:border-box;height:${PRICE_TAG_ROW_HEIGHT}px;padding:0 5px;border-radius:2px 0 0 2px;color:#fff;display:flex;align-items:center;font:500 12px/${PRICE_TAG_ROW_HEIGHT}px var(--font-num);font-variant-numeric:tabular-nums`;
+    const extendedSlot = document.createElement("div");
+    extendedSlot.className = "mm-exttag-slot";
+    extendedSlot.style.cssText = `grid-area:slot;box-sizing:border-box;width:${PRICE_TAG_MIN_VALUE_WIDTH}px;height:${PRICE_TAG_ROW_HEIGHT}px;display:flex;align-items:flex-start`;
+    const extendedValue = document.createElement("div");
+    extendedValue.className = "mm-exttag-val";
+    extendedValue.style.cssText = `box-sizing:border-box;flex:0 0 auto;height:${PRICE_TAG_ROW_HEIGHT}px;padding:0 8px;border-radius:0 2px 2px 0;color:#fff;display:flex;align-items:center;justify-content:flex-start;font:500 12px/${PRICE_TAG_ROW_HEIGHT}px var(--font-num);font-variant-numeric:tabular-nums`;
+    extendedSlot.appendChild(extendedValue);
+    extendedTag.appendChild(extendedKind); extendedTag.appendChild(extendedSlot);
+    wrap.appendChild(extendedTag); extendedTagRef.current = extendedTag;
+
+    const hoverTag = document.createElement("div");
+    hoverTag.className = "mm-hovertag";
+    hoverTag.style.cssText = `position:absolute;z-index:6;right:1px;display:none;box-sizing:border-box;width:${PRICE_TAG_MIN_VALUE_WIDTH}px;height:${PRICE_TAG_ROW_HEIGHT}px;padding:0 5px;border-radius:2px;color:#fff;align-items:center;justify-content:flex-end;pointer-events:none;white-space:nowrap;font:500 12px/${PRICE_TAG_ROW_HEIGHT}px var(--font-num);font-variant-numeric:tabular-nums`;
+    wrap.appendChild(hoverTag); hoverTagRef.current = hoverTag;
+
+    const measureCtx = document.createElement("canvas").getContext("2d");
+    const measuredLabelWidth = (el: HTMLElement, value: string, horizontalPadding: number) => {
+      if (!measureCtx || !value) return horizontalPadding;
+      const cs = getComputedStyle(el);
+      measureCtx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      // Canvas and DOM glyph advances can differ after variable-font shaping. A four-pixel safety
+      // allowance keeps the flex item from shrinking and clipping its final decimal at the edge.
+      return Math.ceil(measureCtx.measureText(value).width + horizontalPadding + 4);
+    };
+    let priceLaneWidth = PRICE_TAG_MIN_VALUE_WIDTH;
+    const placeOnAxisEdge = (el: HTMLElement, onLeft: boolean) => {
+      el.style.left = onLeft ? "1px" : "auto";
+      el.style.right = onLeft ? "auto" : "1px";
+    };
+    const applyLabelLayout = (onLeft: boolean, laneWidth: number) => {
+      priceLaneWidth = Math.max(PRICE_TAG_MIN_VALUE_WIDTH, Math.ceil(laneWidth));
+      placeOnAxisEdge(priceTag, onLeft);
+      placeOnAxisEdge(extendedTag, onLeft);
+      placeOnAxisEdge(hoverTag, onLeft);
+      priceTag.style.gridTemplateColumns = onLeft ? `${priceLaneWidth}px auto` : `auto ${priceLaneWidth}px`;
+      priceTag.style.gridTemplateAreas = onLeft ? '"val sym"' : '"sym val"';
+      extendedTag.style.gridTemplateColumns = onLeft ? `${priceLaneWidth}px auto` : `auto ${priceLaneWidth}px`;
+      extendedTag.style.gridTemplateAreas = onLeft ? '"slot kind"' : '"kind slot"';
+      tagVal.style.width = `${priceLaneWidth}px`;
+      tagCd.style.width = `${priceLaneWidth}px`;
+      extendedSlot.style.width = `${priceLaneWidth}px`;
+      tagSym.style.borderRadius = onLeft ? "0 2px 2px 0" : "2px 0 0 2px";
+      tagVal.style.borderRadius = onLeft ? "2px 0 0 0" : "0 2px 0 0";
+      tagPrice.style.justifyContent = onLeft ? "flex-start" : "flex-end";
+      tagCd.style.left = onLeft ? "0" : "auto";
+      tagCd.style.right = onLeft ? "auto" : "0";
+      tagCd.style.textAlign = onLeft ? "left" : "right";
+      extendedKind.style.borderRadius = onLeft ? "0 2px 2px 0" : "2px 0 0 2px";
+      extendedSlot.style.justifyContent = onLeft ? "flex-end" : "flex-start";
+      extendedValue.style.borderRadius = onLeft ? "2px 0 0 2px" : "0 2px 2px 0";
+      extendedValue.style.justifyContent = onLeft ? "flex-end" : "flex-start";
+      hoverTag.style.justifyContent = onLeft ? "flex-start" : "flex-end";
+      hoverTag.style.textAlign = onLeft ? "left" : "right";
+    };
 
     // While a SUB-pane is maximized the price pane is DOM-hidden — every overlay that projects
     // price-pane coordinates (signal pills, gap zones, drawings, ichimoku/ribbon fills, the
     // last-price tag) must clear/hide itself instead of painting over the maximized pane.
     const priceProjHidden = () => { const c = paneCtl.current; return c.maximized != null && c.maximized !== "__price__"; };
 
-    // ── crosshair dodge (the badge NEVER covers the price you are pointing at) ──
-    // Placement geometry lives in lib/priceTagPlacement (pure + unit-tested); this side owns the
-    // measurements it needs. See that module's header for why the badge yields to the crosshair label.
     const priceIdx = () => { try { return priceSeriesRef.current?.getPane()?.paneIndex() ?? 0; } catch { return 0; } };
-    const axisFontSize = () => { try { return (chart.options() as any).layout?.fontSize || 12; } catch { return 12; } };
-    // Half-extents of the badge around its anchor. It is centred on `top` via translateY(-50%), but
-    // in shell mode globals.css lifts the countdown OUT of the badge box (position:absolute), so the
-    // occupied band is the union of both rects. Cached on the countdown-visibility key: a rect read
-    // per crosshair frame would force a layout flush on every mouse move.
-    let tagBox = { up: 0, down: 0, key: "" };
-    const measureTagBox = (tag: HTMLElement, cdShown: boolean) => {
-      const key = cdShown ? "cd" : "-";
-      if (tagBox.key === key && tagBox.up > 0) return tagBox;
-      const r = tag.getBoundingClientRect();
-      if (!r.height) return tagBox;
-      const mid = r.top + r.height / 2;
-      let top = r.top, bot = r.bottom;
-      if (cdShown) { const rc = tagCd.getBoundingClientRect(); if (rc.height) { top = Math.min(top, rc.top); bot = Math.max(bot, rc.bottom); } }
-      tagBox = { up: mid - top, down: bot - mid, key };
-      return tagBox;
+    // Lightweight Charts returns y coordinates relative to the series' pane, whereas these DOM
+    // labels are children of the full chart wrapper. Resolve the pane's live offset on every paint:
+    // panes can be reordered, collapsed, resized, or restored without rebuilding this effect.
+    const pricePaneGeometry = () => {
+      let top = 0;
+      let height = 0;
+      try {
+        const pane = priceSeriesRef.current?.getPane();
+        const paneEl = pane?.getHTMLElement();
+        const wrapRect = wrap.getBoundingClientRect();
+        if (paneEl) {
+          const paneRect = paneEl.getBoundingClientRect();
+          top = paneRect.top - wrapRect.top;
+          height = paneRect.height;
+        }
+      } catch {}
+      if (!(height > 0)) { try { height = chart.paneSize(priceIdx()).height; } catch {} }
+      return { top, height };
     };
-    const renderPriceTag = () => {
+    const scaleMode = (s: ISeriesApi<any>) => {
+      try { return s.priceScale().options().mode; } catch { return chartSettingsRef.current.mode ?? PriceScaleMode.Normal; }
+    };
+    const visibleScaleBasePrice = (s: ISeriesApi<any>) => {
+      const range = chart.timeScale().getVisibleLogicalRange();
+      if (range == null) return barsRef.current[0]?.c ?? null;
+      try {
+        const data = s.dataByIndex(Math.floor(range.from), MismatchDirection.NearestRight) as any;
+        return data?.close ?? data?.value ?? null;
+      } catch { return null; }
+    };
+    const scalePriceText = (s: ISeriesApi<any>, value: number) => {
+      const mode = scaleMode(s);
+      const displayValue = priceScaleDisplayValue(value, visibleScaleBasePrice(s), mode);
+      const digits = mode === PriceScaleMode.Percentage || mode === PriceScaleMode.IndexedTo100 ? 2 : precRef.current;
+      const text = displayValue.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+      return mode === PriceScaleMode.Percentage ? `${text}%` : text;
+    };
+    let refreshHoverTag = () => {};
+    const renderPriceTags = () => {
       const tag = priceTagRef.current, s = priceSeriesRef.current;
       if (!tag || !s || dead) return;
-      if (priceProjHidden()) { tag.style.display = "none"; return; }
+      if (priceProjHidden()) { tag.style.display = "none"; extendedTag.style.display = "none"; return; }
       const bars = barsRef.current; const last = bars[bars.length - 1];
-      if (!last) { tag.style.display = "none"; return; }
+      if (!last) { tag.style.display = "none"; extendedTag.style.display = "none"; return; }
       const price = last.c;
       const y = s.priceToCoordinate(price) as number | null;
-      if (y == null) { tag.style.display = "none"; return; }
+      if (y == null || !Number.isFinite(y)) { tag.style.display = "none"; extendedTag.style.display = "none"; return; }
       const prev = bars[bars.length - 2];
       const up = prev ? price >= prev.c : price >= last.o;
       const col = up ? tokensRef.current.up : tokensRef.current.down;
-      const prec = precRef.current;
       tagSym.textContent = symbolRef.current;
-      tagPrice.textContent = price.toLocaleString("en-US", { minimumFractionDigits: prec, maximumFractionDigits: prec });
+      tagPrice.textContent = scalePriceText(s, price);
       let cd = "";
       if (replayIdxRef.current == null) {                     // no meaningful "time to close" while replaying history
         const nowSec = Date.now() / 1000; let rem: number | null = null;
@@ -3246,46 +3353,151 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const cdShown = !!cd && countdownVisibleRef.current;
       tagCd.style.display = cdShown ? "block" : "none";
       tagSym.style.background = col; tagVal.style.background = col;
+      const settings = chartSettingsRef.current;
+      const baseLaneWidth = Math.max(
+        PRICE_TAG_MIN_VALUE_WIDTH,
+        measuredLabelWidth(tagPrice, tagPrice.textContent || "", 10),
+        cdShown ? measuredLabelWidth(tagCd, cd, 10) : 0,
+      );
+      applyLabelLayout(!!settings.scaleLeft, baseLaneWidth);
       const shown = lastValueVisibleRef.current;
-      tag.style.display = shown ? "flex" : "none";
-      // dodge the crosshair label when the two boxes collide (see crosshair-dodge note above)
-      const cy = shown ? crossLabelYRef.current : null;
-      let top = y;
-      if (cy != null) {
-        const box = measureTagBox(tag, cdShown);
-        // an unmeasurable badge (never laid out yet) would dodge off a zero-height box — leave it put
-        if (box.up > 0) {
-          let paneH = 0; try { paneH = chart.paneSize(priceIdx()).height; } catch {}
-          top = priceTagTop(y, cy, box, crosshairLabelHalf(axisFontSize()), paneH);
-        }
-      }
-      tag.style.top = Math.round(top) + "px";
+      tag.style.display = shown ? "grid" : "none";
+      const paneGeometry = pricePaneGeometry();
+      const primaryTop = paneGeometry.top + priceTagRowTop(y);
+      tag.style.top = primaryTop + "px";              // immutable: only price/scale movement changes this
+      tag.dataset.anchorY = String(y);
+      tag.dataset.paneTop = String(paneGeometry.top);
+
+      const quote = liveQuoteRef.current;
+      const extVisible = !isIntradayRef.current
+        && replayIdxRef.current == null
+        && chartDataSymRef.current === symbolRef.current
+        && classify(symbolRef.current) === "us"
+        && !isMacroSymbol(symbolRef.current)
+        && settings.extendedLineVisible !== false
+        && !!quote?.extSession
+        && quote.extPrice != null
+        && Number.isFinite(quote.extPrice)
+        && quote.extPrice > 0;
+      if (!extVisible) { extendedTag.style.display = "none"; return; }
+
+      const extendedY = s.priceToCoordinate(quote!.extPrice!) as number | null;
+      if (extendedY == null || !Number.isFinite(extendedY)) { extendedTag.style.display = "none"; return; }
+      const extendedColor = quote!.extSession === "pre"
+        ? settings.preMarketColor || "#ff9800"
+        : quote!.extSession === "post"
+          ? settings.postMarketColor || "#2962ff"
+          : settings.overnightColor || "#9c27b0";
+      extendedKind.textContent = quote!.extSession === "pre" ? "Pre" : quote!.extSession === "post" ? "AH" : "ON";
+      const extendedText = scalePriceText(s, quote!.extPrice!);
+      extendedValue.textContent = extendedText;
+      extendedKind.style.background = extendedColor; extendedValue.style.background = extendedColor;
+      applyLabelLayout(
+        !!settings.scaleLeft,
+        Math.max(baseLaneWidth, measuredLabelWidth(extendedValue, extendedText, 16)),
+      );
+      const paneH = paneGeometry.height;
+      const naturalTop = priceTagRowTop(extendedY);
+      const extendedPaneTop = shown
+        ? secondaryPriceTagTop({
+            primaryY: y,
+            secondaryY: extendedY,
+            paneHeight: paneH,
+            primaryHeight: PRICE_TAG_ROW_HEIGHT + (cdShown ? PRICE_TAG_TIME_HEIGHT : 0),
+          })
+        : naturalTop;
+      const extendedTop = paneGeometry.top + extendedPaneTop;
+      extendedTag.style.top = extendedTop + "px";
+      extendedTag.style.display = "grid";
+      extendedTag.dataset.anchorY = String(extendedY);
+      extendedTag.dataset.naturalTop = String(paneGeometry.top + naturalTop);
+      extendedTag.dataset.docked = Math.abs(extendedPaneTop - naturalTop) > 0.5 ? "true" : "false";
     };
-    renderTagRef.current = renderPriceTag;
-    // `point.y` is PANE-relative — the same space priceToCoordinate returns — so the crosshair
-    // coordinate and the badge anchor compare directly. Magnet mode snaps the DRAWN label to the
-    // hovered bar's close, so mirror that snap here or the badge would dodge a band nothing is in.
+    const renderAllPriceTags = () => { renderPriceTags(); refreshHoverTag(); };
+    renderTagRef.current = renderAllPriceTags;
+    let hoverState: { pointerY: number; snappedPrice: number | null } | null = null;
+    const renderHoverTag = (y: number | null, price?: number | null) => {
+      hoverState = y == null || !Number.isFinite(y)
+        ? null
+        : { pointerY: y, snappedPrice: price != null && Number.isFinite(price) ? price : null };
+      refreshHoverTag();
+    };
+    refreshHoverTag = () => {
+      const tag = hoverTagRef.current;
+      if (!tag || !hoverState || priceProjHidden()) { if (tag) tag.style.display = "none"; return; }
+      const s = priceSeriesRef.current;
+      if (!s) { tag.style.display = "none"; return; }
+      const y = hoverState.snappedPrice == null
+        ? hoverState.pointerY
+        : (s.priceToCoordinate(hoverState.snappedPrice) as number | null);
+      if (y == null || !Number.isFinite(y)) { tag.style.display = "none"; return; }
+      const value = hoverState.snappedPrice ?? (s.coordinateToPrice(y) as number | null);
+      if (value == null || !Number.isFinite(value)) { tag.style.display = "none"; return; }
+      tag.textContent = scalePriceText(s, value);
+      tag.style.background = tokensRef.current.p3;
+      const axisFontSize = (() => { try { return Number((chart.options() as any).layout?.fontSize) || 12; } catch { return 12; } })();
+      // LWC: font + price-label padding (2 x 2.5/12fs) + crosshair padding (2 x 2/12fs).
+      const hoverHeight = Math.ceil(axisFontSize * 7 / 4);
+      tag.style.height = `${hoverHeight}px`;
+      tag.style.font = `500 ${axisFontSize}px/${hoverHeight}px var(--font-num)`;
+      tag.style.top = pricePaneGeometry().top + priceTagRowTop(y, hoverHeight) + "px";
+      const onLeft = !!chartSettingsRef.current.scaleLeft;
+      placeOnAxisEdge(tag, onLeft);
+      // Cover the complete native price-axis label beneath us: text plus its fixed tick/border and
+      // font-scaled inner/outer padding. This prevents duplicate glyph edges at custom font sizes.
+      const nativeHorizontalPadding = Math.ceil(6 + axisFontSize * (10 / 12));
+      tag.style.width = `${Math.max(priceLaneWidth, measuredLabelWidth(tag, tag.textContent, nativeHorizontalPadding))}px`;
+      tag.style.justifyContent = onLeft ? "flex-start" : "flex-end";
+      tag.style.textAlign = onLeft ? "left" : "right";
+      tag.style.display = "flex";
+      crossLabelYRef.current = y;
+    };
+    renderHoverTagRef.current = renderHoverTag;
+    // `point.y` is PANE-relative — the same space priceToCoordinate returns — but LWC reports the
+    // ORIGINAL pointer point even after Magnet has snapped its horizontal line. Mirror LWC's own
+    // Magnet candidate selection from the event's public seriesData: visible, non-overlay series in
+    // this pane, using each series' close/value transformed through its own scale. This covers
+    // Heikin-Ashi and price-pane studies without reaching into Lightweight Charts internals.
     const onTagCrosshair = (p: any) => {
       let y: number | null = null;
+      let snappedPrice: number | null = null;
       const pt = p?.point;
       if (pt && Number.isFinite(pt.y) && (p.paneIndex == null || p.paneIndex === priceIdx())) {
         y = pt.y;
         if (chartSettingsRef.current.crosshairMode === 1) {
-          const idx = p.time != null ? (barIdxMap().get(p.time) ?? barIdxMap().get(String(p.time))) : null;
-          const bar = idx != null ? barsRef.current[idx] : null;
           const s = priceSeriesRef.current;
-          const snapped = bar && s ? (s.priceToCoordinate(bar.c) as number | null) : null;
-          if (snapped != null && Number.isFinite(snapped)) y = snapped;
+          let nearestY: number | null = null;
+          let nearestDistance = Infinity;
+          const data = p?.seriesData;
+          if (data instanceof Map) {
+            for (const [candidate, datum] of data as Map<ISeriesApi<any>, any>) {
+              try {
+                if (candidate.options()?.visible === false || candidate.getPane()?.paneIndex() !== priceIdx()) continue;
+                const scaleId = candidate.options()?.priceScaleId;
+                if (scaleId && scaleId !== "left" && scaleId !== "right") continue; // explicit overlay scale
+                const value = Number.isFinite(datum?.close) ? datum.close : Number.isFinite(datum?.value) ? datum.value : null;
+                if (value == null) continue;
+                const candidateY = candidate.priceToCoordinate(value) as number | null;
+                if (candidateY == null || !Number.isFinite(candidateY)) continue;
+                const distance = Math.abs(candidateY - pt.y);
+                if (distance < nearestDistance) { nearestDistance = distance; nearestY = candidateY; }
+              } catch {}
+            }
+          }
+          if (nearestY != null) {
+            y = nearestY;
+            const snapped = s ? (s.coordinateToPrice(nearestY) as number | null) : null;
+            if (snapped != null && Number.isFinite(snapped)) snappedPrice = snapped;
+          }
         }
       }
       const prev = crossLabelYRef.current;
       if (y == null && prev == null) return;
-      if (y != null && prev != null && Math.abs(prev - y) < 0.5) return;
       crossLabelYRef.current = y;
-      renderPriceTag();
+      renderHoverTag(y, snappedPrice);
     };
     chart.subscribeCrosshairMove(onTagCrosshair);
-    tagTimerRef.current = window.setInterval(() => { if (!dead) renderPriceTag(); }, 1000);
+    tagTimerRef.current = window.setInterval(() => { if (!dead) renderAllPriceTags(); }, 1000);
 
     // ── coordinate helpers (read *Ref.current so they stay valid across reloads) ──
     const dcol = (d: Drawing) => d.color?.startsWith("var(") ? css(d.color.slice(4, -1)) : (d.color || tokensRef.current.brand2);
@@ -5417,7 +5629,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const renderDraw = () => {
       const svgEl = svgRef.current; if (!svgEl) return;
       while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
-      if (priceProjHidden()) { positionBar(); renderPriceTag(); return; }   // drawings stay cleared while a sub-pane is maximized
+      if (priceProjHidden()) { positionBar(); renderAllPriceTags(); return; }  // drawings stay cleared while a sub-pane is maximized
       // Build one projection context per document render. Logical-index X is
       // equivalent to snapped timeToCoordinate but materially cheaper for long
       // paths; the normal price scale is affine, so two chart-API samples give
@@ -5470,7 +5682,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         }
       }
       positionBar();
-      renderPriceTag();   // keep the last-price + countdown tag in step with every data/pan/style render
+      renderAllPriceTags();  // keep persistent and foreground scale labels in step with data/pan/style renders
     };
     renderRef.current = renderDraw;
     clearDrawingSelectionRef.current = () => {
@@ -5608,7 +5820,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       paneLayoutRef.current = layout; setPaneLayout(layout);
     };
     measureRef.current = measureImpl;
-    const scheduleMeasure = () => { if (measRaf != null) return; measRaf = requestAnimationFrame(() => { measRaf = null; if (!dead) measureImpl(); }); };
+    const scheduleMeasure = () => { if (measRaf != null) return; measRaf = requestAnimationFrame(() => { measRaf = null; if (!dead) { measureImpl(); renderTagRef.current?.(); } }); };
 
     // ── pane hover + double-click (maximize-toggle on ANY pane: the tapped pane becomes the only
     //    visible one; a second double-click/tap restores the previous layout) ──
@@ -6730,6 +6942,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // ── mount teardown (base line-416 logic + the new refs) ──
     return () => {
       dead = true; if (rafId != null) cancelAnimationFrame(rafId); if (measRaf != null) cancelAnimationFrame(measRaf);
+      try { chart.unsubscribeCrosshairMove(onTagCrosshair); } catch {}
       if (drawRaf != null) cancelAnimationFrame(drawRaf); if (resizeRaf != null) cancelAnimationFrame(resizeRaf);
       if (pineLiveTimerRef.current != null) { clearTimeout(pineLiveTimerRef.current); pineLiveTimerRef.current = null; }
       if (pineHostRef.current) { try { pineHostRef.current.dispose(); } catch {} pineHostRef.current = null; }
@@ -6737,7 +6950,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (dragCleanup) dragCleanup();
       drawingTransactionRef.current = false;
       window.removeEventListener("mm:snapshot", snapshot);
-      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmChartSeriesTitles; delete (window as any).__mmChartAxisOpts; delete (window as any).__mmCrosshairDodge; delete (window as any).__mmPaneMaximized; } catch {} }
+      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmChartSeriesTitles; delete (window as any).__mmChartAxisOpts; delete (window as any).__mmCrosshairDodge; delete (window as any).__mmPriceLabels; delete (window as any).__mmPaneMaximized; } catch {} }
       if (onKey) window.removeEventListener("keydown", onKey);
       if (winDown) window.removeEventListener("pointerdown", winDown);
       window.removeEventListener("pointerup", onProjectionPointerEnd);
@@ -6768,9 +6981,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       clearDrawingSelectionRef.current = () => {};
       if (tagTimerRef.current != null) { clearInterval(tagTimerRef.current); tagTimerRef.current = null; }
       if (priceTagRef.current) { try { priceTagRef.current.remove(); } catch {} priceTagRef.current = null; }
+      if (extendedTagRef.current) { try { extendedTagRef.current.remove(); } catch {} extendedTagRef.current = null; }
+      if (hoverTagRef.current) { try { hoverTagRef.current.remove(); } catch {} hoverTagRef.current = null; }
       if (sigTip) { try { sigTip.remove(); } catch {} sigTip = null; }
       sigHits = null; sigPointerDown = null; sigTipPinned = false;
       renderTagRef.current = null;
+      renderHoverTagRef.current = null;
       // DT teardown: countdown chip + shading primitive
       if (countdownTimerRef.current) { clearInterval(countdownTimerRef.current); countdownTimerRef.current = null; }
       if (countdownChipRef.current) { try { countdownChipRef.current.remove(); } catch {} countdownChipRef.current = null; }
@@ -7087,13 +7303,40 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const closeByTime = new Map(barsRef.current.map((r) => [r.time, r.c]));
     const cleanup = registerPane(syncId, {
       chart, series: priceS, valueAt: (tm: any) => closeByTime.get(tm as any) ?? null, tf: timeframeRef.current,
-      // A mirrored crosshair draws the same axis label with no crosshairMove event behind it — feed the
-      // badge its coordinate directly so a synced pane dodges exactly like the pane being driven.
-      onCrosshair: (price) => {
-        const s = priceSeriesRef.current;
-        const y = price == null || !s ? null : (s.priceToCoordinate(price) as number | null);
+      // A mirrored crosshair draws with no crosshairMove event behind it. Feed the independent
+      // foreground DOM label directly while keeping both persistent badges untouched.
+      onCrosshair: (price, time) => {
+        const series = priceSeriesRef.current;
+        let y = price == null || !series ? null : (series.priceToCoordinate(price) as number | null);
+        let snappedPrice = price;
+        if (series && y != null && time != null && chartSettingsRef.current.crosshairMode === 1) {
+          const index = barIdxMap().get(time as any) ?? barIdxMap().get(String(time));
+          let nearestY: number | null = null;
+          let nearestDistance = Infinity;
+          let candidates: ISeriesApi<any>[] = [];
+          try { candidates = series.getPane()?.getSeries() as ISeriesApi<any>[] ?? []; } catch {}
+          for (const candidate of candidates) {
+            try {
+              if (index == null || candidate.options()?.visible === false || candidate.getPane()?.paneIndex() !== series.getPane()?.paneIndex()) continue;
+              const scaleId = candidate.options()?.priceScaleId;
+              if (scaleId && scaleId !== "left" && scaleId !== "right") continue;
+              const datum = candidate.dataByIndex(index) as any;
+              const value = Number.isFinite(datum?.close) ? datum.close : Number.isFinite(datum?.value) ? datum.value : null;
+              if (value == null) continue;
+              const candidateY = candidate.priceToCoordinate(value) as number | null;
+              if (candidateY == null || !Number.isFinite(candidateY)) continue;
+              const distance = Math.abs(candidateY - y);
+              if (distance < nearestDistance) { nearestDistance = distance; nearestY = candidateY; }
+            } catch {}
+          }
+          if (nearestY != null) {
+            y = nearestY;
+            const converted = series.coordinateToPrice(nearestY) as number | null;
+            if (converted != null && Number.isFinite(converted)) snappedPrice = converted;
+          }
+        }
         crossLabelYRef.current = y != null && Number.isFinite(y) ? y : null;
-        renderTagRef.current?.();
+        renderHoverTagRef.current?.(crossLabelYRef.current, snappedPrice);
       },
     });
     // v5 subscribe* return void; unsubscribe by passing the SAME handler reference back.
