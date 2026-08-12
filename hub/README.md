@@ -321,7 +321,12 @@ macroFeed       → { sinaSubs, yahooSubs, cacheSize, lastSinaPollAt, lastYahooP
                   or { disabled: true } when MACRO_FEED_DISABLE=1
 ```
 
-`anchor_source` is one of `"daily_file"`, `"polygon_prev"`, `"manifest"`, `"quote_partial"`.
+`anchor_source` is one of `"snapshot"`, `"daily_file"`, `"polygon_prev"`, `"manifest"`,
+`"quote_partial"`. For a current US session, a same-session snapshot reference wins: its
+`day.c` and `prevDay.c` are one internally consistent pair and must not be split by a later
+serve-time re-derivation from the daily file. After the ET date rolls, a completed snapshot
+pair is reused only when its `day.c` matches the independently resolved latest daily close;
+it remains labeled with its actual `regularSessionDate`.
 `stale_anchor: true` means the anchor fell back to the manifest and may lag one session.
 
 **Sample /quotes response with ext fields (AAPL, pre-market window):**

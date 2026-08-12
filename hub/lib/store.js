@@ -26,6 +26,12 @@ const { NAME_REALTIME_MAX_LAG_MS } = require("./snapshot");
 
 const STALE_EVICT_MS = 45 * 60 * 1000; // 45 min
 const MANIFEST_CHECK_MIN_INTERVAL = 30 * 1000; // ≤1 stat/reparse per 30 s
+
+function samePrice(a, b) {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  return Math.abs(a - b) <= Math.max(0.0001, Math.abs(b) * 1e-8);
+}
+
 class Store {
   /**
    * @param {string} manifestPath
@@ -147,8 +153,103 @@ class Store {
       const q = this.quotes.get(sym);
       if (!q) continue;
       const marketSession = q.market === "us" ? classifySession(now) : null;
-      const anchor =
+      const cachedAnchor =
         this.anchorCache && q.market === "us" ? this.anchorCache.get(sym, now) : null;
+      const hasCurrentRegularSession =
+        q.regularSessionDate != null && q.regularSessionDate === etDate(now);
+
+      // A same-session Polygon snapshot owns both halves of the day-change pair:
+      // today's price AND prevDay.c. Keep that baseline ahead of the daily-file anchor.
+      // The daily file can contain a bad/stale prior bar even after today's bar has rolled
+      // (operator-reported SPCX recurrence, 2026-08-11: snapshot prevDay.c=138.74 while
+      // the daily file said 131.66). The old order adopted 138.74 on one request, then
+      // serve-time anchor re-derivation replaced it with 131.66 on the next poll and
+      // turned a -3.93% close into +1.24%.
+      //
+      // A fresh cache row is preferred. If the REST refresh is briefly in flight, retain
+      // an already-proven snapshot reference while the quote still represents that regular
+      // session. After midnight, Polygon still exposes the latest completed day/prevDay pair;
+      // getCompleted() accepts it only when day.c matches the independently resolved latest
+      // daily close. That corroboration fixes a bad prior bar without treating yesterday as
+      // today's session or carrying the pair across a newer regular print.
+      const snap = snapshotFeed && q.market === "us" ? snapshotFeed.get(sym, now) : null;
+      const completedSnap =
+        !hasCurrentRegularSession &&
+        snapshotFeed && typeof snapshotFeed.getCompleted === "function" &&
+        cachedAnchor && cachedAnchor.prevClose != null &&
+        typeof q.last === "number" && Number.isFinite(q.last) &&
+        samePrice(q.last, cachedAnchor.prevClose)
+          ? snapshotFeed.getCompleted(sym, now, cachedAnchor.prevClose)
+          : null;
+      const snapshotPrevClose =
+        hasCurrentRegularSession &&
+        snap && snap.prevClose != null && Number.isFinite(snap.prevClose) && snap.prevClose > 0
+          ? snap.prevClose
+          : null;
+      const persistedSnapshotPrevClose =
+        hasCurrentRegularSession &&
+        q.anchor_source === "snapshot" &&
+        q.prevClose != null && Number.isFinite(q.prevClose) && q.prevClose > 0
+          ? q.prevClose
+          : null;
+      const completedSnapshotPrevClose =
+        completedSnap && completedSnap.prevClose != null &&
+        Number.isFinite(completedSnap.prevClose) && completedSnap.prevClose > 0
+          ? completedSnap.prevClose
+          : null;
+      const persistedCompletedSnapshotPrevClose =
+        !hasCurrentRegularSession &&
+        q.anchor_source === "snapshot" &&
+        q.regularSessionDate != null &&
+        cachedAnchor && cachedAnchor.prevClose != null &&
+        typeof q.last === "number" && Number.isFinite(q.last) &&
+        samePrice(q.last, cachedAnchor.prevClose) &&
+        q.prevClose != null && Number.isFinite(q.prevClose) && q.prevClose > 0
+          ? q.prevClose
+          : null;
+      const snapshotClose =
+        (marketSession === "post" || marketSession === "overnight") &&
+        snap && snap.close != null && Number.isFinite(snap.close) && snap.close > 0
+          ? snap.close
+          : null;
+      const persistedSnapshotClose =
+        (marketSession === "post" || marketSession === "overnight") &&
+        hasCurrentRegularSession &&
+        q.anchor_source === "snapshot" &&
+        q.close != null && Number.isFinite(q.close) && q.close > 0
+          ? q.close
+          : null;
+      const useSnapshotReference =
+        snapshotPrevClose != null ||
+        persistedSnapshotPrevClose != null ||
+        completedSnapshotPrevClose != null ||
+        persistedCompletedSnapshotPrevClose != null;
+      const snapshotReferenceClose =
+        snapshotPrevClose != null
+          ? snapshotClose
+          : persistedSnapshotPrevClose != null
+            ? persistedSnapshotClose
+            : null;
+      const snapshotReferenceSessionDate =
+        snapshotPrevClose != null
+          ? snap.date
+          : persistedSnapshotPrevClose != null
+            ? q.regularSessionDate
+            : completedSnapshotPrevClose != null
+              ? completedSnap.date
+              : q.regularSessionDate;
+      const anchor = useSnapshotReference
+        ? {
+            prevClose:
+              snapshotPrevClose ??
+              persistedSnapshotPrevClose ??
+              completedSnapshotPrevClose ??
+              persistedCompletedSnapshotPrevClose,
+            close: snapshotReferenceClose,
+            anchor_source: "snapshot",
+            sessionDate: snapshotReferenceSessionDate,
+          }
+        : cachedAnchor;
       if (!anchor || anchor.prevClose == null || anchor.prevClose <= 0) {
         if (marketSession) {
           const fresh = { ...q, marketSession };
@@ -167,8 +268,6 @@ class Store {
       const close =
         anchor.close != null && Number.isFinite(anchor.close) ? anchor.close : null;
       const dayRef = close != null ? close : typeof q.last === "number" ? q.last : null;
-      const hasCurrentRegularSession =
-        q.regularSessionDate != null && q.regularSessionDate === etDate(now);
       // A placeholder quote (polygon.js _writePlaceholder) carries `last` = manifest.last,
       // which is the very close the AnchorCache resolves as `prevClose` — so the difference
       // is a STRUCTURAL ZERO, an artifact of comparing a number with itself, not a flat
@@ -209,6 +308,7 @@ class Store {
         chg !== q.chg ||
         (prevSessionChg != null ? q.prevSessionChg !== prevSessionChg : q.prevSessionChg != null) ||
         q.marketSession !== marketSession ||
+        (anchor.sessionDate != null && q.regularSessionDate !== anchor.sessionDate) ||
         q.afterHours != null;
       if (!changed) {
         out[sym] = q;
@@ -223,6 +323,7 @@ class Store {
       if (prevSessionChg != null) fresh.prevSessionChg = prevSessionChg;
       else delete fresh.prevSessionChg;
       fresh.marketSession = marketSession;
+      if (anchor.sessionDate != null) fresh.regularSessionDate = anchor.sessionDate;
       fresh.anchor_source = anchor.anchor_source;
       if (anchor.stale_anchor) fresh.stale_anchor = true;
       else delete fresh.stale_anchor;

@@ -23,6 +23,15 @@ const NOW_POST = Date.UTC(2026, 7, 7, 20, 50);
 // 2026-08-07 10:00 ET (14:00 UTC) — mid-session.
 const NOW_RTH = Date.UTC(2026, 7, 7, 14, 0);
 
+// ── the real SPCX recurrence numbers (2026-08-11) ──
+const SPCX_STALE_ANCHOR = 131.66; // bad prior close in the Terminal daily file
+const SPCX_PREV_CLOSE = 138.74;   // Polygon snapshot prevDay.c / official 2026-08-10 close
+const SPCX_CLOSE = 133.29;        // official 2026-08-11 close
+const SPCX_CHG = ((SPCX_CLOSE - SPCX_PREV_CLOSE) / SPCX_PREV_CLOSE) * 100; // -3.928...
+const SPCX_POST = Date.UTC(2026, 7, 11, 20, 5);
+const SPCX_RTH = Date.UTC(2026, 7, 11, 18, 0);
+const SPCX_NEXT_OVERNIGHT = Date.UTC(2026, 7, 12, 4, 15); // 00:15 ET next date
+
 function polygonRow(updatedMs, { close = TODAY_CLOSE, prevClose = PREV_CLOSE } = {}) {
   return {
     ticker: "SKY",
@@ -30,6 +39,16 @@ function polygonRow(updatedMs, { close = TODAY_CLOSE, prevClose = PREV_CLOSE } =
     prevDay: { o: 94.31, h: 94.31, l: 90.8, c: prevClose, v: 803064.867718 },
     todaysChangePerc: 3.4309440559440567,
     updated: updatedMs * 1e6, // Polygon reports nanoseconds
+  };
+}
+
+function spcxRow(updatedMs) {
+  return {
+    ticker: "SPCX",
+    day: { o: 138.655, h: 139.98, l: 130.5, c: SPCX_CLOSE, v: 108891159 },
+    prevDay: { o: 134.95, h: 139.26, l: 130.17, c: SPCX_PREV_CLOSE, v: 169934328 },
+    todaysChangePerc: -4.149416174138677, // deliberately ignored: it follows lastTrade
+    updated: updatedMs * 1e6,
   };
 }
 
@@ -107,6 +126,21 @@ describe("SnapshotFeed.get — session gating", () => {
       "a 2026-08-06 snapshot must not answer for 2026-08-07");
   });
 
+  it("exposes a prior-session pair only when an independent completed close corroborates it", async () => {
+    const feed = makeFeed([spcxRow(SPCX_POST)]);
+    feed.demand("SPCX", SPCX_NEXT_OVERNIGHT);
+    await feed._flush(SPCX_NEXT_OVERNIGHT);
+
+    assert.equal(feed.get("SPCX", SPCX_NEXT_OVERNIGHT), null,
+      "the Aug 11 row must not masquerade as the Aug 12 session");
+    assert.equal(feed.getCompleted("SPCX", SPCX_NEXT_OVERNIGHT, 140), null,
+      "an unrelated daily close must not authorize an old snapshot");
+    const completed = feed.getCompleted("SPCX", SPCX_NEXT_OVERNIGHT, SPCX_CLOSE);
+    assert.equal(completed.date, "2026-08-11");
+    assert.equal(completed.close, SPCX_CLOSE);
+    assert.equal(completed.prevClose, SPCX_PREV_CLOSE);
+  });
+
   it("is inert when disabled — demand and get are both no-ops", async () => {
     const feed = makeFeed([polygonRow(NOW_POST)], { disabled: true });
     feed.demand("SKY", NOW_POST);
@@ -169,6 +203,119 @@ describe("store overlay — the SKY regression", () => {
     const q = store.getQuotes(["SKY"], NOW_RTH, null, feed)["SKY"];
     assert.equal(q.last, LIVE_LAST, "the stream stays authoritative when it has data");
     assert.notEqual(q.source, "polygon-snapshot");
+  });
+});
+
+describe("store snapshot baseline — the SPCX recurrence", () => {
+  it("keeps snapshot prevDay.c across repeated polls instead of restoring a stale daily anchor", async () => {
+    const anchor = {
+      prevClose: SPCX_STALE_ANCHOR,
+      close: SPCX_CLOSE,
+      anchor_source: "daily_file",
+    };
+    const store = new Store("/dev/null/manifest.json", { get: () => anchor });
+    store.quotes.set("SPCX", {
+      sym: "SPCX",
+      last: SPCX_STALE_ANCHOR,
+      market: "us",
+      live: false,
+      source: "polygon-delayed",
+      basis: "DELAYED_15M",
+      regularSession: "closed",
+      ts: Math.floor(SPCX_POST / 1000),
+    });
+    const feed = makeFeed([spcxRow(SPCX_POST)]);
+    feed.demand("SPCX", SPCX_POST);
+    await feed._flush();
+
+    const first = store.getQuotes(["SPCX"], SPCX_POST, null, feed).SPCX;
+    const second = store.getQuotes(["SPCX"], SPCX_POST, null, feed).SPCX;
+
+    for (const [label, q] of [["first", first], ["second", second]]) {
+      assert.equal(q.last, SPCX_CLOSE, `${label} poll must show the official close`);
+      assert.equal(q.prevClose, SPCX_PREV_CLOSE,
+        `${label} poll must retain Polygon prevDay.c, not the 131.66 daily-file anchor`);
+      assert.ok(Math.abs(q.chg - SPCX_CHG) < 1e-9,
+        `${label} poll chg=${q.chg} expected=${SPCX_CHG}`);
+      assert.equal(q.anchor_source, "snapshot");
+    }
+  });
+
+  it("corrects a current-day stream baseline without replacing the stream price/source", async () => {
+    const anchor = {
+      prevClose: SPCX_STALE_ANCHOR,
+      anchor_source: "daily_file",
+    };
+    const store = new Store("/dev/null/manifest.json", { get: () => anchor });
+    const streamLast = 133.40;
+    store.quotes.set("SPCX", {
+      sym: "SPCX",
+      last: streamLast,
+      market: "us",
+      live: false,
+      source: "polygon-delayed",
+      basis: "DELAYED_15M",
+      regularSession: "rth",
+      regularSessionDate: "2026-08-11",
+      prevClose: SPCX_STALE_ANCHOR,
+      chg: ((streamLast - SPCX_STALE_ANCHOR) / SPCX_STALE_ANCHOR) * 100,
+      anchor_source: "daily_file",
+      ts: Math.floor(SPCX_RTH / 1000),
+    });
+    const feed = makeFeed([spcxRow(SPCX_RTH)]);
+    feed.demand("SPCX", SPCX_RTH);
+    await feed._flush();
+
+    const q = store.getQuotes(["SPCX"], SPCX_RTH, null, feed).SPCX;
+    assert.equal(q.last, streamLast, "the current-day stream price stays authoritative");
+    assert.equal(q.source, "polygon-delayed", "baseline repair must not relabel the price source");
+    assert.equal(q.close, undefined, "an RTH snapshot is not an official close");
+    assert.equal(q.prevClose, SPCX_PREV_CLOSE);
+    assert.ok(Math.abs(q.chg - ((streamLast - SPCX_PREV_CLOSE) / SPCX_PREV_CLOSE) * 100) < 1e-9);
+    assert.equal(q.anchor_source, "snapshot");
+  });
+
+  it("repairs the completed-session baseline after midnight and a hub restart", async () => {
+    // On Aug 12 the daily-file anchor correctly identifies 133.29 as the latest completed
+    // close, but derives its +1.24% move from the bad Aug 10 bar at 131.66. A freshly
+    // fetched Polygon row is still dated Aug 11; it may repair the completed pair but must
+    // not be presented as an Aug 12 print.
+    const rolledAnchor = {
+      prevClose: SPCX_CLOSE,
+      prevSessionChg: ((SPCX_CLOSE - SPCX_STALE_ANCHOR) / SPCX_STALE_ANCHOR) * 100,
+      anchor_source: "daily_file",
+    };
+    const store = new Store("/dev/null/manifest.json", { get: () => rolledAnchor });
+    store.quotes.set("SPCX", {
+      sym: "SPCX",
+      last: SPCX_CLOSE,
+      market: "us",
+      live: false,
+      source: "polygon-delayed",
+      basis: "DELAYED_15M",
+      regularSession: "closed",
+      ts: Math.floor(SPCX_POST / 1000),
+    });
+    const feed = makeFeed([spcxRow(SPCX_POST)]);
+    feed.demand("SPCX", SPCX_NEXT_OVERNIGHT);
+    await feed._flush(SPCX_NEXT_OVERNIGHT);
+
+    const first = store.getQuotes(["SPCX"], SPCX_NEXT_OVERNIGHT, null, feed).SPCX;
+    // Simulate the REST cache being temporarily unavailable on the next UI poll. The
+    // corroborated pair must remain stable in Store instead of reverting to +1.24%.
+    const emptyFeed = { get: () => null, getCompleted: () => null };
+    const second = store.getQuotes(["SPCX"], SPCX_NEXT_OVERNIGHT, null, emptyFeed).SPCX;
+
+    for (const [label, q] of [["first", first], ["second", second]]) {
+      assert.equal(q.last, SPCX_CLOSE, `${label} poll keeps the completed close`);
+      assert.equal(q.prevClose, SPCX_PREV_CLOSE, `${label} poll keeps the corrected prior close`);
+      assert.ok(Math.abs(q.chg - SPCX_CHG) < 1e-9,
+        `${label} poll chg=${q.chg} expected=${SPCX_CHG}`);
+      assert.equal(q.regularSessionDate, "2026-08-11",
+        "completed data stays explicitly dated; it is not an Aug 12 print");
+      assert.equal(q.close, undefined, "yesterday's close must not leak into today's close field");
+      assert.equal(q.anchor_source, "snapshot");
+    }
   });
 });
 
