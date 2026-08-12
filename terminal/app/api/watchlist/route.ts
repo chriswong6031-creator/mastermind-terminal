@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+// Keep interactive mutations bounded without regressing the existing bulk
+// move/remove contract. Visual row order remains the established local
+// watchlist preference until the backend has an atomic ordered-list RPC.
 const MAX_BATCH = 500;
 
 function cleanSymbols(value: unknown): string[] {
@@ -22,9 +25,11 @@ export async function POST(req: Request) {
   if (!body) return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   const action = body.action;
   const symbols = cleanSymbols(body.symbols ?? body.symbol);
+  // Empty is intentional: it is the unsectioned run before the first divider.
+  // Missing still keeps the legacy add contract's "Watchlist" fallback.
   const section = typeof body.section === "string" ? body.section.trim() : "Watchlist";
   if (!symbols.length) return NextResponse.json({ error: "symbol required or batch too large" }, { status: 400 });
-  if (!section || section.length > 80 || /[\u0000-\u001f\u007f]/.test(section)) {
+  if (section.length > 80 || /[\u0000-\u001f\u007f]/.test(section)) {
     return NextResponse.json({ error: "invalid section" }, { status: 400 });
   }
 

@@ -40,6 +40,8 @@ vi.mock("@/lib/supabase/server", () => ({
         }
         return { error: null };
       };
+      // Recursive fluent test double mirrors the Supabase query builder.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const query: any = {
         select: vi.fn((_fields: string, options?: { count?: string; head?: boolean }) => {
           if (options?.head) record.mode = "count";
@@ -129,6 +131,13 @@ describe("POST /api/watchlist", () => {
       inFilter: { column: "symbol", value: ["9988.HK", "002716.SZ"] },
       values: { section: "China Bottoms" },
     });
+  });
+
+  it("moves symbols into the unsectioned root run", async () => {
+    const response = await post({ action: "move", symbols: ["AAPL"], section: "" });
+
+    expect(response.status).toBe(200);
+    expect(symbolQuery("update")?.values).toEqual({ section: "" });
   });
 
   it("keeps the legacy single-symbol add contract", async () => {
