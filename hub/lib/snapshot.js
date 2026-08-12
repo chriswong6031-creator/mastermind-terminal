@@ -23,7 +23,10 @@
 //
 // CONTRACT
 //   demand(sym)      — queue a refresh (fire-and-forget, batched). Safe to call per request.
-//   get(sym, nowMs)  — SYNCHRONOUS read for the quote-serve path; null when unusable.
+//   get(sym, nowMs)  — SYNCHRONOUS read of today's session; null when unusable.
+//   getCompleted(sym, nowMs, expectedClose)
+//                    — prior-session pair, only when its close matches the independently
+//                      resolved latest completed close. Never presents it as today's data.
 //   stats()          — /health block.
 //
 // SAFETY
@@ -153,6 +156,29 @@ class SnapshotFeed {
     if (hit.snap.date !== etDate(now)) return null;
     // Age is MEASURED at read time, not baked at fetch time — a cached snapshot served 8s later
     // is 8s older, and the label has to say so.
+    const lagMs = hit.snap.printMs != null ? now - hit.snap.printMs : null;
+    return { ...hit.snap, lagMs };
+  }
+
+  /**
+   * Latest completed regular-session pair, corroborated against an independent close.
+   *
+   * Polygon keeps the prior session in `day` just after the ET date rolls (and over
+   * weekends/holidays). That row is not today's session, so get() must continue to reject
+   * it. It is still the best source for the PRIOR session's `prevDay.c`, though, when the
+   * daily history has a bad bar. Requiring `day.c === expectedClose` proves both sources
+   * refer to the same completed session before exposing the pair to Store.
+   */
+  getCompleted(sym, nowMs, expectedClose) {
+    if (this.disabled) return null;
+    const hit = this._cache.get(sym);
+    if (!hit || !hit.snap) return null;
+    const now = nowMs != null ? nowMs : Date.now();
+    if (now - hit.ts > MAX_AGE_MS) return null;
+    if (hit.snap.date === etDate(now)) return null;
+    if (!Number.isFinite(expectedClose) || expectedClose <= 0) return null;
+    const tolerance = Math.max(0.0001, Math.abs(expectedClose) * 1e-8);
+    if (Math.abs(hit.snap.close - expectedClose) > tolerance) return null;
     const lagMs = hit.snap.printMs != null ? now - hit.snap.printMs : null;
     return { ...hit.snap, lagMs };
   }
