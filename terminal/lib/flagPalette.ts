@@ -7,6 +7,7 @@ export const FLAG_COLORS = [
   "#f8b500",
   "#9c27b0",
   "#00bcd4",
+  "#ec7fa9",
 ];
 
 export const FLAG_DEFAULT = "#2962ff";
