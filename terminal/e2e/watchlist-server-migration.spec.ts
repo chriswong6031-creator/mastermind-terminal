@@ -64,6 +64,11 @@ test.beforeEach(async ({ page, baseURL }, testInfo) => {
 });
 
 test("one-time migration is additive, per-list, and run-twice identical", async ({ page }) => {
+  // Three full shell mounts (boot + two reloads) against Playwright's DEFAULT 30s per-test budget
+  // — playwright.config.ts's 120_000 is the webServer start timeout, not a per-test one. That made
+  // this the natural first casualty of CPU starvation on a loaded CI runner, reported as a flake
+  // rather than as whatever it was actually measuring.
+  test.setTimeout(120_000);
   await boot(page);
 
   const first = await inventory(page);
