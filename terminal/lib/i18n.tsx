@@ -1293,6 +1293,8 @@ export const LEX: Record<string, [string, string]> = {
   // ─── Phase 8: overnight / extended-hours pricing ─────────────────────────
   colExt: ["Ext", "盘外"],
   colExtShort: ["Ext", "盘外"],
+  colExtPct: ["Ext %", "盘外%"],
+  colExtPctShort: ["Ext %", "盘外%"],
   extColumns: ["Extended Hours", "盘后/盘前"],
   overnight: ["Overnight", "隔夜"],
   overnightPrice: ["Overnight price", "隔夜价格"],
