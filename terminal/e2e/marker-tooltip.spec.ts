@@ -137,7 +137,9 @@ async function applyZh(page: Page) {
   await expect(settings).toBeHidden();
 }
 
-async function openTerminal(page: Page, opts: { zh?: boolean; zhPreseed?: boolean } = {}) {
+async function openTerminal(page: Page, opts: {
+  zh?: boolean; zhPreseed?: boolean; openDiagnostics?: boolean;
+} = {}) {
   if (opts.zhPreseed) {
     await page.addInitScript(() => { localStorage.setItem("mm.lang", "zh"); });
   }
@@ -153,6 +155,12 @@ async function openTerminal(page: Page, opts: { zh?: boolean; zhPreseed?: boolea
   await page.goto("/terminal?symbol=COST");
   await expect(page.locator(".workspace")).toBeVisible();
   await waitForTerminalVisualReady(page);
+  if (opts.openDiagnostics !== false) {
+    const diagnostics = page.locator('.statusline .mm[role="button"]');
+    await expect(diagnostics).toBeVisible();
+    await diagnostics.click();
+    await expect(diagnostics).toHaveText("⚠ detail");
+  }
   if (opts.zh && !opts.zhPreseed) await applyZh(page);
   if (opts.zhPreseed) await expect(page.locator("html")).toHaveAttribute("data-lang", "zh");
   // the markers exist before any test touches them
@@ -234,6 +242,27 @@ async function hoverMarker(page: Page, m: Marker) {
   await expect(tip(page)).toHaveAttribute("data-marker-at", m.t, { timeout: 5_000 });
   await expect(tip(page)).toBeVisible();
 }
+
+test("refused setup annotations are hidden by default and remain available as diagnostics", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "one viewport pins the shared default");
+  await openTerminal(page, { openDiagnostics: false });
+
+  const normal = await settledMarkers(page);
+  expect(normal.length, "only the retro projection and two taken entries should paint").toBe(3);
+  const normalDates = normal.map((m) => Date.parse(m.t));
+  for (const hiddenTs of [PLAIN_TS, CAND_TS]) {
+    expect(Math.min(...normalDates.map((d) => Math.abs(d - Date.parse(hiddenTs)))) / 86_400_000,
+      `${hiddenTs} is a refused setup and should not paint on a normal chart`).toBeGreaterThan(6);
+  }
+
+  const diagnostics = page.locator('.statusline .mm[role="button"]');
+  await diagnostics.click();
+  await expect(diagnostics).toHaveText("⚠ detail");
+  const forensic = await settledMarkers(page);
+  expect(forensic.length, "the explicit diagnostic view should restore both refused annotations").toBe(5);
+  pick(forensic, PLAIN_TS);
+  pick(forensic, CAND_TS);
+});
 
 // ── 1. DISPLAY: five classes, five tooltips, the right words in each ────────────────────────
 test("every marker class shows its own tooltip on hover", async ({ page }, testInfo) => {
@@ -450,7 +479,9 @@ test("a wheel over a marker still zooms the chart", async ({ page }, testInfo) =
 // ── 3. TOUCH: a tap must not dead-end ───────────────────────────────────────────────────────
 test("tapping a marker opens its tooltip, and tapping away dismisses it", async ({ page }, testInfo) => {
   test.skip(!["tablet", "mobile"].includes(testInfo.project.name), "touch viewports only");
-  await openTerminal(page);
+  // RETRO is an actionable projection and remains visible on the normal chart; exercise touch
+  // without first toggling the overlapping status-line diagnostic control.
+  await openTerminal(page, { openDiagnostics: false });
   const target = pick(await settledMarkers(page), RETRO_TS);
 
   await page.touchscreen.tap(target.cx, target.cy);
@@ -468,7 +499,7 @@ test("tapping a marker opens its tooltip, and tapping away dismisses it", async 
 
 test("a touch press that travels is a pan, not a tooltip tap", async ({ page }, testInfo) => {
   test.skip(!["tablet", "mobile"].includes(testInfo.project.name), "touch viewports only");
-  await openTerminal(page);
+  await openTerminal(page, { openDiagnostics: false });
   const m = pick(await settledMarkers(page), RETRO_TS);
 
   await page.touchscreen.tap(m.cx, m.cy);      // prime: a still tap DOES open it…
