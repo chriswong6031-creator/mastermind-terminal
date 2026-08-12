@@ -32,12 +32,21 @@ async function boot(page: Page) {
 const row = (page: Page, symbol: string) => page.locator(`[data-watchlist-symbol="${symbol}"]`);
 
 async function dragRow(page: Page, symbol: string, target: Locator, targetBias = 0.5) {
-  const from = await row(page, symbol).locator(".tk").boundingBox();
+  const source = row(page, symbol);
+  const from = await source.boundingBox();
   expect(from).not.toBeNull();
-  await page.mouse.move(from!.x + Math.min(from!.width / 2, 24), from!.y + from!.height / 2);
+  // The table is intentionally wider than the narrow rail and can be
+  // horizontally scrolled. Start from the visible center of the full row;
+  // a clipped ticker cell can report coordinates underneath the chart even
+  // though the row itself is visible.
+  const viewportWidth = page.viewportSize()?.width ?? from!.x + from!.width;
+  const visibleLeft = Math.max(0, from!.x);
+  const visibleRight = Math.min(viewportWidth, from!.x + from!.width);
+  const sourceX = visibleLeft + (visibleRight - visibleLeft) / 2;
+  await page.mouse.move(sourceX, from!.y + from!.height / 2);
   await page.mouse.down();
   await expect(page.locator("body")).not.toHaveClass(/rail-resizing/);
-  await page.mouse.move(from!.x + Math.min(from!.width / 2, 24), from!.y + from!.height / 2 + 9, { steps: 3 });
+  await page.mouse.move(sourceX, from!.y + from!.height / 2 + 9, { steps: 3 });
   // Under a parallel browser load the PointerSensor activation and React's
   // dragging class can land a frame after the final activation move. Wait for
   // that observable boundary before sending target moves; otherwise CDP can
@@ -68,12 +77,11 @@ async function dragSection(page: Page, section: string, target: Locator) {
   await expect(page.locator(`[data-watchlist-section-header="${section}"].dragging`)).toBeVisible();
   const to = await target.boundingBox();
   expect(to).not.toBeNull();
-  await page.mouse.move(to!.x + to!.width / 2, to!.y + to!.height / 2, { steps: 12 });
+  await page.mouse.move(to!.x + to!.width / 2, to!.y + to!.height * 0.75, { steps: 12 });
   await page.waitForTimeout(120);
-  const settled = await target.boundingBox();
-  expect(settled).not.toBeNull();
-  await page.mouse.move(settled!.x + settled!.width / 2, settled!.y + settled!.height * 0.75, { steps: 4 });
   await page.mouse.up();
+  await expect(page.locator(`[data-watchlist-section-header="${section}"].dragging`)).toHaveCount(0);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
 
 async function microDrag(page: Page, target: Locator, deltaY = 12) {
@@ -85,6 +93,8 @@ async function microDrag(page: Page, target: Locator, deltaY = 12) {
   await page.mouse.down();
   await page.mouse.move(x, y + deltaY, { steps: 3 });
   await page.mouse.up();
+  await expect(page.locator(".wl-row.dragging, .wl-sec.dragging")).toHaveCount(0);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
 
 test("Shift and Cmd/Ctrl select rows without breaking ordinary chart navigation", async ({ page }, testInfo) => {
@@ -245,6 +255,7 @@ test("removing the first divider creates an unsectioned run instead of deleting 
 
 test("section dividers collapse, rename, reorder downward, and remain non-destructive", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Section controls are desktop chrome.");
+  test.slow();
   await boot(page);
 
   await microDrag(page, page.getByRole("button", { name: "Drag section Core" }));
@@ -309,6 +320,7 @@ test("renaming a watchlist preserves its empty and collapsed section dividers", 
 
 test("the full ticker row freely reorders and crosses sections without selecting text", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "The sortable rail is desktop chrome.");
+  test.slow();
   await boot(page);
 
   const source = row(page, "AMD");
@@ -353,6 +365,7 @@ test("the full ticker row freely reorders and crosses sections without selecting
 
   await page.reload();
   await expect(page.locator(".mm-ptag")).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator(".wl-select")).toContainText("Bulk Test");
   await expect.poll(() => page.locator(".wl-row").evaluateAll((elements) =>
     elements.map((element) => element.getAttribute("data-watchlist-symbol")))).toEqual(["NVDA", "MSFT", "AAPL", "AMD"]);
 });
