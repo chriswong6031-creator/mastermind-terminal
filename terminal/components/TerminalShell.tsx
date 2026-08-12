@@ -50,6 +50,12 @@ import {
   resolveSuitePreset,
   type SuitePresetId,
 } from "@/lib/suites/presets";
+import {
+  DEFAULT_LIST,
+  mergeListSymbols,
+  planWatchlistMigration,
+  type ServerWatchlist,
+} from "@/lib/watchlists";
 import { useEntitlement } from "@/lib/useEntitlement";
 import { normalizeDevTierOverride } from "@/lib/subscriptionTier";
 import { useChartBus } from "@/lib/useChartBus";
@@ -487,6 +493,21 @@ const VALID_PANES = new Set<string>([...FIN_PAGES, "analyst"]);
 const normalizePane = (pane: string): FinPage => (pane === "analyst" ? "forecast" : pane) as FinPage;
 const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
 
+// Identity checks that keep the W1b migration from re-rendering the shell for no reason: React
+// bails out of a state update only when the value is IDENTICAL, so an unchanged list set must be
+// returned as the same object, not a fresh copy of it.
+const sameStringMap = (a: Record<string, string>, b: Record<string, string>) => {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key]);
+};
+const sameRows = (a: { symbol: string; section: string }[], b?: { symbol: string; section: string }[]) =>
+  !!b && a.length === b.length && a.every((row, i) => row.symbol === b[i].symbol && row.section === b[i].section);
+
+// W1b: the one-time `mm.wls` -> `watchlists` migration marker. Deliberately a PER-LIST success
+// map (`{ "Gold Miners": true }`), not a single boolean: a run where two lists migrate and a
+// third 500s must retry only the third on the next mount. Absent/false = still to do.
+const WLS_MIGRATED_KEY = "mm.wls.migrated.v1";
+
 // Guest drawings tier: login is disabled site-wide, so /api/drawings is a no-op for
 // everyone and chart drawings were destroyed on symbol switch / reload. Persist them
 // per-symbol in localStorage for guests instead.
@@ -548,6 +569,90 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const wlAnchorRef = useRef<string | null>(null);
   const wlContextFocusRef = useRef<HTMLElement | null>(null);
   const wlSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // W1b: server list id per list NAME, read from GET /api/watchlist once signed in. Empty for
+  // guests and until the inventory lands, which is what keeps every path below fail-safe: no id
+  // means the op stays local, exactly as it behaved before this wave.
+  const [serverListIds, setServerListIds] = useState<Record<string, string>>({});
+  const serverListIdsRef = useRef<Record<string, string>>({});
+  serverListIdsRef.current = serverListIds;
+  const wlMigrationRef = useRef(false);
+  // Set by the mount-restore effect below. The migration must not read `lists` until the saved
+  // `mm.wls` has actually been applied: restore, persist and migrate all fire in the SAME commit,
+  // and in that commit `lists` is still the initial server-seeded Default (and the persist effect
+  // has momentarily written that same Default back over `mm.wls`). Gating on a state flag costs
+  // one extra commit and removes the ordering hazard entirely.
+  const [wlsRestored, setWlsRestored] = useState(false);
+  // Live mirror of `lists` for the async migration below: reading it from a ref keeps the effect
+  // keyed on `loggedIn` alone, so a symbol edit mid-migration cannot restart the whole run.
+  const listsRef = useRef(lists);
+  listsRef.current = lists;
+  // Fire-and-forget symbol sync for ONE list, matching the pre-W1b idiom (optimistic local write,
+  // server catches up). Before W1b this only ever ran for "Default"; a named list now carries a
+  // real server id, so it syncs too. Default deliberately keeps working WITHOUT an id — the API's
+  // no-list fallback still resolves the first list, so TRAP-1's reconcile heal cannot regress
+  // while the inventory request is in flight.
+  const syncWatchlist = useCallback((listName: string, payload: Record<string, unknown>) => {
+    if (!email) return null;
+    const listId = serverListIdsRef.current[listName];
+    if (!listId && listName !== DEFAULT_LIST) return null;
+    return fetch("/api/watchlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, ...(listId ? { listId } : {}) }),
+    });
+  }, [email]);
+  // Existing disclosure surface (`wlSyncFailed` chip: "Watchlist sync failed — local changes were
+  // kept"). Every server path added in W1b routes its failures here rather than minting new copy —
+  // the sentence is already exactly true of a failed list create/rename/delete.
+  const noteWlSyncFailure = useCallback(() => {
+    setWlSyncFailed(true);
+    if (wlSyncTimerRef.current) clearTimeout(wlSyncTimerRef.current);
+    wlSyncTimerRef.current = setTimeout(() => setWlSyncFailed(false), 5000);
+  }, []);
+  /** Create the server row for a locally-created list and remember its id. Optimistic: the local
+   *  list already exists either way, so a failure degrades to the pre-W1b local-only behaviour. */
+  const createServerList = useCallback((name: string, rows: { symbol: string; section: string }[] = []) => {
+    if (!email) return;
+    fetch("/api/watchlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "createList", name }),
+    }).then((response) => (response.ok ? response.json() : null)).then((payload) => {
+      const listId = payload?.list?.id;
+      if (typeof listId !== "string" || !listId) { noteWlSyncFailure(); return; }
+      serverListIdsRef.current = { ...serverListIdsRef.current, [name]: listId };
+      setServerListIds((current) => ({ ...current, [name]: listId }));
+      if (!rows.length) return;
+      return fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "add",
+          listId,
+          symbols: rows.map((row) => row.symbol),
+          sections: Object.fromEntries(rows.map((row) => [row.symbol, row.section])),
+          section: rows[0]?.section || "Watchlist",
+        }),
+      });
+    }).catch(() => { noteWlSyncFailure(); });
+  }, [email, noteWlSyncFailure]);
+  /** Drop one name from the per-list migration marker (WLS_MIGRATED_KEY, defined above). */
+  const forgetListMigrated = useCallback((name: string) => {
+    try {
+      const marker = load(WLS_MIGRATED_KEY, {}) as Record<string, unknown>;
+      if (!marker || typeof marker !== "object" || !(name in marker)) return;
+      delete marker[name];
+      localStorage.setItem(WLS_MIGRATED_KEY, JSON.stringify(marker));
+    } catch {}
+  }, []);
+  // Same call, but surfacing failure through the existing "sync failed" chip.
+  const syncWatchlistLoud = useCallback((listName: string, payload: Record<string, unknown>) => {
+    const request = syncWatchlist(listName, payload);
+    if (!request) return;
+    request.then((response) => {
+      if (!response.ok) throw new Error(`watchlist sync ${response.status}`);
+    }).catch(() => { noteWlSyncFailure(); });
+  }, [syncWatchlist, noteWlSyncFailure]);
   // Memoized so its identity is stable: `lists[activeList] || []` allocated a fresh [] on every
   // render whenever the list was missing, which re-ran every useMemo downstream of `wl`.
   const wl = useMemo(() => lists[activeList] || [], [lists, activeList]);
@@ -593,20 +698,10 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       moved[at] = { ...moved[at], section: prev[to].section };
       return moved;
     });
-    if (!!email && activeList === "Default" && fromRow && targetSection && fromRow.section !== targetSection) {
-      fetch("/api/watchlist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "move", symbols: [fromRow.symbol], section: targetSection }),
-      }).then((response) => {
-        if (!response.ok) throw new Error(`watchlist sync ${response.status}`);
-      }).catch(() => {
-        setWlSyncFailed(true);
-        if (wlSyncTimerRef.current) clearTimeout(wlSyncTimerRef.current);
-        wlSyncTimerRef.current = setTimeout(() => setWlSyncFailed(false), 5000);
-      });
+    if (fromRow && targetSection && fromRow.section !== targetSection) {
+      syncWatchlistLoud(activeList, { action: "move", symbols: [fromRow.symbol], section: targetSection });
     }
-  }, [activeList, email, wl]);
+  }, [activeList, wl, syncWatchlistLoud]);
   // Market preference — ONE instance for the whole shell, so the Markets settings pane and the
   // search results are always reading the same object. Backed by Supabase user_metadata, which
   // is the same store the macro site's onboarding writes, on the same Supabase project.
@@ -1270,12 +1365,127 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     if (savedFlags && typeof savedFlags === "object") setFlags(savedFlags);
     const savedLastColor = load("mm.lastFlagColor", FLAG_DEFAULT);
     if (typeof savedLastColor === "string") setLastFlagColor(savedLastColor);
+    setWlsRestored(true);
     // Mount-only restore: loggedIn/symbols are read for the signed-in Default override but must NOT
     // re-trigger this (re-reading localStorage mid-session would clobber live edits; the guest→signin
     // transition is handled by the prevEmailRef effect below).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { if (Object.keys(lists).length) localStorage.setItem("mm.wls", JSON.stringify({ lists, active: activeList, meta: listMeta })); }, [lists, activeList, listMeta]);
+  // ── W1b: signed-in named lists become SERVER-BACKED; `mm.wls` demotes to an optimistic cache.
+  //    Runs once per signed-in session, after the mount restore above has put the saved lists into
+  //    state. Three steps, in order:
+  //      1. read the owner's inventory (GET /api/watchlist — RLS-scoped);
+  //      2. run the one-time ADDITIVE migration for every non-`Default` local list whose name the
+  //         marker does not already record: merge by EXACT name, create when absent, insert only
+  //         the symbols the server list is missing (local order, local section). It never deletes
+  //         or renames a server row, and server-only lists are simply left alone;
+  //      3. re-read and adopt the server model for those lists — server `position` wins for rows
+  //         that exist on both sides, local-only rows append after them.
+  //    `Default` is untouched at every step: TRAP-1's mount reconcile and guest->signed-in
+  //    overwrite are the only writers of that list, and a second writer here would race them.
+  //    Guests never enter this effect, so `mm.wls` behaves byte-for-byte as it did before W1b.
+  useEffect(() => {
+    if (!loggedIn || !wlsRestored || wlMigrationRef.current) return;
+    wlMigrationRef.current = true;
+    let cancelled = false;
+
+    const post = (payload: Record<string, unknown>) => fetch("/api/watchlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const inventory = async (): Promise<ServerWatchlist[] | null> => {
+      try {
+        const response = await fetch("/api/watchlist", { headers: { Accept: "application/json" } });
+        if (!response.ok) return null;
+        const payload = await response.json();
+        return Array.isArray(payload?.lists) ? payload.lists as ServerWatchlist[] : null;
+      } catch { return null; }
+    };
+
+    (async () => {
+      const server = await inventory();
+      // Offline / 500 / signed out under us: leave `mm.wls` exactly as it is and let the next
+      // mount try again. Releasing the ref is what makes that retry possible.
+      if (!server) { wlMigrationRef.current = false; return; }
+
+      // `wlsRestored` guarantees this is the restored state, not the initial seed. Reading it from
+      // the ref (rather than adding `lists` to the dep array) keeps a mid-migration symbol edit
+      // from restarting the whole run.
+      const localLists = Object.entries(listsRef.current)
+        .filter(([, rows]) => Array.isArray(rows))
+        .map(([name, rows]) => ({ name, rows }));
+      const marker = (() => {
+        const raw = load(WLS_MIGRATED_KEY, {});
+        return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, boolean> : {};
+      })();
+      const plan = planWatchlistMigration(localLists, server, marker);
+      const nextMarker: Record<string, boolean> = { ...marker };
+
+      for (const item of plan.lists) {
+        try {
+          let listId = item.serverListId;
+          if (!listId) {
+            const created = await post({ action: "createList", name: item.name });
+            if (!created.ok) { nextMarker[item.name] = false; continue; }
+            const payload = await created.json();
+            listId = typeof payload?.list?.id === "string" ? payload.list.id : null;
+          }
+          if (!listId) { nextMarker[item.name] = false; continue; }
+          if (item.insert.length) {
+            const added = await post({
+              action: "add",
+              listId,
+              symbols: item.insert.map((row) => row.symbol),
+              sections: Object.fromEntries(item.insert.map((row) => [row.symbol, row.section])),
+              section: item.insert[0].section,
+            });
+            if (!added.ok) { nextMarker[item.name] = false; continue; }
+          }
+          nextMarker[item.name] = true;
+        } catch {
+          nextMarker[item.name] = false;
+        }
+      }
+      // The marker is written even if this component has since unmounted (StrictMode's double
+      // mount, or a route change): the work reached the server, so the receipt must reflect that.
+      // `cancelled` only ever suppresses React state writes below.
+      const markerChanged = JSON.stringify(nextMarker) !== JSON.stringify(marker);
+      if (markerChanged) { try { localStorage.setItem(WLS_MIGRATED_KEY, JSON.stringify(nextMarker)); } catch {} }
+
+      // Only re-read when the migration actually wrote something. On the overwhelmingly common
+      // mount — a user (or a test) with no named lists to migrate — this whole tail costs ONE GET
+      // and, thanks to the identity checks below, ZERO re-renders. That matters: `lists` feeds the
+      // `wl` memo and everything downstream of it, so returning a fresh object for an unchanged
+      // list set would re-render the entire shell a beat after every mount.
+      const fresh = plan.lists.length ? ((await inventory()) ?? server) : server;
+      if (cancelled) return;
+      const ids: Record<string, string> = {};
+      for (const list of fresh) ids[list.name] = list.id;
+      if (!sameStringMap(ids, serverListIdsRef.current)) {
+        serverListIdsRef.current = ids;
+        setServerListIds(ids);
+      }
+      setLists((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const list of fresh) {
+          if (list.name === DEFAULT_LIST) continue;   // TRAP-1 owns Default — never merged here.
+          const merged = mergeListSymbols(
+            list.symbols.map((row) => ({ symbol: row.symbol, section: row.section })),
+            current[list.name] ?? [],
+          );
+          if (sameRows(merged, current[list.name])) continue;
+          next[list.name] = merged;
+          changed = true;
+        }
+        return changed ? next : current;
+      });
+    })();
+
+    return () => { cancelled = true; };
+  }, [loggedIn, wlsRestored]);
   // ── TRAP 1: guest → signed-in reconciliation (AuthSheet router.refresh delivers a real `email`
   //    + the server's Default symbols, but client `lists` was seeded from the guest state in the
   //    useState initializer and never re-seeds on its own; stale mm.wls also shadows the server list).
@@ -1980,20 +2190,12 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     wlAnchorRef.current = null;
   }, [closeWlContext]);
 
-  const syncDefaultWatchlist = useCallback((action: "move" | "remove", symbolsToSync: string[], section?: string) => {
-    if (!loggedIn || activeList !== "Default" || !symbolsToSync.length) return;
-    fetch("/api/watchlist", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, symbols: symbolsToSync, ...(section ? { section } : {}) }),
-    }).then((response) => {
-      if (!response.ok) throw new Error(`watchlist sync ${response.status}`);
-    }).catch(() => {
-      setWlSyncFailed(true);
-      if (wlSyncTimerRef.current) clearTimeout(wlSyncTimerRef.current);
-      wlSyncTimerRef.current = setTimeout(() => setWlSyncFailed(false), 5000);
-    });
-  }, [activeList, loggedIn]);
+  // Bulk move/delete on the ACTIVE list. Pre-W1b this refused any list but Default; the active
+  // list now carries a server id whenever it is registered, so the same batch reaches the server.
+  const syncActiveWatchlist = useCallback((action: "move" | "remove", symbolsToSync: string[], section?: string) => {
+    if (!symbolsToSync.length) return;
+    syncWatchlistLoud(activeList, { action, symbols: symbolsToSync, ...(section ? { section } : {}) });
+  }, [activeList, syncWatchlistLoud]);
 
   const openWlContext = useCallback((symbol: string, event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -2012,17 +2214,17 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     }
     setWl((rows: { symbol: string; section: string }[]) =>
       moveWatchlistSelection(rows, new Set(symbolsToMove), section, visibleWlOrder));
-    syncDefaultWatchlist("move", symbolsToMove, section);
+    syncActiveWatchlist("move", symbolsToMove, section);
     clearWlSelection();
-  }, [selectedWlRows, sectionOrder, visibleWlOrder, syncDefaultWatchlist, clearWlSelection]);
+  }, [selectedWlRows, sectionOrder, visibleWlOrder, syncActiveWatchlist, clearWlSelection]);
 
   const deleteWlSelected = useCallback(() => {
     const symbolsToDelete = selectedWlRows.map((row) => row.symbol);
     if (!symbolsToDelete.length) return;
     setWl((rows: { symbol: string; section: string }[]) => rows.filter((row) => !symbolsToDelete.includes(row.symbol)));
-    syncDefaultWatchlist("remove", symbolsToDelete);
+    syncActiveWatchlist("remove", symbolsToDelete);
     clearWlSelection();
-  }, [selectedWlRows, syncDefaultWatchlist, clearWlSelection]);
+  }, [selectedWlRows, syncActiveWatchlist, clearWlSelection]);
 
   const createListFromWlSelected = useCallback((name: string) => {
     const rows = selectedWlRows.map((row) => ({ ...row }));
@@ -2032,7 +2234,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     setListMeta((current) => ({ ...current, [name]: { sections: sectionsForList, collapsed: [] } }));
     setActiveList(name);
     clearWlSelection();
-  }, [selectedWlRows, lists, sectionOrder, clearWlSelection]);
+    createServerList(name, rows);
+  }, [selectedWlRows, lists, sectionOrder, clearWlSelection, createServerList]);
   const activeIsComposite = isComposite(active);
   const activeLegs = activeIsComposite ? (parseComposite(active) ?? []) : [];
   const m = activeIsComposite ? undefined : man?.symbols?.[active];
@@ -2189,8 +2392,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     const sec = man?.symbols?.[sym]?.sec || "Watchlist";
     if (!inWl.has(sym)) {
       setWl((w: any[]) => [...w, { symbol: sym, section: sec }]);
-      // only the server-backed Default list syncs upstream; custom lists live client-side
-      if (activeList === "Default") fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: sym, section: sec }) }).catch(() => {});
+      syncWatchlist(activeList, { action: "add", symbols: [sym], section: sec })?.catch(() => {});
     }
   }
   async function removeSymbol(sym: string) {
@@ -2198,9 +2400,13 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     setWlSelected((current) => { const next = new Set(current); next.delete(sym); return next; });
     if (wlAnchorRef.current === sym) wlAnchorRef.current = null;
     setWlContext(null);
-    if (activeList === "Default") fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: sym }) }).catch(() => {});
+    syncWatchlist(activeList, { action: "remove", symbols: [sym] })?.catch(() => {});
   }
-  // watchlist management (client-side; guests get real switch/create/rename/delete via localStorage)
+  // ── watchlist management ───────────────────────────────────────────────────────────────
+  // Guests keep the pre-W1b contract exactly: every one of these is a local `mm.wls` edit and
+  // nothing leaves the browser. Signed in, the same edit ALSO reaches `watchlists` — before this
+  // wave no create/rename/delete path existed on the server at all, so a registered user's named
+  // lists could never leave the one device that made them.
   function switchList(name: string) { if (lists[name]) { setActiveList(name); clearWlSelection(); } setWlMenuOpen(false); }
   // Inline create used by the search-hub rail + add-to-list picker (no window.prompt — name is
   // supplied by the caller's inline input). Returns the created/normalized name, or null if the
@@ -2210,10 +2416,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     const name = raw.trim();
     if (!name || lists[name]) return null;
     setLists((l) => ({ ...l, [name]: [] }));
+    createServerList(name);
     return name;
   }
   // Add a symbol to a NAMED list (search-hub multi-list picker). Mirrors addSymbol's dedupe +
-  // Default-only server sync, but targets an explicit list instead of the active one.
+  // server sync, but targets an explicit list instead of the active one.
   function addToList(sym: string, listName: string) {
     // Same descendant-provider constraint as addSymbol — reach the sheet via the window event.
     if (!loggedIn) { showGateNudge(t("gateWatchlist")); window.dispatchEvent(new CustomEvent("mm:onboard", { detail: { mode: "signup" } })); return; }
@@ -2223,19 +2430,35 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       if (cur.some((x) => x.symbol === sym)) return l;
       return { ...l, [listName]: [...cur, { symbol: sym, section: sec }] };
     });
-    if (listName === "Default") fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: sym, section: sec }) }).catch(() => {});
+    syncWatchlist(listName, { action: "add", symbols: [sym], section: sec })?.catch(() => {});
   }
   function newList() {
     const name = (typeof window !== "undefined" ? window.prompt(t("newWatchlistPrompt")) : "")?.trim();
     setWlMenuOpen(false);
     if (!name || lists[name]) return;
     setLists((l) => ({ ...l, [name]: [] })); setActiveList(name);
+    createServerList(name);
   }
   function renameList(name: string) {
     const next = (typeof window !== "undefined" ? window.prompt(t("renameWatchlistPrompt"), name) : "")?.trim();
     if (!next || next === name || lists[next]) return;
     setLists((l) => { const n: Record<string, { symbol: string; section: string }[]> = {}; for (const k of Object.keys(l)) n[k === name ? next : k] = l[k]; return n; });
     setActiveList((a) => (a === name ? next : a));
+    const listId = serverListIdsRef.current[name];
+    if (email && listId) {
+      // Move the id onto the new key first: a symbol op racing the rename must not go to the
+      // server under a name that no longer exists locally.
+      const moved = { ...serverListIdsRef.current };
+      delete moved[name];
+      moved[next] = listId;
+      serverListIdsRef.current = moved;
+      setServerListIds(moved);
+      fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "renameList", listId, name: next }),
+      }).then((response) => { if (!response.ok) noteWlSyncFailure(); }).catch(() => { noteWlSyncFailure(); });
+    }
   }
   function deleteList(name: string) {
     if (Object.keys(lists).length <= 1) return;
@@ -2243,6 +2466,21 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     setLists((l) => { const n = { ...l }; delete n[name]; return n; });
     setListMeta((m) => { const n = { ...m }; delete n[name]; return n; });
     if (activeList === name) { setActiveList(Object.keys(lists).filter((k) => k !== name)[0] || "Default"); clearWlSelection(); }
+    const listId = serverListIdsRef.current[name];
+    if (email && listId) {
+      const remaining = { ...serverListIdsRef.current };
+      delete remaining[name];
+      serverListIdsRef.current = remaining;
+      setServerListIds(remaining);
+      // Drop the marker entry too: the list no longer exists on either side, so a future list
+      // that happens to reuse the name starts from a clean slate instead of a stale "migrated".
+      forgetListMigrated(name);
+      fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "deleteList", listId }),
+      }).then((response) => { if (!response.ok) noteWlSyncFailure(); }).catch(() => { noteWlSyncFailure(); });
+    }
   }
 
   // ── list menu: copy / clear / sort ─────────────────────────────────────────────────────
@@ -2252,9 +2490,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     const next = raw?.trim();
     setWlMenuOpen(false);
     if (!next || lists[next]) return;
-    setLists((l) => ({ ...l, [next]: (l[name] || []).map((r) => ({ ...r })) }));
+    const copied = (lists[name] || []).map((r) => ({ ...r }));
+    setLists((l) => ({ ...l, [next]: copied }));
     setListMeta((m) => (m[name] ? { ...m, [next]: { sections: [...m[name].sections], collapsed: [...m[name].collapsed] } } : m));
     setActiveList(next);
+    createServerList(next, copied);
   }
 
   // Empty a list without deleting it. Section structure is kept — you cleared the symbols, not
@@ -2264,11 +2504,10 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     setWlMenuOpen(false);
     setLists((l) => ({ ...l, [name]: [] }));
     if (name === activeList) clearWlSelection();
-    if (name === "Default") {
-      for (const r of lists[name] || []) {
-        fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: r.symbol }) }).catch(() => {});
-      }
-    }
+    // One batched delete instead of the pre-W1b per-symbol fan-out (the API takes batches on
+    // every symbol action now), and it reaches any registered list, not only Default.
+    const cleared = (lists[name] || []).map((r) => r.symbol);
+    if (cleared.length) syncWatchlist(name, { action: "remove", symbols: cleared })?.catch(() => {});
   }
 
   // Sort symbols A→Z WITHIN each section, so sorting never silently reorganises the list.
@@ -2323,11 +2562,13 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           const have = new Set(prev.map((r) => r.symbol));
           const add = parsed.filter((r) => !have.has(r.symbol));
           if (!add.length) return prev;
-          if (activeList === "Default") {
-            for (const r of add) {
-              fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: r.symbol, section: r.section }) }).catch(() => {});
-            }
-          }
+          // One batched add carrying each row's own section, instead of N single-symbol requests.
+          syncWatchlist(activeList, {
+            action: "add",
+            symbols: add.map((r) => r.symbol),
+            sections: Object.fromEntries(add.map((r) => [r.symbol, r.section])),
+            section: add[0].section,
+          })?.catch(() => {});
           return [...prev, ...add];
         });
       }).catch(() => {});
@@ -2360,7 +2601,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     if (!to || to === from || sectionOrder.includes(to)) return;
     const affected = wl.filter((row) => row.section === from).map((row) => row.symbol);
     setWl((prev: { symbol: string; section: string }[]) => prev.map((r) => (r.section === from ? { ...r, section: to } : r)));
-    syncDefaultWatchlist("move", affected, to);
+    syncActiveWatchlist("move", affected, to);
     editMeta((m) => ({
       sections: m.sections.map((s) => (s === from ? to : s)),
       collapsed: m.collapsed.map((s) => (s === from ? to : s)),
@@ -2375,7 +2616,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     const fallback = sectionOrder[idx - 1] ?? sectionOrder.find((s) => s !== name) ?? "Watchlist";
     const affected = wl.filter((row) => row.section === name).map((row) => row.symbol);
     setWl((prev: { symbol: string; section: string }[]) => prev.map((r) => (r.section === name ? { ...r, section: fallback } : r)));
-    syncDefaultWatchlist("move", affected, fallback);
+    syncActiveWatchlist("move", affected, fallback);
     editMeta((m) => ({
       sections: m.sections.filter((s) => s !== name),
       collapsed: m.collapsed.filter((s) => s !== name),

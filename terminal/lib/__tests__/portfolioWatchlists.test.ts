@@ -55,6 +55,32 @@ describe("portfolio watchlist source contract", () => {
     });
   });
 
+  it("W1b: a MIGRATED named list reads server-canonical; Default keeps the TRAP-1 local order", () => {
+    const resolved = resolvePortfolioWatchlists(
+      [
+        { id: "default", name: "Default", symbols: ["NVDA", "AAPL"] },
+        { id: "gold", name: "Gold Miners", symbols: ["NEM", "AEM"] },
+      ],
+      JSON.stringify({
+        lists: {
+          Default: [{ symbol: "AAPL", section: "Core" }],
+          // Local order disagrees with the server's, and carries one row whose add has not
+          // reached the server yet.
+          "Gold Miners": [{ symbol: "AEM", section: "Miners" }, { symbol: "GOLD", section: "Miners" }],
+        },
+        active: "Gold Miners",
+      }),
+    );
+
+    expect(resolved.lists).toEqual([
+      // Default: the server knows MEMBERSHIP, not ORDER — local order still wins.
+      { id: "default", name: "Default", symbols: ["AAPL", "NVDA"] },
+      // Named list: server position wins for shared rows, local-only rows append after them.
+      { id: "gold", name: "Gold Miners", symbols: ["NEM", "AEM", "GOLD"] },
+    ]);
+    expect(resolved.preferredActiveId).toBe("gold");
+  });
+
   it("fails closed from malformed local state to server state", () => {
     const server = [{ id: "default", name: "Default", symbols: ["NVDA"] }];
     expect(resolvePortfolioWatchlists(server, "{not-json")).toEqual({

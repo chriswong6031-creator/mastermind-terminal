@@ -1,3 +1,5 @@
+import { DEFAULT_LIST } from "@/lib/watchlists";
+
 export type PortfolioWatchlist = {
   id: string;
   name: string;
@@ -28,7 +30,7 @@ export type ResolvedPortfolioWatchlists = {
 
 const EMPTY_DEFAULT: PortfolioWatchlist = {
   id: "local:Default",
-  name: "Default",
+  name: DEFAULT_LIST,
   symbols: [],
 };
 
@@ -141,9 +143,23 @@ function parseLocalWatchlists(raw: string | null): LocalWatchlists | null {
 }
 
 /**
- * Mirror TerminalShell's additive local/server reconciliation without writing
- * either source: local order and local-only rows win, missing server rows append,
- * local-only lists remain local, and server-only lists remain visible.
+ * Additive local/server reconciliation, writing neither source. W1b split this in two along the
+ * same line the shell now draws:
+ *
+ *   `Default`  — UNCHANGED local-wins merge. This is the read-side mirror of TerminalShell's
+ *                TRAP-1 reconcile, and for the same reason: the server row knows MEMBERSHIP, not
+ *                ORDER, so letting it win would render a user's reordered Default in an order
+ *                they never chose. Local order + local-only rows first, missing server rows append.
+ *   named list — SERVER-CANONICAL once it exists on the server, i.e. once W1b's one-time migration
+ *                has run. Server `position` order wins for rows on both sides and local-only rows
+ *                append after them (the collision rule in `lib/watchlists.ts#mergeListSymbols`).
+ *                Signed-in named lists are server-backed now; `mm.wls` is an optimistic cache.
+ *   local-only — still rendered exactly as before. A list that has not migrated yet (or whose
+ *                migration failed and will retry) is real user state, never hidden.
+ *   server-only— kept and appended, as before.
+ *
+ * This is the shrunken remainder of the old local-wins-everywhere merge; the surface stops
+ * rendering watchlists at all in W5, at which point the guest-shell path is all that is left.
  */
 export function resolvePortfolioWatchlists(
   serverLists: readonly PortfolioWatchlist[],
@@ -172,7 +188,9 @@ export function resolvePortfolioWatchlists(
     return {
       id: server.id,
       name: server.name,
-      symbols: uniqueSymbols([...list.symbols, ...server.symbols]),
+      symbols: list.name === DEFAULT_LIST
+        ? uniqueSymbols([...list.symbols, ...server.symbols])    // TRAP-1 mirror: local order wins
+        : uniqueSymbols([...server.symbols, ...list.symbols]),   // migrated list: server is canonical
     };
   });
   for (const server of cleanServer) {
@@ -186,7 +204,7 @@ export function resolvePortfolioWatchlists(
   // Portfolio is an authenticated surface. Match TerminalShell's signed-in
   // fallback exactly: a stale/deleted saved active name returns to Default,
   // regardless of serialized custom-list order, then to the first survivor.
-  const preferred = storedActive ?? safeLists.find((list) => list.name === "Default");
+  const preferred = storedActive ?? safeLists.find((list) => list.name === DEFAULT_LIST);
   return {
     lists: safeLists,
     preferredActiveId: preferred?.id ?? safeLists[0].id,
