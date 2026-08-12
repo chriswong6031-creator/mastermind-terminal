@@ -173,12 +173,6 @@ async function openTerminal(page: Page, opts: {
   await page.goto("/terminal?symbol=COST");
   await expect(page.locator(".workspace")).toBeVisible();
   await waitForTerminalVisualReady(page);
-  // Refused ⊘ setups are diagnostic-only on a normal chart. This suite explicitly opts into
-  // that forensic layer because the ring-slash geometry is what it is designed to inspect.
-  const diagnostics = page.locator('.statusline .mm[role="button"]');
-  await expect(diagnostics).toBeVisible();
-  await diagnostics.click();
-  await expect(diagnostics).toHaveText("⚠ detail");
   if (opts.zh && !opts.zhPreseed) await applyZh(page);
   if (opts.zhPreseed) await expect(page.locator("html")).toHaveAttribute("data-lang", "zh");
   return { blockedTs };

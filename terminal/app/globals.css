@@ -338,7 +338,6 @@ svg{display:block}
 .status-symbol-logo img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#f5f7fa;padding:2px;box-sizing:border-box}.status-symbol-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .status-market-dot{width:6px;height:6px;flex:none;border-radius:50%;background:var(--text-dim);box-shadow:0 0 0 3px color-mix(in srgb,var(--text-dim) 16%,transparent)}.status-market-dot.is-live{background:var(--buy);box-shadow:0 0 0 3px color-mix(in srgb,var(--buy) 18%,transparent)}.status-market-dot.is-delayed{background:var(--signal);box-shadow:0 0 0 3px color-mix(in srgb,var(--signal) 18%,transparent)}
 .statusline .mm{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:var(--r);background:rgba(38,194,129,.12);border:1px solid rgba(38,194,129,.3);color:var(--buy);font:600 10px/1 var(--font-ui);letter-spacing:.05em}
-.statusline .mm[role="button"]{pointer-events:auto}
 .statusline .mm i{width:5px;height:5px;border-radius:50%;background:var(--buy)}
 
 .rail-resizer{grid-column:3;grid-row:2;justify-self:start;align-self:stretch;width:12px;margin-left:-6px;z-index:18;cursor:col-resize;display:flex;align-items:stretch;justify-content:center}
