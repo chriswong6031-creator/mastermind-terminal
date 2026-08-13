@@ -1687,6 +1687,15 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       if (Array.isArray(rows)) beforeRead[name] = new Set(rows.map((row) => row.symbol));
     }
 
+    // DEFERRED to idle. The migration is one-time BACKGROUND reconciliation — nothing on screen
+    // waits for it — but before this it started during mount, adding an inventory GET (plus a
+    // create + add + second GET on a first run) to exactly the window in which the shell is still
+    // applying its restored `mm.wls` and the user is taking their first action. On a starved CI
+    // runner that mattered: `search-add-to-list` clicks `+` a beat after mount, and SearchModal
+    // only opens the multi-list picker when `lists.length > 1`, so any work that delays the
+    // restore commit turns the picker into a silent direct-add. Yielding to idle keeps the
+    // interactive path clear; `timeout` guarantees it still runs on a page that never goes idle.
+    const startMigration = () => {
     // The migration OCCUPIES the shared write chain for its whole duration. Without this a user
     // edit made during the window resolves its list BY NAME (F2) against a server that has not
     // been given that list yet — a guaranteed 400 that trips the sync-failure chip, re-renders the
@@ -1769,8 +1778,19 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       return true;
     }).catch(() => false);
     wlServerChainRef.current = migration;
+    };
 
-    return () => { cancelled = true; };
+    // `requestIdleCallback` is unavailable on Safari < 16.4; the timeout path is the fallback.
+    const canIdle = typeof window.requestIdleCallback === "function";
+    const idle = canIdle
+      ? window.requestIdleCallback(startMigration, { timeout: 3_000 })
+      : window.setTimeout(startMigration, 400);
+
+    return () => {
+      cancelled = true;
+      if (canIdle) window.cancelIdleCallback(idle as number);
+      else window.clearTimeout(idle as number);
+    };
   }, [loggedIn, wlsRestored, registerServerListIds]);
   // ── TRAP 1: guest → signed-in reconciliation (AuthSheet router.refresh delivers a real `email`
   //    + the server's Default symbols, but client `lists` was seeded from the guest state in the

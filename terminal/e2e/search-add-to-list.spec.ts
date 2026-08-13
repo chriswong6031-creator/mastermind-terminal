@@ -24,6 +24,18 @@ async function openSearchWithTwoLists(page: Page, query: string, testInfo: TestI
   await page.addInitScript((seed) => localStorage.setItem("mm.wls", JSON.stringify(seed)), LISTS);
   await page.goto("/terminal?symbol=NVDA");
   await expect(page.locator(".mm-ptag")).toBeVisible({ timeout: 60_000 });
+  // The picker under test only exists for a user with TWO OR MORE lists: SearchModal's handleAdd
+  // opens it when `lists.length > 1` and otherwise adds straight to the active list. `lists` is
+  // seeded with one entry and only becomes two when the mount-restore effect applies the saved
+  // `mm.wls` — a commit that lands after first paint. `.mm-ptag` proves the shell rendered, NOT
+  // that the restore landed, so on a starved runner the click below could beat it and silently
+  // take the single-list branch (that is how this spec failed on CI at 26 minutes' runtime).
+  // The persist effect re-writes `mm.wls` from the restored state, so two keys there is the
+  // precondition itself, observed rather than assumed.
+  await expect.poll(() => page.evaluate(() => {
+    try { return Object.keys(JSON.parse(localStorage.getItem("mm.wls") || "{}").lists ?? {}).length; }
+    catch { return 0; }
+  }), { timeout: 30_000 }).toBeGreaterThan(1);
   await page.locator(".pair").first().click();
   await page.locator(".sh input").click();
   await page.keyboard.type(query);
