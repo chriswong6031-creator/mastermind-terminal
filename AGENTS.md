@@ -15,6 +15,31 @@ promises or “memory” recorded only inside one chat do not carry to another s
 3. Treat `/Users/chriswong/Documents/Cluade/Macro Dashboard` as the connected
    dashboard/backend repository. Authentication, subscriptions, data contracts,
    APIs, Caddy routes, and deployment changes may require checking both repos.
+4. When the task belongs to an existing Mastermind workstream, read its Agent OS
+   record and latest handoff first — see § "Agent OS knowledge plane" below.
+
+## Agent OS knowledge plane (organizational memory)
+
+- The canonical store is the Macro repo's `agentos/` directory
+  (`/Users/chriswong/Documents/Cluade/Macro Dashboard`): workstream records
+  (`WS-*`), decision records (`DEC-*`), discovery records (`DSC-*`), and session
+  handoffs. Rules of the store: `agentos/README.md` there; handoff protocol:
+  Macro `research/MASTERMIND_AGENT_HANDOFF_PROTOCOL.md`. Never create a
+  Terminal-local copy or mirror of any part of it.
+- At task start, when the task belongs to an existing Mastermind workstream, read
+  its `WS-*` record, its latest handoff, and the decisions/discoveries they cite.
+  `do_not_redo` entries are binding unless refuted with new evidence. Records are
+  context, not permission — this file's delivery rules still govern work here.
+- Write records for real events only, as normal Macro PRs: a `DEC-*` when a choice
+  with durable consequences is taken, a `DSC-*` when a durable non-obvious fact is
+  verified (both a falsifier and a so-what are required), and a handoff when
+  claimed work transfers to another session or pauses in a state another session
+  must resume. Facts that live only in one chat's memory are lost to the next
+  session and to Codex — that is the gap this store exists to close.
+- Agent OS is a knowledge plane, never a control plane: nothing in it gates
+  execution, schedules work, ranks priorities, or proves a worker is alive.
+  Terminal delivery remains governed entirely by this file — CI, merge-on-green,
+  the git-gated deploy, and live verification are unchanged.
 
 ## Workspace and git
 
