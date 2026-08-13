@@ -97,6 +97,24 @@ describe("POST /api/watchlist — symbol actions", () => {
     expect(moved.map((row) => row.symbol)).toEqual(["9988.HK", "002716.SZ"]);
   });
 
+  // From master #409 ("Make watchlist sections fluid"): the empty string is a REAL section — the
+  // unsectioned run before the first divider — so it must round-trip rather than 400.
+  it("moves symbols into the unsectioned root run", async () => {
+    const response = await post({ action: "move", symbols: ["AAPL"], section: "" });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect((await state())[0].symbols.find((row) => row.symbol === "AAPL")?.section).toBe("");
+  });
+
+  it("adds into the unsectioned root run without falling back to the legacy label", async () => {
+    await post({ action: "add", symbols: ["NEM"], section: "" });
+    expect((await state())[0].symbols.at(-1)).toEqual({ symbol: "NEM", section: "", position: 6 });
+    // A MISSING section still takes the legacy "Watchlist" fallback — only an explicit "" is root.
+    await post({ action: "add", symbols: ["AEM"] });
+    expect((await state())[0].symbols.at(-1)).toEqual({ symbol: "AEM", section: "Watchlist", position: 7 });
+  });
+
   it("keeps the legacy single-symbol add contract", async () => {
     const response = await post({ action: "add", symbol: " nem ", section: "Miners" });
 
@@ -154,6 +172,7 @@ describe("POST /api/watchlist — symbol actions", () => {
     expect(malformed.status).toBe(400);
     expect(await malformed.json()).toEqual({ error: "invalid JSON" });
 
+    // Rejected for the CONTROL CHARACTER, not for being short — "" is legal (see above).
     const invalidSection = await post({ action: "move", symbols: ["AAPL"], section: "\u0000bad" });
     expect(invalidSection.status).toBe(400);
     expect(await invalidSection.json()).toEqual({ error: "invalid section" });

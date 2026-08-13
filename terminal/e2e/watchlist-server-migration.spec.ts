@@ -175,7 +175,9 @@ test("F1 probe: an inventory read parked mid-flight cannot revert a live local d
   await page.locator('[data-watchlist-symbol="AEM"]').click({ button: "right" });
   const menu = page.getByRole("menu", { name: "Selected ticker actions" });
   await expect(menu).toBeVisible();
-  await menu.getByRole("menuitem", { name: /Delete 1 symbol/ }).click();
+  // master #409 renamed the SINGLE-row action to "Delete symbol" (the counted
+  // "Delete N symbols" is the multi-select form).
+  await menu.getByRole("menuitem", { name: "Delete symbol" }).click();
   await expect(page.locator('[data-watchlist-symbol="AEM"]')).toHaveCount(0);
 
   // Wait for the STALE response to actually be delivered — the marker is no signal here, it was
@@ -228,7 +230,9 @@ test("a server-only list is kept, and a symbol edit on a NAMED list now reaches 
   await page.locator('[data-watchlist-symbol="AEM"]').click({ button: "right" });
   const menu = page.getByRole("menu", { name: "Selected ticker actions" });
   await expect(menu).toBeVisible();
-  await menu.getByRole("menuitem", { name: /Delete 1 symbol/ }).click();
+  // master #409 renamed the SINGLE-row action to "Delete symbol" (the counted
+  // "Delete N symbols" is the multi-select form).
+  await menu.getByRole("menuitem", { name: "Delete symbol" }).click();
 
   await expect.poll(async () => symbolsOf(await inventory(page), "Gold Miners"), { timeout: 15_000 }).toEqual(["NEM"]);
   // Scoped: the sibling lists are untouched by that write.

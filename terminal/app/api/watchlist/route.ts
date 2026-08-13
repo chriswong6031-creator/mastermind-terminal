@@ -30,6 +30,16 @@ import {
 //     a Terminal user made was localStorage-only.
 // A request that names no list still falls back to the first list, so pre-W1b clients and the
 // Default fire-and-forget syncs behave exactly as before.
+//
+// Merged with master #409 ("Make watchlist sections fluid"): an EMPTY `section` is now a legal
+// value — it is the unsectioned run before the first divider — while a MISSING one still falls
+// back to "Watchlist" for the legacy add contract. `normalizeSection` therefore returns `null`
+// for "unusable" and "" for "legitimately unsectioned"; every check below tests `=== null`, never
+// truthiness, or #409's unsectioned rows would 400 on their way to the server.
+//
+// #409's own note is worth keeping in view here, because it independently reached the conclusion
+// this wave's order-semantics ruling encodes: "Visual row order remains the established local
+// watchlist preference until the backend has an atomic ordered-list RPC."
 
 const isE2eFixture = () => process.env.TERMINAL_E2E_FIXTURE === "1";
 
@@ -95,7 +105,8 @@ export async function POST(req: Request) {
   const symbols = normalizeSymbols(body.symbols ?? body.symbol);
   const section = normalizeSection(body.section);
   if (!symbols.length) return fail("symbol required or batch too large", 400);
-  if (!section) return fail("invalid section", 400);
+  // `=== null` is load-bearing: "" is #409's unsectioned run, not a rejection.
+  if (section === null) return fail("invalid section", 400);
 
   const list = await resolveTargetList(db, userId, { listId: body.listId, listName: body.listName });
   if (!list) return fail("no watchlist", 400);
@@ -115,7 +126,10 @@ export async function POST(req: Request) {
   // one-time migration needs to preserve a local list's grouping in a single call.
   const sections = body.sections && typeof body.sections === "object" && !Array.isArray(body.sections)
     ? Object.fromEntries(Object.entries(body.sections as Record<string, unknown>)
-      .map(([symbol, value]) => [symbol.trim().toUpperCase(), normalizeSection(value, section) ?? section]))
+      .map(([symbol, value]) => {
+        const perSymbol = normalizeSection(value, section);
+        return [symbol.trim().toUpperCase(), perSymbol === null ? section : perSymbol];
+      }))
     : undefined;
   const result = await addSymbols(db, list.id, symbols, section, sections);
   if (!result.ok) return fail(result.error || "watchlist update failed", 500);

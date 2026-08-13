@@ -338,7 +338,6 @@ svg{display:block}
 .status-symbol-logo img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#f5f7fa;padding:2px;box-sizing:border-box}.status-symbol-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .status-market-dot{width:6px;height:6px;flex:none;border-radius:50%;background:var(--text-dim);box-shadow:0 0 0 3px color-mix(in srgb,var(--text-dim) 16%,transparent)}.status-market-dot.is-live{background:var(--buy);box-shadow:0 0 0 3px color-mix(in srgb,var(--buy) 18%,transparent)}.status-market-dot.is-delayed{background:var(--signal);box-shadow:0 0 0 3px color-mix(in srgb,var(--signal) 18%,transparent)}
 .statusline .mm{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:var(--r);background:rgba(38,194,129,.12);border:1px solid rgba(38,194,129,.3);color:var(--buy);font:600 10px/1 var(--font-ui);letter-spacing:.05em}
-.statusline .mm[role="button"]{pointer-events:auto}
 .statusline .mm i{width:5px;height:5px;border-radius:50%;background:var(--buy)}
 
 .rail-resizer{grid-column:3;grid-row:2;justify-self:start;align-self:stretch;width:12px;margin-left:-6px;z-index:18;cursor:col-resize;display:flex;align-items:stretch;justify-content:center}
@@ -379,17 +378,21 @@ svg{display:block}
 .wl-list::-webkit-scrollbar-thumb:hover{background:var(--panel-3);background-clip:content-box}
 /* Section divider — now an interactive row: collapse caret, name, count, and hover actions.
    Keeps the original type treatment so existing lists look unchanged until you touch one. */
-.wl-sec{display:flex;align-items:center;gap:7px;padding:8px 12px 4px;font:600 10px/1 var(--font-ui);letter-spacing:.09em;text-transform:uppercase;color:var(--text-dim);cursor:pointer;user-select:none}
+.wl-sec{display:flex;align-items:center;gap:3px;min-height:29px;padding:4px 7px 2px 4px;font:600 10px/1 var(--font-ui);letter-spacing:.09em;text-transform:uppercase;color:var(--text-dim);cursor:default;user-select:none;-webkit-user-select:none}
 .wl-sec:hover{color:var(--text-2)}
 .wl-sec.over{background:rgba(41,98,255,.14);color:var(--text)}
+.wl-sec.dragging{opacity:.72;background:var(--panel-2);box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.wl-sec-drag{position:sticky;right:51px;z-index:1;display:grid;place-items:center;flex:none;width:19px;height:24px;margin-left:auto;border-radius:4px;color:var(--text-dim);background:var(--panel);opacity:0;cursor:grab;touch-action:none}
+.wl-sec:hover .wl-sec-drag,.wl-sec-drag:focus-visible{opacity:1}.wl-sec-drag:hover,.wl-sec-drag:focus-visible{background:var(--panel-3);color:var(--text)}.wl-sec-drag:active{cursor:grabbing}.wl-sec-drag svg{width:12px;height:14px;fill:currentColor}
+.wl-sec-toggle{display:flex;align-items:center;gap:7px;min-width:0;min-height:24px;flex:1;text-align:left;color:inherit;font:inherit;letter-spacing:inherit;text-transform:inherit}
 .wl-sec-car{width:11px;height:11px;flex:none;stroke:currentColor;fill:none;stroke-width:2.6;transform:rotate(90deg);transition:transform var(--t)}
 .wl-sec.collapsed .wl-sec-car{transform:rotate(0deg)}
 .wl-sec-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wl-sec-ct{opacity:.6;font-weight:500;letter-spacing:0}
 /* Actions stay out of the way until the row is hovered or keyboard-focused — a divider is
    scenery most of the time, and three always-on icons per section would be noise. */
-.wl-sec-acts{margin-left:auto;display:flex;gap:2px;opacity:0;transition:opacity var(--t)}
-.wl-sec:hover .wl-sec-acts,.wl-sec:focus-visible .wl-sec-acts{opacity:1}
+.wl-sec-acts{position:sticky;right:4px;z-index:1;display:flex;gap:2px;background:var(--panel);opacity:0;transition:opacity var(--t)}
+.wl-sec:hover .wl-sec-acts,.wl-sec:focus-within .wl-sec-acts{opacity:1}
 .wl-sec-ic{display:grid;place-items:center;width:20px;height:20px;border-radius:var(--r)}
 .wl-sec-ic svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.9}
 .wl-sec-ic:hover{background:var(--panel-3);color:var(--text)}
@@ -400,7 +403,10 @@ svg{display:block}
 .wl-sec-new input{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line-3);border-radius:var(--r);padding:6px 8px;font:500 12px/1.2 var(--font-ui);color:var(--text)}
 .wl-sec-new input:focus{outline:none;border-color:var(--brand)}
 .wl-sec-new button{flex:none;background:var(--brand);border:0;border-radius:var(--r);padding:6px 10px;font:600 11.5px/1.2 var(--font-ui);color:#fff;cursor:pointer}
-.wl-row{position:relative;display:grid;grid-template-columns:1fr 80px 70px;gap:8px;align-items:center;padding:0 12px;height:46px;cursor:pointer;border-bottom:1px solid var(--line-2);transition:background var(--t)}
+.wl-root-drop{height:0;overflow:hidden;display:flex;align-items:center;padding:0 12px;border:0 dashed transparent;color:var(--text-dim);font:600 9px/1 var(--font-ui);letter-spacing:.08em;text-transform:uppercase;opacity:0;transition:height var(--t),opacity var(--t),padding var(--t),border-color var(--t),background var(--t)}
+.wl-root-drop.active{height:25px;padding:4px 12px;border-bottom-width:1px;border-color:var(--line-3);opacity:1}.wl-root-drop.over{border-color:var(--brand-2);background:color-mix(in srgb,var(--brand) 14%,transparent);color:var(--brand-2)}
+.wl-row{position:relative;display:grid;grid-template-columns:1fr 80px 70px;gap:8px;align-items:center;padding:0 12px;height:46px;cursor:grab;border-bottom:1px solid var(--line-2);transition:background var(--t);user-select:none;-webkit-user-select:none}
+.wl-row *{user-select:none;-webkit-user-select:none}.wl-row img{-webkit-user-drag:none}
 .wl-row:hover{background:var(--panel-2)}.wl-row.on{background:rgba(41,98,255,.08)}.wl-row.selected{background:color-mix(in srgb,var(--brand) 15%,var(--panel));box-shadow:inset 3px 0 0 var(--brand-2)}.wl-row.selected:hover{background:color-mix(in srgb,var(--brand) 20%,var(--panel-2))}.wl-row.selected:focus-visible{outline:1px solid var(--brand-2);outline-offset:-2px}
 .wl-drag-handle{position:absolute;left:2px;top:50%;z-index:2;display:grid;place-items:center;width:16px;height:28px;transform:translateY(-50%);border-radius:4px;color:var(--text-dim);cursor:grab;opacity:0;touch-action:none}.wl-row:hover .wl-drag-handle,.wl-drag-handle:focus-visible{opacity:1}.wl-drag-handle:hover,.wl-drag-handle:focus-visible{background:var(--panel-3);color:var(--text)}.wl-drag-handle:active{cursor:grabbing}.wl-drag-handle svg{width:12px;height:14px;fill:currentColor;stroke:none}
 .wl-row .s{display:flex;align-items:center;gap:9px;min-width:0}
@@ -409,6 +415,7 @@ svg{display:block}
 .asset-logo img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#f5f7fa;padding:2px;box-sizing:border-box;z-index:1}.asset-logo-fallback{position:relative;z-index:0;color:#fff;text-shadow:0 1px 1px rgba(0,0,0,.35)}
 .wl-row .nm{display:flex;flex-direction:column;gap:2px;min-width:0}
 .wl-row .tk{font-weight:600;font-size:13px;white-space:nowrap}.wl-row .sub{font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wl-note-mark{display:inline-grid;place-items:center;margin-left:5px;color:var(--brand-2);font-size:16px;line-height:8px;vertical-align:middle;text-shadow:0 0 8px color-mix(in srgb,var(--brand-2) 55%,transparent)}
 .wl-row .c{text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px}
 .card{padding:14px}
 .card .hd{display:flex;align-items:center;gap:10px}
@@ -1675,11 +1682,15 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
    nested scrollers and is clamped to the viewport in TerminalShell. */
 .wl-bulk-menu{position:fixed;z-index:260;min-width:260px;width:min(290px,calc(100vw - 16px));max-width:calc(100vw - 16px);max-height:min(70dvh,520px);transform-origin:top right}
 .wl-bulk-menu .ctx-row{width:100%;border:0;background:transparent;text-align:left;font-family:var(--font-ui)}
+.wl-bulk-menu .ctx-row:disabled{opacity:.42;cursor:not-allowed;background:transparent}
 .wl-bulk-menu svg{stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .wl-bulk-menu-head{display:flex;align-items:center;gap:7px;min-height:36px;padding:4px 8px 7px;margin-bottom:3px;border-bottom:1px solid var(--line);color:var(--text);font:650 12px/1 var(--font-ui)}
 .wl-bulk-back{display:grid;place-items:center;width:27px;height:27px;border-radius:var(--r);color:var(--text-2)}.wl-bulk-back:hover{background:var(--pop-hover);color:var(--text)}.wl-bulk-back svg{width:14px;height:14px}
 .wl-bulk-chevron{flex:none;margin-left:auto;color:var(--text-dim);font-size:18px;line-height:1}
-.wl-bulk-form{display:flex;flex-direction:column;gap:8px;padding:9px}.wl-bulk-form label{font:650 11px/1.2 var(--font-ui);color:var(--text-2)}.wl-bulk-form input{width:100%;height:34px;padding:0 9px;border:1px solid var(--line-3);border-radius:var(--r);background:var(--inset);color:var(--text);font:500 12.5px/1 var(--font-ui);outline:none}.wl-bulk-form input:focus{border-color:var(--brand-2);box-shadow:0 0 0 2px color-mix(in srgb,var(--brand-2) 15%,transparent)}.wl-bulk-form button{align-self:flex-end;height:31px;padding:0 12px;border-radius:var(--r);background:var(--brand);color:#fff;font:650 11.5px/1 var(--font-ui)}.wl-bulk-form button:disabled{opacity:.4;cursor:not-allowed}
+.wl-bulk-form{display:flex;flex-direction:column;gap:8px;padding:9px}.wl-bulk-form label{font:650 11px/1.2 var(--font-ui);color:var(--text-2)}.wl-bulk-form input,.wl-bulk-form textarea{width:100%;padding:0 9px;border:1px solid var(--line-3);border-radius:var(--r);background:var(--inset);color:var(--text);font:500 12.5px/1.35 var(--font-ui);outline:none;user-select:text;-webkit-user-select:text}.wl-bulk-form input{height:34px}.wl-bulk-form textarea{height:96px;padding-top:8px;resize:vertical}.wl-bulk-form input:focus,.wl-bulk-form textarea:focus{border-color:var(--brand-2);box-shadow:0 0 0 2px color-mix(in srgb,var(--brand-2) 15%,transparent)}.wl-bulk-form button{align-self:flex-end;height:31px;padding:0 12px;border-radius:var(--r);background:var(--brand);color:#fff;font:650 11.5px/1 var(--font-ui)}.wl-bulk-form button:disabled{opacity:.4;cursor:not-allowed}
+.wl-single-flag-title{display:flex;align-items:center;gap:8px;padding:6px 11px 3px;color:var(--text-2);font:550 12px/1.2 var(--font-ui)}.wl-single-flag-title .ctx-ico{display:grid;place-items:center;width:18px}.wl-single-flag-title svg{width:15px;height:15px}
+.wl-single-flag-colors{display:flex;align-items:center;gap:9px;padding:8px 12px 10px}.wl-single-flag-dot{width:17px;height:17px;flex:none;border-radius:50%;box-shadow:0 0 0 1px rgba(255,255,255,.1);transition:transform var(--t),box-shadow var(--t)}.wl-single-flag-dot:hover{transform:scale(1.15)}.wl-single-flag-dot.selected{box-shadow:0 0 0 2px var(--pop-bg),0 0 0 3px currentColor;transform:scale(1.08)}
+.wl-menu-check{margin-left:auto;color:var(--buy);font-weight:800}.wl-section-menu{position:fixed;z-index:261;min-width:220px;width:min(260px,calc(100vw - 16px));max-width:calc(100vw - 16px)}.wl-section-menu .ctx-row{width:100%;border:0;background:transparent;text-align:left}.wl-section-menu svg{stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 
 /* D3 Chart Table View */
 .ctv-root{display:flex;flex-direction:column;height:100%;background:var(--bg);overflow:hidden}

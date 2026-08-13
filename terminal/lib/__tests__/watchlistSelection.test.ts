@@ -7,6 +7,15 @@ import {
   resolveWatchlistContextSelection,
   resolveWatchlistSelection,
 } from "@/lib/watchlistSelection";
+import {
+  insertWatchlistSectionBefore,
+  moveWatchlistSection,
+  orderWatchlistRowsBySections,
+  removeWatchlistSection,
+  WATCHLIST_ROOT_SECTION,
+  watchlistSectionOrder,
+  watchlistVisualOrder,
+} from "@/lib/watchlistSections";
 
 const visualOrder = ["AAPL", "MSFT", "NVDA", "AMD", "QQQ"];
 
@@ -77,5 +86,90 @@ describe("watchlist bulk mutations", () => {
     ]);
     copied[0]!.section = "Changed";
     expect(rows[0]!.section).toBe("Core");
+  });
+});
+
+describe("TradingView-style section dividers", () => {
+  const rows = [
+    { symbol: "SPY", section: WATCHLIST_ROOT_SECTION },
+    { symbol: "AAPL", section: "Core" },
+    { symbol: "MSFT", section: "Core" },
+    { symbol: "NVDA", section: "Growth" },
+    { symbol: "AMD", section: "Growth" },
+  ];
+
+  it("keeps an unsectioned run ahead of explicit dividers", () => {
+    const sections = watchlistSectionOrder(rows, ["Core", "Growth", "Empty"]);
+    expect(sections).toEqual(["Core", "Growth", "Empty"]);
+    expect(watchlistVisualOrder(rows, sections)).toEqual(["SPY", "AAPL", "MSFT", "NVDA", "AMD"]);
+    expect(watchlistVisualOrder(rows, sections, new Set(["Core"]))).toEqual(["SPY", "NVDA", "AMD"]);
+  });
+
+  it("inserts a divider above a symbol and splits the tail of that run", () => {
+    expect(insertWatchlistSectionBefore(rows, ["Core", "Growth"], "MSFT", "Mega Caps")).toEqual({
+      rows: [
+        { symbol: "SPY", section: "" },
+        { symbol: "AAPL", section: "Core" },
+        { symbol: "MSFT", section: "Mega Caps" },
+        { symbol: "NVDA", section: "Growth" },
+        { symbol: "AMD", section: "Growth" },
+      ],
+      sections: ["Core", "Mega Caps", "Growth"],
+      movedSymbols: ["MSFT"],
+    });
+  });
+
+  it("removes only the divider and preserves every symbol in order", () => {
+    expect(removeWatchlistSection(rows, ["Core", "Growth"], "Growth")).toEqual({
+      rows: [
+        { symbol: "SPY", section: "" },
+        { symbol: "AAPL", section: "Core" },
+        { symbol: "MSFT", section: "Core" },
+        { symbol: "NVDA", section: "Core" },
+        { symbol: "AMD", section: "Core" },
+      ],
+      sections: ["Core"],
+      movedSymbols: ["NVDA", "AMD"],
+      targetSection: "Core",
+    });
+    expect(removeWatchlistSection(rows, ["Core", "Growth"], "Core")?.rows.map((row) => [row.symbol, row.section])).toEqual([
+      ["SPY", ""], ["AAPL", ""], ["MSFT", ""], ["NVDA", "Growth"], ["AMD", "Growth"],
+    ]);
+    const only = removeWatchlistSection(rows.slice(1, 3), ["Core"], "Core");
+    expect(only?.sections).toEqual([]);
+    expect(only?.rows).toEqual([
+      { symbol: "AAPL", section: "" },
+      { symbol: "MSFT", section: "" },
+    ]);
+  });
+
+  it("moves divider blocks without changing membership", () => {
+    expect(moveWatchlistSection(["Core", "Growth", "Funds"], "Funds", "Core")).toEqual(["Funds", "Core", "Growth"]);
+    expect(moveWatchlistSection(["Core", "Growth"], "Growth", null)).toEqual(["Growth", "Core"]);
+    expect(moveWatchlistSection(["Core", "Growth", "Funds"], "Core", "Growth")).toEqual(["Growth", "Core", "Funds"]);
+    expect(moveWatchlistSection(["Core", "Growth", "Funds"], "Growth", "Funds")).toEqual(["Core", "Funds", "Growth"]);
+  });
+
+  it("stores rows in divider order so a later divider removal cannot scramble symbols", () => {
+    const reorderedSections = moveWatchlistSection(["Core", "Growth"], "Core", "Growth");
+    const reorderedRows = orderWatchlistRowsBySections(rows, reorderedSections);
+    expect(reorderedRows.map((row) => row.symbol)).toEqual(["SPY", "NVDA", "AMD", "AAPL", "MSFT"]);
+    expect(removeWatchlistSection(rows, reorderedSections, "Core")?.rows.map((row) => row.symbol)).toEqual([
+      "SPY", "NVDA", "AMD", "AAPL", "MSFT",
+    ]);
+  });
+
+  it("canonicalizes a move into an empty middle divider before later removal", () => {
+    const physical = [
+      { symbol: "B", section: "Core" },
+      { symbol: "G", section: "Growth" },
+    ];
+    const moved = moveWatchlistSelection(physical, new Set(["G"]), "Empty", ["B", "G"]);
+    const canonical = orderWatchlistRowsBySections(moved, ["Core", "Empty", "Growth"]);
+    expect(canonical).toEqual([
+      { symbol: "B", section: "Core" },
+      { symbol: "G", section: "Empty" },
+    ]);
+    expect(removeWatchlistSection(canonical, ["Core", "Empty", "Growth"], "Growth")?.rows).toEqual(canonical);
   });
 });

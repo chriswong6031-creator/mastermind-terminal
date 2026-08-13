@@ -38,6 +38,11 @@ describe("input normalization", () => {
     expect(normalizeSection(" China Bottoms ")).toBe("China Bottoms");
     expect(normalizeSection("\u0000bad")).toBeNull();
     expect(normalizeSection(undefined)).toBe("Watchlist");
+    // master #409: "" is the unsectioned root run — a legal VALUE, distinct from null/unusable.
+    // Callers must test `=== null`, never truthiness, or every unsectioned row 400s.
+    expect(normalizeSection("")).toBe("");
+    expect(normalizeSection("   ")).toBe("");
+    expect(normalizeSection("x".repeat(81))).toBeNull();
     expect(normalizeListName("  Gold Miners ")).toBe("Gold Miners");
     expect(normalizeListName("x".repeat(81))).toBeNull();
     // The schema's unique (user_id,name) is case-sensitive — no case folding may creep in.

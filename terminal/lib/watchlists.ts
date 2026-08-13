@@ -79,10 +79,15 @@ export function normalizeSymbols(value: unknown): string[] {
   return symbols.length <= MAX_BATCH ? symbols : [];
 }
 
-/** Section label; `null` means the caller sent something unusable. */
-export function normalizeSection(value: unknown, fallback = DEFAULT_SECTION): string | null {
+/**
+ * Section label. `null` means UNUSABLE (too long, control characters); `""` is a legitimate
+ * value — master #409 ("Make watchlist sections fluid") made the empty string mean "the
+ * unsectioned run before the first divider", so callers must test `=== null`, never truthiness.
+ * A MISSING section still falls back to `DEFAULT_SECTION`, which keeps the legacy add contract.
+ */
+export function normalizeSection(value: unknown, fallback: string = DEFAULT_SECTION): string | null {
   const section = typeof value === "string" ? value.trim() : fallback;
-  if (!section || section.length > MAX_NAME_LEN || CONTROL_CHARS.test(section)) return null;
+  if (section.length > MAX_NAME_LEN || CONTROL_CHARS.test(section)) return null;
   return section;
 }
 
@@ -122,7 +127,9 @@ export async function listWatchlists(db: WatchlistDb, userId: string): Promise<S
     if (!list || !symbol || list.symbols.some((existing) => existing.symbol === symbol)) continue;
     list.symbols.push({
       symbol,
-      section: text(row.section)?.trim() || DEFAULT_SECTION,
+      // `null` column = pre-#409 row with no section -> the legacy label. `""` = #409's
+      // deliberate unsectioned run -> preserved verbatim, never coerced back to "Watchlist".
+      section: typeof row.section === "string" ? row.section.trim() : DEFAULT_SECTION,
       position: num(row.position, list.symbols.length),
     });
   }
@@ -385,7 +392,8 @@ export function planWatchlistMigration(
       const symbol = typeof row?.symbol === "string" ? row.symbol.trim().toUpperCase() : "";
       if (!symbol || present.has(symbol) || queued.has(symbol)) continue;
       queued.add(symbol);
-      insert.push({ symbol, section: normalizeSection(row?.section) ?? DEFAULT_SECTION });
+      const section = normalizeSection(row?.section);
+      insert.push({ symbol, section: section === null ? DEFAULT_SECTION : section });
     }
     if (serverList && !insert.length) {
       // Already fully represented on the server — nothing to do, but it IS migrated, so the
@@ -435,17 +443,19 @@ export function adoptServerSymbols(
   const adopted: { symbol: string; section: string }[] = [];
   const seen = new Set<string>();
   // Local rows first, untouched: same order, same section. Nothing here may be dropped.
+  // `?? DEFAULT_SECTION`, never `|| DEFAULT_SECTION`: an empty section is #409's unsectioned run
+  // and must survive adoption, or every unsectioned row silently re-files itself under "Watchlist".
   for (const row of local) {
     if (!row?.symbol || seen.has(row.symbol)) continue;
     seen.add(row.symbol);
-    adopted.push({ symbol: row.symbol, section: row.section || DEFAULT_SECTION });
+    adopted.push({ symbol: row.symbol, section: row.section ?? DEFAULT_SECTION });
   }
   // Then the genuinely server-only rows, appended in server order.
   for (const row of server) {
     if (!row?.symbol || seen.has(row.symbol)) continue;
     if (alreadyLocal?.has(row.symbol)) continue;   // removed locally while the read was in flight
     seen.add(row.symbol);
-    adopted.push({ symbol: row.symbol, section: row.section || DEFAULT_SECTION });
+    adopted.push({ symbol: row.symbol, section: row.section ?? DEFAULT_SECTION });
   }
   return adopted;
 }

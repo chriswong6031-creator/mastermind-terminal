@@ -2,8 +2,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useIsMobile, useIsPhone } from "@/lib/useMediaQuery";
 import MobileSheet from "@/components/ui/MobileSheet";
-import { DndContext, PointerSensor, KeyboardSensor, useDroppable, useSensor, useSensors, closestCenter, type DragEndEvent } from "@dnd-kit/core";
-import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+import { DndContext, PointerSensor, KeyboardSensor, useDroppable, useSensor, useSensors, closestCenter, type CollisionDetection, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import dynamic from "next/dynamic";
@@ -54,7 +54,6 @@ import {
   adoptServerSymbols,
   chunkSymbols,
   DEFAULT_LIST,
-  MAX_BATCH,
   planWatchlistMigration,
   type ServerWatchlist,
 } from "@/lib/watchlists";
@@ -142,12 +141,25 @@ import {
   resolveWatchlistContextSelection,
   resolveWatchlistSelection,
 } from "@/lib/watchlistSelection";
+import {
+  insertWatchlistSectionBefore,
+  moveWatchlistSection,
+  orderWatchlistRowsBySections,
+  removeWatchlistSection,
+  WATCHLIST_ROOT_SECTION,
+  watchlistSectionOrder,
+  watchlistVisualOrder,
+} from "@/lib/watchlistSections";
 
 type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
 // /api/ext-quote entry. extSession mirrors the Quote Hub's own window classification.
 type ExtSession = "pre" | "post" | "overnight";
 type ExtQuote = { extPrice: number; extChg: number; extTs: number; extSession?: ExtSession };
+
+const normalizeWatchlistRows = (rows: readonly { symbol: string; section?: unknown }[]) => rows
+  .filter((row) => typeof row.symbol === "string" && !!row.symbol)
+  .map((row) => ({ symbol: row.symbol, section: typeof row.section === "string" ? row.section.trim() : WATCHLIST_ROOT_SECTION }));
 
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const vol = (v: number | null | undefined) => (v == null || !isFinite(v) ? "—" : v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : String(v));
@@ -192,47 +204,154 @@ function mergeLive(r: Row | undefined, q: any): Row | undefined {
 // never collide with a ticker of the same name (a list with a "GOLD" section and a GOLD symbol
 // would otherwise share an id and drop into itself).
 const SEC_DROP_PREFIX = "__sec__:";
+const ROOT_DROP_ID = "__watchlist_root__";
+const watchlistCollisionDetection: CollisionDetection = (args) => {
+  const draggingSection = String(args.active.id).startsWith(SEC_DROP_PREFIX);
+  const initialRect = args.active.rect.current.initial;
+  const pointerInsideInitial = !!args.pointerCoordinates && !!initialRect
+    && args.pointerCoordinates.x >= initialRect.left && args.pointerCoordinates.x <= initialRect.right
+    && args.pointerCoordinates.y >= initialRect.top && args.pointerCoordinates.y <= initialRect.bottom;
+  // Keep the active target while the pointer is still inside its original
+  // bounds (micro-drags are no-ops). Once it leaves, exclude the transformed
+  // active node so it cannot follow the pointer and swallow a real drop.
+  const scoped = {
+    ...args,
+    droppableContainers: pointerInsideInitial
+      ? args.droppableContainers
+      : args.droppableContainers.filter((container) => container.id !== args.active.id),
+  };
+  // dnd-kit caches layout rectangles at drag start. Sortable transforms then
+  // move sibling rows visually, so those cached bounds can claim the adjacent
+  // divider even while the pointer is visibly centered on a row. Pointer DnD
+  // must resolve against the live transformed DOM rectangles.
+  const exact = args.pointerCoordinates
+    ? scoped.droppableContainers.flatMap((container) => {
+        const rect = container.node.current?.getBoundingClientRect();
+        const pointer = args.pointerCoordinates!;
+        if (!rect || pointer.x < rect.left || pointer.x > rect.right || pointer.y < rect.top || pointer.y > rect.bottom) return [];
+        return [{
+          id: container.id,
+          data: {
+            droppableContainer: container,
+            value: Math.hypot(pointer.x - (rect.left + rect.width / 2), pointer.y - (rect.top + rect.height / 2)),
+          },
+        }];
+      }).sort((a, b) => a.data.value - b.data.value)
+    : [];
+  if (args.pointerCoordinates && !draggingSection) {
+    const exactRows = exact.filter(({ id }) => id !== ROOT_DROP_ID && !String(id).startsWith(SEC_DROP_PREFIX));
+    if (exactRows.length) return exactRows;
+    const pointer = args.pointerCoordinates;
+    const nearRows = scoped.droppableContainers.flatMap((container) => {
+      const id = String(container.id);
+      if (id === ROOT_DROP_ID || id.startsWith(SEC_DROP_PREFIX)) return [];
+      const rect = container.node.current?.getBoundingClientRect();
+      if (!rect || pointer.x < rect.left || pointer.x > rect.right) return [];
+      const gap = pointer.y < rect.top ? rect.top - pointer.y : pointer.y > rect.bottom ? pointer.y - rect.bottom : 0;
+      if (gap > 12) return [];
+      return [{ id: container.id, data: { droppableContainer: container, value: gap } }];
+    }).sort((a, b) => a.data.value - b.data.value);
+    // A row may have shifted just beyond the pointer while opening the sortable
+    // gap. Prefer that nearby row over the adjoining divider; a deliberate
+    // header-center drop is farther than this tolerance and remains a section move.
+    if (nearRows.length) return nearRows;
+  }
+  if (!exact.length) return closestCenter(scoped);
+
+  // Rows and divider headers can overlap while sort transforms are active. A
+  // ticker dropped on another ticker must resolve to that row (not the nearby
+  // section header); a divider drag gets the inverse preference. Empty/root
+  // runs still work because we fall back to the only exact container there.
+  const preferred = exact.filter(({ id }) => {
+    const isSectionTarget = id === ROOT_DROP_ID || String(id).startsWith(SEC_DROP_PREFIX);
+    return draggingSection ? isSectionTarget : !isSectionTarget;
+  });
+  const candidates = preferred.length ? preferred : exact;
+  return candidates;
+};
 
 // A watchlist section divider: collapse toggle, name, count, and — matching the operator's
 // TradingView reference — rename + trash affordances that appear on hover. Deleting removes the
 // DIVIDER only; the symbols survive in the section above (see deleteSection).
-function WlSectionHeader({ name, count, collapsed, minWidth, onToggle, onRename, onDelete, labels }: {
+function WlSectionHeader({ name, count, collapsed, minWidth, onToggle, onContextMenu, onRename, onDelete, labels }: {
   name: string;
   count: number;
   collapsed: boolean;
   minWidth: number;
   onToggle: () => void;
-  onRename: () => void;
+  onContextMenu: (point: { x: number; y: number; focus: HTMLElement }) => void;
+  onRename: (point: { x: number; y: number; focus: HTMLElement }) => void;
   onDelete: () => void;
-  labels: { rename: string; remove: string; collapse: string };
+  labels: { rename: string; remove: string; collapse: string; drag: string };
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: SEC_DROP_PREFIX + name });
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging, isOver } = useSortable({ id: SEC_DROP_PREFIX + name });
   return (
     <div
       ref={setNodeRef}
-      className={`wl-sec${collapsed ? " collapsed" : ""}${isOver ? " over" : ""}`}
+      className={`wl-sec${collapsed ? " collapsed" : ""}${isOver ? " over" : ""}${isDragging ? " dragging" : ""}`}
       data-watchlist-section-header={name}
-      style={{ minWidth }}
-      onClick={onToggle}
-      role="button"
-      tabIndex={0}
-      aria-expanded={!collapsed}
-      title={labels.collapse}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+      style={{ minWidth, transform: DndCSS.Transform.toString(transform), transition: transition ?? undefined }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onContextMenu({ x: event.clientX, y: event.clientY, focus: event.currentTarget });
+      }}
     >
-      <svg className="wl-sec-car" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
-      <span className="wl-sec-nm">{name}</span>
-      <span className="wl-sec-ct">{count}</span>
+      <button
+        type="button"
+        className="wl-sec-toggle"
+        aria-expanded={!collapsed}
+        title={labels.collapse}
+        onClick={onToggle}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onContextMenu({ x: event.clientX, y: event.clientY, focus: event.currentTarget });
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+            event.preventDefault();
+            const rect = event.currentTarget.getBoundingClientRect();
+            onContextMenu({ x: rect.left + 24, y: rect.bottom, focus: event.currentTarget });
+          }
+        }}
+      >
+        <svg className="wl-sec-car" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+        <span className="wl-sec-nm">{name}</span>
+        <span className="wl-sec-ct">{count}</span>
+      </button>
+      <button
+        ref={setActivatorNodeRef}
+        type="button"
+        suppressHydrationWarning
+        {...attributes}
+        {...listeners}
+        className="wl-sec-drag"
+        aria-label={labels.drag}
+        title={labels.drag}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="5" cy="4" r="1" /><circle cx="11" cy="4" r="1" /><circle cx="5" cy="8" r="1" /><circle cx="11" cy="8" r="1" /><circle cx="5" cy="12" r="1" /><circle cx="11" cy="12" r="1" /></svg>
+      </button>
       <span className="wl-sec-acts">
-        <span className="wl-sec-ic" title={labels.rename} onClick={(e) => { e.stopPropagation(); onRename(); }}>
+        <button type="button" className="wl-sec-ic" title={labels.rename} aria-label={labels.rename} onClick={(event) => {
+          event.stopPropagation();
+          const rect = event.currentTarget.getBoundingClientRect();
+          onRename({ x: rect.right, y: rect.bottom, focus: event.currentTarget });
+        }}>
           <svg viewBox="0 0 24 24"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3M13.5 6.5l3 3" /></svg>
-        </span>
-        <span className="wl-sec-ic del" title={labels.remove} onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+        </button>
+        <button type="button" className="wl-sec-ic del" title={labels.remove} aria-label={labels.remove} onClick={(event) => { event.stopPropagation(); onDelete(); }}>
           <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></svg>
-        </span>
+        </button>
       </span>
     </div>
   );
+}
+
+function WlRootDropZone({ active, label }: { active: boolean; label: string }) {
+  const { setNodeRef, isOver } = useDroppable({ id: ROOT_DROP_ID });
+  return <div ref={setNodeRef} className={`wl-root-drop${active ? " active" : ""}${isOver ? " over" : ""}`} aria-hidden={!active}>{label}</div>;
 }
 
 // Drag-sortable wrapper for a watchlist row. Whole-row draggable with a distance
@@ -265,7 +384,7 @@ function SortableWlRow({ sym, section, selected, dragLabel, className, style, on
       // dnd-kit derives aria-describedby from a module counter that differs
       // between SSR and client — a benign, dev-only hydration mismatch.
       suppressHydrationWarning
-      className={className}
+      className={`${className}${isDragging ? " dragging" : ""}`}
       data-watchlist-symbol={sym}
       data-watchlist-section={section}
       style={{
@@ -281,6 +400,12 @@ function SortableWlRow({ sym, section, selected, dragLabel, className, style, on
       onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
       onMouseEnter={onMouseEnter}
+      onPointerDown={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest("[data-wl-no-drag],button,input,textarea,select,a,[role='button']")) return;
+        listeners?.onPointerDown?.(event);
+      }}
+      draggable={false}
       role="option"
       aria-selected={selected}
       tabIndex={0}
@@ -292,6 +417,7 @@ function SortableWlRow({ sym, section, selected, dragLabel, className, style, on
         aria-label={dragLabel}
         title={dragLabel}
         role="button"
+        data-wl-no-drag
         tabIndex={0}
         onClick={(event) => event.stopPropagation()}
         onPointerDown={(event) => {
@@ -308,32 +434,64 @@ function SortableWlRow({ sym, section, selected, dragLabel, className, style, on
 }
 
 type WlContextPoint = { x: number; y: number; symbol: string };
+type WlSectionContextPoint = { x: number; y: number; section: string; initialView?: "main" | "rename" };
 
 function WlBulkContextMenu({
   point,
   count,
   sections,
   listNames,
+  listMembership,
+  symbol,
+  flagColor,
+  note,
+  canCompare,
+  isCompared,
   onClose,
   onMove,
   onMoveNew,
   onCreateList,
   onDelete,
+  onFlag,
+  onUnflag,
+  onUnflagAll,
+  onAddToList,
+  onCompare,
+  onSaveNote,
+  onFinancials,
+  onInsertSection,
+  onAddSymbol,
 }: {
   point: WlContextPoint;
   count: number;
   sections: string[];
   listNames: string[];
+  listMembership: Record<string, boolean>;
+  symbol: string;
+  flagColor?: string;
+  note: string;
+  canCompare: boolean;
+  isCompared: boolean;
   onClose: () => void;
   onMove: (section: string) => void;
   onMoveNew: (section: string) => void;
   onCreateList: (name: string) => void;
   onDelete: () => void;
+  onFlag: (color: string) => void;
+  onUnflag: () => void;
+  onUnflagAll: () => void;
+  onAddToList: (listName: string) => void;
+  onCompare: () => void;
+  onSaveNote: (note: string) => void;
+  onFinancials: () => void;
+  onInsertSection: (section: string) => void;
+  onAddSymbol: () => void;
 }) {
   const t = useT();
   const rootRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<"main" | "sections" | "new-section" | "new-list">("main");
-  const [name, setName] = useState("");
+  const single = count === 1;
+  const [view, setView] = useState<"main" | "sections" | "move-new-section" | "insert-section" | "new-list" | "watchlists" | "note">("main");
+  const [name, setName] = useState(note);
   const [position, setPosition] = useState({ left: point.x, top: point.y });
   const normalized = name.trim();
   const invalidSection = !normalized || sections.includes(normalized);
@@ -349,7 +507,7 @@ function WlBulkContextMenu({
         left: Math.max(margin, Math.min(point.x, window.innerWidth - rect.width - margin)),
         top: Math.max(margin, Math.min(point.y, window.innerHeight - rect.height - margin)),
       });
-      (el.querySelector<HTMLElement>('.wl-bulk-form input:not(:disabled)')
+      (el.querySelector<HTMLElement>('.wl-bulk-form input:not(:disabled),.wl-bulk-form textarea:not(:disabled)')
         ?? el.querySelector<HTMLElement>('button:not(:disabled)'))?.focus();
     });
     return () => window.cancelAnimationFrame(id);
@@ -371,7 +529,7 @@ function WlBulkContextMenu({
   const back = () => { setView("main"); setName(""); };
   const onMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); return; }
-    if ((event.target as HTMLElement).tagName === "INPUT") return;
+    if (["INPUT", "TEXTAREA"].includes((event.target as HTMLElement).tagName)) return;
     if (event.key === "ArrowLeft" && view !== "main") { event.preventDefault(); back(); return; }
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     const controls = [...(rootRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') ?? [])];
@@ -389,6 +547,13 @@ function WlBulkContextMenu({
   const iconList = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M4 12h10M4 18h10M19 8v8M15 12h8" /></svg>;
   const iconTrash = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></svg>;
   const iconBack = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>;
+  const iconFlag = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4m0 1h11l-2 4 2 4H5" /></svg>;
+  const iconCompare = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9m6 10V5m6 14v-7m4 7H2" /></svg>;
+  const iconNote = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v13H9l-5 4V4zm4 5h8M8 13h5" /></svg>;
+  const iconFinancials = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10h4v10m4 0V4h4v16m4 0H2" /></svg>;
+  const iconSection = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 12h12" /></svg>;
+  const iconAdd = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>;
+  const runAndClose = (fn: () => void) => { fn(); onClose(); };
 
   const menu = (
     <div
@@ -403,51 +568,212 @@ function WlBulkContextMenu({
     >
       <div className="wl-bulk-menu-head">
         {view !== "main" && <button type="button" className="wl-bulk-back" aria-label={t("back")} onClick={back}>{iconBack}</button>}
-        <span>{t("wlSymbolsSelected").replace("{n}", String(count))}</span>
+        <span>{single ? symbol : t("wlSymbolsSelected").replace("{n}", String(count))}</span>
       </div>
       {view === "main" && <>
+        {single && <>
+          <div className="wl-single-flag-title"><span className="ctx-ico">{iconFlag}</span>{t("wlFlagSymbol").replace("{symbol}", symbol)}</div>
+          <div className="wl-single-flag-colors" role="group" aria-label={t("wlFlagSymbol").replace("{symbol}", symbol)}>
+            {FLAG_COLORS.map((color, index) => (
+              <button
+                type="button"
+                key={color}
+                className={`wl-single-flag-dot${flagColor === color ? " selected" : ""}`}
+                style={{ background: color, color }}
+                aria-label={t("wlFlagColor").replace("{n}", String(index + 1))}
+                aria-pressed={flagColor === color}
+                onClick={() => runAndClose(() => onFlag(color))}
+              />
+            ))}
+          </div>
+          {flagColor && <button type="button" role="menuitem" className="ctx-row" onClick={() => runAndClose(onUnflag)}>
+            <span className="ctx-ico">{iconFlag}</span><span className="ctx-lbl">{t("flagRemove")}</span>
+          </button>}
+          <button type="button" role="menuitem" className="ctx-row" onClick={() => runAndClose(onUnflagAll)}>
+            <span className="ctx-ico">{iconFlag}</span><span className="ctx-lbl">{t("wlUnflagAll")}</span>
+          </button>
+          <div className="sep" />
+          <button type="button" role="menuitem" className="ctx-row" onClick={() => setView("watchlists")}>
+            <span className="ctx-ico">{iconList}</span><span className="ctx-lbl">{t("wlAddToWatchlist").replace("{symbol}", symbol)}</span><span className="wl-bulk-chevron">›</span>
+          </button>
+          <button type="button" role="menuitem" className="ctx-row" disabled={!canCompare} onClick={() => runAndClose(onCompare)}>
+            <span className="ctx-ico">{iconCompare}</span><span className="ctx-lbl">{t(isCompared ? "wlRemoveFromCompare" : "wlAddToCompare").replace("{symbol}", symbol)}</span>
+          </button>
+          <button type="button" role="menuitem" className="ctx-row" onClick={() => { setName(note); setView("note"); }}>
+            <span className="ctx-ico">{iconNote}</span><span className="ctx-lbl">{note ? t("wlEditNote") : t("wlAddNote").replace("{symbol}", symbol)}</span>
+          </button>
+          <button type="button" role="menuitem" className="ctx-row" onClick={() => runAndClose(onFinancials)}>
+            <span className="ctx-ico">{iconFinancials}</span><span className="ctx-lbl">{t("wlFinancials")}</span>
+          </button>
+          <div className="sep" />
+        </>}
         <button type="button" role="menuitem" className="ctx-row" onClick={() => setView("sections")}>
           <span className="ctx-ico">{iconMove}</span><span className="ctx-lbl">{t("wlMoveToSection")}</span><span className="wl-bulk-chevron">›</span>
         </button>
         <button type="button" role="menuitem" className="ctx-row" onClick={() => setView("new-list")}>
           <span className="ctx-ico">{iconList}</span><span className="ctx-lbl">{t("wlCreateFromSelection")}</span>
         </button>
+        {single && <>
+          <div className="sep" />
+          <button type="button" role="menuitem" className="ctx-row" onClick={() => { setName(""); setView("insert-section"); }}>
+            <span className="ctx-ico">{iconSection}</span><span className="ctx-lbl">{t("addSection")}</span>
+          </button>
+          <button type="button" role="menuitem" className="ctx-row" onClick={() => runAndClose(onAddSymbol)}>
+            <span className="ctx-ico">{iconAdd}</span><span className="ctx-lbl">{t("addSymbol")}</span>
+          </button>
+        </>}
         <div className="sep" />
         <button type="button" role="menuitem" className="ctx-row ctx-danger" onClick={onDelete}>
-          <span className="ctx-ico">{iconTrash}</span><span className="ctx-lbl">{t("wlDeleteSymbols").replace("{n}", String(count))}</span>
+          <span className="ctx-ico">{iconTrash}</span><span className="ctx-lbl">{single ? t("wlDeleteOneSymbol") : t("wlDeleteSymbols").replace("{n}", String(count))}</span>
         </button>
       </>}
       {view === "sections" && <>
         <div className="ctx-grp">{t("wlMoveToSection")}</div>
         {sections.map((section) => (
           <button type="button" role="menuitem" className="ctx-row ctx-sub" key={section} onClick={() => onMove(section)}>
-            <span className="ctx-lbl">{section}</span>
+            <span className="ctx-lbl">{section || t("wlUnsectioned")}</span>
           </button>
         ))}
         <div className="sep" />
-        <button type="button" role="menuitem" className="ctx-row" onClick={() => { setName(""); setView("new-section"); }}>
+        <button type="button" role="menuitem" className="ctx-row" onClick={() => { setName(""); setView("move-new-section"); }}>
           <span className="ctx-ico">+</span><span className="ctx-lbl">{t("wlNewSection")}</span>
         </button>
       </>}
-      {(view === "new-section" || view === "new-list") && <form className="wl-bulk-form" onSubmit={(event) => {
+      {view === "watchlists" && <>
+        <div className="ctx-grp">{t("watchlists")}</div>
+        {listNames.map((listName) => (
+          <button type="button" role="menuitem" className="ctx-row ctx-sub" key={listName} disabled={listMembership[listName]} onClick={() => runAndClose(() => onAddToList(listName))}>
+            <span className="ctx-lbl">{listName}</span>{listMembership[listName] && <span className="wl-menu-check">✓</span>}
+          </button>
+        ))}
+      </>}
+      {(view === "move-new-section" || view === "insert-section" || view === "new-list") && <form className="wl-bulk-form" onSubmit={(event) => {
         event.preventDefault();
-        if (view === "new-section" ? invalidSection : invalidList) return;
-        if (view === "new-section") onMoveNew(normalized);
+        if (view === "new-list" ? invalidList : invalidSection) return;
+        if (view === "move-new-section") onMoveNew(normalized);
+        else if (view === "insert-section") onInsertSection(normalized);
         else onCreateList(normalized);
       }}>
-        <label htmlFor="wl-bulk-name">{view === "new-section" ? t("wlNewSection") : t("wlCreateFromSelection")}</label>
+        <label htmlFor="wl-bulk-name">{view === "new-list" ? t("wlCreateFromSelection") : t("addSection")}</label>
         <input
           id="wl-bulk-name"
           value={name}
           maxLength={80}
-          placeholder={view === "new-section" ? t("addSectionPrompt") : t("newWatchlistPrompt")}
+          placeholder={view === "new-list" ? t("newWatchlistPrompt") : t("addSectionPrompt")}
           onChange={(event) => setName(event.target.value)}
         />
-        <button type="submit" disabled={view === "new-section" ? invalidSection : invalidList}>{t("create")}</button>
+        <button type="submit" disabled={view === "new-list" ? invalidList : invalidSection}>{t("create")}</button>
+      </form>}
+      {view === "note" && <form className="wl-bulk-form" onSubmit={(event) => {
+        event.preventDefault();
+        runAndClose(() => onSaveNote(name.trim()));
+      }}>
+        <label htmlFor="wl-symbol-note">{t("wlNoteFor").replace("{symbol}", symbol)}</label>
+        <textarea id="wl-symbol-note" value={name} maxLength={500} autoFocus placeholder={t("wlNotePlaceholder")} onChange={(event) => setName(event.target.value)} />
+        <button type="submit">{t("save")}</button>
       </form>}
     </div>
   );
   return createPortal(menu, document.body);
+}
+
+function WlSectionContextMenu({ point, sectionNames, onClose, onRename, onRemove, onAddSymbol }: {
+  point: WlSectionContextPoint;
+  sectionNames: string[];
+  onClose: () => void;
+  onRename: (name: string) => boolean;
+  onRemove: () => void;
+  onAddSymbol: () => void;
+}) {
+  const t = useT();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState<"main" | "rename">(point.initialView ?? "main");
+  const [name, setName] = useState(point.section);
+  const [position, setPosition] = useState({ left: point.x, top: point.y });
+  const normalized = name.trim();
+  const invalid = !normalized || normalized === point.section || sectionNames.includes(normalized);
+
+  useEffect(() => {
+    const id = window.requestAnimationFrame(() => {
+      const el = rootRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const margin = 8;
+      setPosition({
+        left: Math.max(margin, Math.min(point.x, window.innerWidth - rect.width - margin)),
+        top: Math.max(margin, Math.min(point.y, window.innerHeight - rect.height - margin)),
+      });
+      (el.querySelector<HTMLElement>("input") ?? el.querySelector<HTMLElement>("button:not(:disabled)"))?.focus();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [point.x, point.y, view]);
+
+  useEffect(() => {
+    const close = (event?: Event) => {
+      if (event?.type === "scroll" && event.target instanceof Node && rootRef.current?.contains(event.target)) return;
+      onClose();
+    };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      ref={rootRef}
+      className="ctx-menu wl-section-menu"
+      style={{ left: position.left, top: position.top }}
+      role="menu"
+      aria-label={t("wlSectionActions").replace("{section}", point.section)}
+      onClick={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.preventDefault()}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") { event.preventDefault(); onClose(); }
+        if (event.key === "ArrowLeft" && view === "rename") { event.preventDefault(); setView("main"); setName(point.section); }
+        if ((event.target as HTMLElement).closest("input")) return;
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+        const controls = [...(rootRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled)") ?? [])];
+        if (!controls.length) return;
+        event.preventDefault();
+        const current = controls.indexOf(document.activeElement as HTMLElement);
+        const next = event.key === "Home" ? 0
+          : event.key === "End" ? controls.length - 1
+            : event.key === "ArrowDown" ? (current + 1 + controls.length) % controls.length
+              : (current - 1 + controls.length) % controls.length;
+        controls[next]?.focus();
+      }}
+    >
+      <div className="wl-bulk-menu-head">
+        {view === "rename" && <button type="button" className="wl-bulk-back" aria-label={t("back")} onClick={() => { setView("main"); setName(point.section); }}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+        </button>}
+        <span>{point.section}</span>
+      </div>
+      {view === "main" ? <>
+        <button type="button" role="menuitem" className="ctx-row" onClick={() => setView("rename")}>
+          <span className="ctx-ico"><svg viewBox="0 0 24 24"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3M13.5 6.5l3 3" /></svg></span><span className="ctx-lbl">{t("renameSection")}</span>
+        </button>
+        <button type="button" role="menuitem" className="ctx-row" onClick={onRemove}>
+          <span className="ctx-ico"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></svg></span><span className="ctx-lbl">{t("deleteSection")}</span>
+        </button>
+        <div className="sep" />
+        <button type="button" role="menuitem" className="ctx-row" onClick={onAddSymbol}>
+          <span className="ctx-ico"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></span><span className="ctx-lbl">{t("addSymbol")}</span>
+        </button>
+      </> : <form className="wl-bulk-form" onSubmit={(event) => {
+        event.preventDefault();
+        if (!invalid && onRename(normalized)) onClose();
+      }}>
+        <label htmlFor="wl-section-rename">{t("renameSection")}</label>
+        <input id="wl-section-rename" value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
+        <button type="submit" disabled={invalid}>{t("save")}</button>
+      </form>}
+    </div>,
+    document.body,
+  );
 }
 const CHART_TYPE_GROUPS: [string, string[]][] = [
   ["ctGroupCandles", ["candles", "hollow", "heikin"]],
@@ -557,7 +883,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const [man, setMan] = useState<Manifest | null>(null);
   // named watchlists — client-side + localStorage-backed so switching / creating lists works for guests
   // (no auth needed). The server-provided `symbols` seed becomes the "Default" list.
-  const [lists, setLists] = useState<Record<string, { symbol: string; section: string }[]>>({ Default: symbols });
+  const [lists, setLists] = useState<Record<string, { symbol: string; section: string }[]>>({ Default: normalizeWatchlistRows(symbols) });
   // Per-list section metadata (order + collapsed). Kept OUT of `lists` so old mm.wls saves,
   // which store `lists` as plain row arrays, keep loading unchanged.
   const [listMeta, setListMeta] = useState<Record<string, { sections: string[]; collapsed: string[] }>>({});
@@ -567,121 +893,37 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const [wlMenuOpen, setWlMenuOpen] = useState(false);
   const [wlSelected, setWlSelected] = useState<Set<string>>(() => new Set());
   const [wlContext, setWlContext] = useState<WlContextPoint | null>(null);
+  const [wlSectionContext, setWlSectionContext] = useState<WlSectionContextPoint | null>(null);
+  const [wlDragId, setWlDragId] = useState<string | null>(null);
   const [wlSyncFailed, setWlSyncFailed] = useState(false);
   const wlAnchorRef = useRef<string | null>(null);
   const wlContextFocusRef = useRef<HTMLElement | null>(null);
+  const wlSectionContextFocusRef = useRef<HTMLElement | null>(null);
+  const wlPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const wlPointerDragRef = useRef(false);
+  const wlPointerLeftInitialRef = useRef(false);
+  const wlPointerInitialRectRef = useRef<{ left: number; right: number; top: number; bottom: number } | null>(null);
+  const addSymbolTargetRef = useRef<{ section: string; afterSymbol?: string } | null>(null);
   const wlSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wlServerChainRef = useRef<Promise<boolean>>(Promise.resolve(true));
   // W1b: server list id per list NAME, read from GET /api/watchlist once signed in. Empty for
-  // guests and until the inventory lands, which is what keeps every path below fail-safe: no id
-  // means the op stays local, exactly as it behaved before this wave.
-  const [serverListIds, setServerListIds] = useState<Record<string, string>>({});
+  // guests and until the inventory lands; a missing id makes an op resolve by exact name instead.
+  //
+  // A REF, deliberately not React state. Nothing renders from it — every consumer reads
+  // `serverListIdsRef.current` inside an event handler or an effect — so holding it in state only
+  // bought a full shell re-render on every registration. That re-render landed ~1s after mount,
+  // mid-interaction, and broke master #409's context-menu tests (the flag row measured as not
+  // visible). Ids are plumbing, not rendered state.
   const serverListIdsRef = useRef<Record<string, string>>({});
-  serverListIdsRef.current = serverListIds;
-  const wlMigrationRef = useRef(false);
-  // Set by the mount-restore effect below. The migration must not read `lists` until the saved
-  // `mm.wls` has actually been applied: restore, persist and migrate all fire in the SAME commit,
-  // and in that commit `lists` is still the initial server-seeded Default (and the persist effect
-  // has momentarily written that same Default back over `mm.wls`). Gating on a state flag costs
-  // one extra commit and removes the ordering hazard entirely.
-  const [wlsRestored, setWlsRestored] = useState(false);
-  // Live mirror of `lists` for the async migration below: reading it from a ref keeps the effect
-  // keyed on `loggedIn` alone, so a symbol edit mid-migration cannot restart the whole run.
-  const listsRef = useRef(lists);
-  listsRef.current = lists;
-  // F7: sign-out -> sign-in (as anyone, but especially as a DIFFERENT user) must not inherit the
-  // previous session's list ids or its "already migrated" latch. Without this the second account
-  // syncs into the first account's list ids until the tab is reloaded. Declared BEFORE the
-  // migration effect so the reset lands first within the same commit.
-  const wlMigrationEmailRef = useRef(email);
-  useEffect(() => {
-    if (wlMigrationEmailRef.current === email) return;
-    wlMigrationEmailRef.current = email;
-    wlMigrationRef.current = false;
-    serverListIdsRef.current = {};
-    setServerListIds({});
-  }, [email]);
-  // Fire-and-forget symbol sync for ONE list, matching the pre-W1b idiom (optimistic local write,
-  // server catches up). Before W1b this only ever ran for "Default"; a named list now carries a
-  // real server id, so it syncs too. Default deliberately keeps working WITHOUT an id — the API's
-  // no-list fallback still resolves the first list, so TRAP-1's reconcile heal cannot regress
-  // while the inventory request is in flight.
-  const syncWatchlist = useCallback((listName: string, payload: Record<string, unknown>) => {
-    if (!email) return null;                       // guests: no network, byte-identical to pre-W1b
-    const listId = serverListIdsRef.current[listName];
-    // F2: an edit made before the inventory lands (or right after a local create) still has to
-    // reach the server. With an id we target it; without one we send the EXACT name and let the
-    // route resolve it — never a silent early return, which is how a drag or a delete used to
-    // vanish during the migration window. `Default` keeps the pre-W1b wire shape exactly: no
-    // target at all, so the route's first-list fallback resolves it and the TRAP-1 heal path is
-    // unchanged even for an account whose first list is macro's 'Watchlist' rather than 'Default'.
-    const target = listId ? { listId } : listName === DEFAULT_LIST ? {} : { listName };
-    // F6: the route caps a batch at MAX_BATCH and refuses anything larger outright, so a 600-name
-    // clear or CSV import would have been dropped whole. Split it here; every pre-W1b caller of
-    // these paths worked at any size.
-    const symbols = Array.isArray(payload.symbols) ? payload.symbols as string[] : null;
-    const sections = payload.sections && typeof payload.sections === "object"
-      ? payload.sections as Record<string, string>
-      : null;
-    const send = (body: Record<string, unknown>) => fetch("/api/watchlist", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, ...target }),
-    });
-    if (!symbols || symbols.length <= MAX_BATCH) return send(payload);
-    return Promise.all(chunkSymbols(symbols).map((chunk) => send({
-      ...payload,
-      symbols: chunk,
-      ...(sections ? { sections: Object.fromEntries(chunk.map((symbol) => [symbol, sections[symbol]]).filter(([, v]) => v)) } : {}),
-    // One failed chunk must read as a failed sync, not a partial success.
-    }))).then((responses) => responses.find((response) => !response.ok) ?? responses[0]);
-  }, [email]);
-  // Existing disclosure surface (`wlSyncFailed` chip: "Watchlist sync failed — local changes were
-  // kept"). Every server path added in W1b routes its failures here rather than minting new copy —
-  // the sentence is already exactly true of a failed list create/rename/delete.
-  const noteWlSyncFailure = useCallback(() => {
-    setWlSyncFailed(true);
-    if (wlSyncTimerRef.current) clearTimeout(wlSyncTimerRef.current);
-    wlSyncTimerRef.current = setTimeout(() => setWlSyncFailed(false), 5000);
-  }, []);
-  /** Create the server row for a locally-created list and remember its id. Optimistic: the local
-   *  list already exists either way, so a failure degrades to the pre-W1b local-only behaviour. */
-  const createServerList = useCallback((name: string, rows: { symbol: string; section: string }[] = []) => {
-    if (!email) return;
-    fetch("/api/watchlist", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "createList", name }),
-    }).then((response) => (response.ok ? response.json() : null)).then((payload) => {
-      const listId = payload?.list?.id;
-      if (typeof listId !== "string" || !listId) { noteWlSyncFailure(); return; }
-      // F5: MERGE, never replace — the migration's own id write must not drop this one, and vice versa.
-      serverListIdsRef.current = { ...serverListIdsRef.current, [name]: listId };
-      setServerListIds((current) => ({ ...current, [name]: listId }));
-      if (!rows.length) return;
-      return fetch("/api/watchlist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "add",
-          listId,
-          symbols: rows.map((row) => row.symbol),
-          sections: Object.fromEntries(rows.map((row) => [row.symbol, row.section])),
-          section: rows[0]?.section || "Watchlist",
-        }),
-      });
-    }).catch(() => { noteWlSyncFailure(); });
-  }, [email, noteWlSyncFailure]);
-  /** F5: fold an inventory's ids INTO the map, never over it. `createServerList` can register an
-   *  id while the migration is still in flight; a wholesale replace would drop it and leave that
-   *  list unsyncable for the rest of the session. */
-  const registerServerListIds = useCallback((lists: readonly { id: string; name: string }[]) => {
+  /** F5: fold an inventory's ids INTO the map, never over it. */
+  const registerServerListIds = useCallback((rows: readonly { id: string; name: string }[]) => {
     const merged = { ...serverListIdsRef.current };
-    for (const list of lists) merged[list.name] = list.id;
+    for (const row of rows) merged[row.name] = row.id;
     if (sameStringMap(merged, serverListIdsRef.current)) return;
     serverListIdsRef.current = merged;
-    setServerListIds(merged);
   }, []);
-  /** Drop one name from the per-list migration marker (WLS_MIGRATED_KEY, defined above). */
+
+  /** Drop one name from the per-list migration marker. */
   const forgetListMigrated = useCallback((name: string) => {
     try {
       const marker = load(WLS_MIGRATED_KEY, {}) as Record<string, unknown>;
@@ -690,14 +932,24 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       localStorage.setItem(WLS_MIGRATED_KEY, JSON.stringify(marker));
     } catch {}
   }, []);
-  // Same call, but surfacing failure through the existing "sync failed" chip.
-  const syncWatchlistLoud = useCallback((listName: string, payload: Record<string, unknown>) => {
-    const request = syncWatchlist(listName, payload);
-    if (!request) return;
-    request.then((response) => {
-      if (!response.ok) throw new Error(`watchlist sync ${response.status}`);
-    }).catch(() => { noteWlSyncFailure(); });
-  }, [syncWatchlist, noteWlSyncFailure]);
+  const wlMigrationRef = useRef(false);
+  // Set by the mount-restore effect. The migration must not read `lists` until the saved `mm.wls`
+  // has actually been applied: restore, persist and migrate all fire in the SAME commit, and in
+  // that commit `lists` still holds the initial server-seeded Default.
+  const [wlsRestored, setWlsRestored] = useState(false);
+  // Live mirror of `lists` for the async migration: reading it from a ref keeps the effect keyed
+  // on `loggedIn` alone, so a symbol edit mid-migration cannot restart the whole run.
+  const listsRef = useRef(lists);
+  listsRef.current = lists;
+  // F7: sign-out -> sign-in (especially as a DIFFERENT user) must not inherit the previous
+  // session's list ids or its "already migrated" latch.
+  const wlMigrationEmailRef = useRef(email);
+  useEffect(() => {
+    if (wlMigrationEmailRef.current === email) return;
+    wlMigrationEmailRef.current = email;
+    wlMigrationRef.current = false;
+    serverListIdsRef.current = {};
+  }, [email]);
   // Memoized so its identity is stable: `lists[activeList] || []` allocated a fresh [] on every
   // render whenever the list was missing, which re-ran every useMemo downstream of `wl`.
   const wl = useMemo(() => lists[activeList] || [], [lists, activeList]);
@@ -707,46 +959,18 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-  // Reorder within and across sections. Order is the wl array, which auto-persists to
-  // localStorage (mm.wls) via the existing effect.
-  const onWlDragEnd = useCallback((e: DragEndEvent) => {
-    const { active, over } = e;
-    if (!over) return;
-    const fromRow = wl.find((row) => row.symbol === active.id);
-    const overId = String(over.id);
-    if (active.id === over.id) return;
-    const targetSection = overId.startsWith(SEC_DROP_PREFIX)
-      ? overId.slice(SEC_DROP_PREFIX.length)
-      : wl.find((row) => row.symbol === overId)?.section;
-    setWl((prev: { symbol: string; section: string }[]) => {
-      const from = prev.findIndex((x) => x.symbol === active.id);
-      if (from < 0) return prev;
-      // Dropping ON a section header re-files the row into that section and parks it at the end
-      // of that group. Sections are user-made now, so a row must be able to LEAVE the section it
-      // was born in — previously any cross-section drop was rejected outright.
-      if (overId.startsWith(SEC_DROP_PREFIX)) {
-        const sec = overId.slice(SEC_DROP_PREFIX.length);
-        if (prev[from].section === sec) return prev;
-        const row = { ...prev[from], section: sec };
-        const rest = prev.filter((_, i) => i !== from);
-        const lastOfSec = rest.map((r) => r.section).lastIndexOf(sec);
-        rest.splice(lastOfSec + 1, 0, row);
-        return rest;
+  useEffect(() => {
+    const trackPointer = (event: PointerEvent) => {
+      if (!wlPointerDragRef.current) return;
+      wlPointerRef.current = { x: event.clientX, y: event.clientY };
+      const initial = wlPointerInitialRectRef.current;
+      if (initial && (event.clientX < initial.left || event.clientX > initial.right || event.clientY < initial.top || event.clientY > initial.bottom)) {
+        wlPointerLeftInitialRef.current = true;
       }
-      const to = prev.findIndex((x) => x.symbol === overId);
-      if (to < 0) return prev;
-      // Same section → plain reorder. Different section → adopt the target's section, so
-      // dragging a row into another group does what it looks like it does.
-      if (prev[from].section === prev[to].section) return arrayMove(prev, from, to);
-      const moved = arrayMove(prev, from, to);
-      const at = moved.findIndex((x) => x.symbol === active.id);
-      moved[at] = { ...moved[at], section: prev[to].section };
-      return moved;
-    });
-    if (fromRow && targetSection && fromRow.section !== targetSection) {
-      syncWatchlistLoud(activeList, { action: "move", symbols: [fromRow.symbol], section: targetSection });
-    }
-  }, [activeList, wl, syncWatchlistLoud]);
+    };
+    window.addEventListener("pointermove", trackPointer, true);
+    return () => window.removeEventListener("pointermove", trackPointer, true);
+  }, []);
   // Market preference — ONE instance for the whole shell, so the Markets settings pane and the
   // search results are always reading the same object. Backed by Supabase user_metadata, which
   // is the same store the macro site's onboarding writes, on the same Supabase project.
@@ -834,6 +1058,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // ── F1 flags: symbol → color; persisted inside mm.wls additively (read below) ──
   const [flags, setFlags] = useState<Record<string, string>>({});
   const [lastFlagColor, setLastFlagColor] = useState<string>(FLAG_DEFAULT);
+  // Symbol notes are symbol-scoped, not chart-coordinate drawings.
+  const [symbolNotes, setSymbolNotes] = useState<Record<string, string>>({});
   // ── F3 add-symbol dialog mode (distinct from "go" search) ──
   const [addSymOpen, setAddSymOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false); const [seed, setSeed] = useState("");
@@ -1355,6 +1581,9 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   useEffect(() => {
     const saved = load("mm.wls", null);
     if (saved && saved.lists && typeof saved.lists === "object" && Object.keys(saved.lists).length) {
+      const savedLists = Object.fromEntries(Object.entries(saved.lists as Record<string, unknown>)
+        .filter(([, rows]) => Array.isArray(rows))
+        .map(([name, rows]) => [name, normalizeWatchlistRows(rows as { symbol: string; section?: unknown }[])]));
       // TRAP 1 (mount side): when signed in, RECONCILE the local Default against the server's
       // Default membership — do NOT wholesale-replace it. The server row only carries add/remove
       // (it knows MEMBERSHIP, not ORDER), and the /api/watchlist adds are fire-and-forget (they can
@@ -1370,8 +1599,9 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       //      server section.
       let restored: Record<string, { symbol: string; section: string }[]>;
       if (loggedIn) {
-        const localDefault: { symbol: string; section: string }[] = Array.isArray(saved.lists.Default) ? saved.lists.Default : [];
-        const serverSyms = new Set(symbols.map((s) => s.symbol));
+        const serverRows = normalizeWatchlistRows(symbols);
+        const localDefault = savedLists.Default ?? [];
+        const serverSyms = new Set(serverRows.map((s) => s.symbol));
         const localSyms = new Set(localDefault.map((r) => r.symbol));
         // 2+3: keep every local row (present-on-server or local-only), local order + section intact.
         const reconciledDefault = [...localDefault];
@@ -1382,12 +1612,12 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           }
         }
         // 4: append server rows missing locally (other-device adds), with their server section.
-        for (const s of symbols) {
+        for (const s of serverRows) {
           if (!localSyms.has(s.symbol)) reconciledDefault.push(s);
         }
-        restored = { ...saved.lists, Default: reconciledDefault };
+        restored = { ...savedLists, Default: reconciledDefault };
       } else {
-        restored = saved.lists;
+        restored = savedLists;
       }
       setLists(restored);
       setActiveList(saved.active && restored[saved.active] ? saved.active : (loggedIn ? "Default" : Object.keys(restored)[0]));
@@ -1398,8 +1628,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         for (const [k, v] of Object.entries(saved.meta as Record<string, unknown>)) {
           const m = v as { sections?: unknown; collapsed?: unknown };
           clean[k] = {
-            sections: Array.isArray(m?.sections) ? m.sections.filter((x): x is string => typeof x === "string") : [],
-            collapsed: Array.isArray(m?.collapsed) ? m.collapsed.filter((x): x is string => typeof x === "string") : [],
+            sections: Array.isArray(m?.sections) ? m.sections.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean) : [],
+            collapsed: Array.isArray(m?.collapsed) ? m.collapsed.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean) : [],
           };
         }
         setListMeta(clean);
@@ -1411,6 +1641,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     const savedLastColor = load("mm.lastFlagColor", FLAG_DEFAULT);
     if (typeof savedLastColor === "string") setLastFlagColor(savedLastColor);
     setWlsRestored(true);
+    const savedNotes = load("mm.symbolNotes", {});
+    if (savedNotes && typeof savedNotes === "object" && !Array.isArray(savedNotes)) {
+      setSymbolNotes(Object.fromEntries(Object.entries(savedNotes).filter(([symbol, note]) =>
+        !!symbol && typeof note === "string" && !!note.trim()).map(([symbol, note]) => [symbol, (note as string).slice(0, 500)])));
+    }
     // Mount-only restore: loggedIn/symbols are read for the signed-in Default override but must NOT
     // re-trigger this (re-reading localStorage mid-session would clobber live edits; the guest→signin
     // transition is handled by the prevEmailRef effect below).
@@ -1418,18 +1653,14 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   }, []);
   useEffect(() => { if (Object.keys(lists).length) localStorage.setItem("mm.wls", JSON.stringify({ lists, active: activeList, meta: listMeta })); }, [lists, activeList, listMeta]);
   // ── W1b: signed-in named lists become SERVER-BACKED; `mm.wls` demotes to an optimistic cache.
-  //    Runs once per signed-in session, after the mount restore above has put the saved lists into
-  //    state. Three steps, in order:
-  //      1. read the owner's inventory (GET /api/watchlist — RLS-scoped);
-  //      2. run the one-time ADDITIVE migration for every non-`Default` local list whose name the
-  //         marker does not already record: merge by EXACT name, create when absent, insert only
-  //         the symbols the server list is missing (local order, local section). It never deletes
-  //         or renames a server row, and server-only lists are simply left alone;
-  //      3. re-read and adopt the server model for those lists — server `position` wins for rows
-  //         that exist on both sides, local-only rows append after them.
+  //    1. read the owner's inventory (RLS-scoped) and register its ids BEFORE any write (F2);
+  //    2. run the one-time ADDITIVE migration for every non-`Default` local list the marker does
+  //       not already record: merge by EXACT name, create when absent, insert only the symbols the
+  //       server lacks (local order, local section). Never deletes or renames a server row;
+  //    3. adopt the server model — ADDITIVE ONLY for a list that exists locally, per the
+  //       order-semantics ruling; wholesale only for a list absent locally.
   //    `Default` is untouched at every step: TRAP-1's mount reconcile and guest->signed-in
-  //    overwrite are the only writers of that list, and a second writer here would race them.
-  //    Guests never enter this effect, so `mm.wls` behaves byte-for-byte as it did before W1b.
+  //    overwrite are its only writers. Guests never enter this effect.
   useEffect(() => {
     if (!loggedIn || !wlsRestored || wlMigrationRef.current) return;
     wlMigrationRef.current = true;
@@ -1456,19 +1687,17 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       if (Array.isArray(rows)) beforeRead[name] = new Set(rows.map((row) => row.symbol));
     }
 
-    (async () => {
+    // The migration OCCUPIES the shared write chain for its whole duration. Without this a user
+    // edit made during the window resolves its list BY NAME (F2) against a server that has not
+    // been given that list yet — a guaranteed 400 that trips the sync-failure chip, re-renders the
+    // shell mid-interaction, and shifts the layout under an open menu. Queued behind the
+    // migration, the same edit finds the list present and simply succeeds.
+    const migration = wlServerChainRef.current.then(async () => {
       const server = await inventory();
-      // Offline / 500 / signed out under us: leave `mm.wls` exactly as it is and let the next
-      // mount try again. Releasing the ref is what makes that retry possible.
-      if (!server) { wlMigrationRef.current = false; return; }
-
-      // F2: register the ids from the FIRST read, before any migration write. Everything the user
-      // does from here on targets a real list id instead of falling through the name path.
+      // Offline / 500 / signed out under us: leave `mm.wls` alone and retry next mount.
+      if (!server) { wlMigrationRef.current = false; return true; }
       registerServerListIds(server);
 
-      // `wlsRestored` guarantees this is the restored state, not the initial seed. Reading it from
-      // the ref (rather than adding `lists` to the dep array) keeps a mid-migration symbol edit
-      // from restarting the whole run.
       const localLists = Object.entries(listsRef.current)
         .filter(([, rows]) => Array.isArray(rows))
         .map(([name, rows]) => ({ name, rows }));
@@ -1489,8 +1718,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
             listId = typeof payload?.list?.id === "string" ? payload.list.id : null;
           }
           if (!listId) { nextMarker[item.name] = false; continue; }
-          // F6: a list longer than the API's per-request cap goes up in chunks, and the marker
-          // reads `true` only when EVERY chunk landed — a half-migrated list must retry next mount.
+          // F6: chunked at the cap; the marker reads `true` only when EVERY chunk landed.
           let allChunksOk = true;
           for (const chunk of chunkSymbols(item.insert)) {
             const added = await post({
@@ -1507,19 +1735,14 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           nextMarker[item.name] = false;
         }
       }
-      // The marker is written even if this component has since unmounted (StrictMode's double
-      // mount, or a route change): the work reached the server, so the receipt must reflect that.
-      // `cancelled` only ever suppresses React state writes below.
-      const markerChanged = JSON.stringify(nextMarker) !== JSON.stringify(marker);
-      if (markerChanged) { try { localStorage.setItem(WLS_MIGRATED_KEY, JSON.stringify(nextMarker)); } catch {} }
+      // Written even if the component has since unmounted (StrictMode's double mount): the work
+      // reached the server, so the receipt must reflect it. `cancelled` gates React writes only.
+      if (JSON.stringify(nextMarker) !== JSON.stringify(marker)) {
+        try { localStorage.setItem(WLS_MIGRATED_KEY, JSON.stringify(nextMarker)); } catch {}
+      }
 
-      // Only re-read when the migration actually wrote something. On the overwhelmingly common
-      // mount — a user (or a test) with no named lists to migrate — this whole tail costs ONE GET
-      // and, thanks to the identity checks below, ZERO re-renders. That matters: `lists` feeds the
-      // `wl` memo and everything downstream of it, so returning a fresh object for an unchanged
-      // list set would re-render the entire shell a beat after every mount.
       const fresh = plan.lists.length ? ((await inventory()) ?? server) : server;
-      if (cancelled) return;
+      if (cancelled) return true;
       registerServerListIds(fresh);
       setLists((current) => {
         let changed = false;
@@ -1529,16 +1752,13 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           const serverRows = list.symbols.map((row) => ({ symbol: row.symbol, section: row.section }));
           const localRows = current[list.name];
           if (!localRows) {
-            // Absent locally -> adopt wholesale: this list is new from another device or from the
-            // Macro side. UNLESS it was there when the read went out, i.e. the user deleted it
-            // mid-flight and this response simply predates that.
+            // Absent locally -> adopt wholesale (new from another device or from Macro), UNLESS it
+            // was present when the read went out, i.e. the user deleted it mid-flight.
             if (beforeRead[list.name]) continue;
             next[list.name] = serverRows;
             changed = true;
             continue;
           }
-          // Present locally -> ADDITIVE ONLY (ruling): local rows keep their order and their
-          // section, nothing local is dropped, and only genuinely server-only symbols append.
           const adopted = adoptServerSymbols(localRows, serverRows, beforeRead[list.name]);
           if (sameRows(adopted, localRows)) continue;
           next[list.name] = adopted;
@@ -1546,7 +1766,9 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         }
         return changed ? next : current;
       });
-    })();
+      return true;
+    }).catch(() => false);
+    wlServerChainRef.current = migration;
 
     return () => { cancelled = true; };
   }, [loggedIn, wlsRestored, registerServerListIds]);
@@ -1561,13 +1783,15 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     const was = prevEmailRef.current;
     prevEmailRef.current = email;
     if (was === "" && email !== "") {
-      setLists((l) => ({ ...l, Default: symbols }));   // server Default authoritative; guest extras preserved
+      setLists((l) => ({ ...l, Default: normalizeWatchlistRows(symbols) }));   // server Default authoritative; guest extras preserved
       setActiveList("Default");
     }
   }, [email, symbols]);
   // persist flags separately (not inside mm.wls to avoid shape-breaking old saves)
   const flagsMounted = useRef(false);
   useEffect(() => { if (!flagsMounted.current) { flagsMounted.current = true; return; } localStorage.setItem("mm.flags", JSON.stringify(flags)); }, [flags]);
+  const notesMounted = useRef(false);
+  useEffect(() => { if (!notesMounted.current) { notesMounted.current = true; return; } localStorage.setItem("mm.symbolNotes", JSON.stringify(symbolNotes)); }, [symbolNotes]);
   // paneSync mirrors same-timeframe peers only — disable it entirely when the panes carry mixed timeframes
   // (the Sync button is rendered disabled in that case), so a stale sync=true can't silently half-work.
   useEffect(() => { setPaneSync(sync && panes.length > 1 && new Set(paneTfs.slice(0, panes.length)).size <= 1); }, [sync, panes.length, paneTfs]);
@@ -2187,8 +2411,12 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     return () => clearInterval(playRef.current);
   }, [replayOn, playing, total, speed]);
 
-  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setWlMenuOpen(false); setSnapOpen(false); setToolbarMoreOpen(false); setToolbarMoreView("main"); setWlContext(null); };
-  useEffect(() => { const h = () => closeAll(); window.addEventListener("click", h); return () => window.removeEventListener("click", h); }, []);
+  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setWlMenuOpen(false); setSnapOpen(false); setToolbarMoreOpen(false); setToolbarMoreView("main"); setWlContext(null); setWlSectionContext(null); };
+  useEffect(() => {
+    const h = (event: MouseEvent) => { if (event.button !== 2) closeAll(); };
+    window.addEventListener("click", h);
+    return () => window.removeEventListener("click", h);
+  }, []);
 
   // ── Sections ────────────────────────────────────────────────────────────────────────────
   // A section used to be purely DERIVED from the rows' `section` field, which meant a section
@@ -2201,26 +2429,24 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
 
   // Section order: declared order first, then any section that only exists on rows (a list
   // created before meta, or a symbol added with a fresh `sec` from the manifest).
-  const sectionOrder = useMemo(() => {
-    const out: string[] = [];
-    for (const s of activeMeta?.sections ?? []) if (!out.includes(s)) out.push(s);
-    for (const r of wl) if (!out.includes(r.section)) out.push(r.section);
-    return out;
-  }, [wl, activeMeta]);
+  const sectionOrder = useMemo(
+    () => watchlistSectionOrder(wl, activeMeta?.sections ?? []),
+    [wl, activeMeta],
+  );
 
   const collapsed = useMemo(() => new Set(activeMeta?.collapsed ?? []), [activeMeta]);
 
   // sec → symbols, in declared section order, INCLUDING empty sections (an empty section still
   // renders its header so the user can drop symbols into the thing they just created).
   const sections = useMemo(() => {
-    const o: Record<string, string[]> = {};
+    const o: Record<string, string[]> = { [WATCHLIST_ROOT_SECTION]: [] };
     for (const s of sectionOrder) o[s] = [];
-    for (const r of wl) (o[r.section] ||= []).push(r.symbol);
+    for (const r of wl) (o[r.section || WATCHLIST_ROOT_SECTION] ||= []).push(r.symbol);
     return o;
   }, [wl, sectionOrder]);
   const visibleWlOrder = useMemo(
-    () => sectionOrder.flatMap((section) => collapsed.has(section) ? [] : (sections[section] ?? [])),
-    [sectionOrder, collapsed, sections],
+    () => watchlistVisualOrder(wl, sectionOrder, collapsed),
+    [wl, sectionOrder, collapsed],
   );
   const selectedWlRows = useMemo(
     () => copyWatchlistSelection(wl, wlSelected, visibleWlOrder),
@@ -2230,6 +2456,9 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const inWl = useMemo(() => new Set(wl.map((s) => s.symbol)), [wl]);
 
   useEffect(() => {
+    // Selection is transient UI state and must be pruned when a list mutation
+    // removes rows outside the selection handlers (import/clear/switch).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setWlSelected((current) => {
       const next = pruneWatchlistSelection(current, wl);
       if (next.size === current.size && [...next].every((symbol) => current.has(symbol))) return current;
@@ -2248,18 +2477,124 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     });
   }, []);
 
+  const closeWlSectionContext = useCallback(() => {
+    setWlSectionContext(null);
+    const focusTarget = wlSectionContextFocusRef.current;
+    wlSectionContextFocusRef.current = null;
+    window.requestAnimationFrame(() => {
+      if (focusTarget?.isConnected) focusTarget.focus();
+      else document.querySelector<HTMLElement>(".wl-sec-toggle")?.focus();
+    });
+  }, []);
+
   const clearWlSelection = useCallback(() => {
     setWlSelected(new Set());
     closeWlContext();
     wlAnchorRef.current = null;
   }, [closeWlContext]);
 
-  // Bulk move/delete on the ACTIVE list. Pre-W1b this refused any list but Default; the active
-  // list now carries a server id whenever it is registered, so the same batch reaches the server.
-  const syncActiveWatchlist = useCallback((action: "move" | "remove", symbolsToSync: string[], section?: string) => {
-    if (!symbolsToSync.length) return;
-    syncWatchlistLoud(activeList, { action, symbols: symbolsToSync, ...(section ? { section } : {}) });
-  }, [activeList, syncWatchlistLoud]);
+  // Existing disclosure surface (`wlSyncFailed` chip: "Watchlist sync failed — local changes were
+  // kept"). Every server path routes its failures here rather than minting new copy.
+  const noteWlSyncFailure = useCallback(() => {
+    setWlSyncFailed(true);
+    if (wlSyncTimerRef.current) clearTimeout(wlSyncTimerRef.current);
+    wlSyncTimerRef.current = setTimeout(() => setWlSyncFailed(false), 5000);
+  }, []);
+
+  // How a request names its list. W1b targets a LIST rather than always writing to the user's
+  // first row; F2 means an edit made before the inventory lands still reaches the server, by EXACT
+  // NAME. `Default` deliberately keeps master's pre-W1b wire shape — no target at all, so the
+  // route's first-list fallback resolves it and the TRAP-1 heal path is unchanged even for an
+  // account whose first list is macro's 'Watchlist' rather than 'Default'.
+  const wlTarget = useCallback((listName: string): Record<string, string> => {
+    const listId = serverListIdsRef.current[listName];
+    if (listId) return { listId };
+    return listName === DEFAULT_LIST ? {} : { listName };
+  }, []);
+
+  // One serialized request, preserving master's `wlServerChainRef` ordering guarantee: watchlist
+  // writes must not race each other, or a move can land before the add it depends on.
+  const wlPost = useCallback((body: Record<string, unknown>) => {
+    const request = wlServerChainRef.current.then(() => fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then((response) => {
+        if (!response.ok) throw new Error(`watchlist sync ${response.status}`);
+        return true;
+      })).catch(() => {
+      noteWlSyncFailure();
+      return false;
+    });
+    wlServerChainRef.current = request;
+    return request;
+  }, [noteWlSyncFailure]);
+
+  // Symbol batch against ONE list. F6: the route caps a batch at MAX_BATCH and refuses anything
+  // larger outright, so a 600-name clear or CSV import would have been dropped whole; the chunks
+  // stay on the same serialized chain, so they also cannot race each other.
+  const syncWatchlistSymbols = useCallback((
+    listName: string,
+    action: "add" | "move" | "remove",
+    symbolsToSync: string[],
+    section?: string,
+    sections?: Record<string, string>,
+  ) => {
+    if (!loggedIn || !symbolsToSync.length) return Promise.resolve(true);
+    const target = wlTarget(listName);
+    const chunks = chunkSymbols(symbolsToSync);
+    if (chunks.length <= 1) {
+      return wlPost({
+        action, symbols: symbolsToSync, ...target,
+        ...(section !== undefined ? { section } : {}),
+        ...(sections ? { sections } : {}),
+      });
+    }
+    // One failed chunk must read as a failed sync, not a partial success.
+    return chunks.reduce<Promise<boolean>>((carry, chunk) => carry.then((okSoFar) => wlPost({
+      action, symbols: chunk, ...target,
+      ...(section !== undefined ? { section } : {}),
+      ...(sections ? { sections: Object.fromEntries(chunk.map((symbol) => [symbol, sections[symbol]]).filter(([, v]) => v !== undefined)) } : {}),
+    }).then((ok) => ok && okSoFar)), Promise.resolve(true));
+  }, [loggedIn, wlPost, wlTarget]);
+
+  // Kept as thin wrappers so master's call sites read unchanged; the NAME is now a parameter
+  // rather than a hard-coded "Default" guard.
+  const syncActiveWatchlist = useCallback((action: "move" | "remove", symbolsToSync: string[], section?: string) =>
+    syncWatchlistSymbols(activeList, action, symbolsToSync, section),
+  [activeList, syncWatchlistSymbols]);
+
+  const syncWatchlistAdd = useCallback((listName: string, symbol: string, section: string) =>
+    syncWatchlistSymbols(listName, "add", [symbol], section),
+  [syncWatchlistSymbols]);
+
+  /** Create the server row for a locally-created list and remember its id. Optimistic: the local
+   *  list exists either way, so a failure degrades to the pre-W1b local-only behaviour. */
+  const createServerList = useCallback((name: string, rows: { symbol: string; section: string }[] = []) => {
+    if (!loggedIn) return;
+    const request = wlServerChainRef.current
+      .then(() => fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "createList", name }),
+      }))
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        const listId = payload?.list?.id;
+        if (typeof listId !== "string" || !listId) { noteWlSyncFailure(); return false; }
+        serverListIdsRef.current = { ...serverListIdsRef.current, [name]: listId };
+        return true;
+      })
+      .catch(() => { noteWlSyncFailure(); return false; });
+    wlServerChainRef.current = request;
+    // Symbols follow on the same chain, so they cannot outrun the create that gives them a home.
+    if (rows.length) {
+      void request.then((ok) => (ok
+        ? syncWatchlistSymbols(name, "add", rows.map((row) => row.symbol), rows[0]?.section,
+            Object.fromEntries(rows.map((row) => [row.symbol, row.section])))
+        : false));
+    }
+  }, [loggedIn, noteWlSyncFailure, syncWatchlistSymbols]);
 
   const openWlContext = useCallback((symbol: string, event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -2267,7 +2602,17 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     wlContextFocusRef.current = event.currentTarget;
     setWlSelected((current) => resolveWatchlistContextSelection(current, symbol));
     wlAnchorRef.current = symbol;
+    setWlSectionContext(null);
     setWlContext({ symbol, x: event.clientX, y: event.clientY });
+  }, []);
+
+  const openWlSectionContext = useCallback((section: string, point: { x: number; y: number; focus: HTMLElement }, initialView: "main" | "rename" = "main") => {
+    wlSectionContextFocusRef.current = point.focus;
+    setWlContext(null);
+    // Chromium can emit a compatibility click after a right-click contextmenu.
+    // Open after that event finishes so the global click-away handler cannot
+    // immediately tear the menu back down.
+    window.requestAnimationFrame(() => setWlSectionContext({ section, x: point.x, y: point.y, initialView }));
   }, []);
 
   const moveWlSelected = useCallback((section: string, createSection = false) => {
@@ -2276,19 +2621,23 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     if (createSection && !sectionOrder.includes(section)) {
       editMeta((meta) => ({ ...meta, sections: [...meta.sections.filter((value) => value !== section), section] }));
     }
-    setWl((rows: { symbol: string; section: string }[]) =>
-      moveWatchlistSelection(rows, new Set(symbolsToMove), section, visibleWlOrder));
-    syncActiveWatchlist("move", symbolsToMove, section);
+    const nextRows = orderWatchlistRowsBySections(
+      moveWatchlistSelection(wl, new Set(symbolsToMove), section, visibleWlOrder),
+      createSection && !sectionOrder.includes(section) ? [...sectionOrder, section] : sectionOrder,
+    );
+    setWl(nextRows);
+    void syncActiveWatchlist("move", symbolsToMove, section);
     clearWlSelection();
-  }, [selectedWlRows, sectionOrder, visibleWlOrder, syncActiveWatchlist, clearWlSelection]);
+  }, [selectedWlRows, sectionOrder, visibleWlOrder, wl, syncActiveWatchlist, clearWlSelection]);
 
   const deleteWlSelected = useCallback(() => {
     const symbolsToDelete = selectedWlRows.map((row) => row.symbol);
     if (!symbolsToDelete.length) return;
-    setWl((rows: { symbol: string; section: string }[]) => rows.filter((row) => !symbolsToDelete.includes(row.symbol)));
-    syncActiveWatchlist("remove", symbolsToDelete);
+    const nextRows = wl.filter((row) => !symbolsToDelete.includes(row.symbol));
+    setWl(nextRows);
+    void syncActiveWatchlist("remove", symbolsToDelete);
     clearWlSelection();
-  }, [selectedWlRows, syncActiveWatchlist, clearWlSelection]);
+  }, [selectedWlRows, wl, syncActiveWatchlist, clearWlSelection]);
 
   const createListFromWlSelected = useCallback((name: string) => {
     const rows = selectedWlRows.map((row) => ({ ...row }));
@@ -2298,8 +2647,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     setListMeta((current) => ({ ...current, [name]: { sections: sectionsForList, collapsed: [] } }));
     setActiveList(name);
     clearWlSelection();
-    createServerList(name, rows);
-  }, [selectedWlRows, lists, sectionOrder, clearWlSelection, createServerList]);
+  }, [selectedWlRows, lists, sectionOrder, clearWlSelection]);
   const activeIsComposite = isComposite(active);
   const activeLegs = activeIsComposite ? (parseComposite(active) ?? []) : [];
   const m = activeIsComposite ? undefined : man?.symbols?.[active];
@@ -2453,24 +2801,32 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     // OnboardingProvider is a DESCENDANT of this component, so useOnboarding() here is the
     // no-op context — the `mm:onboard` window event is the only way up to the real sheet.
     if (!loggedIn) { showGateNudge(t("gateWatchlist")); window.dispatchEvent(new CustomEvent("mm:onboard", { detail: { mode: "signup" } })); return; }
-    const sec = man?.symbols?.[sym]?.sec || "Watchlist";
+    const target = addSymbolTargetRef.current;
+    const sec = target?.section ?? sectionOrder.at(-1) ?? WATCHLIST_ROOT_SECTION;
     if (!inWl.has(sym)) {
-      setWl((w: any[]) => [...w, { symbol: sym, section: sec }]);
-      syncWatchlist(activeList, { action: "add", symbols: [sym], section: sec })?.catch(() => {});
+      const next = [...wl];
+      const anchor = target?.afterSymbol ? next.findIndex((row) => row.symbol === target.afterSymbol) : -1;
+      if (anchor >= 0) next.splice(anchor + 1, 0, { symbol: sym, section: sec });
+      else {
+        const lastInSection = next.map((row) => row.section).lastIndexOf(sec);
+        next.splice(lastInSection + 1, 0, { symbol: sym, section: sec });
+      }
+      const nextRows = orderWatchlistRowsBySections(next, sectionOrder);
+      setWl(nextRows);
+      addSymbolTargetRef.current = { section: sec, afterSymbol: sym };
+      // W1b: any registered list syncs upstream, not just Default.
+      void syncWatchlistAdd(activeList, sym, sec);
     }
   }
   async function removeSymbol(sym: string) {
-    setWl((w: any[]) => w.filter((s) => s.symbol !== sym));
+    const nextRows = wl.filter((row) => row.symbol !== sym);
+    setWl(nextRows);
     setWlSelected((current) => { const next = new Set(current); next.delete(sym); return next; });
     if (wlAnchorRef.current === sym) wlAnchorRef.current = null;
     setWlContext(null);
-    syncWatchlist(activeList, { action: "remove", symbols: [sym] })?.catch(() => {});
+    void syncActiveWatchlist("remove", [sym]);
   }
-  // ── watchlist management ───────────────────────────────────────────────────────────────
-  // Guests keep the pre-W1b contract exactly: every one of these is a local `mm.wls` edit and
-  // nothing leaves the browser. Signed in, the same edit ALSO reaches `watchlists` — before this
-  // wave no create/rename/delete path existed on the server at all, so a registered user's named
-  // lists could never leave the one device that made them.
+  // watchlist management (client-side; guests get real switch/create/rename/delete via localStorage)
   function switchList(name: string) { if (lists[name]) { setActiveList(name); clearWlSelection(); } setWlMenuOpen(false); }
   // Inline create used by the search-hub rail + add-to-list picker (no window.prompt — name is
   // supplied by the caller's inline input). Returns the created/normalized name, or null if the
@@ -2484,17 +2840,19 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     return name;
   }
   // Add a symbol to a NAMED list (search-hub multi-list picker). Mirrors addSymbol's dedupe +
-  // server sync, but targets an explicit list instead of the active one.
+  // Default-only server sync, but targets an explicit list instead of the active one.
   function addToList(sym: string, listName: string) {
     // Same descendant-provider constraint as addSymbol — reach the sheet via the window event.
     if (!loggedIn) { showGateNudge(t("gateWatchlist")); window.dispatchEvent(new CustomEvent("mm:onboard", { detail: { mode: "signup" } })); return; }
-    const sec = man?.symbols?.[sym]?.sec || "Watchlist";
+    const targetRows = lists[listName] || [];
+    const targetSections = listMeta[listName]?.sections ?? [];
+    const sec = targetSections.at(-1) ?? targetRows.at(-1)?.section ?? WATCHLIST_ROOT_SECTION;
     setLists((l) => {
       const cur = l[listName] || [];
       if (cur.some((x) => x.symbol === sym)) return l;
       return { ...l, [listName]: [...cur, { symbol: sym, section: sec }] };
     });
-    syncWatchlist(listName, { action: "add", symbols: [sym], section: sec })?.catch(() => {});
+    void syncWatchlistAdd(listName, sym, sec);
   }
   function newList() {
     const name = (typeof window !== "undefined" ? window.prompt(t("newWatchlistPrompt")) : "")?.trim();
@@ -2507,28 +2865,25 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     const next = (typeof window !== "undefined" ? window.prompt(t("renameWatchlistPrompt"), name) : "")?.trim();
     if (!next || next === name || lists[next]) return;
     setLists((l) => { const n: Record<string, { symbol: string; section: string }[]> = {}; for (const k of Object.keys(l)) n[k === name ? next : k] = l[k]; return n; });
+    setListMeta((m) => {
+      if (!m[name]) return m;
+      const n = { ...m, [next]: m[name] };
+      delete n[name];
+      return n;
+    });
     setActiveList((a) => (a === name ? next : a));
-    if (!email) return;                            // guest: local rename only, exactly as before
+    if (!loggedIn) return;                          // guest: local rename only, exactly as before
     const listId = serverListIdsRef.current[name];
-    // Move the id onto the new key first: a symbol op racing the rename must not go to the
-    // server under a name that no longer exists locally.
+    // Move the id onto the new key first: a symbol op racing the rename must not target a name
+    // that no longer exists locally.
     const moved = { ...serverListIdsRef.current };
     delete moved[name];
     if (listId) moved[next] = listId;
     serverListIdsRef.current = moved;
-    setServerListIds(moved);
-    // The old name is gone locally, so its marker entry can only mislead a later run.
-    forgetListMigrated(name);
-    fetch("/api/watchlist", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(listId
-        ? { action: "renameList", listId, name: next }
-        : { action: "renameList", listName: name, name: next }),
-    }).then((response) => {
-      // 404 = purely local list; the next mount's migration creates it under its new name.
-      if (!response.ok && response.status !== 404) noteWlSyncFailure();
-    }).catch(() => { noteWlSyncFailure(); });
+    forgetListMigrated(name);                       // old name is gone locally
+    void wlPost(listId
+      ? { action: "renameList", listId, name: next }
+      : { action: "renameList", listName: name, name: next });
   }
   function deleteList(name: string) {
     if (Object.keys(lists).length <= 1) return;
@@ -2536,28 +2891,15 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     setLists((l) => { const n = { ...l }; delete n[name]; return n; });
     setListMeta((m) => { const n = { ...m }; delete n[name]; return n; });
     if (activeList === name) { setActiveList(Object.keys(lists).filter((k) => k !== name)[0] || "Default"); clearWlSelection(); }
-    if (!email) return;                            // guest: local delete only, exactly as before
+    if (!loggedIn) return;                          // guest: local delete only, exactly as before
     const listId = serverListIdsRef.current[name];
     const remaining = { ...serverListIdsRef.current };
     delete remaining[name];
     serverListIdsRef.current = remaining;
-    setServerListIds(remaining);
-    // F4: clear the marker whether or not we knew an id. The local list is gone, so the ONLY thing
-    // a stale `{"<name>": true}` can do is mislead a later run — and if the server delete below
-    // fails, the entry's absence is what lets the next mount treat the list as unmigrated rather
-    // than silently resurrect it from a copy that no longer exists.
+    // F4: clear the marker whether or not an id was known, so a later mount cannot resurrect the
+    // list from a local copy that no longer exists; and delete by EXACT NAME when there is no id.
     forgetListMigrated(name);
-    // F4: no id yet (deleted during the migration window, or created locally moments ago) still
-    // deletes — the route resolves the EXACT name. It can never fall back to the first list.
-    fetch("/api/watchlist", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(listId ? { action: "deleteList", listId } : { action: "deleteList", listName: name }),
-    }).then((response) => {
-      // 404 = the list was never on the server (a purely local list). That is a successful delete
-      // of nothing, not a sync failure worth alarming the user about.
-      if (!response.ok && response.status !== 404) noteWlSyncFailure();
-    }).catch(() => { noteWlSyncFailure(); });
+    void wlPost(listId ? { action: "deleteList", listId } : { action: "deleteList", listName: name });
   }
 
   // ── list menu: copy / clear / sort ─────────────────────────────────────────────────────
@@ -2581,10 +2923,10 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     setWlMenuOpen(false);
     setLists((l) => ({ ...l, [name]: [] }));
     if (name === activeList) clearWlSelection();
-    // One batched delete instead of the pre-W1b per-symbol fan-out (the API takes batches on
-    // every symbol action now), and it reaches any registered list, not only Default.
+    // One batched (and chunked) delete instead of the per-symbol fan-out, reaching any registered
+    // list rather than only Default.
     const cleared = (lists[name] || []).map((r) => r.symbol);
-    if (cleared.length) syncWatchlist(name, { action: "remove", symbols: cleared })?.catch(() => {});
+    if (cleared.length) void syncWatchlistSymbols(name, "remove", cleared);
   }
 
   // Sort symbols A→Z WITHIN each section, so sorting never silently reorganises the list.
@@ -2602,7 +2944,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // organisation intact rather than arriving as one flat block.
   function exportList(name: string) {
     setWlMenuOpen(false);
-    const rows = lists[name] || [];
+    const source = lists[name] || [];
+    const rows = orderWatchlistRowsBySections(source, watchlistSectionOrder(source, listMeta[name]?.sections ?? []));
     const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
     const csv = ["symbol,section", ...rows.map((r) => `${esc(r.symbol)},${esc(r.section || "")}`)].join("\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -2632,21 +2975,19 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           const [rawSym, rawSec] = line.split(",");
           const symbol = (rawSym || "").trim().replace(/^"|"$/g, "").toUpperCase();
           if (!symbol) continue;
-          parsed.push({ symbol, section: (rawSec || "").trim().replace(/^"|"$/g, "") || "Watchlist" });
+          parsed.push({ symbol, section: (rawSec || "").trim().replace(/^"|"$/g, "") });
         }
         if (!parsed.length) return;
         setWl((prev: { symbol: string; section: string }[]) => {
           const have = new Set(prev.map((r) => r.symbol));
           const add = parsed.filter((r) => !have.has(r.symbol));
           if (!add.length) return prev;
-          // One batched add carrying each row's own section, instead of N single-symbol requests.
-          syncWatchlist(activeList, {
-            action: "add",
-            symbols: add.map((r) => r.symbol),
-            sections: Object.fromEntries(add.map((r) => [r.symbol, r.section])),
-            section: add[0].section,
-          })?.catch(() => {});
-          return [...prev, ...add];
+          // One batched add carrying each row's own section, chunked at the API cap so a large
+          // CSV is no longer dropped whole.
+          void syncWatchlistSymbols(activeList, "add", add.map((r) => r.symbol), add[0].section,
+            Object.fromEntries(add.map((r) => [r.symbol, r.section])));
+          const merged = [...prev, ...add];
+          return orderWatchlistRowsBySections(merged, watchlistSectionOrder(merged, sectionOrder));
         });
       }).catch(() => {});
     };
@@ -2673,9 +3014,9 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     return true;
   }
 
-  function renameSection(from: string) {
-    const to = (typeof window !== "undefined" ? window.prompt(t("renameSectionPrompt"), from) : "")?.trim();
-    if (!to || to === from || sectionOrder.includes(to)) return;
+  function renameSection(from: string, raw: string): boolean {
+    const to = raw.trim();
+    if (!to || to === from || sectionOrder.includes(to)) return false;
     const affected = wl.filter((row) => row.section === from).map((row) => row.symbol);
     setWl((prev: { symbol: string; section: string }[]) => prev.map((r) => (r.section === from ? { ...r, section: to } : r)));
     syncActiveWatchlist("move", affected, to);
@@ -2683,21 +3024,32 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       sections: m.sections.map((s) => (s === from ? to : s)),
       collapsed: m.collapsed.map((s) => (s === from ? to : s)),
     }));
+    return true;
   }
 
   // Delete the DIVIDER, not the symbols. TradingView behaves the same way, and silently deleting
   // a section's holdings because the user removed a label would be a data-loss trap. The rows
   // fall back to the section above (or the first remaining one).
   function deleteSection(name: string) {
-    const idx = sectionOrder.indexOf(name);
-    const fallback = sectionOrder[idx - 1] ?? sectionOrder.find((s) => s !== name) ?? "Watchlist";
-    const affected = wl.filter((row) => row.section === name).map((row) => row.symbol);
-    setWl((prev: { symbol: string; section: string }[]) => prev.map((r) => (r.section === name ? { ...r, section: fallback } : r)));
-    syncActiveWatchlist("move", affected, fallback);
+    const result = removeWatchlistSection(wl, sectionOrder, name);
+    if (!result) return;
+    setWl(result.rows);
+    void syncActiveWatchlist("move", result.movedSymbols, result.targetSection);
     editMeta((m) => ({
-      sections: m.sections.filter((s) => s !== name),
+      sections: result.sections,
       collapsed: m.collapsed.filter((s) => s !== name),
     }));
+    setWlSectionContext(null);
+  }
+
+  function insertSectionBeforeSymbol(symbol: string, raw: string): boolean {
+    const result = insertWatchlistSectionBefore(wl, sectionOrder, symbol, raw);
+    if (!result) return false;
+    setWl(result.rows);
+    void syncActiveWatchlist("move", result.movedSymbols, raw.trim());
+    editMeta((m) => ({ ...m, sections: result.sections }));
+    clearWlSelection();
+    return true;
   }
 
   function toggleSection(name: string) {
@@ -2713,6 +3065,121 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       collapsed: m.collapsed.includes(name) ? m.collapsed.filter((s) => s !== name) : [...m.collapsed, name],
     }));
   }
+
+  function onWlDragStart(event: DragStartEvent) {
+    const activator = event.activatorEvent;
+    const pointerDrag = "clientX" in activator && "clientY" in activator;
+    const activeId = String(event.active.id);
+    const activeNode = activeId.startsWith(SEC_DROP_PREFIX)
+      ? document.querySelector<HTMLElement>(`[data-watchlist-section-header="${CSS.escape(activeId.slice(SEC_DROP_PREFIX.length))}"]`)
+      : document.querySelector<HTMLElement>(`.wl-row[data-watchlist-symbol="${CSS.escape(activeId)}"]`);
+    wlPointerDragRef.current = pointerDrag;
+    wlPointerLeftInitialRef.current = false;
+    // dnd-kit invokes onDragStart before it publishes active.rect.current.initial.
+    // Capture the source element synchronously so a 12px wiggle remains a no-op,
+    // while a real drag that leaves and later re-enters this slot can still land.
+    wlPointerInitialRectRef.current = event.active.rect.current.initial ?? activeNode?.getBoundingClientRect() ?? null;
+    wlPointerRef.current = pointerDrag
+      ? { x: Number(activator.clientX), y: Number(activator.clientY) }
+      : null;
+    setWlDragId(activeId);
+    window.getSelection()?.removeAllRanges();
+    setWlContext(null);
+    setWlSectionContext(null);
+  }
+
+  // Symbols and divider blocks share one vertical DnD surface. A header drop means
+  // "first item below this divider"; a row drop means "at this exact row".
+  function onWlDragEnd(event: DragEndEvent) {
+    const pointer = wlPointerDragRef.current ? wlPointerRef.current : null;
+    const pointerEverLeftInitial = wlPointerLeftInitialRef.current;
+    const pointerInitialRect = wlPointerInitialRectRef.current;
+    wlPointerDragRef.current = false;
+    wlPointerRef.current = null;
+    wlPointerLeftInitialRef.current = false;
+    wlPointerInitialRectRef.current = null;
+    setWlDragId(null);
+    const { active: dragActive, over } = event;
+    const activeId = String(dragActive.id);
+    const initialRect = dragActive.rect.current.initial ?? pointerInitialRect;
+    if (!over) return;
+    if (pointer && initialRect && !pointerEverLeftInitial) return;
+    let overId = String(over.id);
+    // Re-resolve pointer drops against live row rectangles. Sortable transforms
+    // can move the intended row after dnd-kit measured its cached collision rect;
+    // the live hit keeps a visible row drop attached to that row under load.
+    if (pointer && !activeId.startsWith(SEC_DROP_PREFIX)) {
+      const liveRows = [...document.querySelectorAll<HTMLElement>(".wl-row[data-watchlist-symbol]")]
+        .filter((node) => node.dataset.watchlistSymbol !== activeId)
+        .map((node) => {
+          const rect = node.getBoundingClientRect();
+          const gap = pointer.y < rect.top ? rect.top - pointer.y : pointer.y > rect.bottom ? pointer.y - rect.bottom : 0;
+          return { node, rect, gap };
+        })
+        .filter(({ rect, gap }) => pointer.x >= rect.left && pointer.x <= rect.right && gap <= 12)
+        .sort((a, b) => a.gap - b.gap || Math.abs(pointer.y - (a.rect.top + a.rect.height / 2)) - Math.abs(pointer.y - (b.rect.top + b.rect.height / 2)));
+      const liveSymbol = liveRows[0]?.node.dataset.watchlistSymbol;
+      if (liveSymbol) overId = liveSymbol;
+    }
+    if (activeId === overId) return;
+
+    if (activeId.startsWith(SEC_DROP_PREFIX)) {
+      const section = activeId.slice(SEC_DROP_PREFIX.length);
+      const target = overId === ROOT_DROP_ID
+        ? null
+        : overId.startsWith(SEC_DROP_PREFIX)
+          ? overId.slice(SEC_DROP_PREFIX.length)
+          : wl.find((row) => row.symbol === overId)?.section ?? null;
+      if (target === section) return;
+      const reordered = moveWatchlistSection(sectionOrder, section, target || null);
+      const reorderedRows = orderWatchlistRowsBySections(wl, reordered);
+      setWl(reorderedRows);
+      editMeta((meta) => ({ ...meta, sections: reordered }));
+      return;
+    }
+
+    const fromRow = wl.find((row) => row.symbol === activeId);
+    if (!fromRow) return;
+    const targetSection = overId === ROOT_DROP_ID
+      ? WATCHLIST_ROOT_SECTION
+      : overId.startsWith(SEC_DROP_PREFIX)
+        ? overId.slice(SEC_DROP_PREFIX.length)
+        : wl.find((row) => row.symbol === overId)?.section;
+    if (targetSection == null) return;
+    const translated = dragActive.rect.current.translated;
+    const liveTargetRect = !overId.startsWith(SEC_DROP_PREFIX) && overId !== ROOT_DROP_ID
+      ? document.querySelector<HTMLElement>(`.wl-row[data-watchlist-symbol="${CSS.escape(overId)}"]`)?.getBoundingClientRect()
+      : null;
+    const targetRect = liveTargetRect ?? over.rect;
+    const insertAfterTarget = pointer
+      ? pointer.y >= targetRect.top + targetRect.height / 2
+      : !!translated && translated.top + translated.height / 2 > targetRect.top + targetRect.height / 2;
+
+    const from = wl.findIndex((row) => row.symbol === activeId);
+    if (from < 0) return;
+    const movedRow = { ...wl[from], section: targetSection };
+    const rest = wl.filter((_, index) => index !== from);
+
+    let nextRows: { symbol: string; section: string }[];
+    if (overId === ROOT_DROP_ID || overId.startsWith(SEC_DROP_PREFIX)) {
+      const firstInTarget = rest.findIndex((row) => row.section === targetSection);
+      rest.splice(firstInTarget >= 0 ? firstInTarget : rest.length, 0, movedRow);
+      nextRows = orderWatchlistRowsBySections(rest, sectionOrder);
+    } else {
+      const originalTargetIndex = wl.findIndex((row) => row.symbol === overId);
+      const targetIndex = rest.findIndex((row) => row.symbol === overId);
+      if (targetIndex < 0) return;
+      const placeAfter = fromRow.section === targetSection ? from < originalTargetIndex : insertAfterTarget;
+      rest.splice(targetIndex + (placeAfter ? 1 : 0), 0, movedRow);
+      nextRows = orderWatchlistRowsBySections(rest, sectionOrder);
+    }
+
+    setWl(nextRows);
+    if (fromRow.section !== targetSection) {
+      void syncActiveWatchlist("move", [fromRow.symbol], targetSection);
+    }
+  }
+
   const toggleInd = (k: string) => {
     // Anon cap: toggling OFF is always fine; block ADDING past the cap + nudge.
     // Checked OUTSIDE the setInds updater (no setState side-effect in a reducer).
@@ -4010,7 +4477,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                 <div className="menu-row danger" onClick={() => clearList(activeList)}><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></svg>{t("clearWatchlist")}</div>
               </div>
               <div className={`wl-acts${selectedWlCount >= 2 ? " wl-acts-selection" : ""}`}>
-                <button title={t("addSymbol")} onClick={(e) => { e.stopPropagation(); setSeed(""); setAddSymOpen(true); }}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
+                <button title={t("addSymbol")} onClick={(e) => { e.stopPropagation(); addSymbolTargetRef.current = null; setSeed(""); setAddSymOpen(true); }}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
                 <button title={t("settings")} onClick={(e) => { e.stopPropagation(); const willOpen = !wlSetOpen; closeAll(); setWlSetOpen(willOpen); }}><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg></button>
               </div>
               <div className={`pop${wlSetOpen ? " show" : ""}`} style={{ top: 40, right: 6 }} onClick={(e) => e.stopPropagation()}>
@@ -4035,22 +4502,26 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                 <span />
               </div>
               <div className="wl-list" role="listbox" aria-label={t("watchlists")} aria-multiselectable="true">
-                <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={onWlDragEnd} modifiers={[restrictToVerticalAxis]}>
-                {sectionOrder.map((sec) => {
+                <DndContext sensors={dndSensors} collisionDetection={watchlistCollisionDetection} onDragStart={onWlDragStart} onDragCancel={() => { wlPointerDragRef.current = false; wlPointerRef.current = null; wlPointerLeftInitialRef.current = false; wlPointerInitialRectRef.current = null; setWlDragId(null); }} onDragEnd={onWlDragEnd} modifiers={[restrictToVerticalAxis]}>
+                <SortableContext items={sectionOrder.map((section) => SEC_DROP_PREFIX + section)} strategy={verticalListSortingStrategy}>
+                <WlRootDropZone active={wlDragId !== null} label={t("wlUnsectionedDrop")} />
+                {[WATCHLIST_ROOT_SECTION, ...sectionOrder].map((sec) => {
                   const rows = sections[sec] ?? [];
-                  const isCollapsed = collapsed.has(sec);
+                  const isRoot = sec === WATCHLIST_ROOT_SECTION;
+                  const isCollapsed = !isRoot && collapsed.has(sec);
                   return (
-                  <div key={sec}>
-                    <WlSectionHeader
+                  <div key={isRoot ? ROOT_DROP_ID : sec} className={isRoot ? "wl-root-run" : "wl-section-run"}>
+                    {!isRoot && <WlSectionHeader
                       name={sec}
                       count={rows.length}
                       collapsed={isCollapsed}
                       minWidth={wlMinW}
                       onToggle={() => toggleSection(sec)}
-                      onRename={() => renameSection(sec)}
+                      onContextMenu={(point) => openWlSectionContext(sec, point)}
+                      onRename={(point) => openWlSectionContext(sec, point, "rename")}
                       onDelete={() => deleteSection(sec)}
-                      labels={{ rename: t("renameSection"), remove: t("deleteSection"), collapse: t("collapseSection") }}
-                    />
+                      labels={{ rename: t("renameSection"), remove: t("deleteSection"), collapse: t("collapseSection"), drag: t("wlDragSection").replace("{section}", sec) }}
+                    />}
                     {!isCollapsed && (
                     <SortableContext items={rows} strategy={verticalListSortingStrategy}>
                     {rows.map((sym) => {
@@ -4113,7 +4584,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                           <WlFlagSlot sym={sym} color={flagColor} onSet={(c) => setFlag(sym, c)} onRemove={() => removeFlag(sym)} lastColor={lastFlagColor} />
                           <div className="s">{set.logo && !isCompSym && <AssetLogo className="ic" symbol={sym} name={nm} market={r?.mkt || r?.sec} color={r?.col} size={set.tableView ? 18 : 24} />}
                             {set.logo && isCompSym && <span className="ic" style={{ background: "#2962ff", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24, fontSize: 7, fontWeight: 700, color: "#fff" }}>M</span>}
-                            <span className="nm"><span className="tk">{isCompSym ? sym.split("+").slice(0, 2).join("+") + (sym.split("+").length > 2 ? "+…" : "") : primary}</span>{secondary && !isCompSym && <span className={set.tableView ? "tk-sub" : "sub"}>{secondary}</span>}</span></div>
+                            <span className="nm"><span className="tk">{isCompSym ? sym.split("+").slice(0, 2).join("+") + (sym.split("+").length > 2 ? "+…" : "") : primary}{symbolNotes[sym] && <span className="wl-note-mark" title={symbolNotes[sym]} aria-label={t("wlHasNote")}>•</span>}</span>{secondary && !isCompSym && <span className={set.tableView ? "tk-sub" : "sub"}>{secondary}</span>}</span></div>
                           {dataCols.map(([k]) => {
                             const isChg = k === "changePct" || k === "change";
                             const isExt = k === "ext" || k === "extPct";
@@ -4130,6 +4601,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                   </div>
                   );
                 })}
+                </SortableContext>
                 </DndContext>
               </div>
             </div>
@@ -4138,13 +4610,54 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                 key={`${wlContext.symbol}:${wlContext.x}:${wlContext.y}`}
                 point={wlContext}
                 count={selectedWlCount}
-                sections={sectionOrder}
+                sections={[WATCHLIST_ROOT_SECTION, ...sectionOrder]}
                 listNames={Object.keys(lists)}
+                listMembership={Object.fromEntries(Object.entries(lists).map(([name, rows]) => [name, rows.some((row) => row.symbol === wlContext.symbol)]))}
+                symbol={wlContext.symbol}
+                flagColor={flags[wlContext.symbol]}
+                note={symbolNotes[wlContext.symbol] ?? ""}
+                canCompare={wlContext.symbol !== active && (compare.includes(wlContext.symbol) || compare.length < 4)}
+                isCompared={compare.includes(wlContext.symbol)}
                 onClose={closeWlContext}
                 onMove={(section) => moveWlSelected(section)}
                 onMoveNew={(section) => moveWlSelected(section, true)}
                 onCreateList={createListFromWlSelected}
                 onDelete={deleteWlSelected}
+                onFlag={(color) => setFlag(wlContext.symbol, color)}
+                onUnflag={() => removeFlag(wlContext.symbol)}
+                onUnflagAll={() => setFlags({})}
+                onAddToList={(listName) => addToList(wlContext.symbol, listName)}
+                onCompare={() => toggleCompare(wlContext.symbol)}
+                onSaveNote={(value) => setSymbolNotes((current) => {
+                  const next = { ...current };
+                  if (value) next[wlContext.symbol] = value;
+                  else delete next[wlContext.symbol];
+                  return next;
+                })}
+                onFinancials={() => { pick(wlContext.symbol); setPaneOpen("overview"); }}
+                onInsertSection={(section) => insertSectionBeforeSymbol(wlContext.symbol, section)}
+                onAddSymbol={() => {
+                  const row = wl.find((candidate) => candidate.symbol === wlContext.symbol);
+                  addSymbolTargetRef.current = { section: row?.section ?? WATCHLIST_ROOT_SECTION, afterSymbol: wlContext.symbol };
+                  setSeed("");
+                  setAddSymOpen(true);
+                }}
+              />
+            )}
+            {wlSectionContext && (
+              <WlSectionContextMenu
+                key={`${wlSectionContext.section}:${wlSectionContext.x}:${wlSectionContext.y}:${wlSectionContext.initialView ?? "main"}`}
+                point={wlSectionContext}
+                sectionNames={sectionOrder}
+                onClose={closeWlSectionContext}
+                onRename={(name) => renameSection(wlSectionContext.section, name)}
+                onRemove={() => { deleteSection(wlSectionContext.section); closeWlSectionContext(); }}
+                onAddSymbol={() => {
+                  addSymbolTargetRef.current = { section: wlSectionContext.section };
+                  setSeed("");
+                  setAddSymOpen(true);
+                  closeWlSectionContext();
+                }}
               />
             )}
           </div>
@@ -4277,7 +4790,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         <SearchModal open seed="" manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode="add" active={active}
           flags={flags} lastFlagColor={lastFlagColor}
           marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
-          onClose={() => setAddSymOpen(false)} onPick={pick} onAdd={addSymbol} onRemove={removeSymbol}
+          onClose={() => { addSymbolTargetRef.current = null; setAddSymOpen(false); }} onPick={pick} onAdd={addSymbol} onRemove={removeSymbol}
           onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
       )}
       {indOpen && (
@@ -4444,8 +4957,10 @@ function WlFlagSlot({ color, onSet, onRemove, lastColor }: { sym: string; color?
     return (
       <span
         className="wl-flag-slot wl-flag-slot--set"
+        data-wl-no-drag
         style={{ background: color }}
         title={t("flagSetColor")}
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => { e.stopPropagation(); setPopOpen((v) => !v); }}
       >
         {popOpen && (
@@ -4469,7 +4984,9 @@ function WlFlagSlot({ color, onSet, onRemove, lastColor }: { sym: string; color?
   return (
     <span
       className="wl-flag-slot wl-flag-slot--empty"
+      data-wl-no-drag
       title={t("flagAdd")}
+      onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => { e.stopPropagation(); onSet(lastColor); }}
     />
   );

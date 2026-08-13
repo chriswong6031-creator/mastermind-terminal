@@ -602,11 +602,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // GC v2 side channels: anticipation dots (dates) + structure-break warnings ({t, kind}), resolved to bar times.
   const earlyDotsRef = useRef<{ t: string }[]>([]);
   const warnMarksRef = useRef<{ t: string; kind: string }[]>([]);
-  // Refused bear-block setups are diagnostic history, not calls. Keep that layer available for
-  // forensic review, but leave it OFF on a normal chart so a field of ⊘ annotations cannot read
-  // like a field of predicted entries. The same detail switch also owns the existing early dots and
-  // structure-break warnings.
-  const showDetailRef = useRef<boolean>(false);
+  const showDetailRef = useRef<boolean>(true);   // "Signals detail" chip → early dots + warnings visibility
   const highlightTimerRef = useRef<any>(null);   // R14 pulse timer — cleared on symbol/TF change
   const epochRef = useRef(0);               // race guard: latest data-effect run wins
   const cmpGenRef = useRef(0);              // compare-specific generation token (epoch doesn't bump on compare change)
@@ -665,7 +661,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const [legendOpen, setLegendOpen] = useState(() =>
     typeof window === "undefined" ? true : !window.matchMedia("(max-width:860px)").matches
   );
-  const [showDetail, setShowDetail] = useState(false);  // diagnostics: refused setups + early dots + warnings
+  const [showDetail, setShowDetail] = useState(true);   // GC v2: early-dots + warnings overlay toggle
   // DayStatsStrip: snapshot of bars + dailyBars for the strip (updated when intraday data loads)
   // Using state so React re-renders the strip when data changes; refs are not enough.
   const [stripBars, setStripBars] = useState<Bar[]>([]);
@@ -3721,7 +3717,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           layer.appendChild(g);
           continue;
         }
-        // ── HK-O1: a REFUSED entry is optional diagnostic history, never buy geometry ──
+        // ── HK-O1: a REFUSED entry is an annotation, never buy geometry ──
         // The emitter still types it BUY/REBUY so old readers parse, but 9988.HK's
         // 2026-07-09 regime-vetoed entry drew a solid up-pointing star on the price series
         // and the operator chased it. A blocked setup now renders as a hollow slate ring
@@ -3732,9 +3728,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // entry geometry below. What it must never do is answer it silently — the entry
         // branch gives it a persistent, glance-tier `retro` tag for exactly that reason.
         if ((m.blocked || m.quality === "regime_blocked") && !m.retro) {
-          // Ordinary charts show decisions and actionable watches, not every setup the engine
-          // refused. The detail chip is the explicit forensic opt-in for these ⊘ annotations.
-          if (!showDetailRef.current) continue;
           const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
           const cy = y + 15, r = 5.4, k = r * 0.707;
           // ── washout-override candidate: the SAME ring-slash, promoted in weight only ──
@@ -8100,12 +8093,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         <span ref={statusRef} />
         <span className="mm" style={{ display: oracleVisible ? undefined : "none" }}><i style={{ background: "currentColor" }} /><span ref={verdictRef}>GOLDEN ORACLE</span></span>
         {replayIdx != null && <span className="mm" style={{ background: "rgba(232,179,57,.14)", borderColor: "rgba(232,179,57,.35)", color: "var(--signal)" }}><i style={{ background: "var(--signal)" }} />REPLAY</span>}
-        {/* GC v2 diagnostics: refused entries + early dots + arm/confirm warning side channels. */}
-        {oracleVisible && <span className="mm" role="button" tabIndex={0}
-          onPointerDown={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()}
-          onClick={(e) => { e.stopPropagation(); setShowDetail((v) => !v); }}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); setShowDetail((v) => !v); } }}
-          title={tPlain("cpOracleToggle", "Toggle refused setups, early dots & structure-break warnings")}
+        {/* GC v2: toggle the early-dots + arm/confirm warning overlay (side channels) */}
+        {oracleVisible && <span className="mm" role="button" tabIndex={0} onClick={() => setShowDetail((v) => !v)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setShowDetail((v) => !v); } }}
+          title={tPlain("cpOracleToggle", "Toggle early dots & structure-break warnings")}
           style={{ cursor: "pointer", opacity: showDetail ? 1 : 0.5 }}>
           <i style={{ background: "var(--muted)" }} />{showDetail ? "⚠ detail" : "⚠ off"}
         </span>}
