@@ -256,3 +256,80 @@ describe("populationDisclosure", () => {
     expect(empty.mismatch).toBe(brief.book.n !== 0);
   });
 });
+
+// ── W6: the desk declares its own population (packet amendment A8) ────────────
+//
+// Before this, the panel could only compare SIZES. That heuristic is blind to the exact
+// case the program exists to prevent — a watchlist and a position book of the same size —
+// so the desk now states its population and the panel reads the statement.
+
+describe("populationDisclosure: the desk's declared mode", () => {
+  const v2 = loadBrief("watchlist_union_v2");
+
+  it("reads the mode and the pre-localized sentence from the payload", () => {
+    const d = populationDisclosure({ kind: "watchlist_union", count: v2.book.n }, v2);
+    expect(d.deskMode).toBe("watchlist_union");
+    expect(d.deskDisclosure?.en).toContain("not a position book");
+    expect(d.deskDisclosure?.zh).toContain("并非持仓");
+    expect(d.mismatch).toBe(false);
+  });
+
+  it("catches a SAME-SIZE different set — the case the size heuristic could not see", () => {
+    // A page rendering N positions under a brief composed from an N-name watchlist. The
+    // counts agree exactly, so the old detector reported agreement; the founding defect.
+    const d = populationDisclosure({ kind: "positions", count: v2.book.n }, v2);
+    expect(d.briefCount).toBe(d.count);
+    expect(d.mismatch).toBe(true);
+    expect(d.mismatchReason).toBe("mode");
+  });
+
+  it("prefers the conclusive mode reason over a mere count difference", () => {
+    const d = populationDisclosure({ kind: "positions", count: v2.book.n + 5 }, v2);
+    expect(d.mismatchReason).toBe("mode");
+  });
+
+  it("still reports a count gap when the modes agree", () => {
+    const d = populationDisclosure({ kind: "watchlist_union", count: v2.book.n + 2 }, v2);
+    expect(d.mismatch).toBe(true);
+    expect(d.mismatchReason).toBe("count");
+  });
+
+  it("never renders `unspecified` as agreement OR as an accusation", () => {
+    // The desk saying "I could not establish the population" is not evidence the page is
+    // wrong. It surfaces through the desk's own sentence instead.
+    const unspec = {
+      ...v2,
+      population: {
+        ...v2.population!,
+        mode: "unspecified" as const,
+        disclosure_en: "This read describes the 9 names sent to the desk. The set they came from was not declared.",
+      },
+    };
+    const d = populationDisclosure({ kind: "positions", count: v2.book.n }, unspec);
+    expect(d.deskMode).toBe("unspecified");
+    expect(d.mismatch).toBe(false);
+    expect(d.deskDisclosure?.en).toContain("was not declared");
+  });
+
+  it("degrades to the size-only cross-check on a v1 payload", () => {
+    // An older API, a stale cache, or a proxy predating the bump. No mode, no crash, and
+    // no invented mode — the previous behaviour exactly.
+    const d = populationDisclosure({ kind: "positions", count: brief.book.n }, brief);
+    expect(brief.population).toBeUndefined();
+    expect(d.deskMode).toBeNull();
+    expect(d.deskDisclosure).toBeNull();
+    expect(d.mismatch).toBe(false);
+    expect(populationDisclosure({ kind: "positions", count: brief.book.n + 1 }, brief).mismatchReason)
+      .toBe("count");
+  });
+
+  it("ignores a mode this build cannot interpret rather than rendering a raw token", () => {
+    const future = {
+      ...v2,
+      population: { ...v2.population!, mode: "some_future_mode" },
+    } as unknown as PortfolioBrief;
+    const d = populationDisclosure({ kind: "positions", count: v2.book.n }, future);
+    expect(d.deskMode).toBeNull();
+    expect(d.mismatch).toBe(false);
+  });
+});

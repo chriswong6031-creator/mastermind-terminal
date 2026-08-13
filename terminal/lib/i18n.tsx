@@ -912,6 +912,10 @@ export const LEX: Record<string, [string, string]> = {
   briefPopulationPositions: ["Reading your {n} open positions.", "解读范围：你的 {n} 项在持仓位。"],
   briefPopulationWatchlist: ["Watchlist structure — equal weighted, {n} names.", "自选列表结构 —— 等权重，{n} 个标的。"],
   briefPopulationGap: ["The desk read {m} names — not the same set.", "研究台解读了 {m} 个标的 —— 与本页并非同一组。"],
+  briefPopulationModeGap: [
+    "The desk read a different set of names from the one shown here.",
+    "研究台解读的标的组与此处显示的并非同一组。",
+  ],
   briefStale: ["data as of {asof}", "数据截至 {asof}"],
   briefUncovered: ["No desk coverage yet for: {names}", "以下标的暂无研究台覆盖：{names}"],
   briefUnavailable: ["Your book brief is unavailable right now.", "你的账本简报暂时无法加载。"],

@@ -38,7 +38,34 @@ export interface BriefBook {
   uncovered: string[];
 }
 
-/** The full portfolio_brief.v1 payload (200 response body). */
+/** The population modes the desk can declare (packet amendment A8). */
+export type PopulationMode = "positions" | "watchlist_union" | "unspecified";
+
+/**
+ * WHICH SET OF NAMES the desk composed the brief over — its own declaration, not our
+ * inference (portfolio_brief.v2).
+ *
+ * `unspecified` is a real, honest value, not a missing one: it means the upstream loader
+ * could not establish the population (its Supabase query failed, or no query ran), and
+ * the desk says so rather than assuming. It must NEVER be rendered as agreement with
+ * whatever the page happens to show.
+ */
+export interface BriefPopulation {
+  mode: PopulationMode;
+  label_en: string;
+  label_zh: string;
+  n: number;
+  disclosure_en: string;
+  disclosure_zh: string;
+}
+
+/**
+ * The full portfolio_brief payload (200 response body).
+ *
+ * `population` is v2 and OPTIONAL here on purpose: a v1 payload (an older API, a stale
+ * cache, a proxy that predates the bump) has no such field, and this panel must degrade
+ * to the size-only cross-check rather than crash or invent a mode.
+ */
 export interface PortfolioBrief {
   schema: string;
   asof: string;
@@ -46,6 +73,7 @@ export interface PortfolioBrief {
   stale: boolean;
   weighting: BriefWeighting;
   book: BriefBook;
+  population?: BriefPopulation;
   headline: Bilingual;
   sections: BriefSection[];
 }
@@ -75,17 +103,49 @@ export type PopulationDisclosure = {
   /** The book size the DESK reports it read, when the payload says. `null` = it did not say. */
   briefCount: number | null;
   /**
-   * The desk provably read a different set from the one on screen. Only ever true when the payload
-   * reports its own count — an absent count is unknown, and unknown is never rendered as agreement.
-   *
-   * The brief API does not yet carry an explicit `mode` field (that ships with W6). Until it does,
-   * the reported book size is the only cross-check available, so this is a genuine-difference
-   * detector rather than a full mode comparison — it can miss a same-size different set, and it
-   * never produces a false alarm.
+   * The desk's OWN declared population (v2), or `null` on a v1 payload that cannot say.
+   * This is a statement of fact from the composer, not a guess from counting.
+   */
+  deskMode: PopulationMode | null;
+  /** The desk's pre-localized disclosure sentence, when the payload carries one. */
+  deskDisclosure: Bilingual | null;
+  /**
+   * The desk provably read a different set from the one on screen — never a guess, and never
+   * rendered as agreement when the truth is unknown.
    */
   mismatch: boolean;
+  /**
+   * WHY it mismatched, so the view can say the stronger thing when it has it.
+   * `"mode"` — the desk names a different population than the page renders. Conclusive.
+   * `"count"` — same declared population (or none declared) but a different number of names.
+   * `null` — no mismatch, or nothing to compare against.
+   */
+  mismatchReason: "mode" | "count" | null;
 };
 
+function readPopulation(brief: PortfolioBrief | null): BriefPopulation | null {
+  const p = brief?.population;
+  if (!p || typeof p !== "object") return null;
+  if (p.mode !== "positions" && p.mode !== "watchlist_union" && p.mode !== "unspecified") {
+    // An unknown mode from a newer API is not something this build can interpret; treat it
+    // as "the desk did not say in terms I understand" rather than rendering a raw token.
+    return null;
+  }
+  return p;
+}
+
+/**
+ * Reconcile what the PAGE renders against what the DESK says it read.
+ *
+ * Since W6 the payload declares its own population, so this is a comparison of two
+ * statements rather than the size-only heuristic it replaced — that heuristic could miss a
+ * same-size different set, which is precisely the case this program exists to prevent (a
+ * 9-name watchlist under a 9-position table read as agreement).
+ *
+ * `unspecified` is deliberately NOT a mismatch: the desk is telling us it does not know,
+ * and "we disagree" would be a stronger claim than the evidence supports. The view renders
+ * the desk's own `unspecified` sentence, which says the set was not declared.
+ */
 export function populationDisclosure(
   population: PagePopulation,
   brief: PortfolioBrief | null,
@@ -93,11 +153,28 @@ export function populationDisclosure(
   const reported = brief?.book && typeof brief.book.n === "number" && Number.isFinite(brief.book.n)
     ? brief.book.n
     : null;
+  const desk = readPopulation(brief);
+
+  let mismatch = false;
+  let mismatchReason: "mode" | "count" | null = null;
+  if (desk && desk.mode !== "unspecified" && desk.mode !== population.kind) {
+    mismatch = true;
+    mismatchReason = "mode";
+  } else if (reported !== null && reported !== population.count) {
+    mismatch = true;
+    mismatchReason = "count";
+  }
+
   return {
     kind: population.kind,
     count: population.count,
     briefCount: reported,
-    mismatch: reported !== null && reported !== population.count,
+    deskMode: desk ? desk.mode : null,
+    deskDisclosure: desk
+      ? { en: desk.disclosure_en, zh: desk.disclosure_zh }
+      : null,
+    mismatch,
+    mismatchReason,
   };
 }
 

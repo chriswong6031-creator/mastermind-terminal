@@ -102,11 +102,24 @@ export default function PortfolioBriefPanel({ population }: { population: PagePo
       <div className="pbrief-body">
         {/* Which names this is about — stated before the claims, not after them. */}
         <p className="pbrief-population" data-testid="brief-population">
-          {(disclosure.kind === "positions" ? t("briefPopulationPositions") : t("briefPopulationWatchlist"))
-            .replace("{n}", String(disclosure.count))}
+          {/*
+            The desk states its own population since W6, so we render ITS sentence — it
+            arrives pre-localized and it is the only source that can distinguish a
+            9-name watchlist from a 9-position book. The local LEX phrasing stays as the
+            fallback for a v1 payload (older API, stale cache, or a proxy predating the
+            bump), which cannot say.
+          */}
+          {disclosure.deskDisclosure
+            ? pickLang(disclosure.deskDisclosure, lang as Lang)
+            : (disclosure.kind === "positions"
+                ? t("briefPopulationPositions")
+                : t("briefPopulationWatchlist")
+              ).replace("{n}", String(disclosure.count))}
           {disclosure.mismatch && (
             <span className="pbrief-population-gap">
-              {t("briefPopulationGap").replace("{m}", String(disclosure.briefCount))}
+              {disclosure.mismatchReason === "mode"
+                ? t("briefPopulationModeGap")
+                : t("briefPopulationGap").replace("{m}", String(disclosure.briefCount))}
             </span>
           )}
         </p>
