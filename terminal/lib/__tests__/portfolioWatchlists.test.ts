@@ -55,6 +55,35 @@ describe("portfolio watchlist source contract", () => {
     });
   });
 
+  it("W1b ruling: EVERY name-matched list reconciles local-wins — named lists included", () => {
+    const resolved = resolvePortfolioWatchlists(
+      [
+        { id: "default", name: "Default", symbols: ["NVDA", "AAPL"] },
+        { id: "gold", name: "Gold Miners", symbols: ["NEM", "AEM"] },
+      ],
+      JSON.stringify({
+        lists: {
+          Default: [{ symbol: "AAPL", section: "Core" }],
+          // Local order disagrees with the server's, and carries one row whose add has not
+          // reached the server yet.
+          "Gold Miners": [{ symbol: "AEM", section: "Miners" }, { symbol: "GOLD", section: "Miners" }],
+        },
+        active: "Gold Miners",
+      }),
+    );
+
+    expect(resolved.lists).toEqual([
+      // The server knows MEMBERSHIP, not ORDER. That was always true of Default...
+      { id: "default", name: "Default", symbols: ["AAPL", "NVDA"] },
+      // ...and the round-2 ruling makes it true of named lists too: local order and local rows
+      // first (AEM ahead of GOLD, as the user has them), server-only NEM appended last. A
+      // server-canonical read would have rendered ["NEM","AEM","GOLD"] — an order the user never
+      // chose — and would have hidden the not-yet-synced GOLD behind rows it did not write.
+      { id: "gold", name: "Gold Miners", symbols: ["AEM", "GOLD", "NEM"] },
+    ]);
+    expect(resolved.preferredActiveId).toBe("gold");
+  });
+
   it("fails closed from malformed local state to server state", () => {
     const server = [{ id: "default", name: "Default", symbols: ["NVDA"] }];
     expect(resolvePortfolioWatchlists(server, "{not-json")).toEqual({

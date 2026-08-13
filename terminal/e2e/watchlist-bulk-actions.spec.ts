@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { isolateWatchlistStore } from "./watchlistStore";
 
 const SEED = {
   lists: {
@@ -19,7 +20,11 @@ const SEED = {
   },
 };
 
-async function boot(page: Page) {
+async function boot(page: Page, testInfo: TestInfo, baseURL?: string) {
+  // W1b: "Bulk Test" and "Other" are non-Default lists, so a signed-in mount now migrates them
+  // into the server store behind /api/watchlist. Give each test its own store or the parallel
+  // matrix's deletes and re-inserts reorder this rail (see e2e/watchlistStore.ts).
+  await isolateWatchlistStore(page, testInfo, baseURL);
   await page.addInitScript((seed) => {
     if (!localStorage.getItem("mm.wls")) localStorage.setItem("mm.wls", JSON.stringify(seed));
   }, SEED);
@@ -97,9 +102,9 @@ async function microDrag(page: Page, target: Locator, deltaY = 12) {
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
 
-test("Shift and Cmd/Ctrl select rows without breaking ordinary chart navigation", async ({ page }, testInfo) => {
+test("Shift and Cmd/Ctrl select rows without breaking ordinary chart navigation", async ({ page, baseURL }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "The sortable rail is desktop chrome.");
-  await boot(page);
+  await boot(page, testInfo, baseURL);
 
   await row(page, "MSFT").click();
   await expect(page.locator(".mm-ptag-sym")).toHaveText("MSFT");
@@ -126,9 +131,9 @@ test("Shift and Cmd/Ctrl select rows without breaking ordinary chart navigation"
   await expect(row(page, "NVDA")).toBeFocused();
 });
 
-test("right-click moves, deletes, and creates a watchlist from the selected symbols", async ({ page }, testInfo) => {
+test("right-click moves, deletes, and creates a watchlist from the selected symbols", async ({ page, baseURL }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Context menu is a desktop pointer workflow.");
-  await boot(page);
+  await boot(page, testInfo, baseURL);
 
   await row(page, "AAPL").click();
   await row(page, "NVDA").click({ modifiers: ["Shift"] });
@@ -172,9 +177,9 @@ test("right-click moves, deletes, and creates a watchlist from the selected symb
   await expect(page.locator(".wl-row")).toHaveCount(0);
 });
 
-test("a single ticker has TradingView-style actions plus our move and new-list actions", async ({ page }, testInfo) => {
+test("a single ticker has TradingView-style actions plus our move and new-list actions", async ({ page, baseURL }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Context menus are desktop chrome.");
-  await boot(page);
+  await boot(page, testInfo, baseURL);
 
   await row(page, "MSFT").click({ button: "right" });
   const menu = page.getByRole("menu", { name: "Selected ticker actions" });
@@ -210,9 +215,9 @@ test("a single ticker has TradingView-style actions plus our move and new-list a
   await expect(page.getByRole("region", { name: /Microsoft Corp · Overview/ })).toBeVisible();
 });
 
-test("adding and removing section dividers preserves the ordered symbol stream", async ({ page }, testInfo) => {
+test("adding and removing section dividers preserves the ordered symbol stream", async ({ page, baseURL }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Section menus are desktop chrome.");
-  await boot(page);
+  await boot(page, testInfo, baseURL);
 
   await row(page, "MSFT").click({ button: "right" });
   const menu = page.getByRole("menu", { name: "Selected ticker actions" });
@@ -239,9 +244,9 @@ test("adding and removing section dividers preserves the ordered symbol stream",
   await expect(row(page, "NVDA")).toHaveAttribute("data-watchlist-section", "Mega Caps");
 });
 
-test("removing the first divider creates an unsectioned run instead of deleting or regrouping symbols", async ({ page }, testInfo) => {
+test("removing the first divider creates an unsectioned run instead of deleting or regrouping symbols", async ({ page, baseURL }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Section menus are desktop chrome.");
-  await boot(page);
+  await boot(page, testInfo, baseURL);
 
   await page.locator('[data-watchlist-section-header="Core"]').click({ button: "right" });
   await page.getByRole("menu", { name: "Section actions for Core" }).getByRole("menuitem", { name: "Remove section" }).click();
@@ -253,10 +258,10 @@ test("removing the first divider creates an unsectioned run instead of deleting 
     elements.map((element) => element.getAttribute("data-watchlist-symbol")))).toEqual(["AAPL", "MSFT", "NVDA", "AMD"]);
 });
 
-test("section dividers collapse, rename, reorder downward, and remain non-destructive", async ({ page }, testInfo) => {
+test("section dividers collapse, rename, reorder downward, and remain non-destructive", async ({ page, baseURL }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Section controls are desktop chrome.");
   test.slow();
-  await boot(page);
+  await boot(page, testInfo, baseURL);
 
   await microDrag(page, page.getByRole("button", { name: "Drag section Core" }));
   await expect.poll(() => page.locator("[data-watchlist-section-header]").evaluateAll((elements) =>
@@ -293,9 +298,9 @@ test("section dividers collapse, rename, reorder downward, and remain non-destru
     elements.map((element) => element.getAttribute("data-watchlist-symbol")))).toEqual(["NVDA", "AMD", "AAPL", "MSFT"]);
 });
 
-test("renaming a watchlist preserves its empty and collapsed section dividers", async ({ page }, testInfo) => {
+test("renaming a watchlist preserves its empty and collapsed section dividers", async ({ page, baseURL }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Named-list controls are desktop chrome.");
-  await boot(page);
+  await boot(page, testInfo, baseURL);
 
   await page.locator('[data-watchlist-section-header="Growth"] .wl-sec-toggle').click();
   await expect(row(page, "NVDA")).toBeHidden();
@@ -318,10 +323,10 @@ test("renaming a watchlist preserves its empty and collapsed section dividers", 
   await expect(row(page, "NVDA")).toBeHidden();
 });
 
-test("the full ticker row freely reorders and crosses sections without selecting text", async ({ page }, testInfo) => {
+test("the full ticker row freely reorders and crosses sections without selecting text", async ({ page, baseURL }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "The sortable rail is desktop chrome.");
   test.slow();
-  await boot(page);
+  await boot(page, testInfo, baseURL);
 
   const source = row(page, "AMD");
   const target = page.locator('[data-watchlist-section-header="Archive"]');
@@ -370,9 +375,53 @@ test("the full ticker row freely reorders and crosses sections without selecting
     elements.map((element) => element.getAttribute("data-watchlist-symbol")))).toEqual(["NVDA", "MSFT", "AAPL", "AMD"]);
 });
 
-test("smaller viewports retain the mobile watchlist surface without desktop bulk chrome leaking", async ({ page }, testInfo) => {
+// W1b: bulk move and bulk delete used to sync ONLY when the active list was "Default" — on any
+// named list they were localStorage-only, so the same account on another device never saw them.
+// The same two gestures must now reach the server list "Bulk Test" migrated into on mount.
+test("bulk move and bulk delete on a NAMED list reach the server", async ({ page, baseURL }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Context menu is a desktop pointer workflow.");
+  await boot(page, testInfo, baseURL);
+
+  const serverList = async (name: string) => page.evaluate(async (listName) => {
+    const payload = await (await fetch("/api/watchlist", { headers: { Accept: "application/json" } })).json();
+    const list = payload.lists.find((row: { name: string }) => row.name === listName);
+    return list ? list.symbols.map((row: { symbol: string; section: string }) => [row.symbol, row.section]) : null;
+  }, name);
+
+  // The mount migration carried the local list up verbatim — order and sections included.
+  await expect.poll(() => serverList("Bulk Test"), { timeout: 30_000 }).toEqual([
+    ["AAPL", "Core"], ["MSFT", "Core"], ["NVDA", "Growth"], ["AMD", "Growth"],
+  ]);
+
+  // A plain click sets the anchor without selecting; Shift then takes the range.
+  await row(page, "AAPL").click();
+  await row(page, "MSFT").click({ modifiers: ["Shift"] });
+  await expect(page.locator("[data-testid='watchlist-selection-count']")).toHaveText("2 tickers selected");
+  await row(page, "MSFT").click({ button: "right" });
+  await page.getByRole("menu", { name: "Selected ticker actions" })
+    .getByRole("menuitem", { name: "Move to section" }).click();
+  await page.getByRole("menu", { name: "Selected ticker actions" })
+    .getByRole("menuitem", { name: "Archive" }).click();
+  await expect.poll(() => serverList("Bulk Test"), { timeout: 15_000 }).toEqual([
+    ["AAPL", "Archive"], ["MSFT", "Archive"], ["NVDA", "Growth"], ["AMD", "Growth"],
+  ]);
+
+  await row(page, "NVDA").click();
+  await row(page, "AMD").click({ modifiers: ["Shift"] });
+  await expect(page.locator("[data-testid='watchlist-selection-count']")).toHaveText("2 tickers selected");
+  await row(page, "AMD").click({ button: "right" });
+  await page.getByRole("menu", { name: "Selected ticker actions" })
+    .getByRole("menuitem", { name: "Delete 2 symbols" }).click();
+  await expect.poll(() => serverList("Bulk Test"), { timeout: 15_000 }).toEqual([
+    ["AAPL", "Archive"], ["MSFT", "Archive"],
+  ]);
+  // Scoped to the targeted list: Default is a different row set and must be untouched.
+  expect(await serverList("Default")).toHaveLength(6);
+});
+
+test("smaller viewports retain the mobile watchlist surface without desktop bulk chrome leaking", async ({ page, baseURL }, testInfo) => {
   test.skip(testInfo.project.name === "desktop", "Desktop behavior is covered above.");
-  await boot(page);
+  await boot(page, testInfo, baseURL);
   await expect(page.locator(".rail .wl-board")).toBeHidden();
   await expect(page.locator("[data-testid='watchlist-selection-count']")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(

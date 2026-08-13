@@ -1,3 +1,5 @@
+import { DEFAULT_LIST } from "@/lib/watchlists";
+
 export type PortfolioWatchlist = {
   id: string;
   name: string;
@@ -28,7 +30,7 @@ export type ResolvedPortfolioWatchlists = {
 
 const EMPTY_DEFAULT: PortfolioWatchlist = {
   id: "local:Default",
-  name: "Default",
+  name: DEFAULT_LIST,
   symbols: [],
 };
 
@@ -141,9 +143,24 @@ function parseLocalWatchlists(raw: string | null): LocalWatchlists | null {
 }
 
 /**
- * Mirror TerminalShell's additive local/server reconciliation without writing
- * either source: local order and local-only rows win, missing server rows append,
- * local-only lists remain local, and server-only lists remain visible.
+ * Additive local/server reconciliation, writing neither source.
+ *
+ * ORDER-SEMANTICS RULING (commissioning session, W1b round 2): named lists mirror `Default`'s
+ * proven local-wins semantics. Membership and section are server-synced write-through; ORDER is
+ * local-wins everywhere in the Terminal until a position-write path ships (a W5 line item). So
+ * every name-matched list reconciles the SAME way here — local order and local rows first, server
+ * -only rows appended — and there is no per-list special case to get wrong. `lib/watchlists.ts
+ * #adoptServerSymbols` is the live-state twin of this read-side rule.
+ *
+ * The reason is the one this file already recorded for Default: the server row knows MEMBERSHIP,
+ * not ORDER. `position` exists but nothing in the Terminal writes it after the initial insert.
+ *
+ *   local-only  — still rendered exactly as before. A list that has not migrated yet (or whose
+ *                 migration failed and will retry) is real user state, never hidden.
+ *   server-only — kept and appended, as before.
+ *
+ * The surface stops rendering watchlists at all in W5, at which point the guest-shell path is all
+ * that is left.
  */
 export function resolvePortfolioWatchlists(
   serverLists: readonly PortfolioWatchlist[],
@@ -169,6 +186,8 @@ export function resolvePortfolioWatchlists(
     const server = serverByName.get(list.name);
     if (!server) return { id: localId(list.name), name: list.name, symbols: list.symbols };
     usedServerIds.add(server.id);
+    // ONE rule for every list, Default and named alike (see the ruling in the doc comment above):
+    // local order wins, server-only rows append. No per-list special case.
     return {
       id: server.id,
       name: server.name,
@@ -186,7 +205,7 @@ export function resolvePortfolioWatchlists(
   // Portfolio is an authenticated surface. Match TerminalShell's signed-in
   // fallback exactly: a stale/deleted saved active name returns to Default,
   // regardless of serialized custom-list order, then to the first survivor.
-  const preferred = storedActive ?? safeLists.find((list) => list.name === "Default");
+  const preferred = storedActive ?? safeLists.find((list) => list.name === DEFAULT_LIST);
   return {
     lists: safeLists,
     preferredActiveId: preferred?.id ?? safeLists[0].id,

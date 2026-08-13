@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { isolateWatchlistStore } from "./watchlistStore";
 
 // Operator report (2026-08-05): a one-hit search for 明阳电气 showed a sliver of a panel behind the
 // result row and the + button appeared to do nothing. With two or more watchlists, + opens the
@@ -14,22 +15,37 @@ const LISTS = {
   meta: {},
 };
 
-async function openSearchWithTwoLists(page: Page, query: string) {
+async function openSearchWithTwoLists(page: Page, query: string, testInfo: TestInfo, baseURL?: string) {
+  // Since W1b the seeded "China" list migrates to the server on mount, so this spec needs its own
+  // fixture store (see e2e/watchlistStore.ts) to stay deterministic under the parallel matrix.
+  await isolateWatchlistStore(page, testInfo, baseURL);
   // Seeded before any app code runs: TerminalShell persists its own list state on mount, so a seed
   // written after the first load races that write and loses.
   await page.addInitScript((seed) => localStorage.setItem("mm.wls", JSON.stringify(seed)), LISTS);
   await page.goto("/terminal?symbol=NVDA");
   await expect(page.locator(".mm-ptag")).toBeVisible({ timeout: 60_000 });
+  // The picker under test only exists for a user with TWO OR MORE lists: SearchModal's handleAdd
+  // opens it when `lists.length > 1` and otherwise adds straight to the active list. `lists` is
+  // seeded with one entry and only becomes two when the mount-restore effect applies the saved
+  // `mm.wls` — a commit that lands after first paint. `.mm-ptag` proves the shell rendered, NOT
+  // that the restore landed, so on a starved runner the click below could beat it and silently
+  // take the single-list branch (that is how this spec failed on CI at 26 minutes' runtime).
+  // The persist effect re-writes `mm.wls` from the restored state, so two keys there is the
+  // precondition itself, observed rather than assumed.
+  await expect.poll(() => page.evaluate(() => {
+    try { return Object.keys(JSON.parse(localStorage.getItem("mm.wls") || "{}").lists ?? {}).length; }
+    catch { return 0; }
+  }), { timeout: 30_000 }).toBeGreaterThan(1);
   await page.locator(".pair").first().click();
   await page.locator(".sh input").click();
   await page.keyboard.type(query);
   await expect(page.locator(".sres .r").first()).toBeVisible({ timeout: 20_000 });
 }
 
-test("the add-to-list picker is fully visible on a one-result search", async ({ page }, testInfo) => {
+test("the add-to-list picker is fully visible on a one-result search", async ({ page, baseURL }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "The picker is a pointer affordance; the phone sheet has its own layout.");
 
-  await openSearchWithTwoLists(page, "AMD");
+  await openSearchWithTwoLists(page, "AMD", testInfo, baseURL);
   expect(await page.locator(".sres .r").count()).toBe(1);   // the one-row shape that did the clipping
 
   await page.locator(".sres .r .add").first().click();
@@ -60,10 +76,10 @@ test("the add-to-list picker is fully visible on a one-result search", async ({ 
   }), { timeout: 10_000 }).toContain("AMD");
 });
 
-test("scrolling the result list closes the picker instead of stranding it", async ({ page }, testInfo) => {
+test("scrolling the result list closes the picker instead of stranding it", async ({ page, baseURL }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Pointer affordance; desktop is where the popover lives.");
 
-  await openSearchWithTwoLists(page, "A");                  // many hits → a scrollable result list
+  await openSearchWithTwoLists(page, "A", testInfo, baseURL);                  // many hits → a scrollable result list
   await page.locator(".sres .r .add").first().click();
   await expect(page.locator(".s-pick")).toBeVisible();
   // The popover is anchored to the row's viewport rect, so a scroll would leave it floating.
