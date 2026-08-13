@@ -375,6 +375,83 @@ test("the full ticker row freely reorders and crosses sections without selecting
     elements.map((element) => element.getAttribute("data-watchlist-symbol")))).toEqual(["NVDA", "MSFT", "AAPL", "AMD"]);
 });
 
+test("the lifted ticker stays anchored to the exact pointer grab point", async ({ page, baseURL }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "The sortable rail is desktop chrome.");
+  await boot(page, testInfo, baseURL);
+
+  const source = row(page, "AAPL");
+  const section = page.locator('[data-watchlist-section-header="Core"]');
+  const crossSection = page.locator('[data-watchlist-section-header="Growth"]');
+  const crossRow = row(page, "NVDA");
+  await source.scrollIntoViewIfNeeded();
+  const before = await source.boundingBox();
+  const sectionBefore = await section.boundingBox();
+  expect(before).not.toBeNull();
+  expect(sectionBefore).not.toBeNull();
+
+  const viewportWidth = page.viewportSize()?.width ?? before!.x + before!.width;
+  const visibleLeft = Math.max(0, before!.x);
+  const visibleRight = Math.min(viewportWidth, before!.x + before!.width);
+  const pointerDown = {
+    x: visibleLeft + (visibleRight - visibleLeft) / 2,
+    y: before!.y + before!.height * 0.37,
+  };
+  const grabOffsetY = pointerDown.y - before!.y;
+
+  await page.evaluate(() => {
+    (window as Window & { __wlPointer?: { x: number; y: number } }).__wlPointer = { x: 0, y: 0 };
+    window.addEventListener("pointermove", (event) => {
+      (window as Window & { __wlPointer?: { x: number; y: number } }).__wlPointer = { x: event.clientX, y: event.clientY };
+    }, { capture: true });
+  });
+
+  await page.mouse.move(pointerDown.x, pointerDown.y);
+  await page.mouse.down();
+  // Cross the 6px activation threshold with one natural vertical movement.
+  // The lifted visual must immediately catch up to that same coordinate.
+  await page.mouse.move(pointerDown.x, pointerDown.y + 8);
+  await expect(source).toHaveClass(/dragging/);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  const activatedGeometry = await source.evaluate((element) => {
+    const visual = document.querySelector<HTMLElement>('[data-watchlist-drag-visual="AAPL"]')!;
+    const rect = visual.getBoundingClientRect();
+    const pointer = (window as Window & { __wlPointer?: { x: number; y: number } }).__wlPointer!;
+    return { top: rect.top, pointerY: pointer.y };
+  });
+  expect(Math.abs((activatedGeometry.pointerY - activatedGeometry.top) - grabOffsetY)).toBeLessThanOrEqual(1.5);
+  // Hold beyond the old 110ms root-drop expansion: the cursor-to-row offset must
+  // remain exact even after every drag-state visual has settled.
+  await page.waitForTimeout(180);
+
+  const geometry = await page.locator('[data-watchlist-drag-visual="AAPL"]').evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const pointer = (window as Window & { __wlPointer?: { x: number; y: number } }).__wlPointer;
+    return { top: rect.top, width: rect.width, height: rect.height, pointer };
+  });
+  const sectionAfter = await section.boundingBox();
+  expect(geometry.pointer).toBeTruthy();
+  expect(Math.abs((geometry.pointer!.y - geometry.top) - grabOffsetY)).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(geometry.width - before!.width)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(geometry.height - before!.height)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(sectionAfter!.y - sectionBefore!.y)).toBeLessThanOrEqual(0.5);
+
+  for (const target of [crossSection, crossRow]) {
+    const targetBox = await target.boundingBox();
+    expect(targetBox).not.toBeNull();
+    await page.mouse.move(pointerDown.x, targetBox!.y + targetBox!.height / 2);
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+    const crossGeometry = await page.locator('[data-watchlist-drag-visual="AAPL"]').evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const pointer = (window as Window & { __wlPointer?: { x: number; y: number } }).__wlPointer!;
+      return { top: rect.top, pointerY: pointer.y };
+    });
+    expect(Math.abs((crossGeometry.pointerY - crossGeometry.top) - grabOffsetY)).toBeLessThanOrEqual(1.5);
+  }
+
+  await page.mouse.up();
+  await expect(source).not.toHaveClass(/dragging/);
+});
+
 // W1b: bulk move and bulk delete used to sync ONLY when the active list was "Default" — on any
 // named list they were localStorage-only, so the same account on another device never saw them.
 // The same two gestures must now reach the server list "Bulk Test" migrated into on mount.

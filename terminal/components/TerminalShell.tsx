@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useIsMobile, useIsPhone } from "@/lib/useMediaQuery";
 import MobileSheet from "@/components/ui/MobileSheet";
-import { DndContext, PointerSensor, KeyboardSensor, useDroppable, useSensor, useSensors, closestCenter, type CollisionDetection, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
+import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useDroppable, useSensor, useSensors, closestCenter, type CollisionDetection, type DragEndEvent, type DragStartEvent, type Modifier } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
@@ -240,6 +240,11 @@ const watchlistCollisionDetection: CollisionDetection = (args) => {
       }).sort((a, b) => a.data.value - b.data.value)
     : [];
   if (args.pointerCoordinates && !draggingSection) {
+    // The root target is a zero-layout overlay on the first 25px of the list.
+    // When the pointer deliberately enters that band it owns the drop even
+    // though a ticker or divider remains visible beneath it.
+    const exactRoot = exact.filter(({ id }) => id === ROOT_DROP_ID);
+    if (!pointerInsideInitial && exactRoot.length) return exactRoot;
     const exactRows = exact.filter(({ id }) => id !== ROOT_DROP_ID && !String(id).startsWith(SEC_DROP_PREFIX));
     if (exactRows.length) return exactRows;
     const pointer = args.pointerCoordinates;
@@ -352,7 +357,7 @@ function WlSectionHeader({ name, count, collapsed, minWidth, onToggle, onContext
 
 function WlRootDropZone({ active, label }: { active: boolean; label: string }) {
   const { setNodeRef, isOver } = useDroppable({ id: ROOT_DROP_ID });
-  return <div ref={setNodeRef} className={`wl-root-drop${active ? " active" : ""}${isOver ? " over" : ""}`} aria-hidden={!active}>{label}</div>;
+  return <div ref={setNodeRef} data-watchlist-root-drop className={`wl-root-drop${active ? " active" : ""}${isOver ? " over" : ""}`} aria-hidden={!active}>{label}</div>;
 }
 
 // Drag-sortable wrapper for a watchlist row. Whole-row draggable with a distance
@@ -394,7 +399,7 @@ function SortableWlRow({ sym, section, selected, dragLabel, className, style, on
         transition: transition ?? undefined,
         cursor: "grab",
         ...(isDragging
-          ? { opacity: 0.96, zIndex: 30, position: "relative", background: "var(--panel-2)", boxShadow: "0 10px 28px rgba(0,0,0,.5)", cursor: "grabbing" }
+          ? { opacity: 0.18, zIndex: 30, position: "relative", cursor: "grabbing" }
           : {}),
       }}
       onClick={onClick}
@@ -904,6 +909,16 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const wlPointerDragRef = useRef(false);
   const wlPointerLeftInitialRef = useRef(false);
   const wlPointerInitialRectRef = useRef<{ left: number; right: number; top: number; bottom: number } | null>(null);
+  const wlPendingPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const wlActivationDeltaRef = useRef<{ x: number; y: number } | null>(null);
+  const preserveWlActivationDelta = useMemo<Modifier>(() => ({ transform, activatorEvent }) => {
+    if (!activatorEvent || !("clientX" in activatorEvent) || !("clientY" in activatorEvent)) return transform;
+    const pointerY = wlPointerRef.current?.y;
+    const sourceTop = wlPointerInitialRectRef.current?.top;
+    const grabOffsetY = wlActivationDeltaRef.current?.y;
+    if (pointerY == null || sourceTop == null || grabOffsetY == null) return transform;
+    return { ...transform, x: 0, y: pointerY - sourceTop - grabOffsetY };
+  }, []);
   const addSymbolTargetRef = useRef<{ section: string; afterSymbol?: string } | null>(null);
   const wlSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wlServerChainRef = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -994,6 +1009,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   );
   useEffect(() => {
     const trackPointer = (event: PointerEvent) => {
+      wlPendingPointerRef.current = { x: event.clientX, y: event.clientY };
       if (!wlPointerDragRef.current) return;
       wlPointerRef.current = { x: event.clientX, y: event.clientY };
       const initial = wlPointerInitialRectRef.current;
@@ -2556,6 +2572,14 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     () => watchlistVisualOrder(wl, sectionOrder, collapsed),
     [wl, sectionOrder, collapsed],
   );
+  const visibleWlDropOrder = useMemo(() => [
+    ROOT_DROP_ID,
+    ...(sections[WATCHLIST_ROOT_SECTION] ?? []),
+    ...sectionOrder.flatMap((section) => [
+      SEC_DROP_PREFIX + section,
+      ...(collapsed.has(section) ? [] : (sections[section] ?? [])),
+    ]),
+  ], [sections, sectionOrder, collapsed]);
   const selectedWlRows = useMemo(
     () => copyWatchlistSelection(wl, wlSelected, visibleWlOrder),
     [wl, wlSelected, visibleWlOrder],
@@ -3177,6 +3201,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   function onWlDragStart(event: DragStartEvent) {
     const activator = event.activatorEvent;
     const pointerDrag = "clientX" in activator && "clientY" in activator;
+    const activatorPointer = pointerDrag ? activator as PointerEvent : null;
     const activeId = String(event.active.id);
     const activeNode = activeId.startsWith(SEC_DROP_PREFIX)
       ? document.querySelector<HTMLElement>(`[data-watchlist-section-header="${CSS.escape(activeId.slice(SEC_DROP_PREFIX.length))}"]`)
@@ -3187,9 +3212,14 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     // Capture the source element synchronously so a 12px wiggle remains a no-op,
     // while a real drag that leaves and later re-enters this slot can still land.
     wlPointerInitialRectRef.current = event.active.rect.current.initial ?? activeNode?.getBoundingClientRect() ?? null;
-    wlPointerRef.current = pointerDrag
-      ? { x: Number(activator.clientX), y: Number(activator.clientY) }
+    const latestPointer = pointerDrag ? wlPendingPointerRef.current : null;
+    const activationRect = activeNode?.getBoundingClientRect();
+    wlActivationDeltaRef.current = latestPointer && activationRect
+      ? { x: 0, y: activatorPointer ? activatorPointer.clientY - activationRect.top : 0 }
       : null;
+    wlPointerRef.current = latestPointer ?? (activatorPointer
+      ? { x: activatorPointer.clientX, y: activatorPointer.clientY }
+      : null);
     setWlDragId(activeId);
     window.getSelection()?.removeAllRanges();
     setWlContext(null);
@@ -3206,6 +3236,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     wlPointerRef.current = null;
     wlPointerLeftInitialRef.current = false;
     wlPointerInitialRectRef.current = null;
+    wlPendingPointerRef.current = null;
+    wlActivationDeltaRef.current = null;
     setWlDragId(null);
     const { active: dragActive, over } = event;
     const activeId = String(dragActive.id);
@@ -4673,7 +4705,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                 <span />
               </div>
               <div className="wl-list" role="listbox" aria-label={t("watchlists")} aria-multiselectable="true">
-                <DndContext sensors={dndSensors} collisionDetection={watchlistCollisionDetection} onDragStart={onWlDragStart} onDragCancel={() => { wlPointerDragRef.current = false; wlPointerRef.current = null; wlPointerLeftInitialRef.current = false; wlPointerInitialRectRef.current = null; setWlDragId(null); }} onDragEnd={onWlDragEnd} modifiers={[restrictToVerticalAxis]}>
+                <DndContext sensors={dndSensors} collisionDetection={watchlistCollisionDetection} onDragStart={onWlDragStart} onDragCancel={() => { wlPointerDragRef.current = false; wlPointerRef.current = null; wlPointerLeftInitialRef.current = false; wlPointerInitialRectRef.current = null; wlPendingPointerRef.current = null; wlActivationDeltaRef.current = null; setWlDragId(null); }} onDragEnd={onWlDragEnd} modifiers={[restrictToVerticalAxis]}>
                 <SortableContext items={sectionOrder.map((section) => SEC_DROP_PREFIX + section)} strategy={verticalListSortingStrategy}>
                 <WlRootDropZone active={wlDragId !== null} label={t("wlUnsectionedDrop")} />
                 {[WATCHLIST_ROOT_SECTION, ...sectionOrder].map((sec) => {
@@ -4694,7 +4726,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                       labels={{ rename: t("renameSection"), remove: t("deleteSection"), collapse: t("collapseSection"), drag: t("wlDragSection").replace("{section}", sec) }}
                     />}
                     {!isCollapsed && (
-                    <SortableContext items={rows} strategy={verticalListSortingStrategy}>
+                    <SortableContext items={visibleWlDropOrder} strategy={verticalListSortingStrategy}>
                     {rows.map((sym) => {
                       const isCompSym = isComposite(sym);
                       // For composite rows, derive summed quote from leg quotes with EOD fallback.
@@ -4773,6 +4805,18 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                   );
                 })}
                 </SortableContext>
+                <DragOverlay dropAnimation={null} zIndex={45} modifiers={[preserveWlActivationDelta]}>
+                  {wlDragId && !wlDragId.startsWith(SEC_DROP_PREFIX) ? (() => {
+                    const sym = wlDragId;
+                    const r = mergeLive(man?.symbols?.[sym], quotes[sym]);
+                    const nm = nameOf(r);
+                    return (
+                      <div className="wl-drag-overlay" data-watchlist-drag-visual={sym} aria-hidden="true" style={{ width: wlMinW, height: set.tableView ? 32 : 46 }}>
+                        <span className="s">{set.logo && <AssetLogo className="ic" symbol={sym} name={nm} market={r?.mkt || r?.sec} color={r?.col} size={set.tableView ? 18 : 24} />}<span className="tk">{set.disp === "name" ? (nm || sym) : sym}</span></span>
+                      </div>
+                    );
+                  })() : null}
+                </DragOverlay>
                 </DndContext>
               </div>
             </div>
