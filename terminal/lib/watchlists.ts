@@ -434,6 +434,40 @@ export function planWatchlistMigration(
  * is simply stale about it and it must not be re-appended. (An offline-window delete made BEFORE
  * mount is absent from that snapshot and CAN still resurrect — an accepted, documented W1b
  * tradeoff.)
+ *
+ * ── W5 DISPOSITION OF THE ORDER-SYNC LINE ITEM (third refusal; read this before the fourth) ──
+ *
+ * W1b ruled order local-wins and called a position-write path "a W5 line item". W5 looked, and is
+ * NOT shipping it. The reason is a checkable fact about the schema rather than a preference:
+ *
+ *   `watchlist_symbols` (supabase/migrations/0001_init.sql:40-48) carries `id` as its only unique
+ *   key — there is NO unique constraint or index on `(watchlist_id, symbol)`, only the plain
+ *   `wls_watchlist` index on `watchlist_id`. PostgREST's `on_conflict` upsert REQUIRES a unique
+ *   constraint, so a whole list's order cannot be rewritten in one request. The only write path
+ *   available inside this wave's scope is one `update … where watchlist_id=? and symbol=?` per
+ *   row — and every watchlist write in the Terminal is serialized on `wlServerChainRef`, so a
+ *   60-name drag would queue 60 requests ahead of the user's next edit and an A-Z sort of a
+ *   500-name list would queue 500. That is not an ordering sync; it is a stall with a side effect.
+ *
+ * Making it real needs new database surface — either a unique index on `(watchlist_id, symbol)`
+ * (which is a live-data migration, not a no-op: `addSymbols` dedupes in application code only, so
+ * duplicates may exist and would have to be reconciled first) or the atomic ordered-list RPC that
+ * master #409's own note already named as the precondition:
+ *
+ *   > Visual row order remains the established local watchlist preference until the backend has
+ *   > an atomic ordered-list RPC.
+ *
+ * The commissioning packet forbids silent schema additions riding this program (section 4), so
+ * that work belongs to a deliberate schema wave with the duplicate-reconciliation question
+ * answered, not to a portfolio wave.
+ *
+ * The READ side would not be safe even if the write existed: making server `position` authoritative
+ * on adopt is exactly the construction W1b round 1 was BLOCKED for — a stale inventory response
+ * replaying a user's pre-drag order (and their just-deleted rows) over live local state. That fix
+ * is what this function is.
+ *
+ * So: three independent refusals now (W1b's reviewer, master #409, and this wave), one named
+ * precondition, and one open schema question. A fourth lane should ship the RPC or ship nothing.
  */
 export function adoptServerSymbols(
   local: readonly { symbol: string; section: string }[],

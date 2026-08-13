@@ -54,6 +54,54 @@ export interface PortfolioBrief {
 export type TeaserTier = "free" | "insider";
 
 /**
+ * What the PAGE hosting this panel actually renders (packet amendment A8 — population disclosure).
+ *
+ * The mismatch this exists to prevent is the one the commissioning census found in production: a
+ * page titled Portfolio showing WATCHLIST symbols, with a brief above it composed from a third
+ * population, and nothing anywhere saying which set any number described. Since W5 the Terminal's
+ * `/portfolio` renders `portfolio_positions` and nothing else, so it declares `positions`.
+ *
+ * `watchlist_union` is declared by a surface that renders an equal-weighted watchlist instead — the
+ * Terminal has no such surface after W5, and the label exists so a future one cannot ship silent.
+ */
+export type PagePopulation =
+  | { kind: "positions"; count: number }
+  | { kind: "watchlist_union"; count: number };
+
+export type PopulationDisclosure = {
+  kind: PagePopulation["kind"];
+  /** Names the page itself is rendering. */
+  count: number;
+  /** The book size the DESK reports it read, when the payload says. `null` = it did not say. */
+  briefCount: number | null;
+  /**
+   * The desk provably read a different set from the one on screen. Only ever true when the payload
+   * reports its own count — an absent count is unknown, and unknown is never rendered as agreement.
+   *
+   * The brief API does not yet carry an explicit `mode` field (that ships with W6). Until it does,
+   * the reported book size is the only cross-check available, so this is a genuine-difference
+   * detector rather than a full mode comparison — it can miss a same-size different set, and it
+   * never produces a false alarm.
+   */
+  mismatch: boolean;
+};
+
+export function populationDisclosure(
+  population: PagePopulation,
+  brief: PortfolioBrief | null,
+): PopulationDisclosure {
+  const reported = brief?.book && typeof brief.book.n === "number" && Number.isFinite(brief.book.n)
+    ? brief.book.n
+    : null;
+  return {
+    kind: population.kind,
+    count: population.count,
+    briefCount: reported,
+    mismatch: reported !== null && reported !== population.count,
+  };
+}
+
+/**
  * The four terminal states the panel can be in. `hidden` means render nothing
  * (guest / 401) — the page already handles guests, so the brief simply absents itself.
  */

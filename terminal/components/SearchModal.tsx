@@ -44,7 +44,10 @@ const SEARCH_DETENTS = [62, 96] as const;
 
 // Roughly what the add-to-list popover measures (header + a few list rows + "New list"). Only used
 // to decide whether it opens below the row or above it, so an approximation is enough.
-const PICKER_H = 190;
+// Flip threshold for the add-to picker. Raised in W5: the popover gained the Portfolio destination
+// and its own group header above the watchlists, so the old 190 under-measured it and the menu
+// could open downward into a space that could not hold it.
+const PICKER_H = 250;
 
 // Category tab order + their i18n keys (bilingual labels — no hardcoded English in JSX).
 const CATS: { id: string; key: string }[] = [
@@ -65,7 +68,7 @@ export default function SearchModal({
   open, seed, manifest, inWatchlist, mode = "go", compare = [], active = "",
   quotes = {},
   flags = {}, lastFlagColor = FLAG_DEFAULT,
-  email, lists = [], activeList = "", onSwitchList, onCreateList, onAddToList,
+  email, lists = [], activeList = "", onSwitchList, onCreateList, onAddToList, onAddToPortfolio,
   marketPrefs = DEFAULT_PREFS, prefsReady = false, onShowAllMarkets,
   onClose, onPick, onAdd, onRemove, onToggleCompare, compareCfg,
 }: {
@@ -80,6 +83,9 @@ export default function SearchModal({
   onSwitchList?: (name: string) => void;
   onCreateList?: (name: string) => string | null;   // returns created name, or null on empty/dup
   onAddToList?: (sym: string, listName: string) => void;
+  // W5: Portfolio is a SECOND destination, not a watchlist. Opens the position modal instead of
+  // writing a row, because a holding needs shares/entry data a watchlist row has no place for.
+  onAddToPortfolio?: (sym: string) => void;
   // Owned by TerminalShell (one instance) and passed down, so the settings toggles and the
   // search results can never disagree about which markets are on.
   marketPrefs?: MarketPrefs;
@@ -305,28 +311,37 @@ export default function SearchModal({
     addedTimer.current = setTimeout(() => setJustAdded(null), 1500);
   }
 
-  // Add button on a SEARCH result row. One list → add directly + inline confirm. Many → open picker.
+  // Add button on a SEARCH result row → the "Add to…" picker.
+  //
+  // W5 made this ALWAYS open the picker. It used to add straight to the active watchlist whenever
+  // the user had a single list, which was fine while a watchlist was the only place a symbol could
+  // go. It is not fine now: Portfolio is a second destination with different meaning (what you HOLD
+  // vs what you WATCH), and a `+` that silently picks one of them for you is the conflation this
+  // whole program exists to end. One extra click buys an unambiguous choice.
+  //
+  // A user with no `onAddToPortfolio` wired (nothing in the product today, but the prop is
+  // optional) keeps the old single-list shortcut, so the picker never opens with one row in it.
   function handleAdd(sym: string, rowEl?: HTMLElement | null) {
     track(sym);
-    if (lists.length <= 1) {
+    if (lists.length <= 1 && !onAddToPortfolio) {
       onAdd(sym);
       flashAdded(sym, lists[0]?.name || activeList || "Watchlist");
-    } else {
-      // Anchor to the row in VIEWPORT space: the popover is position:fixed, so the only room that
-      // matters is the window's, not the scroller's (see pickerPos). Flip it above the row when
-      // the space below can't hold it and the space above can.
-      if (rowEl) {
-        const rr = rowEl.getBoundingClientRect();
-        const roomBelow = window.innerHeight - rr.bottom;
-        const up = roomBelow < PICKER_H && rr.top > roomBelow;
-        setPickerPos({
-          right: Math.max(8, window.innerWidth - rr.right + 8),   // matches the old right:8px inset
-          ...(up ? { bottom: window.innerHeight - rr.top + 2 } : { top: rr.bottom - 2 }),
-          up,
-        });
-      } else setPickerPos(null);
-      setPicker(sym); setPickerNew(false); setPickerNewName("");
+      return;
     }
+    // Anchor to the row in VIEWPORT space: the popover is position:fixed, so the only room that
+    // matters is the window's, not the scroller's (see pickerPos). Flip it above the row when
+    // the space below can't hold it and the space above can.
+    if (rowEl) {
+      const rr = rowEl.getBoundingClientRect();
+      const roomBelow = window.innerHeight - rr.bottom;
+      const up = roomBelow < PICKER_H && rr.top > roomBelow;
+      setPickerPos({
+        right: Math.max(8, window.innerWidth - rr.right + 8),   // matches the old right:8px inset
+        ...(up ? { bottom: window.innerHeight - rr.top + 2 } : { top: rr.bottom - 2 }),
+        up,
+      });
+    } else setPickerPos(null);
+    setPicker(sym); setPickerNew(false); setPickerNewName("");
   }
 
   function commitRailCreate() {
@@ -485,7 +500,21 @@ export default function SearchModal({
               ? { position: "fixed", right: pickerPos.right, top: pickerPos.top, bottom: pickerPos.bottom, left: "auto" }
               : undefined}
             onClick={(e) => e.stopPropagation()}>
-            <div className="s-pick-hd">{t("chooseListHd")}</div>
+            {/* Two destinations, visually separated, never mixed into one list of names (packet
+                section 6). Portfolio first because it is the consequential one — a position is a
+                claim about what you own; a watchlist row is a bookmark. */}
+            {onAddToPortfolio && (
+              <>
+                <div className="s-pick-hd">{t("addToHd")}</div>
+                <button className="s-pick-row s-pick-pf" data-testid="add-to-portfolio"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => { onAddToPortfolio(s); setPicker(null); }}>
+                  <span className="s-pick-nm">{t("pagePortfolio")}</span>
+                  <span className="s-pick-note">{t("addToPortfolioNote")}</span>
+                </button>
+              </>
+            )}
+            <div className="s-pick-hd">{onAddToPortfolio ? t("watchlists") : t("chooseListHd")}</div>
             {lists.map((l) => {
               const has = l.symbols.some((x) => x.symbol === s);
               return (

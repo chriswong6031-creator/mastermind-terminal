@@ -1,28 +1,52 @@
-// Deterministic in-memory stand-in for the two watchlist tables, used ONLY when
+// Deterministic in-memory stand-in for the THREE user-state tables, used ONLY when
 // `TERMINAL_E2E_FIXTURE=1` (the Playwright dev server). It implements the same structural
-// `WatchlistDb` surface `lib/watchlists.ts` calls, so the e2e suite exercises the REAL service
-// and route logic — the fixture replaces the transport, never the behaviour under test.
+// `WatchlistDb` surface `lib/watchlists.ts` and `lib/portfolio.ts` call, so the e2e suite exercises
+// the REAL service and route logic — the fixture replaces the transport, never the behaviour under
+// test.
 //
-// Never reachable in production: `app/api/watchlist/route.ts` reads the env flag once and falls
-// through to the RLS'd Supabase server client otherwise.
+// Never reachable in production: `app/api/watchlist/route.ts` and `app/api/portfolio/route.ts` read
+// the env flag once and fall through to the RLS'd Supabase server client otherwise.
 //
 // The three responsive browser projects share ONE dev server, so the store is keyed by the
 // `mm_e2e_wl` cookie: a spec that wants isolation sets its own key and gets its own account-shaped
 // world. Absent cookie -> the shared "default" store, seeded to match `app/terminal/page.tsx`'s
 // guest/e2e symbols so specs that never opt in see exactly today's Default list.
+//
+// W5 added `portfolio_positions` to the SAME store on purpose. The semantic invariants the program
+// is gated on (packet section 0 A-D: watchlist ops never move positions, position ops never move
+// watchlist rows) are only provable if both tables live behind one account-shaped world — two
+// separate fixtures would let a spec "prove" isolation that the product does not actually have.
+// The positions table is seeded EMPTY: a new book has nothing in it, and every spec that wants
+// rows creates them through the real route.
 
 import type { DbResult, DbRow, WatchlistDb, WatchlistQuery } from "@/lib/watchlists";
 
 export const FIXTURE_STORE_COOKIE = "mm_e2e_wl";
 
-type Store = { lists: DbRow[]; symbols: DbRow[]; seq: number };
+type Store = { lists: DbRow[]; symbols: DbRow[]; positions: DbRow[]; seq: number };
 
 const SEED_SYMBOLS: [string, string][] = [
   ["Crypto", "BTC-USD"], ["Crypto", "ETH-USD"], ["Equities", "NVDA"],
   ["Equities", "AAPL"], ["Equities", "MSFT"], ["Equities", "QQQ"],
 ];
 
-const stores = new Map<string, Store>();
+// PROCESS-global, not module-global — and the difference is load-bearing.
+//
+// Next compiles Route Handlers and Server Components into different bundles, so a module-level
+// `new Map()` is instantiated ONCE PER BUNDLE: `POST /api/portfolio` wrote into one map while
+// `app/(shell)/portfolio/page.tsx` read an empty one in the same process, same request, same cookie
+// key. Measured directly (2026-08-12): the route answered `GET /api/portfolio` with the position it
+// had just created, and the page rendered `data-position-count="0"` immediately afterwards.
+//
+// Nothing exposed this before W5 — the watchlist route was the only fixture consumer, and the old
+// portfolio page served a hardcoded constant instead of reading a store. Hanging the map off
+// `globalThis` makes every bundle share the one store, which is what the thing being modelled (a
+// single shared Supabase project) actually is.
+//
+// Test-only by construction: this file is reachable only from the `TERMINAL_E2E_FIXTURE` branches.
+const GLOBAL_KEY = Symbol.for("mm.e2e.watchlistFixtureStores");
+type FixtureGlobal = typeof globalThis & { [GLOBAL_KEY]?: Map<string, Store> };
+const stores: Map<string, Store> = ((globalThis as FixtureGlobal)[GLOBAL_KEY] ??= new Map<string, Store>());
 
 /** Stable synthetic owner id per store key — the service still filters on it everywhere. */
 export function fixtureUserId(key: string): string {
@@ -40,6 +64,7 @@ function seedStore(key: string): Store {
       section,
       position: index,
     })),
+    positions: [],
     seq: 0,
   };
 }
@@ -58,7 +83,7 @@ export function resetFixtureStores(): void {
   stores.clear();
 }
 
-type Table = "watchlists" | "watchlist_symbols";
+type Table = "watchlists" | "watchlist_symbols" | "portfolio_positions";
 
 class FixtureQuery implements WatchlistQuery {
   private predicates: ((row: DbRow) => boolean)[] = [];
@@ -72,7 +97,9 @@ class FixtureQuery implements WatchlistQuery {
   constructor(private store: Store, private table: Table) {}
 
   private get rows(): DbRow[] {
-    return this.table === "watchlists" ? this.store.lists : this.store.symbols;
+    if (this.table === "watchlists") return this.store.lists;
+    if (this.table === "portfolio_positions") return this.store.positions;
+    return this.store.symbols;
   }
 
   private matched(): DbRow[] {
@@ -142,7 +169,16 @@ class FixtureQuery implements WatchlistQuery {
 
   private run(): DbResult {
     if (this.mode === "insert") {
-      const incoming: DbRow[] = this.payload.map((row) => ({ id: `${this.table}-${++this.store.seq}`, ...row }));
+      const incoming: DbRow[] = this.payload.map((row) => ({
+        id: `${this.table}-${++this.store.seq}`,
+        // Server-side column DEFAULTS the writer never supplies (migration 0007): `created_at`
+        // is `now()` and `status` is 'open'. Without them a fixture row sorts on `undefined` and
+        // reads back with a null created_at, which the real table never does.
+        ...(this.table === "portfolio_positions"
+          ? { created_at: new Date().toISOString(), status: "open" }
+          : {}),
+        ...row,
+      }));
       // The live schema's unique (user_id,name) is what makes the migration converge under a
       // race instead of duplicating a list — model it rather than accepting anything.
       if (this.table === "watchlists") {
@@ -168,6 +204,10 @@ class FixtureQuery implements WatchlistQuery {
         this.store.lists = kept;
         // FK `on delete cascade` (0001_init.sql) — the symbol rows go with the list.
         this.store.symbols = this.store.symbols.filter((row) => !removed.has(row.watchlist_id));
+        // NOTHING else cascades. `portfolio_positions` has no FK to a watchlist and is deliberately
+        // untouched here: deleting a list must never delete a position (packet section 0, gate C).
+      } else if (this.table === "portfolio_positions") {
+        this.store.positions = kept;
       } else {
         this.store.symbols = kept;
       }
