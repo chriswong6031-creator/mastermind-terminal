@@ -48,6 +48,9 @@ that each violated several of these — do not hand-roll a sixth way.
 ## Repo facts
 Next.js 16 + Supabase; entitlements authority = macro-api (`profiles.is_pro` is a UI hint only); i18n via LEX `[en, zh]` tuples in `lib/i18n.tsx`; tests = vitest, golden fixtures in `lib/__tests__/fixtures/`. The main checkout is often on another agent's branch — ALWAYS `git worktree add` off `origin/master`; never touch the main checkout's git state.
 
+## Agent OS (organizational memory)
+Durable org memory — workstreams `WS-*`, decisions `DEC-*`, discoveries `DSC-*`, session handoffs — lives in the Macro repo's `agentos/` (`/Users/chriswong/Documents/Cluade/Macro Dashboard`; rules: `agentos/README.md` there). A task on an existing Mastermind workstream starts by reading its `WS-*` record and latest handoff; `do_not_redo` is binding unless refuted with new evidence. Durable choices, verified non-obvious facts, and transfers of claimed work get a `DEC-*`/`DSC-*`/handoff record via a normal Macro PR — chat memory is not company memory. Knowledge plane only: nothing in it gates execution, ranks priorities, or proves liveness, and no Terminal-local copy of the store may exist. Full section: root `AGENTS.md` § "Agent OS knowledge plane".
+
 ## Responsive product contract
 - This directory is one responsive Next.js application. Desktop, tablet, and mobile share routes,
   data fetching, chart logic, indicator logic, and settings; breakpoint-specific chrome is allowed,
