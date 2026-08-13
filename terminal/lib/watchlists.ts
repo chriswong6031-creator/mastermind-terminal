@@ -423,7 +423,7 @@ export function planWatchlistMigration(
  *   overwrite a local section. Lists absent locally adopt wholesale (they are new from another
  *   device or from the Macro side).
  *
- * The reason is the one already recorded for Default in `lib/portfolioWatchlists.ts`: the server
+ * The reason is the one first recorded for Default in the since-deleted guest-shell module: the server
  * row knows MEMBERSHIP, not ORDER. `watchlist_symbols.position` exists, but nothing in the
  * Terminal writes it after the initial insert, so treating it as canonical renders a user's
  * reordered list in an order they never chose — and, worse, replays their just-deleted rows and
