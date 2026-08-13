@@ -12,7 +12,7 @@
  */
 
 import { useState } from "react";
-import { makeProphetT } from "./prophetStrings";
+import { makeProphetT, phaseWhy } from "./prophetStrings";
 import { RingGauge } from "@/components/ui/RingGauge";
 import type { Lang } from "@/lib/i18n";
 
@@ -79,6 +79,8 @@ export function ConfidencePanel({
     invalidated:       t("phaseInvalidated"),
   };
   const phaseDisplay = phase ? (phaseDisplayMap[phase] ?? phase) : null;
+  // Shared with SignalCard + AnalysisPanel; null for every phase but `overtime`.
+  const phaseNote = phaseWhy(lang, phase);
 
   // Action label display
   const actionMap: Record<string, string> = {
@@ -106,7 +108,7 @@ export function ConfidencePanel({
       <div style={HEADER}>
         <span style={HEADER_LABEL}>{t("confidenceHeader")}</span>
         {phaseDisplay && (
-          <span style={PHASE_CHIP}>{phaseDisplay}</span>
+          <span style={PHASE_CHIP} aria-label={phaseNote ?? undefined}>{phaseDisplay}</span>
         )}
       </div>
 

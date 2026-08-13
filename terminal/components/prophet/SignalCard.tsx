@@ -16,7 +16,7 @@
  */
 
 import { useState } from "react";
-import { makeProphetT } from "./prophetStrings";
+import { makeProphetT, phaseWhy } from "./prophetStrings";
 import { OptionCard } from "./OptionCard";
 import type { OptionContractPayload } from "./OptionCard";
 import { Tip } from "@/components/ui/Tip";
@@ -222,7 +222,7 @@ function archetypeColor(tag: string): string {
  *   pre_trigger      → muted     (armed, nothing has happened)
  *   triggered_pre_t1 → brand-2   (live, working)
  *   at_t1/T1→T2/T2   → up        (at or past target)
- *   overtime         → warn      (past its horizon — caution, not direction)
+ *   overtime         → warn      (window elapsed, price frame stale — caution, not direction)
  *   invalidated      → down      (thesis broken)
  */
 export function phaseTone(phase: string | null | undefined): string {
@@ -277,6 +277,9 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
   const phaseDisplay = currentPhase ? (phaseMap[currentPhase] ?? currentPhase) : null;
   const isInvalidated = currentPhase === "invalidated";
   const phaseColor = phaseTone(currentPhase);
+  // null for every phase but `overtime`, so React omits the attribute and the card
+  // renders byte-identically for a fresh plan.
+  const phaseNote = phaseWhy(lang, currentPhase);
 
   const dirColor = isBear ? "var(--down)" : "var(--up)";
 
@@ -324,6 +327,7 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
           <span
             className="obs-tag"
             style={{ ...CHIP_BASE, "--c": phaseColor, fontSize: 9 } as React.CSSProperties}
+            aria-label={phaseNote ?? undefined}
           >
             {phaseDisplay}
           </span>

@@ -1,0 +1,153 @@
+{
+  "_comment": "Synthetic prophet/index.json exercising the WINDOW ELAPSED vocabulary and the stale-frame action suppression. Two rows on purpose: an overtime plan whose price frame never reconciled, and a fresh triggered plan as the unchanged-render control. The stale row is what the closure contract actually makes reachable — the declared window ran out while the close/current price frame stayed unavailable — so it carries phase='overtime' with recommended_action=null, last_price=null, no what_to_do_now, and a geometry block with no price-derived distances. THE WIRE ENUM IS STILL 'overtime' ON BOTH SHAPES (flat and state.*): the Terminal renames nothing on the wire, it only stops saying 'Overtime' to the reader. Every row is production-shaped — state.geometry, state.components, profit_plan and thesis — because all three surfaces (card, analysis panel, confidence panel) render this fixture and a bare row would let a suppressed block pass as green.",
+  "schema": "prophet.index/v1",
+  "asof": "2026-08-13",
+  "cadence": "nightly",
+  "plan_count": 2,
+  "active_count": 2,
+  "plans": [
+    {
+      "id": "LRN-BULL-20260605",
+      "asset": "LRN",
+      "direction": "BULL",
+      "archetype": "Resumption",
+      "entry": 90.44,
+      "invalidation": 70.26,
+      "targets": [
+        120.71,
+        150.98
+      ],
+      "horizon_days": 45,
+      "min_hold_days": 10,
+      "_signal_date": "2026-06-05",
+      "option_contract": null,
+      "phase": "overtime",
+      "management_confidence": 31,
+      "recommended_action": null,
+      "last_price": null,
+      "state": {
+        "phase": "overtime",
+        "management_confidence": 31,
+        "recommended_action": null,
+        "geometry": {
+          "dist_to_stop_r": null,
+          "dist_to_t1_r": null,
+          "horizon_pct_used": 100
+        },
+        "components": {
+          "validity": 55,
+          "progress": null,
+          "pace": null,
+          "retention": null,
+          "overlay": 48
+        },
+        "change_reason": "Plan window elapsed"
+      },
+      "profit_plan": [
+        {
+          "level": 120.71,
+          "label": "T1",
+          "action": "Scale out 40%, trail stop to entry",
+          "status": "PENDING"
+        },
+        {
+          "level": 150.98,
+          "label": "T2",
+          "action": "Close remaining 60%, exit full position",
+          "status": "PENDING"
+        }
+      ],
+      "profit_plan_zh": [
+        {
+          "level": 120.71,
+          "label": "T1",
+          "action": "减仓 40%，止损上移至成本价",
+          "status": "PENDING"
+        },
+        {
+          "level": 150.98,
+          "label": "T2",
+          "action": "了结剩余 60%，全部退出",
+          "status": "PENDING"
+        }
+      ],
+      "thesis": "LRN [RESUMPTION] — conviction 62/100 (medium). Technical context: above 200-day moving average; weekly structure bullish. DISPLAY-ONLY: machine-generated from factor scores; no forward return guarantee; display-tier artifact."
+    },
+    {
+      "id": "BA-BULL-20260806",
+      "asset": "BA",
+      "direction": "BULL",
+      "archetype": "Recovery",
+      "entry": 226.5,
+      "invalidation": 183.53,
+      "targets": [
+        290.955,
+        355.41
+      ],
+      "horizon_days": 45,
+      "min_hold_days": 10,
+      "_signal_date": "2026-08-06",
+      "option_contract": null,
+      "phase": "triggered_pre_t1",
+      "management_confidence": 57.8,
+      "recommended_action": "hold",
+      "last_price": 241.3,
+      "state": {
+        "phase": "triggered_pre_t1",
+        "management_confidence": 57.8,
+        "recommended_action": "hold",
+        "geometry": {
+          "dist_to_stop_r": 1.344,
+          "dist_to_t1_r": 1.156,
+          "horizon_pct_used": 11.1
+        },
+        "components": {
+          "validity": 100,
+          "progress": 23,
+          "pace": 64.5,
+          "retention": 76,
+          "overlay": 59
+        },
+        "change_reason": "Trigger Confirmed"
+      },
+      "what_to_do_now": [
+        "Trigger is confirmed. Hold the current position and let the trade advance toward T1 ($290.96).",
+        "Add on short-term pullbacks as long as price remains above $183.53 (invalidation level)."
+      ],
+      "what_to_do_now_zh": [
+        "触发已确认。继续持有当前仓位，让交易向 T1（$290.96）推进。",
+        "只要价格保持在 $183.53（失效价位）之上，可在短线回调时加仓。"
+      ],
+      "profit_plan": [
+        {
+          "level": 290.955,
+          "label": "T1",
+          "action": "Scale out 40%, trail stop to entry",
+          "status": "ACTIVE"
+        },
+        {
+          "level": 355.41,
+          "label": "T2",
+          "action": "Close remaining 60%, exit full position",
+          "status": "PENDING"
+        }
+      ],
+      "profit_plan_zh": [
+        {
+          "level": 290.955,
+          "label": "T1",
+          "action": "减仓 40%，止损上移至成本价",
+          "status": "ACTIVE"
+        },
+        {
+          "level": 355.41,
+          "label": "T2",
+          "action": "了结剩余 60%，全部退出",
+          "status": "PENDING"
+        }
+      ],
+      "thesis": "BA [RECOVERY] — conviction 46/100 (medium). Technical context: post-washout recovery context. DISPLAY-ONLY: machine-generated from factor scores; no forward return guarantee; display-tier artifact."
+    }
+  ],
+  "note": "DISPLAY-ONLY. All plans are display-tier artifacts. No signal has passed a forward ledger gate."
+}
