@@ -259,6 +259,65 @@ describe("display math — honest nulls, never a fabricated number", () => {
     expect(totals.valued).toBe(0);
   });
 
+  // ── round-2 review MAJOR: two populations, never mixed ────────────────────────────────────
+  it("REGRESSION: an entry-price-less position's market value is not booked as profit", () => {
+    // The reviewer's exact probe. Before the fix `value` summed the WIDE population (every valued
+    // position) while `basis` summed the NARROW one (those with an entry price), and subtracting
+    // them reported BBB's entire 50,000 market value as profit: +52,000 / +260%.
+    const positions = [
+      position({ id: "a", ticker: "AAA", shares: 100, entryPrice: 200 }),
+      position({ id: "b", ticker: "BBB", shares: 100, entryPrice: null }),
+    ];
+    const totals = bookTotals(positions, { AAA: { last: 220 }, BBB: { last: 500 } }, {});
+
+    // What the book is WORTH still covers everything held — that population is not restricted.
+    expect(totals.marketValue).toBe(72000);
+    expect(totals.valued).toBe(2);
+
+    // What it has MADE covers only the position that can answer the question.
+    expect(totals.sinceEntry).toBe(2000);
+    expect(totals.sinceEntryPct).toBeCloseTo(10);
+    expect(totals.costBasis).toBe(20000);
+    expect(totals.based).toBe(1);
+
+    // …and the exclusion is DISCLOSED. `unpriced` cannot carry this: BBB has a price.
+    expect(totals.noBasis).toEqual(["BBB"]);
+    expect(totals.unpriced).toEqual([]);
+  });
+
+  it("separates 'no price' from 'no entry price' — they are different silences", () => {
+    const totals = bookTotals(
+      [
+        position({ id: "a", ticker: "AAA", shares: 10, entryPrice: 100 }),
+        position({ id: "b", ticker: "BBB", shares: 10, entryPrice: null }),   // priced, no basis
+        position({ id: "c", ticker: "CCC", shares: 10, entryPrice: 100 }),    // no price at all
+        position({ id: "d", ticker: "DDD", shares: null, entryPrice: 100 }),  // unsized
+      ],
+      { AAA: { last: 120 }, BBB: { last: 50 }, DDD: { last: 10 } },
+      {},
+    );
+    expect(totals.openCount).toBe(4);
+    expect(totals.valued).toBe(2);          // AAA + BBB
+    expect(totals.based).toBe(1);           // AAA only
+    expect(totals.unpriced).toEqual(["CCC"]);
+    expect(totals.noBasis).toEqual(["BBB"]);
+    expect(totals.sinceEntry).toBe(200);    // (10 x 120) - (10 x 100), BBB excluded entirely
+  });
+
+  it("reports no P&L at all when nothing carries a basis, rather than a number built from none", () => {
+    const totals = bookTotals(
+      [position({ shares: 100, entryPrice: null })],
+      { NVDA: { last: 500 } },
+      {},
+    );
+    expect(totals.marketValue).toBe(50000);
+    expect(totals.sinceEntry).toBeNull();
+    expect(totals.sinceEntryPct).toBeNull();
+    expect(totals.costBasis).toBeNull();
+    expect(totals.based).toBe(0);
+    expect(totals.noBasis).toEqual(["NVDA"]);
+  });
+
   it("names the unpriced rather than quietly dropping them from a confident total", () => {
     const totals = bookTotals(
       [position({ id: "a", ticker: "NVDA" }), position({ id: "b", ticker: "0700.HK" })],

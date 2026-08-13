@@ -381,14 +381,19 @@ export type BookTotals = {
   openCount: number;
   closedCount: number;
   valued: number;
-  /** Sums over the VALUED subset only; `null` when nothing could be valued. */
+  /** Market value over every VALUED position; `null` when nothing could be valued. */
   marketValue: number | null;
+  /** Cost basis, and the P&L derived from it, over the NARROWER priced-AND-based subset. */
   costBasis: number | null;
   sinceEntry: number | null;
   sinceEntryPct: number | null;
+  /** How many valued positions carry a cost basis — the population `sinceEntry` describes. */
+  based: number;
   dayChange: number | null;
   /** Open tickers with no resolvable price — surfaced, never silently dropped from the count. */
   unpriced: string[];
+  /** Priced tickers with no ENTRY PRICE — excluded from P&L, and named for the same reason. */
+  noBasis: string[];
 };
 
 /**
@@ -398,6 +403,20 @@ export type BookTotals = {
  * could be valued and the rest are NAMED, so a book whose HK names have no store never shows a
  * confident number that quietly excludes them. When nothing can be valued every total is `null` —
  * not `0`, which reads as "your book is worth nothing".
+ *
+ * TWO POPULATIONS, NEVER MIXED (round-2 review). `marketValue` answers "what is this worth" and
+ * covers every valued position. `sinceEntry` answers "what has it made" and can only cover
+ * positions that carry BOTH a live value and a cost basis. The first version of this function summed
+ * `value` over the wide population and `basis` over the narrow one and then subtracted them, which
+ * booked an entry-price-less position's ENTIRE market value as profit:
+ *
+ *   100 AAA @ entry 200, last 220   ->  value 22,000   basis 20,000
+ *   100 BBB, no entry price, last 500 -> value 50,000   basis      0
+ *   reported: +52,000 / +260%        truth: +2,000 / +10%
+ *
+ * Nothing disclosed it either — `unpriced` names missing PRICES, and BBB had a price. So the fix is
+ * both halves: restrict the subset, and name what the restriction excluded (`noBasis`), the same
+ * way a missing price is named.
  */
 export function bookTotals(
   positions: readonly Position[],
@@ -406,11 +425,16 @@ export function bookTotals(
 ): BookTotals {
   const open = positions.filter((position) => position.status === "open");
   let value = 0;
-  let basis = 0;
   let day = 0;
   let valued = 0;
   let dayValued = 0;
+  // The P&L accumulators are deliberately SEPARATE from `value`: both sides of the subtraction must
+  // come from the same population, or the difference is not a profit.
+  let basedValue = 0;
+  let basis = 0;
+  let based = 0;
   const unpriced: string[] = [];
+  const noBasis: string[] = [];
 
   for (const position of open) {
     const last = resolveLast(position.ticker, quotes, manifest);
@@ -422,7 +446,14 @@ export function bookTotals(
     valued += 1;
     value += positionValue;
     const positionBasis = costBasis(position);
-    if (positionBasis != null) basis += positionBasis;
+    if (positionBasis == null) {
+      // Priced and sized, but no entry price — it has a value and no knowable P&L.
+      if (!noBasis.includes(position.ticker)) noBasis.push(position.ticker);
+    } else {
+      based += 1;
+      basis += positionBasis;
+      basedValue += positionValue;
+    }
     // Day move is a percent on the CURRENT value; a name without one contributes nothing rather
     // than dragging the book toward zero.
     const chg = quotes[position.ticker]?.chg ?? manifest[position.ticker]?.chg;
@@ -432,17 +463,20 @@ export function bookTotals(
     }
   }
 
-  const hasBasis = valued > 0 && basis !== 0;
+  // A zero total basis has no defined percentage, so the pair reports nothing rather than Infinity.
+  const hasBasis = based > 0 && basis !== 0;
   return {
     openCount: open.length,
     closedCount: positions.length - open.length,
     valued,
     marketValue: valued ? value : null,
-    costBasis: valued && basis ? basis : null,
-    sinceEntry: hasBasis ? value - basis : null,
-    sinceEntryPct: hasBasis ? ((value - basis) / basis) * 100 : null,
+    costBasis: hasBasis ? basis : null,
+    sinceEntry: hasBasis ? basedValue - basis : null,
+    sinceEntryPct: hasBasis ? ((basedValue - basis) / basis) * 100 : null,
+    based,
     dayChange: dayValued ? day : null,
     unpriced,
+    noBasis,
   };
 }
 

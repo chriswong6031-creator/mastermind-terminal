@@ -136,6 +136,17 @@ test("crop — closed section, and a position with no size", async ({ page, base
   await shot(page, "closed-and-unsized", testInfo);
 });
 
+test("crop — P&L coverage when a position carries no entry price", async ({ page, baseURL }, testInfo) => {
+  await prepare(page, testInfo, baseURL);
+  await page.request.post("/api/portfolio", { data: { action: "create", ticker: "NVDA", shares: "120", entryPrice: "138.40", entryDate: "2026-01-05" } });
+  // Held and sized, but the entry price was never recorded — it has a market value and no knowable
+  // P&L. Round-2 review: its market value used to be booked as profit, and nothing said so.
+  await page.request.post("/api/portfolio", { data: { action: "create", ticker: "GLD", shares: "40" } });
+  await page.goto("/portfolio");
+  await expect(page.getByTestId("portfolio-coverage-nobasis")).toBeVisible({ timeout: 20_000 });
+  await shot(page, "pnl-coverage", testInfo);
+});
+
 test("crop — the Add-to split and the rail source toggle", async ({ page, baseURL }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "The picker is a pointer affordance and the rail is desktop chrome.");
   await prepare(page, testInfo, baseURL);

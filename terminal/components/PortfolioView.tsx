@@ -269,18 +269,33 @@ export default function PortfolioView({ positions: seed }: { positions: Position
           </div>
         </div>
 
-        {/* Coverage honesty, stated WHERE the totals are — never a silent exclusion. */}
-        {!!open.length && totals.valued < totals.openCount && (
-          <p className="pf-coverage" data-testid="portfolio-coverage">
-            {totals.unpriced.length
-              ? t("bookCoverageUnpriced")
-                .replace("{valued}", String(totals.valued))
-                .replace("{total}", String(totals.openCount))
-                .replace("{names}", totals.unpriced.join(", "))
-              : t("bookCoverageUnsized")
-                .replace("{valued}", String(totals.valued))
-                .replace("{total}", String(totals.openCount))}
-          </p>
+        {/* Coverage honesty, stated WHERE the totals are — never a silent exclusion.
+            Two DIFFERENT silences, so two lines: a name with no price is missing from "what it is
+            worth", and a name with no entry price is missing from "what it has made". They are not
+            interchangeable, and one line covering both would be true of neither. */}
+        {!!open.length && (totals.valued < totals.openCount || !!totals.noBasis.length) && (
+          <div className="pf-coverage" data-testid="portfolio-coverage">
+            {totals.valued < totals.openCount && (
+              <p>
+                {totals.unpriced.length
+                  ? t("bookCoverageUnpriced")
+                    .replace("{valued}", String(totals.valued))
+                    .replace("{total}", String(totals.openCount))
+                    .replace("{names}", totals.unpriced.join(", "))
+                  : t("bookCoverageUnsized")
+                    .replace("{valued}", String(totals.valued))
+                    .replace("{total}", String(totals.openCount))}
+              </p>
+            )}
+            {!!totals.noBasis.length && (
+              <p data-testid="portfolio-coverage-nobasis">
+                {t("bookCoverageNoBasis")
+                  .replace("{based}", String(totals.based))
+                  .replace("{valued}", String(totals.valued))
+                  .replace("{names}", totals.noBasis.join(", "))}
+              </p>
+            )}
+          </div>
         )}
 
         <div className="panel" data-testid="portfolio-open">

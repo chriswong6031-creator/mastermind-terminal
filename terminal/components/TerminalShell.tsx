@@ -1522,6 +1522,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       setSet(resolvedSet.settings);
     } setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
+    // W5: which SOURCE the rail was last showing — holdings or watchlists. Restored here with the
+    // rail's other view preferences rather than in an effect of its own; a lazy `useState`
+    // initializer cannot read localStorage without a hydration mismatch (the server always renders
+    // the default), so a mount read is the only correct shape and this is where the file does them.
+    { const savedTab = localStorage.getItem("mm.railTab"); if (savedTab === "portfolio" || savedTab === "watchlists") setRailTab(savedTab); }
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
       try {
@@ -1844,13 +1849,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     };
   }, [loggedIn, wlsRestored, registerServerListIds]);
 
-  // ── W5 rail source: restore / persist the chosen tab, and load positions LAZILY ──────────────
+  // ── W5 rail source: persist the chosen tab, and load positions LAZILY ────────────────────────
   // The tab choice is a local view preference (like `mm.railW`), not user data, so it lives in
-  // localStorage and never travels to the server.
-  useEffect(() => {
-    const saved = localStorage.getItem("mm.railTab");
-    if (saved === "portfolio" || saved === "watchlists") setRailTab(saved);
-  }, []);
+  // localStorage and never travels to the server. It is RESTORED inside the existing mount-restore
+  // effect above, alongside `mm.railW` — a second mount effect just to read one key would have
+  // added another cascading-render site to a file that already carries too many.
   const railTabMounted = useRef(false);
   useEffect(() => {
     if (!railTabMounted.current) { railTabMounted.current = true; return; }
@@ -1862,19 +1865,20 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // Portfolio tab issues no request at all, and one who has it persisted issues it strictly after
   // the restore has landed — the interactive path stays as clear as it is on master.
   useEffect(() => {
-    if (!loggedIn) { setPfRows([]); setPfLoaded(false); return; }
-    if (railTab !== "portfolio" || !wlsRestored) return;
+    if (railTab !== "portfolio" || !loggedIn || !wlsRestored) return;
     void loadPortfolioRows();
   }, [loggedIn, railTab, wlsRestored, loadPortfolioRows]);
   // A different account must not inherit the previous one's book, the same way `serverListIds`
-  // resets on an email change (W1b F7).
-  const pfEmailRef = useRef(email);
-  useEffect(() => {
-    if (pfEmailRef.current === email) return;
-    pfEmailRef.current = email;
+  // resets on an email change (W1b F7). Adjusted DURING RENDER rather than in an effect: React
+  // re-runs this component before committing, so the rail can never paint one account's holdings
+  // under another's session — which an effect, running after paint, would allow for one frame.
+  // A sign-out clears it too: `loggedIn` is `!!email`, so "" is just another email change.
+  const [pfEmail, setPfEmail] = useState(email);
+  if (pfEmail !== email) {
+    setPfEmail(email);
     setPfRows([]);
     setPfLoaded(false);
-  }, [email]);
+  }
 
   // ── TRAP 1: guest → signed-in reconciliation (AuthSheet router.refresh delivers a real `email`
   //    + the server's Default symbols, but client `lists` was seeded from the guest state in the

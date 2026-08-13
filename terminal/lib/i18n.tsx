@@ -630,7 +630,6 @@ export const LEX: Record<string, [string, string]> = {
   winRateShort: ["WR", "胜率"],
   // watchlist management
   watchlists: ["Watchlists", "自选列表"],
-  portfolioWatchlistSelector: ["Portfolio watchlists", "投资组合自选列表"],
   newWatchlist: ["New watchlist", "新建自选列表"],
   newWatchlistPrompt: ["Name your new watchlist", "为新的自选列表命名"],
   renameWatchlist: ["Rename", "重命名"],
@@ -892,6 +891,9 @@ export const LEX: Record<string, [string, string]> = {
   emptyPortfolioBody: ["Add what you hold and this page prices it live. Watchlists stay on the chart — this page is holdings only.", "添加你的持仓，本页会实时计价。自选列表仍在图表侧栏 —— 本页只放真实持仓。"],
   bookCoverageUnpriced: ["Valued {valued} of {total} — no live price yet for {names}.", "已计价 {valued}/{total} —— {names} 暂无实时价格。"],
   bookCoverageUnsized: ["Valued {valued} of {total} — the rest have no share count yet.", "已计价 {valued}/{total} —— 其余持仓尚未填写股数。"],
+  // A missing PRICE and a missing ENTRY PRICE are different silences: the first keeps a name out of
+  // what the book is worth, the second keeps it out of what the book has made.
+  bookCoverageNoBasis: ["Since entry covers {based} of {valued} priced positions — no entry price recorded for {names}.", "「自建仓以来」覆盖 {based}/{valued} 项已计价持仓 —— {names} 未记录建仓价。"],
   // rail: the two SOURCES — what you hold vs what you watch (packet section 6)
   railSourceLabel: ["Rail source", "侧栏内容"],
   myPortfolio: ["My portfolio", "我的持仓"],

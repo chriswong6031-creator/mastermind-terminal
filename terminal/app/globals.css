@@ -1242,6 +1242,7 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .pf-failure{margin:-6px 0 14px;padding:9px 12px;border:1px solid color-mix(in srgb,var(--down) 45%,var(--line));border-radius:var(--r-md);background:color-mix(in srgb,var(--down) 9%,var(--panel));color:var(--text);font-size:12.5px}
 .kpi b .kpi-sub{display:inline-block;margin-left:8px;font:600 12px/1 var(--font-ui);color:var(--muted)}
 .pf-coverage{margin:-8px 0 14px;color:var(--muted);font-size:12px;line-height:1.55}
+.pf-coverage p+p{margin-top:3px}
 /* Rows carry their own controls, so the whole-row pointer the ranked book used is wrong here. */
 .pf-table tbody tr{cursor:default}
 .pf-table tbody tr:hover{background:var(--panel-2)}
@@ -1256,6 +1257,8 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .pf-act:hover:not(:disabled){color:var(--text);border-color:color-mix(in srgb,var(--brand) 55%,var(--line));background:var(--inset)}
 .pf-act:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
 .pf-act:disabled{opacity:.45;cursor:default}
+/* A touch device wider than the 860px breakpoint (a landscape tablet) is still a finger. */
+@media (pointer:coarse){.pf-act{min-height:44px;padding:0 12px}.pf-add-btn,.pf-btn{min-height:44px}}
 .pf-act.danger:hover:not(:disabled){color:var(--down);border-color:color-mix(in srgb,var(--down) 55%,var(--line))}
 .pf-confirm{display:inline-flex;align-items:center;gap:7px}
 .pf-confirm-q{color:var(--text-2);font-size:12px}
@@ -2526,6 +2529,13 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 /* ── legend / pane-ops mobile overrides — MUST sit after the legend base styles above,
      or the later equal-specificity base rules win and these go dead ── */
 @media (max-width:860px){
+  /* PORTFOLIO row controls — 44px touch targets. Edit / Close / DELETE sit side by side in one
+     table cell, and the destructive one is the rightmost: a 28px target there is a mis-tap waiting
+     to delete a position. 28px stays on pointer-precise desktop, where the compact row is what
+     makes a long book readable; every touch viewport gets the full target. */
+  .pf-act{min-height:44px;padding:0 12px}
+  .pf-add-btn{min-height:44px}
+  .pf-btn{min-height:44px}
   /* B6 typography; C2: tight ellipsis cap so long names never obstruct the chart */
   .lg-name{font-size:13px;max-width:150px}
   /* Static Legend: fixed 28px visual height on mobile — child sizing NEVER dictates row height,

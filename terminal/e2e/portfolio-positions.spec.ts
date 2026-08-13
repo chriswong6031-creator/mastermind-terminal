@@ -174,6 +174,37 @@ test("an unsized position is a labelled state, not a broken row", async ({ page,
   await expect(page.locator(".kpi").first().locator("b")).toHaveText("—");
 });
 
+test("a position with no entry price is kept out of P&L and NAMED, not folded into profit", async ({ page, baseURL }, testInfo) => {
+  await prepare(page, testInfo, baseURL);
+  // The round-2 review's probe, on the real surface: AAA has a basis, BBB does not.
+  await seedPosition(page, { ticker: "NVDA", shares: "100", entryPrice: "150" });   // live 180
+  await seedPosition(page, { ticker: "AAPL", shares: "100" });                      // manifest 228.1, no entry
+
+  await page.goto("/portfolio");
+  await expect(table(page).locator("tr[data-ticker]")).toHaveCount(2);
+
+  // Book value covers BOTH (that population is not restricted): 100×180 + 100×228.1 = 40,810.
+  await expect.poll(async () => (await page.locator(".kpi").first().locator("b").innerText()).trim(),
+    { timeout: 20_000 }).toBe("40,810.00");
+
+  // Since-entry covers ONLY NVDA: (100×180) − (100×150) = +3,000 / +20%. Before the round-2 fix
+  // this read +25,810 / +172%, because AAPL's whole market value was booked as profit.
+  const sinceEntry = page.locator(".kpi").nth(2).locator("b");
+  await expect(sinceEntry).toContainText("+3,000.00");
+  await expect(sinceEntry).toContainText("+20.00%");
+
+  // …and the exclusion is stated in plain words, naming the position it left out.
+  const noBasis = page.getByTestId("portfolio-coverage-nobasis");
+  await expect(noBasis).toBeVisible();
+  await expect(noBasis).toContainText("1 of 2");
+  await expect(noBasis).toContainText("AAPL");
+
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-portfolio-nobasis.png`),
+    fullPage: false,
+  });
+});
+
 test("add · edit · close · delete, all browser-driven, none of it touching the watchlist", async ({ page, baseURL }, testInfo) => {
   await prepare(page, testInfo, baseURL);
   await page.goto("/portfolio");
@@ -287,19 +318,28 @@ test("the page holds its shape at this viewport, in zh", async ({ page, baseURL 
   }));
   expect(shape.documentWidth).toBeLessThanOrEqual(shape.viewport + 1);
   expect(shape.scrollerOverflowX).toBe("auto");
-  expect(shape.addButtonHeight).toBeGreaterThanOrEqual(32);
 
-  // EVERY viewport must keep the row controls reachable. The responsive column plan this table
-  // inherited was written for the retired 9-column Conviction Book and, applied by position, hid
-  // the actions column at 390px — a phone user could see their book and change nothing in it.
-  // Asserted here so it cannot come back silently.
+  // EVERY viewport must keep the row controls reachable, at a real touch target. The responsive
+  // column plan this table inherited was written for the retired 9-column Conviction Book and,
+  // applied by position, hid the actions column at 390px — a phone user could see their book and
+  // change nothing in it. Asserted here so it cannot come back silently.
+  //
+  // The bar is the CSS floor with NO slack: 44px wherever the input is a finger, 28px on
+  // pointer-precise desktop where the compact row is what makes a long book readable. Delete is
+  // the rightmost of three controls in one cell, so an undersized target there mis-taps into a
+  // destructive action.
+  const touch = testInfo.project.name !== "desktop";
+  const floor = touch ? 44 : 28;
   for (const name of [/^编辑 NVDA$/, /^平仓 NVDA$/, /^删除 NVDA$/]) {
     const control = row(page, "NVDA").getByRole("button", { name });
     await expect(control).toBeVisible();
     const box = await control.boundingBox();
     expect(box?.width ?? 0).toBeGreaterThan(0);
-    expect(box?.height ?? 0).toBeGreaterThanOrEqual(26);
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(floor);
   }
+  // The add-position button and the modal's own buttons take the same floor.
+  const addBox = await page.locator(".pf-add-btn").first().boundingBox();
+  expect(addBox?.height ?? 0).toBeGreaterThanOrEqual(touch ? 44 : 34);
   // …and the symbol stays legible next to them, never squeezed out by the controls.
   await expect(row(page, "NVDA").locator(".pf-tk")).toBeVisible();
 
