@@ -9,6 +9,7 @@ import {
   stateForResponse,
   uncoveredNotice,
   weightingLabel,
+  populationDisclosure,
   SECTION_ORDER,
 } from "@/lib/portfolioBrief";
 
@@ -200,5 +201,58 @@ describe("stale handling", () => {
     const staleBrief: PortfolioBrief = { ...brief, stale: true };
     expect(staleBrief.stale).toBe(true);
     // The view keys its muted "data as of {asof}" caution off exactly this flag.
+  });
+});
+
+// ── Population disclosure (packet amendment A8) ─────────────────────────────────
+//
+// The defect this closes shipped in production: a page titled Portfolio rendering WATCHLIST
+// symbols, with this brief above it composed from a third population, and nothing on screen
+// saying which set any number described. The panel now states the page's population, and flags
+// the case where the desk's own reported book size proves it read a different set.
+
+describe("populationDisclosure", () => {
+  it("reports what the PAGE renders, and the desk's own count alongside it", () => {
+    const disclosure = populationDisclosure({ kind: "positions", count: brief.book.n }, brief);
+    expect(disclosure.kind).toBe("positions");
+    expect(disclosure.count).toBe(brief.book.n);
+    expect(disclosure.briefCount).toBe(brief.book.n);
+    expect(disclosure.mismatch).toBe(false);
+  });
+
+  it("flags a genuine population gap in BOTH directions", () => {
+    expect(populationDisclosure({ kind: "positions", count: brief.book.n + 3 }, brief).mismatch).toBe(true);
+    expect(populationDisclosure({ kind: "positions", count: Math.max(0, brief.book.n - 1) }, brief).mismatch).toBe(true);
+  });
+
+  it("treats an absent or unusable book count as UNKNOWN, never as agreement", () => {
+    // No payload at all (loading / teaser / unavailable): nothing to compare, so no claim.
+    const none = populationDisclosure({ kind: "positions", count: 4 }, null);
+    expect(none.briefCount).toBeNull();
+    expect(none.mismatch).toBe(false);
+
+    // A payload whose book count is missing or non-finite must not manufacture a mismatch —
+    // "we cannot tell" and "they agree" are rendered the same way only because neither may
+    // accuse the desk of reading the wrong names.
+    for (const n of [undefined, null, "6", Number.NaN] as unknown[]) {
+      const odd = { ...brief, book: { ...brief.book, n } } as unknown as PortfolioBrief;
+      const disclosure = populationDisclosure({ kind: "positions", count: 4 }, odd);
+      expect(disclosure.briefCount).toBeNull();
+      expect(disclosure.mismatch).toBe(false);
+    }
+  });
+
+  it("carries the watchlist_union mode for any surface that renders an equal-weighted list", () => {
+    // The Terminal has no such surface after W5 — the label exists so a future one cannot ship
+    // silent, which is exactly what A8 forbids.
+    const disclosure = populationDisclosure({ kind: "watchlist_union", count: 12 }, brief);
+    expect(disclosure.kind).toBe("watchlist_union");
+    expect(disclosure.count).toBe(12);
+  });
+
+  it("counts zero as a real population, not as a missing one", () => {
+    const empty = populationDisclosure({ kind: "positions", count: 0 }, brief);
+    expect(empty.count).toBe(0);
+    expect(empty.mismatch).toBe(brief.book.n !== 0);
   });
 });

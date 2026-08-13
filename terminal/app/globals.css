@@ -353,6 +353,32 @@ svg{display:block}
 .wl-board{height:52%;flex:none;overflow:visible}
 .detail-board{flex:1;min-height:120px;overflow-y:auto}
 .wl-bar{display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--line);flex:none}
+/* ── W5 rail sources: [ Portfolio | Watchlists ]. Two SOURCES, not two views of one — what you
+   hold and what you watch are different facts, and the toggle is the seam between them. Hiding
+   (never unmounting) the watchlist board preserves its scroll, drag and selection state. ── */
+.rail-tabs{display:flex;flex:none;gap:4px;padding:3px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel)}
+.rail-tab{appearance:none;flex:1;min-width:0;min-height:30px;padding:0 10px;border:0;border-radius:var(--r-md);background:transparent;color:var(--muted);font:650 11.5px/1 var(--font-ui);cursor:pointer;transition:color var(--t),background var(--t)}
+.rail-tab:hover{color:var(--text)}
+.rail-tab:focus-visible{outline:2px solid var(--brand-2);outline-offset:-2px}
+.rail-tab.on{color:var(--brand-2);background:color-mix(in srgb,var(--brand) 15%,transparent)}
+.board.rail-hidden{display:none}
+.pf-board{height:52%;flex:none}
+.pf-board-ttl{font:650 11.5px/1 var(--font-ui);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.pf-board-link{margin-left:auto;color:var(--brand-2);font:600 11px/1 var(--font-ui);text-decoration:none}
+.pf-board-link:hover{text-decoration:underline}
+.pf-board-list{display:flex;flex-direction:column}
+.pf-board-row{appearance:none;display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:9px;width:100%;min-height:34px;padding:6px 11px;border:0;border-bottom:1px solid var(--line-2);background:transparent;color:var(--text);font:13px/1 var(--font-ui);text-align:left;cursor:pointer;transition:background var(--t)}
+.pf-board-row:hover{background:var(--panel-2)}
+.pf-board-row:focus-visible{outline:2px solid var(--brand-2);outline-offset:-2px}
+.pf-board-row.on{background:color-mix(in srgb,var(--brand) 13%,transparent)}
+.pf-board-sym{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.pf-board-px,.pf-board-chg{font-variant-numeric:tabular-nums;font-size:11.5px}
+.pf-board-px{color:var(--text-2)}
+.pf-board-chg{min-width:56px;text-align:right;color:var(--muted)}
+.pf-board-chg.up{color:var(--up)} .pf-board-chg.down{color:var(--down)}
+.pf-board-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:26px 14px;text-align:center;color:var(--muted);font-size:12px;line-height:1.55}
+.pf-board-cta{color:var(--brand-2);font-weight:600;text-decoration:none}
+.pf-board-cta:hover{text-decoration:underline}
 .wl-select{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 9px;border-radius:var(--r-md);color:var(--text);font:650 13px/1 var(--font-ui)}
 .wl-select:hover{background:var(--panel-2)}.wl-select svg{width:12px;height:12px;stroke:var(--muted);fill:none;stroke-width:2.2}
 .wl-selection-summary{display:flex;align-items:center;gap:5px;min-width:0;height:28px;padding:0 5px 0 9px;border:1px solid color-mix(in srgb,var(--brand-2) 38%,var(--line));border-radius:var(--r-pill);background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand-2);font:650 11px/1 var(--font-ui);white-space:nowrap}
@@ -1185,6 +1211,11 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .s-pick-ct{font:600 9.5px/1 var(--font-num,var(--font-ui));color:var(--text-dim)}
 .s-pick-row.has{color:var(--text-2);cursor:default}
 .s-pick-ck{width:14px;height:14px;stroke:var(--buy);fill:none;stroke-width:2.4;flex:none}
+/* W5 — Portfolio as the picker's first, visually separated destination. The rule under it is the
+   split itself: above is what you HOLD, below is what you WATCH. */
+.s-pick-pf{border-bottom:1px solid var(--line);border-radius:0;padding-bottom:9px;margin-bottom:2px}
+.s-pick-note{flex:none;font:600 9.5px/1 var(--font-ui);letter-spacing:.03em;text-transform:uppercase;color:var(--text-dim)}
+.s-pick-pf:hover .s-pick-note{color:var(--text-2)}
 .s-pick-add{color:var(--brand-2);border-top:1px solid var(--line);border-radius:0;margin-top:2px}
 .s-pick-add svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2.2}
 .s-pick-new{display:flex;align-items:center;gap:4px;padding:5px 6px;border-top:1px solid var(--line);margin-top:2px}
@@ -1196,16 +1227,90 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 /* ===== alerts + portfolio pages ===== */
 .pg{flex:1;overflow-y:auto;min-height:0;padding:18px 20px}
 .pg-head{display:flex;align-items:center;gap:12px;margin-bottom:16px}.pg-head h2{font:650 17px/1 var(--font-ui)}.pg-head .sub{color:var(--muted);font-size:12.5px}
-.portfolio-wl-switch{display:flex;align-items:center;gap:10px;min-width:0;margin:-4px 0 14px}
-.portfolio-wl-label{flex:none;font:650 10px/1 var(--font-ui);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
-.portfolio-wl-tabs{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
-.portfolio-wl-pill{appearance:none;display:inline-flex;align-items:center;gap:7px;min-width:0;max-width:220px;min-height:34px;padding:5px 10px;border:1px solid var(--line);border-radius:var(--r-pill);background:var(--panel);color:var(--muted);font:600 12px/1 var(--font-ui);cursor:pointer;transition:color var(--t),border-color var(--t),background var(--t)}
-.portfolio-wl-pill:hover{color:var(--text);border-color:color-mix(in srgb,var(--brand) 62%,var(--line))}
-.portfolio-wl-pill:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
-.portfolio-wl-pill.on{color:var(--brand-2);border-color:var(--brand);background:color-mix(in srgb,var(--brand) 12%,var(--panel))}
-.portfolio-wl-name{min-width:0;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.portfolio-wl-count{flex:none;min-width:20px;padding:2px 5px;border-radius:var(--r-pill);background:color-mix(in srgb,var(--muted) 18%,transparent);font:700 10px/1 var(--font-num);text-align:center;color:currentColor}
-.portfolio-wl-pill.on .portfolio-wl-count{background:color-mix(in srgb,var(--brand) 22%,transparent)}
+/* ── /portfolio (W5) — the real book. The watchlist pill switcher that used to live here went
+   with the Conviction Book; watchlist selection is the charting rail's job now. Everything below
+   is built from the existing tokens/primitives (.pg/.panel/.ptable/.kpis) — no new type scale,
+   no new card grammar. Terminal is dark-only (see app/settings.css), so there is no light branch
+   to carry. ── */
+.pg .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.pf-head{flex-wrap:wrap}
+.pf-head .sub{min-width:0}
+.pf-add-btn{appearance:none;margin-left:auto;display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:0 13px;border:1px solid var(--brand);border-radius:var(--r-pill);background:color-mix(in srgb,var(--brand) 14%,var(--panel));color:var(--brand-2);font:650 12px/1 var(--font-ui);cursor:pointer;transition:background var(--t),border-color var(--t)}
+.pf-add-btn:hover{background:color-mix(in srgb,var(--brand) 24%,var(--panel))}
+.pf-add-btn:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
+.pf-add-btn svg{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.pf-failure{margin:-6px 0 14px;padding:9px 12px;border:1px solid color-mix(in srgb,var(--down) 45%,var(--line));border-radius:var(--r-md);background:color-mix(in srgb,var(--down) 9%,var(--panel));color:var(--text);font-size:12.5px}
+.kpi b .kpi-sub{display:inline-block;margin-left:8px;font:600 12px/1 var(--font-ui);color:var(--muted)}
+.pf-coverage{margin:-8px 0 14px;color:var(--muted);font-size:12px;line-height:1.55}
+/* Rows carry their own controls, so the whole-row pointer the ranked book used is wrong here. */
+.pf-table tbody tr{cursor:default}
+.pf-table tbody tr:hover{background:var(--panel-2)}
+.pf-table tbody tr.busy{opacity:.55}
+.pf-tk{color:var(--text);text-decoration:none}
+.pf-tk:hover{color:var(--brand-2);text-decoration:underline}
+.pf-tk:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px;border-radius:3px}
+.pf-unsized{margin-left:7px;padding:1px 6px;border:1px solid var(--line);border-radius:var(--r-pill);font:600 9.5px/1.5 var(--font-ui);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.pf-delta{display:block;margin-top:2px;font:500 11px/1 var(--font-ui);color:var(--muted)}
+.pf-acts{white-space:nowrap}
+.pf-act{appearance:none;min-height:28px;padding:0 9px;margin-left:5px;border:1px solid var(--line);border-radius:var(--r-md);background:transparent;color:var(--text-2);font:600 11.5px/1 var(--font-ui);cursor:pointer;transition:color var(--t),border-color var(--t),background var(--t)}
+.pf-act:hover:not(:disabled){color:var(--text);border-color:color-mix(in srgb,var(--brand) 55%,var(--line));background:var(--inset)}
+.pf-act:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
+.pf-act:disabled{opacity:.45;cursor:default}
+.pf-act.danger:hover:not(:disabled){color:var(--down);border-color:color-mix(in srgb,var(--down) 55%,var(--line))}
+.pf-confirm{display:inline-flex;align-items:center;gap:7px}
+.pf-confirm-q{color:var(--text-2);font-size:12px}
+.pf-empty{display:flex;flex-direction:column;align-items:center;gap:9px;padding:46px 16px;text-align:center}
+.pf-empty b{font:650 14px/1.3 var(--font-ui);color:var(--text)}
+.pf-empty span{max-width:46ch;color:var(--muted);font-size:12.5px;line-height:1.6}
+.pf-empty .pf-add-btn{margin:5px 0 0}
+.pf-closed{margin-bottom:16px}
+.pf-closed>summary{display:flex;align-items:center;gap:9px;padding:11px 14px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);cursor:pointer;list-style:none;font:600 12.5px/1 var(--font-ui);color:var(--text-2)}
+.pf-closed>summary::-webkit-details-marker{display:none}
+.pf-closed>summary::before{content:"";width:0;height:0;border:4px solid transparent;border-left-color:currentColor;transition:transform var(--t)}
+.pf-closed[open]>summary::before{transform:rotate(90deg) translateX(-1px)}
+.pf-closed>summary:hover{color:var(--text)}
+.pf-closed>summary:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
+.pf-closed-count{min-width:20px;padding:2px 6px;border-radius:var(--r-pill);background:color-mix(in srgb,var(--muted) 18%,transparent);font:700 10px/1.4 var(--font-num);text-align:center}
+.pf-closed[open]>summary{margin-bottom:10px}
+.pf-closed .pf-table tbody tr{opacity:.72}
+/* population disclosure — quiet, and BEFORE the desk's claims, not after them */
+.pbrief-population{margin-bottom:11px;color:var(--muted);font-size:11.5px;line-height:1.5}
+.pbrief-population-gap{display:block;margin-top:2px;color:var(--signal)}
+
+/* ── add/edit position modal ── */
+.pf-modal-back{position:fixed;inset:0;z-index:90;display:grid;place-items:center;padding:20px;background:rgba(0,0,0,.58);backdrop-filter:blur(2px)}
+.pf-modal{width:min(440px,100%);max-height:calc(100dvh - 40px);overflow-y:auto;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);box-shadow:0 24px 60px rgba(0,0,0,.5)}
+.pf-modal-hd{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.pf-modal-hd h3{font:650 14px/1 var(--font-ui);color:var(--text)}
+.pf-modal-x{appearance:none;margin-left:auto;width:28px;height:28px;display:grid;place-items:center;border:1px solid transparent;border-radius:var(--r-md);background:transparent;color:var(--muted);cursor:pointer}
+.pf-modal-x:hover{color:var(--text);border-color:var(--line)}
+.pf-modal-x:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
+.pf-modal-x svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.pf-modal-body{display:flex;flex-direction:column;gap:12px;padding:16px}
+.pf-field{display:flex;flex-direction:column;gap:5px;min-width:0}
+.pf-field>span{font:600 10px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.pf-field input,.pf-field textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--inset);color:var(--text);font:13px/1.45 var(--font-ui);outline:none;transition:border-color var(--t)}
+.pf-field input{height:36px;font-variant-numeric:tabular-nums}
+.pf-field textarea{resize:vertical;min-height:62px}
+.pf-field input:focus,.pf-field textarea:focus{border-color:var(--brand)}
+.pf-field input::placeholder,.pf-field textarea::placeholder{color:var(--text-dim)}
+.pf-field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pf-modal-hint{color:var(--muted);font-size:11.5px;line-height:1.55}
+.pf-modal-err{color:var(--down);font-size:12px;line-height:1.5}
+.pf-modal-ft{display:flex;justify-content:flex-end;gap:9px;padding:13px 16px;border-top:1px solid var(--line)}
+.pf-btn{appearance:none;min-height:34px;padding:0 15px;border:1px solid var(--line);border-radius:var(--r-md);background:transparent;color:var(--text-2);font:650 12.5px/1 var(--font-ui);cursor:pointer;transition:color var(--t),border-color var(--t),background var(--t)}
+.pf-btn:hover:not(:disabled){color:var(--text);background:var(--inset)}
+.pf-btn:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
+.pf-btn.primary{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 16%,var(--panel));color:var(--brand-2)}
+.pf-btn.primary:hover:not(:disabled){background:color-mix(in srgb,var(--brand) 26%,var(--panel))}
+.pf-btn:disabled{opacity:.5;cursor:default}
+@media(max-width:640px){
+  .pf-head .sub{order:3;flex-basis:100%}
+  .pf-add-btn{margin-left:auto}
+  .pf-acts{white-space:normal}
+  .pf-act{margin:2px 0 2px 5px}
+  .pf-field-row{grid-template-columns:1fr}
+}
 .panel{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);overflow:hidden;margin-bottom:16px}
 /* allow table scroll inside panels without clipping */
 .panel:has(.tbl-scroll){overflow-x:visible;overflow-y:hidden}
@@ -1267,13 +1372,8 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
 .kpi{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:14px 16px}.kpi small{font:600 10px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.kpi b{display:block;font:700 22px/1.1 var(--font-ui);margin-top:7px;font-variant-numeric:tabular-nums}
 @media(max-width:500px){.kpis{grid-template-columns:repeat(2,1fr);gap:8px}.kpi{padding:11px 12px}.kpi b{font-size:18px}}
-@media(max-width:640px){
-  .portfolio-wl-switch{align-items:flex-start;flex-direction:column;gap:7px}
-  .portfolio-wl-tabs{width:100%;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;touch-action:pan-x;scrollbar-width:none;padding:2px}
-  .portfolio-wl-tabs::-webkit-scrollbar{display:none}
-  .portfolio-wl-pill{flex:0 0 auto;max-width:190px;min-height:44px;padding:7px 12px}
-  .portfolio-wl-name{max-width:132px}
-}
+/* (The 640px watchlist-pill rules that sat here went with the switcher in W5. The positions
+   table's own narrow-viewport rules live with the rest of the .pf-* block above.) */
 
 /* ── Your book today · portfolio brief panel ──────────────────────────────────
    The desk's morning read of the user's own book, rendered as threaded prose.
@@ -2576,13 +2676,20 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
   .scr2 .scr2-asof{padding:8px 10px}
   table.scr2 thead th{padding:11px 10px}
   table.scr2 tbody td{padding:0 10px}
-  /* portfolio: hide DAY%(3), REGIME(5), WIN-RATE(6), PF(7), CAGR(8), TILT(9) — SYMBOL + LAST + SIGNAL visible */
-  .tbl-scroll td:nth-child(3),.tbl-scroll th:nth-child(3){display:none}
-  .tbl-scroll td:nth-child(5),.tbl-scroll th:nth-child(5){display:none}
-  .tbl-scroll td:nth-child(6),.tbl-scroll th:nth-child(6){display:none}
-  .tbl-scroll td:nth-child(7),.tbl-scroll th:nth-child(7){display:none}
-  .tbl-scroll td:nth-child(8),.tbl-scroll th:nth-child(8){display:none}
-  .tbl-scroll td:nth-child(9),.tbl-scroll th:nth-child(9){display:none}
+  /* PORTFOLIO TABLE — 8 cols: Symbol(1) Shares(2) Entry price(3) Entry date(4) Last(5) Value(6)
+     Since entry(7) Actions(8). Keep Symbol + Last + Value + Since entry + ACTIONS; hide the three
+     entry-record columns, which are reference facts the owner already knows and can still read and
+     edit in the position modal.
+
+     The rules these replace were the retired Conviction Book's column plan (DAY%/REGIME/WIN-RATE/
+     PF/CAGR/TILT) and were keyed to the bare `.tbl-scroll` container rather than to a table. This
+     page is the only `.tbl-scroll` consumer in the app, so they applied to the new table by
+     position and hid columns 3, 5, 6, 7 and 8 of it — INCLUDING the actions column, which left a
+     phone user unable to edit, close or delete anything. Caught by the 390px e2e project.
+     Scoped to `.pf-table` now so a future table in this container cannot inherit them. */
+  .pf-table td:nth-child(2),.pf-table th:nth-child(2){display:none}
+  .pf-table td:nth-child(3),.pf-table th:nth-child(3){display:none}
+  .pf-table td:nth-child(4),.pf-table th:nth-child(4){display:none}
   /* flow feed table (inside .scr-table / OptionsHubView) — 11 cols: Time(1) Ticker(2) Sector(3) Side(4) CP(5) Contract(6) DTE(7) Mny(8) Size(9) Prem(10) Flags(11)
      keep: Time(1) + Ticker(2) + Side(4) + Prem(10) + Flags(11); hide: Sector(3), CP(5), Contract(6), DTE(7), Mny(8), Size(9) */
   .scr-table table.scr td:nth-child(3),.scr-table table.scr th:nth-child(3){display:none}

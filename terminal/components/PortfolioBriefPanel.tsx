@@ -1,5 +1,5 @@
 "use client";
-// "Your book today" — the Pro portfolio brief panel, rendered above the Conviction Book.
+// "Your book today" — the Pro portfolio brief panel, rendered above the positions table.
 //
 // The desk composes the brief upstream (portfolio_brief.v1); this panel FETCHES it through
 // the same-origin proxy (/api/portfolio-brief), maps the response to a UI state via the
@@ -10,7 +10,13 @@
 //   200 → headline + threaded sections (+ stale caution, + honest-null uncovered line)
 //   401 → render nothing (the page already handles guests)
 //   403 → tasteful in-place teaser (what it is + one blurred SAMPLE line + upgrade)
-//   503 / network → one quiet "unavailable" line — the Conviction Book below is untouched
+//   503 / network → one quiet "unavailable" line — the positions table below is untouched
+//
+// W5 — POPULATION DISCLOSURE (packet amendment A8): the panel states which set of names the page
+// under it is showing, and says so when the desk's own reported book size differs. Before this the
+// panel sat above a WATCHLIST-derived table while describing the user's holdings, and nothing on
+// screen said the two were different populations. The page passes what it renders; the panel never
+// infers it.
 //
 // Descriptive only: this panel shows the desk's sentences and never adds a buy/sell/
 // rebalance CTA or any per-user recommendation.
@@ -20,8 +26,10 @@ import { useLang, useT } from "@/lib/i18n";
 import {
   type BriefState,
   type Lang,
+  type PagePopulation,
   orderedSections,
   pickLang,
+  populationDisclosure,
   sectionTitle,
   stateForResponse,
   uncoveredNotice,
@@ -33,7 +41,7 @@ const UPGRADE_URL = "https://mastermind-x.com/#pricing";
 
 type Phase = { kind: "loading" } | BriefState;
 
-export default function PortfolioBriefPanel() {
+export default function PortfolioBriefPanel({ population }: { population: PagePopulation }) {
   const t = useT();
   const { lang } = useLang();
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
@@ -80,6 +88,7 @@ export default function PortfolioBriefPanel() {
   const uncovered = uncoveredNotice(brief);
   const meta = t("briefAsOf").replace("{asof}", brief.asof);
   const wLabel = weightingLabel(brief.weighting, lang as Lang);
+  const disclosure = populationDisclosure(population, brief);
 
   return (
     <section className="pbrief" aria-label={t("briefEyebrow")}>
@@ -91,6 +100,16 @@ export default function PortfolioBriefPanel() {
         </span>
       </div>
       <div className="pbrief-body">
+        {/* Which names this is about — stated before the claims, not after them. */}
+        <p className="pbrief-population" data-testid="brief-population">
+          {(disclosure.kind === "positions" ? t("briefPopulationPositions") : t("briefPopulationWatchlist"))
+            .replace("{n}", String(disclosure.count))}
+          {disclosure.mismatch && (
+            <span className="pbrief-population-gap">
+              {t("briefPopulationGap").replace("{m}", String(disclosure.briefCount))}
+            </span>
+          )}
+        </p>
         {brief.stale && (
           <div style={{ marginBottom: 10 }}>
             <span className="pbrief-stale">

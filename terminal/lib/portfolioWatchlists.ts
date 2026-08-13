@@ -1,3 +1,17 @@
+// UNWIRED SINCE W5 — read this before treating anything here as live behaviour.
+//
+// This module was the read model for `/portfolio`'s watchlist switcher: it reconciled the server's
+// lists with local `mm.wls` so the page could show watchlist symbols as a "Conviction Book". W5
+// removed that switcher — `/portfolio` renders `portfolio_positions` and no watchlist at all — so
+// NO page, component or route imports this file any more. Its only remaining consumer is
+// `lib/__tests__/portfolioWatchlists.test.ts`.
+//
+// It is left in place rather than deleted because its local-wins merge semantics are the recorded
+// reference W1b's order-semantics ruling generalised (quoted at `lib/watchlists.ts#adoptServerSymbols`),
+// and deleting a module the commissioning session reviewed is not a build wave's call. Flagged to
+// the commissioning session as a deletion candidate: if the ruling's reference copy is kept in
+// `watchlists.ts` (it is), this file and its test can go.
+
 import { DEFAULT_LIST } from "@/lib/watchlists";
 
 export type PortfolioWatchlist = {

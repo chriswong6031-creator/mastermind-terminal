@@ -15,6 +15,7 @@ import DashboardBackButton from "@/components/DashboardBackButton";
 import { AppNav } from "@/components/AppNav";
 import { initShellBridge, postToShell } from "@/lib/platform/shellBridge";
 import MobileNav from "@/components/MobileNav";
+import PositionModal from "@/components/PositionModal";
 import { type DetectCmd } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
 import ChartConductor from "@/components/ChartConductor";
@@ -937,6 +938,38 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // has actually been applied: restore, persist and migrate all fire in the SAME commit, and in
   // that commit `lists` still holds the initial server-seeded Default.
   const [wlsRestored, setWlsRestored] = useState(false);
+
+  // ── W5: the rail's second source — the user's REAL portfolio ────────────────────────────────
+  // Packet section 6: `[ Portfolio | Watchlists ]`, "separate sources, never serialized into
+  // mm.wls". These rows come from `portfolio_positions` through /api/portfolio and are NEVER
+  // folded into `lists`, written to `mm.wls`, or touched by the watchlist sync chain. Holding a
+  // name and watching a name are different facts; the rail shows both without mixing them.
+  const [railTab, setRailTab] = useState<"watchlists" | "portfolio">("watchlists");
+  const [pfRows, setPfRows] = useState<{ id: string; ticker: string; status: string }[]>([]);
+  const [pfLoaded, setPfLoaded] = useState(false);
+  /** Symbol queued for the "Add to → Portfolio" modal; `null` = closed. */
+  const [pfAddSymbol, setPfAddSymbol] = useState<string | null>(null);
+  const loadPortfolioRows = useCallback(async () => {
+    try {
+      const response = await fetch("/api/portfolio", { headers: { Accept: "application/json" } });
+      if (!response.ok) return;
+      const payload = await response.json();
+      if (!Array.isArray(payload?.positions)) return;
+      const rows = (payload.positions as { id: string; ticker: string; status: string }[])
+        .filter((row) => row && typeof row.ticker === "string")
+        .map((row) => ({ id: row.id, ticker: row.ticker, status: row.status }));
+      // Identity-stable: an unchanged book must not re-render the rail (and with it the chart
+      // workspace) every time this runs.
+      setPfRows((current) => (current.length === rows.length
+        && current.every((row, index) => row.id === rows[index].id && row.ticker === rows[index].ticker && row.status === rows[index].status)
+        ? current
+        : rows));
+    } catch {
+      // UWP-R6: an unreachable store leaves the rail on its last good read; no error chrome here.
+    } finally {
+      setPfLoaded(true);
+    }
+  }, []);
   // Live mirror of `lists` for the async migration: reading it from a ref keeps the effect keyed
   // on `loggedIn` alone, so a symbol edit mid-migration cannot restart the whole run.
   const listsRef = useRef(lists);
@@ -1753,6 +1786,22 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       const fresh = plan.lists.length ? ((await inventory()) ?? server) : server;
       if (cancelled) return true;
       registerServerListIds(fresh);
+      // W5, residual (a) from the W1b review — the list `Default`'s writes ACTUALLY land in.
+      //
+      // `wlTarget(DEFAULT_LIST)` deliberately sends NO target when Default has no server id, so
+      // the route's legacy first-list fallback resolves it (that is the TRAP-1 heal path, and it
+      // stays). On a MACRO-FIRST account the server's only list is macro's `'Watchlist'`, so that
+      // first-by-position row IS Default's mirror — and adopting it as its own rail entry showed
+      // the user a second list holding a copy of Default's symbols. Nothing was lost, but it was a
+      // duplicate presentation of one list.
+      //
+      // `fresh` is ordered by `position` (lib/watchlists.ts#listWatchlists), so `fresh[0]` is the
+      // row that fallback reaches. The skip is scoped two ways so it can only ever remove the
+      // duplicate: it applies ONLY when Default has no registered id (a terminal-first account
+      // registers one, so nothing changes there), and ONLY on the wholesale-adopt branch below —
+      // a user who genuinely keeps a local list of that name still receives its server rows
+      // additively.
+      const defaultMirrorName = serverListIdsRef.current[DEFAULT_LIST] ? null : (fresh[0]?.name ?? null);
       setLists((current) => {
         let changed = false;
         const next = { ...current };
@@ -1764,6 +1813,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
             // Absent locally -> adopt wholesale (new from another device or from Macro), UNLESS it
             // was present when the read went out, i.e. the user deleted it mid-flight.
             if (beforeRead[list.name]) continue;
+            // …or unless it is the row Default is already being rendered from (residual (a)).
+            if (list.name === defaultMirrorName) continue;
             next[list.name] = serverRows;
             changed = true;
             continue;
@@ -1792,6 +1843,39 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       else window.clearTimeout(idle as number);
     };
   }, [loggedIn, wlsRestored, registerServerListIds]);
+
+  // ── W5 rail source: restore / persist the chosen tab, and load positions LAZILY ──────────────
+  // The tab choice is a local view preference (like `mm.railW`), not user data, so it lives in
+  // localStorage and never travels to the server.
+  useEffect(() => {
+    const saved = localStorage.getItem("mm.railTab");
+    if (saved === "portfolio" || saved === "watchlists") setRailTab(saved);
+  }, []);
+  const railTabMounted = useRef(false);
+  useEffect(() => {
+    if (!railTabMounted.current) { railTabMounted.current = true; return; }
+    try { localStorage.setItem("mm.railTab", railTab); } catch {}
+  }, [railTab]);
+  // The fetch is gated on the tab being SELECTED and on `wlsRestored`, deliberately. W1b's CI
+  // failure was a mount-window race: `search-add-to-list` clicks a beat after paint, and any extra
+  // work in that window can beat the restore commit it depends on. A user who never opens the
+  // Portfolio tab issues no request at all, and one who has it persisted issues it strictly after
+  // the restore has landed — the interactive path stays as clear as it is on master.
+  useEffect(() => {
+    if (!loggedIn) { setPfRows([]); setPfLoaded(false); return; }
+    if (railTab !== "portfolio" || !wlsRestored) return;
+    void loadPortfolioRows();
+  }, [loggedIn, railTab, wlsRestored, loadPortfolioRows]);
+  // A different account must not inherit the previous one's book, the same way `serverListIds`
+  // resets on an email change (W1b F7).
+  const pfEmailRef = useRef(email);
+  useEffect(() => {
+    if (pfEmailRef.current === email) return;
+    pfEmailRef.current = email;
+    setPfRows([]);
+    setPfLoaded(false);
+  }, [email]);
+
   // ── TRAP 1: guest → signed-in reconciliation (AuthSheet router.refresh delivers a real `email`
   //    + the server's Default symbols, but client `lists` was seeded from the guest state in the
   //    useState initializer and never re-seeds on its own; stale mm.wls also shadows the server list).
@@ -4447,7 +4531,70 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       {(!shellMode || dossierMode) && (<>
       <aside className="rail">
         <div className="rail-body">
-          <div className="board wl-board">
+          {/* W5 — the rail's two SOURCES (packet section 6). Signed-in only: a guest has no book,
+              so the guest rail is byte-for-byte what it was. The watchlist board below is HIDDEN,
+              never unmounted, when Portfolio is showing — unmounting it would throw away drag
+              state, scroll position and selection every time the user glanced at their holdings. */}
+          {loggedIn && (
+            <div className="rail-tabs" role="tablist" aria-label={t("railSourceLabel")} data-testid="rail-source-tabs">
+              <button type="button" role="tab" id="rail-tab-portfolio" aria-selected={railTab === "portfolio"}
+                aria-controls="rail-panel-portfolio" tabIndex={railTab === "portfolio" ? 0 : -1}
+                className={`rail-tab${railTab === "portfolio" ? " on" : ""}`}
+                onClick={() => setRailTab("portfolio")}>{t("pagePortfolio")}</button>
+              <button type="button" role="tab" id="rail-tab-watchlists" aria-selected={railTab === "watchlists"}
+                aria-controls="rail-panel-watchlists" tabIndex={railTab === "watchlists" ? 0 : -1}
+                className={`rail-tab${railTab === "watchlists" ? " on" : ""}`}
+                onClick={() => setRailTab("watchlists")}>{t("watchlists")}</button>
+            </div>
+          )}
+          {loggedIn && railTab === "portfolio" && (
+            <div className="board pf-board" id="rail-panel-portfolio" role="tabpanel" aria-labelledby="rail-tab-portfolio">
+              <div className="wl-bar">
+                <span className="pf-board-ttl">{t("myPortfolio")}</span>
+                <Link className="pf-board-link" href="/portfolio">{t("openPortfolio")}</Link>
+              </div>
+              <div className="wl-scroll">
+                {(() => {
+                  const held = pfRows.filter((row) => row.status !== "closed");
+                  if (!held.length) {
+                    return (
+                      <div className="pf-board-empty">
+                        {pfLoaded ? (
+                          <>
+                            <span>{t("railPortfolioEmpty")}</span>
+                            <Link className="pf-board-cta" href="/portfolio">{t("addPosition")}</Link>
+                          </>
+                        ) : <span>{t("railPortfolioLoading")}</span>}
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="pf-board-list" role="listbox" aria-label={t("myPortfolio")}>
+                      {held.map((row) => {
+                        const quote = mergeLive(man?.symbols?.[row.ticker], quotes[row.ticker]);
+                        const up = (quote?.chg ?? 0) >= 0;
+                        return (
+                          <button key={row.id} type="button" role="option" aria-selected={row.ticker === active}
+                            className={`pf-board-row${row.ticker === active ? " on" : ""}`}
+                            onClick={() => pick(row.ticker)}>
+                            <span className="pf-board-sym">{row.ticker}</span>
+                            {/* Honest dash: a name the quote hub cannot resolve shows no price
+                                rather than a stale or invented one. */}
+                            <span className="pf-board-px">{quote?.last == null ? "—" : quote.last.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            <span className={`pf-board-chg${quote?.chg == null ? "" : up ? " up" : " down"}`}>
+                              {quote?.chg == null ? "—" : `${up ? "+" : ""}${quote.chg.toFixed(2)}%`}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+          <div className={`board wl-board${loggedIn && railTab === "portfolio" ? " rail-hidden" : ""}`}
+            id="rail-panel-watchlists" {...(loggedIn ? { role: "tabpanel", "aria-labelledby": "rail-tab-watchlists" } : {})}>
             <div className="wl-bar pophost">
               <button className="wl-select" onClick={(e) => { e.stopPropagation(); const willOpen = !wlMenuOpen; closeAll(); setWlMenuOpen(willOpen); }}>{activeList} <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></button>
               {selectedWlCount >= 2 && (
@@ -4791,6 +4938,33 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       </div>
       )}
 
+      {/* W5 "Add to → Portfolio". Opens the SAME modal `/portfolio` uses, so a position entered
+          from the chart and one entered from the book are one object with one set of rules. Only a
+          signed-in user sees the destination at all (`onAddToPortfolio` below is undefined for a
+          guest), so the guest picker keeps its pre-W5 shape. */}
+      {pfAddSymbol && (
+        <PositionModal
+          mode="add"
+          position={null}
+          initialTicker={pfAddSymbol}
+          onCancel={() => setPfAddSymbol(null)}
+          onSubmit={async (draft) => {
+            try {
+              const response = await fetch("/api/portfolio", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "create", ...draft }),
+              });
+              if (!response.ok) return false;
+            } catch { return false; }
+            setPfAddSymbol(null);
+            // The rail only holds a book while the Portfolio tab is open; refresh it there so the
+            // new row appears without a reload, and leave it alone otherwise.
+            if (railTab === "portfolio") void loadPortfolioRows();
+            return true;
+          }}
+        />
+      )}
       {searchOpen && (
         <SearchModal open seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} compareCfg={compareCfg} active={active}
           quotes={quotes}
@@ -4801,6 +4975,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           onSwitchList={switchList}
           onCreateList={createListNamed}
           onAddToList={addToList}
+          onAddToPortfolio={loggedIn ? (sym: string) => { setSearchOpen(false); setSearchMode("go"); setPfAddSymbol(sym); } : undefined}
           marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
           onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} onRemove={removeSymbol}
           onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
