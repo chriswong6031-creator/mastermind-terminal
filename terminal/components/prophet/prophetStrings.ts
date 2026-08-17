@@ -101,13 +101,31 @@ const PROPHET_LEX = {
   bear:             ["BEAR", "做空"],
 
   // ── Lifecycle phases (7-phase) ────────────────────────────────────────────
+  // Display vocabulary ONLY. The wire enum (pre_trigger … overtime … invalidated) is
+  // the producer's and never changes here — these keys are what the reader sees.
   phasePretrigger:  ["Pre-Trigger", "触发前"],
   phaseTriggered:   ["Triggered", "已触发"],
   phaseAtT1:        ["At T1", "T1位"],
   phaseBetweenT1T2: ["T1→T2", "T1→T2"],
   phaseAtT2:        ["At T2", "T2位"],
-  phaseOvertime:    ["Overtime", "超时"],
+  // `overtime` does NOT mean a live plan that simply ran past its holding period —
+  // that reading is what "Overtime" shipped, and it is wrong. Under Prophet's closure
+  // contract the reachable open state is the stale / no-closing-print case, so the
+  // label names the WINDOW, not a running clock (macro Q2 vocabulary ruling).
+  phaseOvertime:    ["Window Elapsed", "窗口已到期"],
   phaseInvalidated: ["Invalidated", "已失效"],
+  // The one phase whose label alone still understates it: "Window Elapsed" reads as
+  // "ran long" unless the price-frame half is said out loud. Rides as the chip's
+  // accessible name — never a title= (CI-guarded; see the file header).
+  //
+  // It states the STATE and stops there. That the row also instructs no action is a
+  // consequence the reader sees rendered — an absent action chip — and deliberately
+  // not a claim made here, so this sentence stays true of every overtime row whatever
+  // the safety contract publishes alongside it.
+  phaseOvertimeWhy: [
+    "The declared plan window elapsed. The close or current price frame is unavailable or awaiting reconciliation.",
+    "计划声明的窗口已到期。收盘或现价数据帧不可用或尚待对账。",
+  ],
 
   // ── Geometry ladder ────────────────────────────────────────────────────────
   geometryTitle:    ["Trade Geometry", "交易结构"],
@@ -445,6 +463,19 @@ export function getProphetStr(lang: Lang, key: ProphetKey): string {
 
 export function makeProphetT(lang: Lang): (key: ProphetKey) => string {
   return (key: ProphetKey) => getProphetStr(lang, key);
+}
+
+/**
+ * Explanatory copy for a lifecycle phase, or null when the label speaks for itself.
+ *
+ * Shared by all three surfaces that draw a phase chip — the stream card, the analysis
+ * header, the confidence panel — for the same reason phaseTone() is shared: one state
+ * must not be explained three ways. Keyed on the WIRE enum, so the internal value is
+ * what routes here and only the returned sentence is vocabulary.
+ */
+export function phaseWhy(lang: Lang, phase: string | null | undefined): string | null {
+  if (phase === "overtime") return getProphetStr(lang, "phaseOvertimeWhy");
+  return null;
 }
 
 export type { ProphetKey };

@@ -28,7 +28,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flowGet } from "@/lib/flowClientCache";
 import { useLang } from "@/lib/i18n";
-import { makeProphetT } from "./prophetStrings";
+import { makeProphetT, phaseWhy } from "./prophetStrings";
 import { SignalCard, phaseTone, planAsof, planConfidence, planOriginationNote, planPhase, planRecommendedAction } from "./SignalCard";
 import type { PlanSummary } from "./SignalCard";
 import { ConfidencePanel } from "./ConfidencePanel";
@@ -504,8 +504,11 @@ export function AnalysisPanel({
     invalidated:       t("phaseInvalidated"),
   };
   const phaseLabel = phase ? (phaseMap[phase] ?? phase) : null;
-  // Shared with SignalCard + ConfidencePanel — one phase, one colour, everywhere.
+  // Shared with SignalCard + ConfidencePanel — one phase, one colour, one explanation,
+  // everywhere. Null for every phase but `overtime`, so the attribute is absent (and the
+  // panel byte-identical) on a fresh plan.
   const phaseColor = phaseTone(phase);
+  const phaseNote  = phaseWhy(lang, phase);
 
   // What-to-do-now from payload — prefer ZH variant when lang is zh.
   const whatToDo = (lang === "zh" && plan.what_to_do_now_zh?.length)
@@ -541,6 +544,7 @@ export function AnalysisPanel({
             <span
               className="obs-tag"
               style={{ ...PHASE_BADGE, "--c": phaseColor } as React.CSSProperties}
+              aria-label={phaseNote ?? undefined}
             >
               {phaseLabel}
             </span>
