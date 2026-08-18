@@ -10,6 +10,8 @@ import {
   type CompanyIntelligenceResult,
   type CompanyIntelligenceSource,
 } from "../../lib/companyIntelligence";
+import { getCurrentEventWorkspace, type EventWorkspaceResult } from "../../lib/eventWorkspace";
+import CompanyIntelligenceV2Current from "./CompanyIntelligenceV2Current";
 import CompanySourceManifest from "./CompanySourceManifest";
 import EvidenceRail, { type CompanyEvidenceSelection } from "./EvidenceRail";
 import TranscriptSearchWorkspace from "./TranscriptSearchWorkspace";
@@ -30,7 +32,8 @@ export interface CompanyIntelligencePageProps {
 interface LoadState {
   sym: string;
   nonce: number;
-  result: CompanyIntelligenceResult | null;
+  v1: CompanyIntelligenceResult | null;
+  v2: EventWorkspaceResult | null;
 }
 
 const LENSES: readonly Lens[] = ["brief", "transcript", "history", "topics", "sources"];
@@ -188,7 +191,7 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
   const zh = lang === "zh";
   const ticker = sym.trim().toUpperCase();
   const [retryNonce, setRetryNonce] = useState(0);
-  const [load, setLoad] = useState<LoadState>({ sym: "", nonce: -1, result: null });
+  const [load, setLoad] = useState<LoadState>({ sym: "", nonce: -1, v1: null, v2: null });
   const [lens, setLens] = useState<Lens>("brief");
   const [eventState, setEventState] = useState<{ sym: string; id: string }>({ sym: "", id: "" });
   const [evidence, setEvidence] = useState<CompanyEvidenceSelection | null>(null);
@@ -208,16 +211,15 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
 
   useEffect(() => {
     const controller = new AbortController();
-    getCompanyIntelligence(ticker, { signal: controller.signal, retryNonce })
-      .then((result) => setLoad({ sym: ticker, nonce: retryNonce, result }))
-      .catch(() => {
-        if (controller.signal.aborted) return;
-        setLoad({
-          sym: ticker,
-          nonce: retryNonce,
-          result: { ok: false, state: "error", error: { code: "upstream_unavailable", message: "Company intelligence request failed", retryable: true } },
-        });
-      });
+    const v1Fail: CompanyIntelligenceResult = { ok: false, state: "error", error: { code: "upstream_unavailable", message: "Company intelligence request failed", retryable: true } };
+    const v2Fail: EventWorkspaceResult = { ok: false, state: "error", available: false, error: { code: "upstream_unavailable", message: "Event workspace request failed", retryable: true } };
+    Promise.all([
+      getCompanyIntelligence(ticker, { signal: controller.signal, retryNonce }).catch(() => v1Fail),
+      getCurrentEventWorkspace(ticker, { signal: controller.signal, retryNonce }).catch(() => v2Fail),
+    ]).then(([v1, v2]) => {
+      if (controller.signal.aborted) return;
+      setLoad({ sym: ticker, nonce: retryNonce, v1, v2 });
+    });
     return () => controller.abort();
   }, [retryNonce, ticker]);
 
@@ -247,7 +249,8 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
   }, [evidenceOpen, evidenceOverlay, onEvidenceOpenChange]);
 
   const loading = load.sym !== ticker || load.nonce !== retryNonce;
-  const result = loading ? null : load.result;
+  const result = loading ? null : load.v1;
+  const v2 = loading ? null : load.v2;
   const context = result?.ok ? result.context : null;
   const events = useMemo(() => context ? allEvents(context) : [], [context]);
   const transcriptSearchEvents = useMemo(() => events.map((candidate) => ({
@@ -308,6 +311,33 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
     );
   }
 
+  if (v2?.ok) {
+    return (
+      <CompanyIntelligenceV2Current
+        ticker={ticker}
+        name={name}
+        result={v2}
+        v1={result?.ok ? result.context : null}
+        onOpenTx={onOpenTx}
+        onEvidenceOpenChange={onEvidenceOpenChange}
+      />
+    );
+  }
+
+  if (v2 && !v2.ok && v2.error.code !== "not_found") {
+    return (
+      <div className="ci-page">
+        <EmptyState
+          title={pick(zh, "Current event workspace unavailable", "当期事件工作区暂不可用")}
+          why={v2.error.message}
+          action={v2.error.retryable ? (
+            <button className="btn btn-primary" onClick={() => setRetryNonce(Date.now())}>{pick(zh, "Retry", "重试")}</button>
+          ) : undefined}
+        />
+      </div>
+    );
+  }
+
   if (!result || !result.ok) {
     const message = result && !result.ok ? result.error.message : pick(zh, "No response was returned.", "未返回响应。");
     return (
@@ -331,8 +361,8 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
           title={pick(zh, `${ticker} is not covered yet`, `${ticker} 尚未覆盖`)}
           why={pick(
             zh,
-            "No validated company-event view exists for this symbol. This is a coverage boundary, not a processing queue.",
-            "该标的尚无通过验证的公司事件视图。这是数据覆盖边界，并非正在排队处理。",
+            "No company-event view exists for this symbol. This is a coverage boundary, not a processing queue.",
+            "该标的尚无公司事件视图。这是数据覆盖边界，并非正在排队处理。",
           )}
         />
       </div>
@@ -535,7 +565,7 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
               {txId ? (
                 <div className="ci-transcript-launch"><div className="ci-transcript-glyph" aria-hidden><span>T</span><i /></div><div><strong>{pick(zh, "Normalized call record is available", "标准化电话会记录可用")}</strong><p>{pick(zh, "Open the event-selected transcript in Mastermind's existing reader with speaker and Q&A structure intact.", "在 Mastermind 现有阅读器中打开本事件电话会，并保留发言人与问答结构。")}</p></div><button className="btn btn-primary" onClick={() => onOpenTx(txId)}>{pick(zh, "Read transcript", "阅读电话会")}</button></div>
               ) : (
-                <EmptyState title={pick(zh, "Transcript body unavailable", "电话会正文不可用")} why={pick(zh, "Event metadata is retained, but this fiscal period does not resolve to a validated transcript document.", "事件元数据已保留，但该财季尚未关联到通过验证的电话会文档。")} />
+                <EmptyState title={pick(zh, "Transcript body unavailable", "电话会正文不可用")} why={pick(zh, "Event metadata is retained, but this fiscal period does not resolve to a transcript document.", "事件元数据已保留，但该财季尚未关联到电话会文档。")} />
               )}
               <TranscriptSearchWorkspace
                 ticker={ticker}

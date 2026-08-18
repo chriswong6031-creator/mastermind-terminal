@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { gzipSync } from "node:zlib";
+import aaplWorkspace from "../lib/__tests__/fixtures/aapl-event-workspace.json";
 
 const SHA = "a".repeat(64);
 const drawerFixtureBody = {
@@ -262,7 +263,20 @@ async function openCompanyIntelligence(page: Page, intelligenceLabel = "Intellig
 
 test.beforeEach(async ({ page }) => {
   await routeInstitutionalContext(page);
+  await page.route("**/api/event-workspace/**", async (route) => {
+    await route.fulfill({
+      status: 404,
+      json: { ok: false, state: "error", available: false, error: { code: "not_found", message: "Event workspace is not covered", retryable: false } },
+    });
+  });
 });
+
+async function closeEvidenceOverlay(page: Page) {
+  if (await page.locator(".ci-evidence-scrim.open").isVisible()) {
+    await page.locator(".ci-evidence-close").click();
+    await expect(page.locator(".ci-evidence")).toHaveAttribute("aria-hidden", "true");
+  }
+}
 
 async function expectNoDocumentOverflow(page: Page) {
   const width = await page.evaluate(() => ({
@@ -759,3 +773,148 @@ test("transcript search copy switches cleanly between English and Chinese", asyn
   await expect(page.locator(".ci-ts-state.empty p")).toHaveText("已在选定事件中进行精确字面匹配；没有段落包含该短语。系统没有扩展、改写或推断关联内容。");
   await expectNoDocumentOverflow(page);
 });
+
+const AAPL_EVENT_ID = "evt_cik0000320193_2026q3_results";
+const AAPL_GENERATION = "f709a0a6ec514282d5769e7d";
+
+function aaplWorkspacePayload(overrides: Record<string, unknown> = {}) {
+  const workspace = { ...aaplWorkspace, ...overrides } as typeof aaplWorkspace & { generation_id: string; lifecycle: { state: string } };
+  return {
+    ok: true,
+    state: "ready",
+    available: true,
+    event_id: AAPL_EVENT_ID,
+    workspace,
+    authority: "context_only",
+    is_context_only: true,
+    display_only: true,
+    receipt: {
+      generation_id: workspace.generation_id,
+      workspace_sha256: "a".repeat(64),
+      marker_sha256: "b".repeat(64),
+      workspace_url: `https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev/company_intelligence/event_workspaces/generations/${workspace.generation_id}/workspaces/${AAPL_EVENT_ID}.json`,
+    },
+  };
+}
+
+async function openAaplWorkspace(page: Page, payload = aaplWorkspacePayload()) {
+  await page.route("**/api/event-workspace/AAPL**", async (route) => {
+    await route.fulfill({ json: payload });
+  });
+  await page.route("**/api/company-intelligence/AAPL**", async (route) => {
+    await route.fulfill({
+      status: 404,
+      json: { ok: false, state: "error", error: { code: "not_found", message: "Company intelligence is not covered", retryable: false } },
+    });
+  });
+  await page.route("**/api/company-theme-context/AAPL**", async (route) => {
+    await route.fulfill({
+      status: 404,
+      json: { ok: false, state: "error", error: { code: "not_found", message: "Theme context is not covered", retryable: false } },
+    });
+  });
+  await page.route("**/api/company-institutional-context/AAPL**", async (route) => {
+    await route.fulfill({
+      status: 404,
+      json: { ok: false, state: "error", error: { code: "not_found", message: "Institutional context is not covered", retryable: false } },
+    });
+  });
+  await page.goto("/analysis?symbol=AAPL&page=intelligence");
+  await expect(page.locator(".ci-page")).toBeVisible({ timeout: 15_000 });
+}
+
+test("AAPL intelligence opens the verified FY2026 Q3 event workspace", async ({ page }, testInfo) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await openAaplWorkspace(page);
+  const root = page.locator(".ci-page");
+  await expect(root).toHaveAttribute("data-ci-plane", "event_workspace.v1");
+  await expect(root).toHaveAttribute("data-ci-event-id", AAPL_EVENT_ID);
+  await expect(root).toHaveAttribute("data-ci-generation-id", AAPL_GENERATION);
+  await expect(root).toHaveAttribute("data-ci-transcript-id", "2026Q3");
+  await expect(page.locator("[data-ci-glance-title]")).toContainText("Q3 FY2026");
+  await expect(page.locator("[data-ci-glance-title]")).toContainText("Jul");
+  await expect(page.locator(".ci-glance-lede")).toContainText("AAPL · Q3 FY2026 · 30 Jul");
+  await expect(page.locator(".ci-brief")).toContainText("$109.4B");
+  await expect(page.locator(".ci-brief")).toContainText("+16%");
+  await expect(page.locator(".ci-brief")).toContainText("9–11%");
+  await expect(page.locator(".ci-brief")).toContainText("100-year flood");
+  await expect(page.locator(".ci-page")).not.toContainText(/\bbeats?\b/i);
+  await expect(page.locator(".ci-page")).not.toContainText(/\bmisses?\b/i);
+  await expect(page.locator(".ci-honest")).toContainText("Unavailable / unstructured");
+  await expect(page.locator(".ci-honest")).not.toContainText("14");
+  await expect(page.locator(".ci-honest")).toContainText("unlicensed");
+  await expect(page.locator(".ci-honest")).toContainText("absent");
+  await expect(page.locator(".ci-honest")).toContainText("not joined");
+
+  await page.getByRole("button", { name: "Revenue $109.4B · +16%" }).click();
+  await expect(page.locator(".ci-receipt-card")).toHaveAttribute("data-ci-receipt-state", "byte_replayed");
+  await expect(page.locator(".ci-evidence")).toContainText("Byte-replayed");
+  await expect(page.locator(".ci-evidence")).toContainText("109,417");
+  await expect(page.locator(".ci-evidence-note")).toHaveCount(0);
+
+  await closeEvidenceOverlay(page);
+  await page.getByRole("button", { name: /Q4 revenue growth/ }).click();
+  await expect(page.locator(".ci-evidence")).toContainText("9%-11%");
+  await expect(page.locator(".ci-receipt-card")).toHaveAttribute("data-ci-receipt-state", "byte_replayed");
+
+  await closeEvidenceOverlay(page);
+  await page.locator(".ci-lenses").getByRole("tab", { name: "Results" }).click();
+  await expect(page.locator("#ci-panel-results")).toContainText("No beat/miss");
+  await expect(page.locator("#ci-panel-results")).toContainText("$109.4B");
+
+  await closeEvidenceOverlay(page);
+  await page.locator(".ci-lenses").getByRole("tab", { name: "Sources" }).click();
+  await expect(page.locator("[data-ci-source-kind='issuer_release']")).toContainText("8-K / Exhibit 99.1");
+  await expect(page.locator("[data-ci-source-kind='transcript']")).toContainText("2026Q3");
+  await expect(page.locator("[data-ci-source-kind='issuer_release']")).toContainText("0000320193-26-000018");
+
+  await closeEvidenceOverlay(page);
+  await page.locator(".ci-lenses").getByRole("tab", { name: "Transcript" }).click();
+  await expect(page.locator("#ci-panel-transcript")).toContainText(AAPL_EVENT_ID);
+  await expect(page.locator("#ci-panel-transcript")).toContainText("AAPL/2026Q3");
+  await expect(page.locator("#ci-panel-transcript")).toContainText("2026Q3");
+  await expectNoDocumentOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-aapl-event-workspace.png`), fullPage: false });
+});
+
+test("AAPL workspace correction advances generation without changing event identity", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.endsWith("desktop"), "one desktop correction contract is sufficient");
+  const corrected = "aaaaaaaaaaaaaaaaaaaaaaaa";
+  await openAaplWorkspace(page);
+  await expect(page.locator(".ci-page")).toHaveAttribute("data-ci-generation-id", AAPL_GENERATION);
+  await page.unroute("**/api/event-workspace/AAPL**");
+  await page.route("**/api/event-workspace/AAPL**", async (route) => {
+    await route.fulfill({
+      json: aaplWorkspacePayload({
+        generation_id: corrected,
+        lifecycle: { ...(aaplWorkspace as { lifecycle: object }).lifecycle, state: "corrected" },
+      }),
+    });
+  });
+  await page.reload();
+  await expect(page.locator(".ci-page")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(".ci-page")).toHaveAttribute("data-ci-event-id", AAPL_EVENT_ID);
+  await expect(page.locator(".ci-page")).toHaveAttribute("data-ci-generation-id", corrected);
+  await expect(page.locator(".ci-page")).not.toHaveAttribute("data-ci-generation-id", AAPL_GENERATION);
+  await expect(page.locator(".ci-hero")).toContainText("Corrected");
+});
+
+test("AAPL workspace remains usable in Chinese without overflow", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.endsWith("mobile"), "one mobile bilingual contract is sufficient");
+  await page.addInitScript(() => window.localStorage.setItem("mm.lang", "zh"));
+  await openAaplWorkspace(page);
+  await expect(page.locator(".ci-lenses").getByRole("tab", { name: "简报" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".ci-lenses").getByRole("tab", { name: "业绩" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "询问 Mastermind" })).toBeVisible();
+  await expect(page.locator(".ci-honest")).toContainText("暂无结构化计数");
+  await expect(page.locator(".ci-honest")).not.toContainText("14");
+  const close = page.locator(".ci-evidence-close");
+  await page.getByRole("button", { name: "查看凭证" }).click();
+  await expect(page.locator(".ci-evidence")).toHaveAttribute("aria-hidden", "false");
+  expect((await close.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await expectNoDocumentOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("mobile-aapl-event-workspace-zh.png"), fullPage: false });
+});
+
