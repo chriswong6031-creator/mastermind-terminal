@@ -29,7 +29,10 @@ export default async function ScriptsPage() {
     const { cookies } = await import("next/headers");
     const { listFixtureScripts, SCRIPTS_FIXTURE_COOKIE } = await import("@/lib/scriptsFixtureDb");
     const key = (await cookies()).get(SCRIPTS_FIXTURE_COOKIE)?.value || "default";
-    return <PineEditor scripts={listFixtureScripts(key) as Script[]} isPro email="e2e@example.com" />;
+    // Goes through PineEditorMount, exactly like the member branch below: #431 made that the
+    // guest/member module boundary for this route, and a fixture path that bypassed it would test
+    // a component graph the product no longer has.
+    return <PineEditorMount scripts={listFixtureScripts(key) as Script[]} isPro email="e2e@example.com" />;
   }
 
   const supabase = await createClient();
