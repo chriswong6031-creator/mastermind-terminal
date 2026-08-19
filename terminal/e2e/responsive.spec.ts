@@ -740,6 +740,11 @@ test("an archived session withholds the matrix instead of captioning today's gri
 
 test("a Pro-equivalent entitlement can discover all premium modules and add a suite preset", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "One viewport is sufficient for the shared entitlement contract.");
+  // A cold /terminal compile plus ~15 modal round-trips (four preset applications, each re-reading
+  // the 31-module picker) does not fit the 30s default on a hosted runner: it has timed out mid-run
+  // on the click AFTER the element reported visible, enabled and stable, which is a slow page, not
+  // a broken control. It finishes in ~6s locally.
+  test.slow();
 
   await armTerminalVisualReady(page);
   await page.goto("/terminal?symbol=NVDA");
