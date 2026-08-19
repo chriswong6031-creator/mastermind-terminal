@@ -70,6 +70,7 @@ import {
 import { paintCandleData } from "@/lib/indicator-canvas/candlePaint";
 import { paintSnapshotTables } from "@/lib/chartSnapshotTables";
 import { SUITE_DEFS, getSuiteDef, isSuiteKey as isSuiteKeyReg, paneSuiteKeys } from "@/lib/suites/registry";
+import { ensureSuiteRuntime, peekSuiteRuntime } from "@/lib/suites/compute";
 import {
   enabledModulesForSuite,
   parseSuiteModuleId,
@@ -630,6 +631,40 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const symbolRef = useRef(symbol);                          // current symbol (Effect 1 mounts once; symbol changes in Effect 2)
   const companyNameRef = useRef(companyName);                 // proper name for the snapshot header (zh preferred over English)
   const renderSignalsRef = useRef<() => void>(() => {});
+  // B7: the suite-runtime preload effect repaints through these, so it can live above the
+  // definitions it calls without capturing a stale closure.
+  const rerenderOverlaysRef = useRef<(() => void) | null>(null);
+  const applySuitePaintRef = useRef<(() => void) | null>(null);
+  // ── B7: suite COMPUTATION is fetched per suite, on first use ───────────────────────────────
+  //
+  // The registry used to import all 31 module implementations eagerly, so /terminal shipped the
+  // whole premium-suite compute before one was switched on. Metadata still comes from the static
+  // graph; only the computation is deferred.
+  //
+  // The trigger is the RENDER PASS, not an effect keyed on the active set. That is deliberate:
+  // an effect can resolve before the chart has mounted, and `rerenderOverlays` calls render
+  // functions that are no-ops until then — the repaint would land on nothing and the suite would
+  // stay invisible until the next unrelated pan or zoom. A render pass, by definition, only runs
+  // once the chart is alive, so hanging the load off it removes that race entirely.
+  //
+  // Hooked ONCE per suite, not once per frame: `ensureSuiteRuntime` dedupes the fetch, but the
+  // repaint callback would otherwise be re-attached on every frame while the chunk is in flight.
+  const suiteRuntimeHookedRef = useRef<Set<string>>(new Set());
+  // The chart's own frame scheduler, captured on mount. It is what re-runs renderIndOverlays —
+  // the pass that draws SUITE prims. `rerenderOverlays` covers signals/drawings/tag only, so
+  // repainting through that alone left a just-loaded suite invisible until the next pan or zoom.
+  const scheduleRenderRef = useRef<(() => void) | null>(null);
+  const requestSuiteRuntime = (key: string) => {
+    if (suiteRuntimeHookedRef.current.has(key)) return;
+    suiteRuntimeHookedRef.current.add(key);
+    void ensureSuiteRuntime(key).then(() => {
+      suiteRuntimeHookedRef.current.delete(key);
+      // Both layers: the SVG prims/tables AND the candle paint, which is key-guarded and would
+      // otherwise not notice that a suite it skipped now has something to say.
+      scheduleRenderRef.current?.();      // suite prims + tables
+      applySuitePaintRef.current?.();     // candle paint (key-guarded, so it needs its own kick)
+    });
+  };
   const syncCleanupRef = useRef<(() => void) | null>(null);
   // D3 table-view: stable lookup of per-key indicator values by bar time (built after each data load).
   const indDataMapRef = useRef<Map<string, Record<string, number | null>>>(new Map());
@@ -1324,7 +1359,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (!suiteColorsRef.current) suiteColorsRef.current = resolveSuiteColors();
       const lang = typeof document !== "undefined" && document.documentElement.getAttribute("data-lang") === "zh" ? "zh" as const : "en" as const;
       for (const k of active) {
-        const def = SUITE_DEFS[k]; if (!def) continue;
+        const def = peekSuiteRuntime(k); if (!def) { requestSuiteRuntime(k); continue; }   // fetch + repaint when it lands
         try {
           const b = computeSuite(def, suiteRenderParams(k), { bars: rows as any, tf: timeframeRef.current, symbol: symbolRef.current, isIntraday: isIntradayRef.current, lang }, userTierRef.current, suiteColorsRef.current!);
           if (b.candlePaint.length) paint = paint.concat(b.candlePaint);
@@ -1349,6 +1384,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (!paint.length) { if (hadPaint) restoreNormalCandleColors(rows); return; }
     try { priceS.setData(paintCandleData(rows as any, paint, chartTyp === "bars" ? "bars" : "candles") as any); } catch {}
   };
+  applySuitePaintRef.current = applySuitePaint;
 
   // SuperTrend: two line series (up/down rails with null gaps at flips).
   const buildSupertrend = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
@@ -2010,6 +2046,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ind fills, price tag) — they gate themselves off while a sub-pane is maximized and must clear/
   // restore NOW, not on the next pan/zoom.
   const rerenderOverlays = () => { try { renderSignalsRef.current(); renderRef.current(); renderTagRef.current?.(); } catch {} };
+  rerenderOverlaysRef.current = rerenderOverlays;
+
   const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { if (panesMeta.current.length <= 1) return; ctl.maximized = key; ctl.collapsed.delete(key); } applyStretch(); rerenderOverlays(); requestAnimationFrame(() => { measure(); rerenderOverlays(); }); };
   const doCollapse = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; ctl.maximized = null; if (ctl.collapsed.has(key)) ctl.collapsed.delete(key); else ctl.collapsed.add(key); applyStretch(); rerenderOverlays(); requestAnimationFrame(() => { measure(); rerenderOverlays(); }); };
   // applyStretch() after the swap re-runs applyMaximizeDom so the row-hiding tracks the panes'
@@ -5270,7 +5308,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           const wrapRect = wrapElRef.current?.getBoundingClientRect();
           const langP = typeof document !== "undefined" && document.documentElement.getAttribute("data-lang") === "zh" ? "zh" as const : "en" as const;
           for (const k of paneKeys) {
-            const def = SUITE_DEFS[k]; if (!def) continue;
+            const def = peekSuiteRuntime(k); if (!def) { requestSuiteRuntime(k); continue; }   // fetch + repaint when it lands
             const anchor = indSeriesRef.current.get(k)?.[0]; if (!anchor || !wrapRect) continue;
             let paneTop = 0, paneH = 0;
             try { const paneEl = anchor.getPane().getHTMLElement(); if (!paneEl) continue; const rct = paneEl.getBoundingClientRect(); paneTop = rct.top - wrapRect.top; paneH = rct.height; } catch { continue; }
@@ -5309,7 +5347,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           if (!suiteColorsRef.current) suiteColorsRef.current = resolveSuiteColors();
           const lang = typeof document !== "undefined" && document.documentElement.getAttribute("data-lang") === "zh" ? "zh" as const : "en" as const;
           for (const k of tableOnlyKeys) {
-            const def = SUITE_DEFS[k]; if (!def) continue;
+            const def = peekSuiteRuntime(k); if (!def) { requestSuiteRuntime(k); continue; }   // fetch + repaint when it lands
             try {
               const bundle = computeSuite(def, suiteRenderParams(k), {
                 bars: barsRef.current as any,
@@ -5603,7 +5641,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           };
           const lang = typeof document !== "undefined" && document.documentElement.getAttribute("data-lang") === "zh" ? "zh" as const : "en" as const;
           for (const k of activeSuites) {
-            const def = SUITE_DEFS[k]; if (!def) continue;
+            const def = peekSuiteRuntime(k); if (!def) { requestSuiteRuntime(k); continue; }   // fetch + repaint when it lands
             try {
               const bundle = computeSuite(def, suiteRenderParams(k), {
                 bars: barsRef.current as any, tf: timeframeRef.current, symbol: symbolRef.current,
@@ -5697,6 +5735,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (activeRef.current) setActivePaneCoords(cmxCoordResolverRef.current);
     // coalesce the overlay rebuild to one paint per frame on the hot pan/zoom path
     const scheduleRender = () => { if (rafId != null) return; rafId = requestAnimationFrame(() => { rafId = null; if (!dead) { renderSignals(); renderIndOverlays(); renderDraw(); } }); };
+    scheduleRenderRef.current = scheduleRender;
     // Draw-only rAF coalescer for the drawing drag / shape-creation pointermove paths: those fire on
     // every raw pointer event and previously called renderDraw() (→ full SVG clear + renderIndOverlays
     // re-projecting every ichimoku/ribbon/vwap point) synchronously per event. Batching to one rebuild
