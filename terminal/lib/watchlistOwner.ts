@@ -92,10 +92,6 @@ export function watchlistOwnerKey(userId: string | null | undefined): string {
   return id ? `account:${id}` : GUEST_OWNER;
 }
 
-export function isGuestOwner(owner: string): boolean {
-  return owner === GUEST_OWNER;
-}
-
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 

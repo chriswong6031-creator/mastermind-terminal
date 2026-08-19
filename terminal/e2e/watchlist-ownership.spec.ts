@@ -106,6 +106,12 @@ test.describe("A1 — one browser, two accounts", () => {
 
 test.describe("A3 — a delete survives a failed write", () => {
   test("a symbol deleted while the server is unreachable does not resurrect", async ({ page, baseURL }, testInfo) => {
+    // The delete is driven through the rail's RIGHT-CLICK context menu, a pointer affordance the
+    // touch viewports do not carry — the same reason `search-add-to-list` and the drawing specs
+    // scope their menu-driven cases to desktop. What is desktop-only here is the INPUT, not the
+    // behaviour: the tombstone, the reconcile guard and the retry are viewport-independent, and
+    // the ownership case above runs on all three.
+    test.skip(testInfo.project.name !== "desktop", "Right-click context menu is a pointer affordance.");
     test.setTimeout(180_000);
     const storeKey = `own-del-${testInfo.project.name}-${testInfo.retry}`;
     await signInAs(page, storeKey, baseURL);
