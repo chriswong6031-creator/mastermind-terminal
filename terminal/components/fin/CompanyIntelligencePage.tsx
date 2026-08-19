@@ -1,5 +1,13 @@
 "use client";
 
+// Owned here rather than in app/layout.tsx: this sheet styles ONLY the `.ci-*` intelligence
+// surface (this page + its descendant cards) and the `.analysis-*` chrome that
+// components/workspaces/AnalysisWorkspace imports it for. In the root layout it was
+// render-blocking CSS on all nine other routes — 61 KB decoded — none of which can show a
+// single one of its selectors. Imported by the two components that DO, so it rides their
+// chunk. Both import sites are required; dropping either leaves that surface unstyled.
+import "../../app/company-intelligence.css";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLang } from "../../lib/i18n";
 import { fmtDate, pick } from "../../lib/finFormat";

@@ -33,7 +33,11 @@ import { flowGet } from "@/lib/flowClientCache";
 import { parseGlanceState } from "@/lib/mscGlance";
 import { DEFAULT_START_TF, TF_CANONICAL_ORDER, mobileTimeframeOptions, readStartTf, resolveStartTf } from "@/lib/startTf";
 import { useMarketPrefs } from "@/lib/useMarketPrefs";
-import { FIN_PAGES, type FinPage } from "@/components/fin/MegaPane";
+// Import the page ids from the import-free leaf, NOT from MegaPane: MegaPane is mounted
+// through next/dynamic below, and a value import out of it here would statically pull its
+// entire graph (14 fundamentals pages + statement/intelligence/transcript libs, ~709 KB of
+// source) into the /terminal first-paint chunk. See components/fin/finPages.ts.
+import { FIN_PAGES, type FinPage } from "@/components/fin/finPages";
 import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey } from "@/lib/indicators";
 import { isSuiteKey, suiteDefaults } from "@/lib/suites/registry";

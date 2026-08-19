@@ -23,7 +23,10 @@ import { ArcGauge } from "@/components/ui/ArcGauge";
 // mapping — shared with ForecastPage so the rail gauge and the Analyst/Technicals
 // panes never disagree on reading, verdict, or where buy/hold/sell begin.
 import { analystReading, ratingVerdict, readingToArc } from "@/components/fin/ForecastPage";
-import type { FinPage } from "@/components/fin/MegaPane";
+// From the import-free leaf, not MegaPane: StockAnalysis is eagerly loaded by the chart
+// shell, so sourcing anything here from MegaPane risks re-introducing the value edge that
+// pulls the whole fundamentals graph into first paint (components/fin/finPages.ts).
+import type { FinPage } from "@/components/fin/finPages";
 import EventEdgePop from "@/components/fin/EventEdgePop";
 // R3.2 positioning block: the ONE regime colour/label convention (lib/mscGlance + the
 // desk's gexStrings), staleness via the shared weekday counter. The parent parses the
