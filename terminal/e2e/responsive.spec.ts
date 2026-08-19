@@ -123,7 +123,7 @@ test("the canonical Terminal shell works at its supported responsive widths", as
     const phone = testInfo.project.name === "mobile";
     await page.locator(".m-symbar").click();
     const searchHub = page.locator(phone ? ".msheet-search" : ".smodal-hub");
-    const searchInput = searchHub.getByPlaceholder("Symbol, ISIN, or CUSIP");
+    const searchInput = searchHub.getByPlaceholder("Symbol or company name");
     const viewToggle = searchHub.locator(".sh-view-toggle");
     const closeSearch = async () => {
       if (phone) await page.keyboard.press("Escape");

@@ -51,6 +51,8 @@
 .ci-provenance-bar b{color:var(--brand-2);font-weight:650}
 .ci-provenance-bar code{max-width:150px;overflow:hidden;text-overflow:ellipsis;color:var(--text-2);font:500 9.5px/1 var(--font-code)}
 .ci-live-dot{width:6px;height:6px;border-radius:50%;background:var(--up);box-shadow:0 0 0 3px color-mix(in srgb,var(--up) 14%,transparent)}
+.ci-live-dot.stale,.ci-page[data-ci-freshness="stale"] .ci-live-dot{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 18%,transparent)}
+.ci-stale-banner{margin:0;padding:8px var(--sp-5) 12px;border-top:1px solid color-mix(in srgb,var(--warn) 28%,var(--line));background:color-mix(in srgb,var(--warn) 8%,transparent);color:var(--warn);font:620 11px/1.4 var(--font-ui)}
 .ci-state-banner{display:flex;align-items:center;gap:9px;padding:9px var(--sp-5);border-top:1px solid color-mix(in srgb,var(--warn) 24%,var(--line));background:color-mix(in srgb,var(--warn) 7%,transparent);color:var(--text-2);font:540 11px/1.4 var(--font-ui)}
 .ci-state-banner>span{width:18px;height:18px;display:grid;place-items:center;flex:none;border:1px solid color-mix(in srgb,var(--warn) 42%,transparent);border-radius:50%;color:var(--warn);font:750 10px/1 var(--font-ui)}
 .ci-state-banner p{margin:0}
