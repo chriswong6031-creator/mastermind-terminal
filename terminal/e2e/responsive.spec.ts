@@ -978,6 +978,13 @@ test("Seasonal read stays useful in chart and table views at every supported wid
 });
 
 test("Golden Oracle shows the session a 3D signal became knowable", async ({ page }, testInfo) => {
+  // Freeze the evaluation instant inside the live window. known_ts stays 2026-07-28;
+  // production ORACLE_STALE_DAYS stays 21 (stale is age > 21). 2026-08-10 is 13 days
+  // after the known date, so the Buy remains live. Mock Date.now only — Playwright
+  // clock.install also fake-timers Next.js and hangs hydration.
+  await page.addInitScript(() => {
+    Date.now = () => Date.parse("2026-08-10T12:00:00.000Z");
+  });
   // Exercise the bilingual branch at one supported width; the Terminal itself is dark-only.
   const zh = testInfo.project.name === "tablet";
   const costSlice = {
