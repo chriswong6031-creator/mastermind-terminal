@@ -51,7 +51,7 @@ import {
   isAvailable as idbAvailable,
 } from "./idbJsonStore";
 
-type Entry = { data: any; ts: number; inflight: Promise<any> | null };
+type Entry = { data: any; ts: number; inflight: Promise<CacheOutcome> | null };
 
 const store = new Map<string, Entry>();
 
@@ -85,6 +85,32 @@ export interface GetOpts {
 
 const DEFAULT_TTL = 60_000;
 
+/**
+ * CacheOutcome — the DISCRIMINATING availability contract.
+ *
+ * `getJSON` answers `data | null`, and that single `null` conflates three facts a product
+ * surface must tell apart:
+ *
+ *   "data"        the authority answered and the payload is usable.
+ *   "absent"      the authority answered 404/410 — the artifact intentionally does not exist.
+ *   "unavailable" nobody answered: the transport failed, the server 5xx'd, or the body was
+ *                 not parseable JSON. NOTHING is known about whether the artifact exists.
+ *
+ * A consumer that renders "loaded" or "empty" off a `null` is asserting the second fact when
+ * it only ever observed the third. That is exactly how a manifest outage rendered as an
+ * infinite Screener skeleton: the failure resolved as `null`, `.then` ignored the falsy value,
+ * `.catch` never ran (this module never rejects), and `loaded` stayed false forever.
+ *
+ * `getJSON` is unchanged and remains correct for consumers that genuinely treat missing and
+ * broken alike (a per-symbol intel file either paints or does not). Use `getJSONResult` where
+ * the product needs different states — and never re-collapse them at the call site.
+ */
+export type UnavailableReason = "network" | "server" | "malformed";
+export type CacheOutcome =
+  | { status: "data"; data: any }
+  | { status: "absent"; httpStatus?: number }
+  | { status: "unavailable"; reason: UnavailableReason; httpStatus?: number };
+
 // ── LRU eviction: delete the oldest entry when the store exceeds 400 items ──
 function evictOldest(): void {
   if (store.size <= 400) return;
@@ -99,46 +125,68 @@ function touch(url: string, entry: Entry): void {
   store.set(url, entry);
 }
 
+/**
+ * fetchOutcome — one request, classified. The ONLY place a transport/HTTP/parse failure is
+ * turned into a fact, so "does not exist" can never be inferred from "could not ask".
+ */
+async function fetchOutcome(url: string): Promise<CacheOutcome> {
+  let r: Response;
+  try {
+    r = await fetch(url);
+  } catch {
+    return { status: "unavailable", reason: "network" };
+  }
+  if (!r.ok) {
+    // Only 404/410 are authoritative absence. 5xx / 429 / 403 say nothing about existence.
+    if (r.status === 404 || r.status === 410) return { status: "absent", httpStatus: r.status };
+    return { status: "unavailable", reason: "server", httpStatus: r.status };
+  }
+  let data: any;
+  try {
+    data = await r.json();
+  } catch {
+    // 200 with a truncated/HTML body — an edge or origin failure wearing a success code.
+    return { status: "unavailable", reason: "malformed", httpStatus: r.status };
+  }
+  // A literal `null`/`undefined` body is not usable data and was never committed to the
+  // store either; it is a broken artifact, not a deliberate absence.
+  if (data === null || data === undefined) return { status: "unavailable", reason: "malformed", httpStatus: r.status };
+  return { status: "data", data };
+}
+
 // ── Core fetch: issues the request, writes/evicts on settle ──
 // onRevalidate (optional) is invoked with the committed payload — the hook that lets a
 // background SWR refresh reach the caller that was already handed the stale value.
-function doFetch(url: string, entry: Entry, onRevalidate?: (data: any) => void): Promise<any> {
-  const inflight: Promise<any> = fetch(url)
-    .then((r) => {
-      if (r.ok) return r.json();
-      // Only permanently suppress on true 404/410 (resource does not exist).
-      // 5xx / 429 / network errors are transient — let the entry evict so the
-      // next call retries, which is strictly better than the pre-D2 behaviour.
-      if (r.status === 404 || r.status === 410) neg404.add(url);
-      return null;
-    })
-    .catch(() => null)
-    .then((data) => {
-      // Only commit if this specific inflight is still the one registered.
-      const current = store.get(url);
-      if (current && current.inflight === inflight) {
-        if (data === null || data === undefined) {
-          // Never pin null — clear the key so the next call retries.
-          // (neg404 prevents the URL from being refetched in-session.)
-          store.delete(url);
-        } else {
-          const committed: Entry = { data, ts: Date.now(), inflight: null };
-          touch(url, committed);
-          // Write-through to IndexedDB (fire-and-forget; never awaited on the
-          // hot path; all errors swallowed inside idbPut). Guarded so the call
-          // is a true no-op when IDB is unavailable (SSR / private browsing).
-          if (idbAvailable()) {
-            void idbPut(url, committed.data, committed.ts);
-          }
-          // Hand the corrected payload to the caller that already received the stale one.
-          // Isolated: a throwing consumer must not break the cache commit above.
-          if (onRevalidate) {
-            try { onRevalidate(data); } catch { /* consumer's problem, not the cache's */ }
-          }
+function doFetch(url: string, entry: Entry, onRevalidate?: (data: any) => void): Promise<CacheOutcome> {
+  const inflight: Promise<CacheOutcome> = fetchOutcome(url).then((outcome) => {
+    // Only permanently suppress on true 404/410 (resource does not exist).
+    // 5xx / 429 / network errors are transient — the entry evicts so the next call retries.
+    if (outcome.status === "absent") neg404.add(url);
+    // Only commit if this specific inflight is still the one registered.
+    const current = store.get(url);
+    if (current && current.inflight === inflight) {
+      if (outcome.status !== "data") {
+        // Never pin null — clear the key so the next call retries.
+        // (neg404 prevents a 404/410 URL from being refetched in-session.)
+        store.delete(url);
+      } else {
+        const committed: Entry = { data: outcome.data, ts: Date.now(), inflight: null };
+        touch(url, committed);
+        // Write-through to IndexedDB (fire-and-forget; never awaited on the
+        // hot path; all errors swallowed inside idbPut). Guarded so the call
+        // is a true no-op when IDB is unavailable (SSR / private browsing).
+        if (idbAvailable()) {
+          void idbPut(url, committed.data, committed.ts);
+        }
+        // Hand the corrected payload to the caller that already received the stale one.
+        // Isolated: a throwing consumer must not break the cache commit above.
+        if (onRevalidate) {
+          try { onRevalidate(outcome.data); } catch { /* consumer's problem, not the cache's */ }
         }
       }
-      return data;
-    });
+    }
+    return outcome;
+  });
 
   entry.inflight = inflight;
   store.delete(url);
@@ -172,19 +220,23 @@ export function _seedDecision(ts: number, now: number, ttl: number, swr: boolean
 }
 
 /**
- * getJSON — the core cache primitive.
+ * getJSONResult — the core cache primitive, answering the DISCRIMINATING contract.
  *
  * Algorithm:
- *   0. In-session 404 → return null immediately (never refetch).
+ *   0. In-session 404 → "absent" immediately (never refetch).
  *   1. Inflight request present → return it (deduplication).
  *   2. Fresh (now - ts < ttl) → return cached data immediately.
  *   3. Stale + swr=true → kick off background revalidate; return stale data.
  *   3b. Full memory miss → try IndexedDB read-back before the network (see below).
  *   4. Otherwise → fetch synchronously (caller awaits).
+ *
+ * Every cached/stale serve is `data` — a served-stale copy is still an answer. Only a live
+ * request that failed produces `unavailable`, and only a 404/410 (live or remembered)
+ * produces `absent`.
  */
-export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
-  // 0. In-session 404 negative cache — never re-request a URL that returned !r.ok.
-  if (neg404.has(url)) return null;
+export async function getJSONResult(url: string, opts?: GetOpts): Promise<CacheOutcome> {
+  // 0. In-session 404 negative cache — never re-request a URL that answered 404/410.
+  if (neg404.has(url)) return { status: "absent" };
 
   const ttl = opts?.ttl ?? DEFAULT_TTL;
   const swr = opts?.swr ?? true;
@@ -203,7 +255,7 @@ export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
     // 2. Fresh — serve from cache.
     if (age < ttl) {
       touch(url, entry);
-      return Promise.resolve(entry.data);
+      return { status: "data", data: entry.data };
     }
 
     // 3. Stale + swr — serve stale, revalidate in background.
@@ -213,7 +265,7 @@ export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
       const staleData = entry.data;
       const bgEntry: Entry = { data: staleData, ts: entry.ts, inflight: null };
       doFetch(url, bgEntry, opts?.onRevalidate); // fire-and-forget
-      return Promise.resolve(staleData);
+      return { status: "data", data: staleData };
     }
 
     // 3.stale + swr=false with an existing memory entry → fall through to (4).
@@ -229,7 +281,7 @@ export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
       if (raced.inflight !== null) return raced.inflight;
       if (Date.now() - raced.ts < ttl) {
         touch(url, raced);
-        return Promise.resolve(raced.data);
+        return { status: "data", data: raced.data };
       }
       // raced entry is stale — fall through to the normal miss fetch below.
     } else if (rec && !neg404.has(url)) {
@@ -238,7 +290,7 @@ export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
       if (decision === "fresh") {
         const seeded: Entry = { data: rec.data, ts: rec.ts, inflight: null };
         touch(url, seeded);
-        return Promise.resolve(rec.data);
+        return { status: "data", data: rec.data };
       }
       if (decision === "stale-swr") {
         const seeded: Entry = { data: rec.data, ts: rec.ts, inflight: null };
@@ -247,15 +299,29 @@ export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
         // path every reload takes for the manifest, so the callback matters most here.
         const bgEntry: Entry = { data: rec.data, ts: rec.ts, inflight: null };
         doFetch(url, bgEntry, opts?.onRevalidate); // fire-and-forget
-        return Promise.resolve(rec.data);
+        return { status: "data", data: rec.data };
       }
       // decision === "refetch" (stale + swr=false): fall through to blocking fetch.
     }
   }
 
-  // 4. Miss or expired (swr=false): blocking fetch.
+  // 4. Miss or expired (swr=false): blocking fetch. No onRevalidate here — the caller is
+  // awaiting THIS request, so a callback would just re-deliver what it is about to receive.
   const fresh: Entry = { data: null, ts: 0, inflight: null };
   return doFetch(url, fresh);
+}
+
+/**
+ * getJSON — data-or-null convenience over `getJSONResult`.
+ *
+ * Unchanged behaviour for every existing consumer: absent and unavailable both answer `null`.
+ * That is the right shape ONLY where the surface treats "no artifact" and "could not reach the
+ * artifact" identically. Anything that renders a loaded/empty/error distinction must call
+ * `getJSONResult` — see the CacheOutcome docblock.
+ */
+export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
+  const outcome = await getJSONResult(url, opts);
+  return outcome.status === "data" ? outcome.data : null;
 }
 
 /**

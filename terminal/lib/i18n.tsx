@@ -787,6 +787,9 @@ export const LEX: Record<string, [string, string]> = {
   ],
   scr2ErrTitle: ["Could not load the scan", "无法加载扫描"],
   scr2ErrWhy: ["The market manifest failed to load — check your connection.", "行情清单加载失败——请检查网络连接。"],
+  // 404/410: the file answered, and the answer was "I am not here". A different fact from a
+  // failed request, so it gets its own line rather than blaming the user's connection.
+  scr2ErrWhyAbsent: ["The market manifest is not published right now.", "行情清单目前尚未发布。"],
   scr2Retry: ["Retry", "重试"],
   // chart frame bar (items 6, 7, 8)
   gotoDate: ["Go to date", "跳转到日期"],

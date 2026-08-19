@@ -19,7 +19,7 @@ import {
 } from "./eventWorkspace";
 
 export interface EventWorkspaceEvidenceView {
-  receipt_state: EventWorkspaceReceiptState;
+  receipt_state: EventWorkspaceReceiptState | "status_only";
   excerpt: string | null;
   document_id: string | null;
   document_label: string;
@@ -34,6 +34,7 @@ export interface EventWorkspaceEvidenceView {
   typed_absence: EventWorkspaceTypedAbsence | null;
   transcript_id: string | null;
   source_url: string | null;
+  status_label: string | null;
 }
 
 export interface EventWorkspacePresentedItem {
@@ -154,6 +155,7 @@ function evidenceFromSpan(
     typed_absence: null,
     transcript_id: span.document_id?.startsWith("tx:") ? transcriptIdFromWorkspace(workspace) : null,
     source_url: sourceUrl,
+    status_label: null,
   };
 }
 
@@ -177,55 +179,29 @@ function evidenceFromAbsence(
     typed_absence: absence,
     transcript_id: absence.document_id?.startsWith("tx:") ? transcriptIdFromWorkspace(workspace) : null,
     source_url: null,
+    status_label: null,
   };
 }
 
-function evidenceForFact(fact: EventWorkspaceFact, workspace: EventWorkspace): EventWorkspaceEvidenceView {
+function evidenceForFact(fact: EventWorkspaceFact, workspace: EventWorkspace): EventWorkspaceEvidenceView | null {
   if (fact.source_span) {
     const release = workspace.sources.find((source) => source.document_id === fact.source_span?.document_id);
     return evidenceFromSpan(fact.source_span, workspace, release?.url ?? null);
   }
   if (fact.typed_absence) return evidenceFromAbsence(fact.typed_absence, workspace);
-  return evidenceFromAbsence({
-    schema: "typed_absence.v1",
-    authority: "context_only",
-    reason: "no_span_addressable_evidence",
-    subject: fact.metric,
-    detail: "No receipt is attached to this fact.",
-    event_id: workspace.event_id,
-    document_id: null,
-    missing_fields: [],
-  }, workspace);
+  return null;
 }
 
-function evidenceForClaim(claim: EventWorkspaceClaim, workspace: EventWorkspace): EventWorkspaceEvidenceView {
+function evidenceForClaim(claim: EventWorkspaceClaim, workspace: EventWorkspace): EventWorkspaceEvidenceView | null {
   if (claim.source_span) return evidenceFromSpan(claim.source_span, workspace, null);
   if (claim.typed_absence) return evidenceFromAbsence(claim.typed_absence, workspace);
-  return evidenceFromAbsence({
-    schema: "typed_absence.v1",
-    authority: "context_only",
-    reason: "no_span_addressable_evidence",
-    subject: claim.claim_id,
-    detail: "No receipt is attached to this claim.",
-    event_id: workspace.event_id,
-    document_id: null,
-    missing_fields: [],
-  }, workspace);
+  return null;
 }
 
-function evidenceForGuidance(item: EventWorkspaceGuidance, workspace: EventWorkspace): EventWorkspaceEvidenceView {
+function evidenceForGuidance(item: EventWorkspaceGuidance, workspace: EventWorkspace): EventWorkspaceEvidenceView | null {
   if (item.source_span) return evidenceFromSpan(item.source_span, workspace, null);
   if (item.typed_absence) return evidenceFromAbsence(item.typed_absence, workspace);
-  return evidenceFromAbsence({
-    schema: "typed_absence.v1",
-    authority: "context_only",
-    reason: "no_span_addressable_evidence",
-    subject: item.metric,
-    detail: "No receipt is attached to this guidance item.",
-    event_id: workspace.event_id,
-    document_id: null,
-    missing_fields: [],
-  }, workspace);
+  return null;
 }
 
 function yoyFromRevenueClaim(claim: EventWorkspaceClaim | undefined): string | null {
@@ -253,46 +229,65 @@ function completenessItem(
   label: string,
   block: EventWorkspaceCompletenessBlock,
   workspace: EventWorkspace,
-  fallbackAbsence?: EventWorkspaceTypedAbsence,
-): EventWorkspacePresentedItem {
-  const absence = block.typed_absence ?? fallbackAbsence ?? null;
+): EventWorkspacePresentedItem | null {
   const present = block.status === "present" || block.status === "bound";
-  const evidence = absence
-    ? evidenceFromAbsence(absence, workspace)
-    : present
-      ? {
-        receipt_state: "byte_replayed" as const,
-        excerpt: null,
-        document_id: block.document_id ?? block.filing_key?.accession ?? null,
-        document_label: documentLabel(block.document_id ?? null, false),
-        speaker: null,
-        role: null,
-        segment_index: null,
-        span_start_byte: null,
-        span_end_byte: null,
-        text_sha256: null,
-        source_sha256: null,
-        source_clock: workspace.lifecycle.source_available_at,
-        typed_absence: null,
-        transcript_id: key === "transcript" ? transcriptIdFromWorkspace(workspace) : null,
-        source_url: null,
-      }
-      : evidenceFromAbsence({
-        schema: "typed_absence.v1",
-        authority: "context_only",
-        reason: "missing_source",
-        subject: key,
-        detail: `${label} is ${block.status.replaceAll("_", " ")}.`,
-        event_id: workspace.event_id,
-        document_id: block.document_id ?? null,
-        missing_fields: [],
-      }, workspace);
+  const source = workspace.sources.find((row) => (
+    (block.document_id && row.document_id === block.document_id)
+    || (key === "transcript" && row.kind === "transcript")
+    || (key === "filing" && row.kind === "filing")
+    || (key === "release" && (row.kind === "issuer_release" || row.kind === "release"))
+    || (key === "slides" && (row.kind === "presentation" || row.kind === "slides"))
+    || (key === "consensus" && row.kind === "consensus")
+    || (key === "reaction" && (row.kind === "reaction" || row.kind === "market_reaction"))
+  ));
+  let evidence: EventWorkspaceEvidenceView;
+  if (block.typed_absence) {
+    evidence = evidenceFromAbsence(block.typed_absence, workspace);
+  } else if (source && source.receipt_state !== "typed_absence") {
+    evidence = {
+      receipt_state: source.receipt_state,
+      excerpt: null,
+      document_id: source.document_id,
+      document_label: documentLabel(source.document_id, false),
+      speaker: null,
+      role: null,
+      segment_index: null,
+      span_start_byte: null,
+      span_end_byte: null,
+      text_sha256: null,
+      source_sha256: source.source_sha256,
+      source_clock: workspace.lifecycle.source_available_at,
+      typed_absence: null,
+      transcript_id: key === "transcript" ? transcriptIdFromWorkspace(workspace) : null,
+      source_url: source.url,
+      status_label: source.receipt_state === "byte_replayed" ? null : sourceStatusLabel(source),
+    };
+  } else {
+    evidence = {
+      receipt_state: "status_only",
+      excerpt: null,
+      document_id: block.document_id ?? block.filing_key?.accession ?? null,
+      document_label: documentLabel(block.document_id ?? null, false),
+      speaker: null,
+      role: null,
+      segment_index: null,
+      span_start_byte: null,
+      span_end_byte: null,
+      text_sha256: null,
+      source_sha256: null,
+      source_clock: workspace.lifecycle.source_available_at,
+      typed_absence: null,
+      transcript_id: key === "transcript" ? transcriptIdFromWorkspace(workspace) : null,
+      source_url: null,
+      status_label: block.status.replaceAll("_", " "),
+    };
+  }
   const value = present
     ? (key === "filing" && block.filing_key
       ? `${block.filing_key.accession}`
       : block.status.replaceAll("_", " "))
     : block.status.replaceAll("_", " ");
-  return { id: `completeness:${key}`, label, value, detail: absence?.detail ?? null, evidence };
+  return { id: `completeness:${key}`, label, value, detail: block.typed_absence?.detail ?? null, evidence };
 }
 
 function sourceStatusLabel(source: EventWorkspaceSource): string {
@@ -315,65 +310,84 @@ export function presentEventWorkspace(workspace: EventWorkspace, options: { zh?:
   const reported: EventWorkspacePresentedItem[] = [];
   if (revenue && revenue.value != null) {
     const growth = yoyFromRevenueClaim(revenueClaim);
-    reported.push({
-      id: revenue.fact_id,
-      label: zh ? "营收" : "Revenue",
-      value: growth ? `${formatUsdMillions(revenue.value)} · ${growth}` : formatUsdMillions(revenue.value),
-      detail: revenueClaim?.text ?? null,
-      evidence: evidenceForFact(revenue, workspace),
-    });
+    const evidence = evidenceForFact(revenue, workspace);
+    if (evidence) {
+      reported.push({
+        id: revenue.fact_id,
+        label: zh ? "营收" : "Revenue",
+        value: growth ? `${formatUsdMillions(revenue.value)} · ${growth}` : formatUsdMillions(revenue.value),
+        detail: revenueClaim?.text ?? null,
+        evidence,
+      });
+    }
   }
-  const guidance: EventWorkspacePresentedItem[] = workspace.guidance.map((item, index) => {
+  const guidance: EventWorkspacePresentedItem[] = [];
+  workspace.guidance.forEach((item, index) => {
+    const evidence = evidenceForGuidance(item, workspace);
+    if (!evidence) return;
     const range = formatPercentRange(item.low, item.high);
-    return {
+    guidance.push({
       id: `guidance:${item.metric}:${index}`,
       label: guidanceHorizonLabel(item.horizon, workspace),
       value: range ?? (zh ? "无结构化指引" : "No structured range"),
       detail: item.source_span?.display_excerpt ?? item.horizon,
-      evidence: evidenceForGuidance(item, workspace),
-    };
+      evidence,
+    });
   });
   const shown = new Set(reported.map((item) => item.id));
   if (revenueClaim) shown.add(revenueClaim.claim_id);
   const watch: EventWorkspacePresentedItem[] = [];
   for (const claim of workspace.claims) {
     if (shown.has(claim.claim_id) || !isWatchClaim(claim)) continue;
+    const evidence = evidenceForClaim(claim, workspace);
+    if (!evidence) continue;
     watch.push({
       id: claim.claim_id,
       label: claim.kind === "quote" ? (zh ? "关注" : "Watch") : claim.metric ?? (zh ? "关注" : "Watch"),
       value: claim.text,
       detail: claim.speaker,
-      evidence: evidenceForClaim(claim, workspace),
+      evidence,
     });
   }
-  const facts: EventWorkspacePresentedItem[] = workspace.facts.map((fact) => {
+  const facts: EventWorkspacePresentedItem[] = [];
+  for (const fact of workspace.facts) {
+    const evidence = evidenceForFact(fact, workspace);
+    if (!evidence) continue;
     if (fact.metric === "questions_count") {
-      return {
+      facts.push({
         id: fact.fact_id,
         label: zh ? "分析师提问" : "Analyst questions",
         value: zh ? "暂无结构化计数" : "Unavailable / unstructured",
         detail: fact.typed_absence?.detail ?? null,
-        evidence: evidenceForFact(fact, workspace),
-      };
+        evidence,
+      });
+      continue;
     }
     const formatted = fact.metric === "revenue" && fact.value != null
       ? formatUsdMillions(fact.value)
       : fact.value == null ? (zh ? "暂无" : "Unavailable") : String(fact.value);
-    return {
+    facts.push({
       id: fact.fact_id,
       label: fact.metric.replaceAll("_", " "),
       value: formatted,
       detail: fact.basis,
-      evidence: evidenceForFact(fact, workspace),
-    };
-  });
-  const deltas: EventWorkspacePresentedItem[] = workspace.deltas.map((delta) => {
+      evidence,
+    });
+  }
+  const deltas: EventWorkspacePresentedItem[] = [];
+  for (const delta of workspace.deltas) {
     const current = delta.current && "value" in delta.current
       ? (delta.metric === "revenue" ? formatUsdMillions(delta.current.value) : String(delta.current.value))
       : (zh ? "当期已报告" : "Reported");
     const priorMissing = delta.prior && "schema" in delta.prior;
     const consensusMissing = delta.consensus && "schema" in delta.consensus;
-    return {
+    const evidence = consensusMissing && delta.consensus && "schema" in delta.consensus
+      ? evidenceFromAbsence(delta.consensus, workspace)
+      : priorMissing && delta.prior && "schema" in delta.prior
+        ? evidenceFromAbsence(delta.prior, workspace)
+        : (revenue ? evidenceForFact(revenue, workspace) : null);
+    if (!evidence) continue;
+    deltas.push({
       id: `delta:${delta.metric}`,
       label: delta.metric.replaceAll("_", " "),
       value: current,
@@ -381,20 +395,9 @@ export function presentEventWorkspace(workspace: EventWorkspace, options: { zh?:
         priorMissing ? (zh ? "上期未按同表绑定" : "Prior period is not bound") : null,
         consensusMissing || !delta.basis_match ? (zh ? "共识未授权 · 不显示超预期或不及预期" : "Consensus unlicensed · no beat/miss") : null,
       ].filter(Boolean).join(" · ") || null,
-      evidence: consensusMissing && delta.consensus && "schema" in delta.consensus
-        ? evidenceFromAbsence(delta.consensus, workspace)
-        : (revenue ? evidenceForFact(revenue, workspace) : evidenceFromAbsence({
-          schema: "typed_absence.v1",
-          authority: "context_only",
-          reason: "missing_basis",
-          subject: delta.metric,
-          detail: "No beat/miss is emitted because basis_match is false.",
-          event_id: workspace.event_id,
-          document_id: null,
-          missing_fields: [],
-        }, workspace)),
-    };
-  });
+      evidence,
+    });
+  }
   const completeness: EventWorkspacePresentedItem[] = [
     completenessItem("filing", "8-K", workspace.completeness.filing, workspace),
     completenessItem("release", "Exhibit 99.1", workspace.completeness.release, workspace),
@@ -402,15 +405,18 @@ export function presentEventWorkspace(workspace: EventWorkspace, options: { zh?:
     completenessItem("slides", zh ? "演示文稿" : "Slides", workspace.completeness.slides, workspace),
     completenessItem("consensus", zh ? "共识" : "Consensus", workspace.completeness.consensus, workspace),
     completenessItem("reaction", zh ? "市场反应" : "Market reaction", workspace.completeness.reaction, workspace),
-  ];
+  ].filter((item): item is EventWorkspacePresentedItem => item != null);
   if (questions) {
-    completeness.push({
-      id: questions.fact_id,
-      label: zh ? "分析师提问" : "Analyst questions",
-      value: zh ? "暂无结构化计数" : "Unavailable / unstructured",
-      detail: questions.typed_absence?.detail ?? null,
-      evidence: evidenceForFact(questions, workspace),
-    });
+    const evidence = evidenceForFact(questions, workspace);
+    if (evidence) {
+      completeness.push({
+        id: questions.fact_id,
+        label: zh ? "分析师提问" : "Analyst questions",
+        value: zh ? "暂无结构化计数" : "Unavailable / unstructured",
+        detail: questions.typed_absence?.detail ?? null,
+        evidence,
+      });
+    }
   }
   const sources: EventWorkspacePresentedSource[] = workspace.sources.map((source) => ({
     kind: source.kind,
