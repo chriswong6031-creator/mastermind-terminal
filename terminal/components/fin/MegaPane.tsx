@@ -43,25 +43,13 @@ import CompanyIntelligencePage from "./CompanyIntelligencePage";
 import { isTranscriptId } from "../../lib/transcripts";
 import type { TranscriptOpenTarget } from "../../lib/transcriptSearch";
 
-/** The twelve hostable pages share one fundamentals/research tab bar. The former deep-analysis
- *  ("mastermind") page was merged into the OracleDash Research-Desk surface. */
-export type FinPage =
-  | "overview"
-  | "statements"
-  | "statistics"
-  | "dividends"
-  | "earnings"
-  | "intelligence"
-  | "transcripts"
-  | "revenue"
-  | "forecast"
-  | "technicals"
-  | "seasonals"
-  | "insider"
-  | "lab";
-
-/** The pages that share the TV "Financials" tab pill bar. */
-export const FIN_PAGES: readonly FinPage[] = ["overview", "intelligence", "statements", "transcripts", "statistics", "dividends", "earnings", "revenue", "seasonals", "forecast", "technicals", "insider", "lab"];
+// The page ids live in the import-free leaf `./finPages` — an eager module that needs
+// FIN_PAGES as a runtime value (TerminalShell does) must import it from THERE, never from
+// here, or the value edge pulls this file's whole graph into the first-paint bundle and
+// cancels the dynamic() split that mounts it. See finPages.ts for the full contract.
+// Re-exported so the fundamentals surfaces keep their single import site.
+export { FIN_PAGES, type FinPage } from "./finPages";
+import { FIN_PAGES, type FinPage } from "./finPages";
 
 const PAGE_LABELS: Record<FinPage, [string, string]> = {
   overview: ["Overview", "概览"],
