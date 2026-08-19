@@ -594,6 +594,9 @@ export const LEX: Record<string, [string, string]> = {
   myScripts: ["My Scripts", "我的脚本"],
   noScriptsYet: ["No custom scripts yet.", "还没有自定义脚本。"],
   openPineEditor: ["Open the Pine editor", "打开 Pine 编辑器"],
+  // A failed read of the personal script library. Distinct from noScriptsYet on purpose: telling a
+  // user with saved scripts that they have none reads as "your work is gone".
+  scriptsUnavailable: ["Couldn't load your scripts.", "无法加载你的脚本。"],
   editScript: ["Edit in Pine editor", "在 Pine 编辑器中编辑"],
   rename: ["Rename", "重命名"],
   delete: ["Delete", "删除"],

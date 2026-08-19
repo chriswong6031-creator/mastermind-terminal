@@ -70,7 +70,10 @@ const DIAG_SLOT = "@diag";   // shared supersession slot for editor diagnostics 
 const LINE_H = 12.5 * 1.65;        // px per line
 const COL_W = 12.5 * 0.6;          // px per mono char (JetBrains Mono advance ≈ 0.6em)
 
-export default function PineEditor({ scripts, isPro, email }: { scripts: Script[]; isPro: boolean; email: string }) {
+// `libraryUnavailable`: the `saved_scripts` read failed, so `scripts` carries ONLY the built-in
+// flagship and says nothing about what the user has saved. Without this flag the page renders
+// exactly like a brand-new account — which, to someone who has written scripts, reads as data loss.
+export default function PineEditor({ scripts, isPro, email, libraryUnavailable = false }: { scripts: Script[]; isPro: boolean; email: string; libraryUnavailable?: boolean }) {
   const t = useT();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -294,6 +297,9 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
         <div className="pine-side">
           <div className="side-sec">
             <h4>{t("peMyScripts")}</h4>
+            {libraryUnavailable && (
+              <div className="gate" role="alert" data-scripts-status="unavailable">{t("scriptsUnavailable")}</div>
+            )}
             {scripts.map((s, i) => (
               <div key={s.id} className={`script-row${i === idx ? " on" : ""}`} onClick={() => setIdx(i)}>
                 <span className="si">{s.lang === "pine" ? "ƒ" : "λ"}</span>
