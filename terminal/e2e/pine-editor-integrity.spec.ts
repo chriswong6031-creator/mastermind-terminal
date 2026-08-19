@@ -52,11 +52,19 @@ async function openScripts(page: Page, testInfo: TestInfo, baseURL?: string, que
   await expect(editor(page)).toBeVisible({ timeout: 60_000 });
 }
 
-/** Replace the whole buffer — the editor is a controlled textarea. */
+/** Replace the whole buffer — the editor is a controlled textarea — and WAIT until the editor
+ *  actually considers itself dirty.
+ *
+ *  Every dirty-switch test below types and then immediately clicks another script, expecting the
+ *  decision dialog. `dirty` is derived during render, so a click that lands before React has
+ *  committed the change sees a CLEAN buffer, switches silently, and the test fails as though the
+ *  guard were missing — which is the exact defect under test. Observing the state here, once, makes
+ *  every caller deterministic instead of each one racing. */
 async function setSource(page: Page, text: string) {
   await editor(page).click();
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.type(text);
+  await expect(console_(page)).toContainText("unsaved changes", { timeout: 10_000 });
 }
 
 test.describe("D3b — a successful save becomes the editor's baseline", () => {
