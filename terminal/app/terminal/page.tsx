@@ -19,10 +19,19 @@ export default async function Terminal({ searchParams }: { searchParams: Promise
   // Start the two chart-blocking JSON requests while the browser is still
   // downloading/hydrating the Terminal JavaScript. getSliceAndOhlc() reuses
   // these same-origin preloads when ChartPanel mounts.
+  //
+  // ⚠️ crossOrigin MUST stay "anonymous" so the preload is actually reused. The browser
+  // matches a preload against a later fetch by request mode + credentials mode, not by
+  // effective behavior. dataCache's `fetch(url)` is mode "cors" / credentials "same-origin";
+  // "anonymous" is the only crossOrigin value that produces that same pair. Both alternatives
+  // silently MISS and download the payload a second time — verified in-browser: "use-credentials"
+  // (mode cors / credentials include) and omitting crossOrigin entirely (mode no-cors /
+  // credentials include) each cost a full extra fetch of both files, ~141 KB on production's
+  // critical path, delaying first chart paint by exactly what the preload was meant to save.
   for (const href of criticalTerminalDataUrls(initialSymbol)) {
     preload(href, {
       as: "fetch",
-      crossOrigin: "use-credentials",
+      crossOrigin: "anonymous",
       fetchPriority: "high",
     });
   }

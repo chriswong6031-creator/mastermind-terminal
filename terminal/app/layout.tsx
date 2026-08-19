@@ -2,7 +2,11 @@ import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import "./fin.css";
-import "./company-intelligence.css";
+// NB: company-intelligence.css is deliberately NOT here. Its selectors (`.ci-*`, `.analysis-*`)
+// belong to two surfaces only, so it is imported by those components instead
+// (components/fin/CompanyIntelligencePage + components/workspaces/AnalysisWorkspace) and no
+// longer blocks first paint on the routes that cannot render any of it. fin.css stays global:
+// its classes are shared across the options desks, screener and chart rail, not just fin/.
 import "./observatory.css";
 import "./onboarding.css";
 import "./settings.css";

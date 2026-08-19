@@ -1,4 +1,9 @@
 "use client";
+// The `.analysis-*` shell/context-bar rules below live in this sheet (alongside the `.ci-*`
+// intelligence surface). It used to load from app/layout.tsx on every route; it is imported
+// here and in components/fin/CompanyIntelligencePage so only the two surfaces that use it pay
+// for it. See the note in that file.
+import "../../app/company-intelligence.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import MegaPane, { FIN_PAGES as FIN_PAGE_LIST, type FinPage } from "@/components/fin/MegaPane";
