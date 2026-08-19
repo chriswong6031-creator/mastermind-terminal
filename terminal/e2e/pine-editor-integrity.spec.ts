@@ -19,8 +19,13 @@ import { expect, test, type Page, type TestInfo } from "@playwright/test";
  * fixture (lib/scriptsFixtureDb.ts, TERMINAL_E2E_FIXTURE only).
  */
 
-const A = "Alpha Study";
-const B = "Beta Study";
+// #433's fixture seed (lib/scriptsFixtureDb.ts): two scripts owned by the signed-in user.
+// Their SOURCES, not their names, are what the editor shows — that seed deliberately uses a
+// generic `indicator('x')` body, so assert on the distinguishing plot() call rather than the title.
+const A = "My Momentum";
+const B = "My Reversion";
+const A_SRC = /plot\(close\)/;      // "My Momentum" stored source
+const B_SRC = /plot\(open\)/;       // "My Reversion" stored source
 
 // Per-RUN nonce, for the same reason e2e/watchlistStore.ts carries one. `reuseExistingServer: !CI`
 // means a second local run usually attaches to the FIRST run's dev server, and the fixture store is
@@ -46,8 +51,18 @@ const editor = (page: Page) => page.locator(".editor textarea");
 const sideRow = (page: Page, name: string) => page.locator(".script-row", { hasText: name });
 const console_ = (page: Page) => page.locator(".console");
 
+/** #433's scripts fixture is READ-ONLY on purpose, so a successful save is fulfilled at the
+ *  transport. This is the honest level for D3b: the write always reached the database — what went
+ *  stale was the editor's CLIENT baseline, which is exactly what these specs observe. */
+async function stubSaveOk(page: Page) {
+  await page.route("**/api/scripts/save", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, id: "fixture-id" }),
+  }));
+}
+
 async function openScripts(page: Page, testInfo: TestInfo, baseURL?: string, query = "") {
   await isolateScripts(page, testInfo, baseURL);
+  await stubSaveOk(page);
   await page.goto(`/scripts${query}`);
   await expect(editor(page)).toBeVisible({ timeout: 60_000 });
 }
@@ -74,38 +89,57 @@ test.describe("D3b — a successful save becomes the editor's baseline", () => {
 
     // Land on A and give it a distinctive edit.
     await sideRow(page, A).click();
-    await expect(editor(page)).toHaveValue(/Alpha Study/);
-    const EDITED = "//@version=6\nindicator(\"Alpha Study\")\nplot(close * 2) // A-PRIME\n";
+    await expect(editor(page)).toHaveValue(A_SRC);
+    const EDITED = "//@version=6\nindicator(\"My Momentum\")\nplot(close * 2) // A-PRIME\n";
     await setSource(page, EDITED);
     await expect(console_(page)).toContainText("unsaved changes");
 
-    // Save, and assert the editor stops calling itself dirty.
+    // Save, and assert the editor stops calling itself dirty. Deliberately NOT asserting the
+    // "Saved ✓" label: it lives for 2.2s and a loaded runner can miss the window entirely, which
+    // made this spec flaky. Losing the dirty marker is the durable, load-independent evidence that
+    // the baseline actually moved — which is the thing D3b fixed.
     await page.getByRole("button", { name: /Save/ }).first().click();
-    await expect(page.getByRole("button", { name: "Saved ✓" })).toBeVisible({ timeout: 15_000 });
-    await expect(console_(page)).not.toContainText("unsaved changes");
+    await expect(console_(page)).not.toContainText("unsaved changes", { timeout: 15_000 });
 
     // Leave and come back. THIS is where the save used to disappear.
     await sideRow(page, B).click();
-    await expect(editor(page)).toHaveValue(/Beta Study/);
+    await expect(editor(page)).toHaveValue(B_SRC);
     await sideRow(page, A).click();
     await expect(editor(page)).toHaveValue(/A-PRIME/);
     // …and it is not merely displayed — the editor considers it stored, so a further switch is clean.
     await expect(console_(page)).not.toContainText("unsaved changes");
   });
 
-  test("the saved source also survives a full reload (it really reached the store)", async ({ page, baseURL }, testInfo) => {
+  test("a second save sends the SAVED source, not the pre-save one", async ({ page, baseURL }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop", "Editor state is viewport-independent.");
     await openScripts(page, testInfo, baseURL);
 
-    await sideRow(page, A).click();
-    await setSource(page, "//@version=6\nindicator(\"Alpha Study\")\nplot(hlc3) // PERSISTED\n");
-    await page.getByRole("button", { name: /Save/ }).first().click();
-    await expect(page.getByRole("button", { name: "Saved ✓" })).toBeVisible({ timeout: 15_000 });
+    // The second half of the D3b defect, and the damaging half: with a stale baseline, editing
+    // again after a round trip re-sent the ORIGINAL source and overwrote the save for real.
+    const sent: string[] = [];
+    await page.route("**/api/scripts/save", async (route) => {
+      sent.push(JSON.parse(route.request().postData() || "{}").source ?? "");
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, id: "fixture-id" }) });
+    });
 
-    await page.reload();
-    await expect(editor(page)).toBeVisible({ timeout: 60_000 });
     await sideRow(page, A).click();
-    await expect(editor(page)).toHaveValue(/PERSISTED/);
+    await setSource(page, "//@version=6\nindicator(\"My Momentum\")\nplot(hlc3) // FIRST\n");
+    await page.getByRole("button", { name: /Save/ }).first().click();
+    await expect.poll(() => sent.length, { timeout: 15_000 }).toBe(1);
+
+    // Leave and return — the step that used to reinstate the pre-save source.
+    await sideRow(page, B).click();
+    await expect(editor(page)).toHaveValue(B_SRC);
+    await sideRow(page, A).click();
+    await expect(editor(page)).toHaveValue(/FIRST/);
+
+    await setSource(page, "//@version=6\nindicator(\"My Momentum\")\nplot(hlc3) // SECOND\n");
+    await page.getByRole("button", { name: /Save/ }).first().click();
+    await expect.poll(() => sent.length, { timeout: 15_000 }).toBe(2);
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toContain("SECOND");
+    expect(sent[1]).not.toContain("plot(close)");   // never the original stored source
   });
 });
 
@@ -115,7 +149,7 @@ test.describe("D3a — a dirty buffer is never discarded without a decision", ()
     await openScripts(page, testInfo, baseURL);
 
     await sideRow(page, A).click();
-    await setSource(page, "//@version=6\nindicator(\"Alpha Study\")\nplot(low) // UNSAVED\n");
+    await setSource(page, "//@version=6\nindicator(\"My Momentum\")\nplot(low) // UNSAVED\n");
     await sideRow(page, B).click();
 
     // A decision is REQUIRED — the old code just swapped the buffer.
@@ -134,7 +168,7 @@ test.describe("D3a — a dirty buffer is never discarded without a decision", ()
     await openScripts(page, testInfo, baseURL);
 
     await sideRow(page, A).click();
-    await setSource(page, "//@version=6\nindicator(\"Alpha Study\")\nplot(low) // FRAGILE\n");
+    await setSource(page, "//@version=6\nindicator(\"My Momentum\")\nplot(low) // FRAGILE\n");
 
     // Break the save at the transport, the way a real outage would.
     await page.route("**/api/scripts/save", (route) => route.fulfill({ status: 500, body: "{}" }));
@@ -156,16 +190,16 @@ test.describe("D3a — a dirty buffer is never discarded without a decision", ()
     await openScripts(page, testInfo, baseURL);
 
     await sideRow(page, A).click();
-    await setSource(page, "//@version=6\nindicator(\"Alpha Study\")\nplot(low) // THROWAWAY\n");
+    await setSource(page, "//@version=6\nindicator(\"My Momentum\")\nplot(low) // THROWAWAY\n");
     await sideRow(page, B).click();
 
     await page.getByRole("dialog").getByRole("button", { name: /Discard changes/ }).click();
     await expect(page.getByRole("dialog")).toBeHidden();
-    await expect(editor(page)).toHaveValue(/Beta Study/);        // switched
+    await expect(editor(page)).toHaveValue(B_SRC);        // switched
 
     // Returning to A shows the STORED source — the discard was real, and only the edit was dropped.
     await sideRow(page, A).click();
-    await expect(editor(page)).toHaveValue(/Alpha Study/);
+    await expect(editor(page)).toHaveValue(A_SRC);
     await expect(editor(page)).not.toHaveValue(/THROWAWAY/);
   });
 
@@ -176,7 +210,7 @@ test.describe("D3a — a dirty buffer is never discarded without a decision", ()
     await sideRow(page, A).click();
     await sideRow(page, B).click();
     await expect(page.getByRole("dialog")).toBeHidden();
-    await expect(editor(page)).toHaveValue(/Beta Study/);
+    await expect(editor(page)).toHaveValue(B_SRC);
   });
 });
 
@@ -185,19 +219,24 @@ test.describe("D4 — the visible script and the ?id= deep link agree", () => {
     test.skip(testInfo.project.name !== "desktop", "Editor state is viewport-independent.");
     await openScripts(page, testInfo, baseURL);
 
-    // The URL names the visible script on ARRIVAL, before any switch — the list is ordered by
-    // updated_at, so "whatever is first" is not a stable thing to share.
+    // The URL names the visible script on ARRIVAL, before any switch. Do NOT assume which script
+    // that is: the page prepends the locked flagship, and the saved rows are ordered by updated_at,
+    // so "whatever is first" is exactly the unstable thing this fix exists to stop people sharing.
     //
     // POLL, never read once: mirroring is an effect, so it necessarily lands a tick AFTER the
     // editor paints. Reading the URL immediately raced it and CI got `null` — a harness bug that
     // reads exactly like "the product never mirrored".
-    await expect(editor(page)).toHaveValue(/Beta Study/);        // fixture: newest first
+    await expect.poll(() => new URL(page.url()).searchParams.get("id")).toBeTruthy();
+
+    // Select each script EXPLICITLY and capture the id the URL then carries.
+    await sideRow(page, B).click();
+    await expect(editor(page)).toHaveValue(B_SRC);
     await expect.poll(() => new URL(page.url()).searchParams.get("id")).toBeTruthy();
     const bId = new URL(page.url()).searchParams.get("id");
 
     // Selecting the OTHER script must move the URL with it — this is what used to drift.
     await sideRow(page, A).click();
-    await expect(editor(page)).toHaveValue(/Alpha Study/);
+    await expect(editor(page)).toHaveValue(A_SRC);
     await expect.poll(() => new URL(page.url()).searchParams.get("id")).not.toBe(bId);
     const aId = new URL(page.url()).searchParams.get("id");
     expect(aId).toBeTruthy();
@@ -205,12 +244,12 @@ test.describe("D4 — the visible script and the ?id= deep link agree", () => {
     // Reload lands on the SAME script the URL names, not on the first one.
     await page.reload();
     await expect(editor(page)).toBeVisible({ timeout: 60_000 });
-    await expect(editor(page)).toHaveValue(/Alpha Study/);
+    await expect(editor(page)).toHaveValue(A_SRC);
     expect(new URL(page.url()).searchParams.get("id")).toBe(aId);
 
     // A fresh session opening the copied URL sees what the sharer saw.
     await page.goto(`/scripts?id=${encodeURIComponent(bId!)}`);
-    await expect(editor(page)).toHaveValue(/Beta Study/);
+    await expect(editor(page)).toHaveValue(B_SRC);
   });
 
   test("URL mirroring preserves unrelated query params", async ({ page, baseURL }, testInfo) => {
@@ -218,7 +257,7 @@ test.describe("D4 — the visible script and the ?id= deep link agree", () => {
     await openScripts(page, testInfo, baseURL, "?keep=yes");
 
     await sideRow(page, A).click();
-    await expect(editor(page)).toHaveValue(/Alpha Study/);
+    await expect(editor(page)).toHaveValue(A_SRC);
     await expect.poll(() => new URL(page.url()).searchParams.get("id")).toBeTruthy();
     const url = new URL(page.url());
     expect(url.searchParams.get("keep")).toBe("yes");
@@ -227,8 +266,9 @@ test.describe("D4 — the visible script and the ?id= deep link agree", () => {
   test("an unknown ?id= falls back predictably instead of blanking the editor", async ({ page, baseURL }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop", "Editor state is viewport-independent.");
     await openScripts(page, testInfo, baseURL, "?id=does-not-exist");
-    // The first script, not an empty editor and not a crash…
-    await expect(editor(page)).toHaveValue(/Study/);
+    // A real script, not an empty editor and not a crash. Which one is deliberately not asserted:
+    // the fallback is "the first entry", and the page prepends the locked flagship.
+    await expect(editor(page)).toHaveValue(/@version=6/);
     // …and the dangling id is REPAIRED rather than left naming nothing, so the URL never lies about
     // which script is on screen.
     await expect.poll(() => new URL(page.url()).searchParams.get("id")).not.toBe("does-not-exist");

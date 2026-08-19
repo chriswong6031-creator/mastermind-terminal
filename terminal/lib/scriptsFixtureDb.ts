@@ -1,96 +1,88 @@
-// Deterministic in-memory stand-in for `saved_scripts`, used ONLY when `TERMINAL_E2E_FIXTURE=1`
-// (the Playwright dev server). It exists so the Pine editor's STATE contract — a successful save
-// becomes the editor's baseline, a dirty buffer is never discarded silently, the visible script and
-// the ?id= deep link agree — can be proven in a real browser against the real component and the
-// real save route. The fixture replaces the transport, never the behaviour under test.
+// Deterministic stand-in for the `saved_scripts` READ, used ONLY when `TERMINAL_E2E_FIXTURE=1`
+// (the Playwright dev server). Same construction as lib/watchlistsFixtureDb.ts and
+// lib/layoutsFixtureDb.ts: the fixture replaces the transport, never the behaviour under test.
 //
-// Never reachable in production: `app/(shell)/scripts/page.tsx` and `app/api/scripts/save/route.ts`
-// read the env flag once and fall through to the RLS'd Supabase server client otherwise.
+// It exists because the C6 statement cannot be proved in a browser otherwise. The bug is that
+// `saved_scripts` grants SELECT on **any** row with `is_public = true`, so "the signed-in user's
+// scripts" and "rows this user may read" are different sets — and the seed below contains exactly
+// that: a FOREIGN PUBLIC script alongside the owner's own. `visibleTo()` applies the real RLS
+// predicate, so a query that forgets `user_id` gets the foreign row handed to it, and the spec's
+// assertion is about the application filter rather than about an empty table.
 //
-// Mirrors lib/watchlistsFixtureDb.ts deliberately, including the globalThis store. Next compiles
-// Route Handlers and Server Components into different bundles, so a module-level `new Map()` is
-// instantiated once PER BUNDLE — `POST /api/scripts/save` would write into one map while
-// `app/(shell)/scripts/page.tsx` read an empty one in the same process and same request. That is
-// exactly the false-negative this whole PR is about (a save that landed but does not appear), so
-// the fixture must not manufacture one of its own.
-//
-// Keyed by the `mm_e2e_scripts` cookie so the three parallel viewport projects cannot see each
-// other's edits; absent cookie -> a shared "default" store.
-
-export const SCRIPTS_FIXTURE_COOKIE = "mm_e2e_scripts";
+// Read-only on purpose. Save/rename/delete keep going to Supabase: this seam exists to prove which
+// rows the library SHOWS, and a writable fixture would be a second, divergent implementation of
+// entitlement-gated writes for no additional proof.
 
 export type FixtureScript = {
   id: string;
+  user_id: string;
   name: string;
   source: string;
   lang: string;
   params: Record<string, unknown>;
+  is_public: boolean;
   updated_at: string;
 };
 
-const GLOBAL_KEY = Symbol.for("mm.e2e.scriptsFixtureStores");
-type FixtureGlobal = typeof globalThis & { [GLOBAL_KEY]?: Map<string, FixtureScript[]> };
-const stores: Map<string, FixtureScript[]> =
-  ((globalThis as FixtureGlobal)[GLOBAL_KEY] ??= new Map<string, FixtureScript[]>());
+/** Per-test store key, so parallel viewport projects cannot see each other's seeds. */
+export const SCRIPTS_STORE_COOKIE = "mm_e2e_scripts";
+/** Any non-empty value makes the read fail, the way an outage would. */
+export const SCRIPTS_FAULT_COOKIE = "mm_e2e_script_fault";
 
-/** Two editable scripts is the minimum that can express the defect: the bug only shows itself when
- *  you leave a script and come back to it. */
+/** The signed-in owner in fixture mode. Mirrors the synthetic identity the other fixtures use. */
+export const fixtureScriptUserId = (key: string) => `e2e-script-user-${key}`;
+/** A DIFFERENT account, whose public script must never appear in the owner's library. */
+export const fixtureOtherUserId = (key: string) => `e2e-script-other-${key}`;
+
 function seed(key: string): FixtureScript[] {
+  const base = { source: "//@version=6\nindicator('x')\nplot(close)", lang: "pine", params: {}, is_public: false };
   return [
-    {
-      id: `${key}-script-a`,
-      name: "Alpha Study",
-      source: "//@version=6\nindicator(\"Alpha Study\")\nplot(close)\n",
-      lang: "pine",
-      params: { length: 14 },
-      updated_at: "2026-08-01T00:00:00.000Z",
-    },
-    {
-      id: `${key}-script-b`,
-      name: "Beta Study",
-      source: "//@version=6\nindicator(\"Beta Study\")\nplot(open)\n",
-      lang: "pine",
-      params: { length: 21 },
-      updated_at: "2026-08-02T00:00:00.000Z",
-    },
+    { ...base, id: `${key}-mine`, user_id: fixtureScriptUserId(key), name: "My Momentum", updated_at: "2026-08-03T00:00:00Z" },
+    // A SECOND script owned by the same user. The editor's state contract (D3/D4) is only
+    // observable by leaving a script and coming back to it — a save that looks lost, an unsaved
+    // edit discarded without a decision, a ?id= that stops matching the visible script all need
+    // somewhere to switch TO. Owned and private, so it changes nothing about the C6 ownership
+    // assertion above; it just gives the library two editable rows instead of one.
+    { ...base, id: `${key}-second`, user_id: fixtureScriptUserId(key), name: "My Reversion", source: "//@version=6\nindicator('second')\nplot(open)", updated_at: "2026-08-02T00:00:00Z" },
+    // Owned by someone else and PUBLIC — readable under RLS, and never part of My Scripts.
+    { ...base, id: `${key}-foreign`, user_id: fixtureOtherUserId(key), name: "Someone Else's Public Script", is_public: true, updated_at: "2026-08-04T00:00:00Z" },
   ];
 }
 
-export function fixtureScriptsUserId(key: string): string {
-  return `e2e-user-${key}`;
-}
+// PROCESS-global for the reason spelled out in watchlistsFixtureDb: Route Handlers and Server
+// Components are separate bundles, so a module-level Map would be instantiated once per bundle.
+const GLOBAL_KEY = Symbol.for("mm.e2e.scriptFixtureStores");
+type FixtureGlobal = typeof globalThis & { [GLOBAL_KEY]?: Map<string, FixtureScript[]> };
+const stores: Map<string, FixtureScript[]> = ((globalThis as FixtureGlobal)[GLOBAL_KEY] ??= new Map());
 
-export function listFixtureScripts(key: string): FixtureScript[] {
+function storeFor(key: string): FixtureScript[] {
   let rows = stores.get(key);
   if (!rows) { rows = seed(key); stores.set(key, rows); }
-  // Same ordering the real page asks Supabase for (updated_at desc) — a spec must not accidentally
-  // depend on an order the product does not produce.
-  return [...rows].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  return rows;
 }
 
-/** Insert or update, returning the row id — the same contract `/api/scripts/save` answers with. */
-export function saveFixtureScript(
-  key: string,
-  input: { id?: string; name: string; source: string; lang?: string; params?: Record<string, unknown> },
-): string {
-  const rows = stores.get(key) ?? (() => { const s = seed(key); stores.set(key, s); return s; })();
-  const at = new Date().toISOString();
-  const existing = input.id ? rows.find((r) => r.id === input.id) : undefined;
-  if (existing) {
-    existing.name = input.name;
-    existing.source = input.source;
-    existing.params = input.params ?? {};
-    existing.updated_at = at;
-    return existing.id;
-  }
-  const created: FixtureScript = {
-    id: `${key}-script-${rows.length + 1}-${at}`,
-    name: input.name,
-    source: input.source,
-    lang: input.lang ?? "pine",
-    params: input.params ?? {},
-    updated_at: at,
+/** The REAL RLS predicate for `saved_scripts`: owner OR public. */
+export const visibleTo = (rows: FixtureScript[], userId: string) =>
+  rows.filter((r) => r.user_id === userId || r.is_public);
+
+export type FixtureScriptRead =
+  | { ok: true; scripts: Omit<FixtureScript, "user_id" | "is_public">[] }
+  | { ok: false };
+
+/**
+ * The owner-scoped read the route performs, against the fixture store. `ownerScoped: false` is what
+ * the route USED to do and is what the spec's counterfactual asserts against.
+ */
+export function readFixtureScripts(key: string, fault: boolean, ownerScoped = true): FixtureScriptRead {
+  if (fault) return { ok: false };
+  const userId = fixtureScriptUserId(key);
+  const visible = visibleTo(storeFor(key), userId);
+  const rows = ownerScoped ? visible.filter((r) => r.user_id === userId) : visible;
+  return {
+    ok: true,
+    scripts: rows
+      .slice()
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+      .map(({ id, name, source, lang, params, updated_at }) => ({ id, name, source, lang, params, updated_at })),
   };
-  rows.push(created);
-  return created.id;
 }
