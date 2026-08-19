@@ -1,4 +1,6 @@
+import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
+import { GUEST_COOKIE } from "@/lib/layoutsFixtureDb";
 import TerminalShell from "@/components/TerminalShell";
 import { criticalTerminalDataUrls } from "@/lib/terminalBoot";
 import { preload } from "react-dom";
@@ -45,7 +47,12 @@ export default async function Terminal({ searchParams }: { searchParams: Promise
   const e2eFixture = process.env.TERMINAL_E2E_FIXTURE === "1";
   const guestSymbols: [string, string][] = [["Crypto", "BTC-USD"], ["Crypto", "ETH-USD"], ["Equities", "NVDA"], ["Equities", "AAPL"], ["Equities", "MSFT"], ["Equities", "QQQ"]];
   if (e2eFixture) {
-    return <TerminalShell symbols={guestSymbols.map(([section, symbol]) => ({ symbol, section }))} email={process.env.TERMINAL_E2E_EMAIL || ""} initialSymbol={initialSymbol} shellMode={shellMode} shellTray={shellTray} shellDossier={shellDossier} secondBarsEnabled={secondBarsEnabled} />;
+    // The fixture server signs every session in (TERMINAL_E2E_EMAIL), which leaves the signed-OUT
+    // workspace — the one that carried a Save button wired to a guaranteed 401 — untestable. One
+    // cookie renders a genuine guest, and `/api/layouts` honours the same cookie, so the page and
+    // the API agree about who is asking. Fixture branch only: unreachable in production.
+    const guest = (await cookies()).get(GUEST_COOKIE)?.value === "1";
+    return <TerminalShell symbols={guestSymbols.map(([section, symbol]) => ({ symbol, section }))} email={guest ? "" : (process.env.TERMINAL_E2E_EMAIL || "")} initialSymbol={initialSymbol} shellMode={shellMode} shellTray={shellTray} shellDossier={shellDossier} secondBarsEnabled={secondBarsEnabled} />;
   }
 
   const supabase = await createClient();

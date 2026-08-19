@@ -126,6 +126,17 @@ export const LEX: Record<string, [string, string]> = {
   saveCurrentAs: ["Save current as…", "保存当前为…"],
   save: ["Save", "保存"],
   noSavedLayouts: ["No saved layouts", "暂无已存布局"],
+  // Saved-layout store states. "No saved layouts" is an ANSWER, so it may only be shown after an
+  // authoritative read — these cover the states that used to be flattened into it.
+  layoutsLoading: ["Loading layouts…", "正在加载布局…"],
+  layoutsUnavailable: ["Saved layouts are unavailable right now.", "已存布局暂时不可用。"],
+  layoutRetry: ["Retry", "重试"],
+  layoutSaving: ["Saving…", "保存中…"],
+  layoutSaved: ["Layout saved", "布局已保存"],
+  layoutSaveFailed: ["Couldn't save the layout — nothing was stored.", "布局保存失败 —— 未写入任何内容。"],
+  layoutNameTaken: ["A layout with that name already exists.", "已存在同名布局。"],
+  layoutDeleteFailed: ["Couldn't delete the layout — it's still saved.", "布局删除失败 —— 仍保留在账户中。"],
+  layoutSignInToSave: ["Sign in to save layouts", "登录后可保存布局"],
   // Chart Bus v2 — AI drawing-layer legend chip
   aiLayer: ["AI layer", "AI 图层"],
   aiLayerTip: ["Drawings placed by Mastermind AI", "由 Mastermind AI 绘制的图形"],
@@ -639,6 +650,7 @@ export const LEX: Record<string, [string, string]> = {
   // Free-tier gate nudges (anonymous → free-account conversion)
   gateIndCap: ["Free plan: 3 indicators max.", "免费版最多 3 个指标"],
   gateWatchlist: ["Create a free account to build a watchlist.", "注册免费账户即可创建自选列表"],
+  gateLayouts: ["Create a free account to save chart layouts.", "注册免费账户即可保存图表布局"],
   gateSignupCta: ["Sign up free →", "免费注册 →"],
   // Options paywall (/options — the terminal_live_options entitlement gate)
   opwTitle: ["Unlock the Options desk", "解锁期权终端"],
