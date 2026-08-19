@@ -5,7 +5,7 @@ import { useT, useLang } from "@/lib/i18n";
 import { displayName, marketOf, isSymbolVisible, ALL_MARKETS, type MarketId } from "@/lib/markets";
 import { useMarketPrefs } from "@/lib/useMarketPrefs";
 import { MARKET_TKEY } from "@/lib/markets";
-import { getJSON, invalidate } from "@/lib/dataCache";
+import { getJSONResult, invalidate } from "@/lib/dataCache";
 import { trackSearch } from "@/lib/searchTrack";
 import { verdictIsStale } from "@/lib/signalVerdict";
 // R3.2 msc_* positioning columns: one cross-root index fetch joined by symbol (the
@@ -60,6 +60,24 @@ type Row = {
   // sortable scalar (REGIME_RANK — structural risk PIN→CASCADE); mscRegime the display word.
   mscRank?: number | null; mscRegime?: GexRegime | null; mscNetGex?: number | null; mscFlip?: number | null;
 };
+
+/**
+ * Why the scan is not on screen. `null` = no fault.
+ *
+ * `dataCache.getJSON` answers `null` for BOTH "the file 404s" and "the request failed", and it
+ * never rejects — so `.then(m => { if (m) apply(m) })` silently did nothing on any failure and
+ * left `loaded` false forever: a manifest outage rendered as a permanent loading skeleton with
+ * no reachable Retry. The view now reads `getJSONResult`, so a failure is a state, not a no-op.
+ */
+type ScreenerFault = "absent" | "unavailable";
+
+/** A manifest is an object carrying a `symbols` map. Anything else parsed fine but is not a
+ *  scan — rendering it as zero rows would print "No matches" over an unread universe. */
+function isManifestShape(m: unknown): m is { as_of?: string; symbols?: Record<string, any> } {
+  if (!m || typeof m !== "object" || Array.isArray(m)) return false;
+  const symbols = (m as { symbols?: unknown }).symbols;
+  return !!symbols && typeof symbols === "object" && !Array.isArray(symbols);
+}
 
 type Sig = "any" | "buy" | "sell" | "tracked";
 type W52 = "any" | "nearHigh" | "within15" | "dd30" | "nearLow";
@@ -231,7 +249,10 @@ export default function ScreenerView({ email }: { email: string }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [asOf, setAsOf] = useState<string>("");
   const [loaded, setLoaded] = useState(false);
-  const [err, setErr] = useState(false);
+  // Four distinct load states, never collapsed: skeleton (!loaded), a scan (loaded, err null),
+  // "the manifest is not published" (absent) and "we could not reach it" (unavailable). The
+  // last two both mean NO SCAN — but they are different facts, so the why-line names which.
+  const [err, setErr] = useState<ScreenerFault | null>(null);
   const [reloadN, setReloadN] = useState(0);
 
   // ── filter state ───────────────────────────────────────────────────────
@@ -332,11 +353,20 @@ export default function ScreenerView({ email }: { email: string }) {
         );
         setLoaded(true);
     };
-    getJSON("/data/manifest.json", {
-      onRevalidate: (m: any) => { if (alive && m) apply(m); },
+    // A background revalidation that FAILS leaves the last good scan on screen (it is still a
+    // real answer, just older) — onRevalidate only ever fires with data.
+    getJSONResult("/data/manifest.json", {
+      onRevalidate: (m: any) => { if (alive && isManifestShape(m)) apply(m); },
     })
-      .then((m: any) => { if (alive && m) apply(m); })
-      .catch(() => { if (alive) { setErr(true); setLoaded(true); } });
+      .then((res) => {
+        if (!alive) return;
+        if (res.status === "data" && isManifestShape(res.data)) { apply(res.data); return; }
+        // No scan. `absent` = the manifest is not published at this address; anything else
+        // (network, 5xx, unparseable body, a 200 that is not a manifest) = we could not find out.
+        setErr(res.status === "absent" ? "absent" : "unavailable");
+        setLoaded(true);
+      })
+      .catch(() => { if (alive) { setErr("unavailable"); setLoaded(true); } });
     return () => { alive = false; };
   }, [reloadN]);
 
@@ -359,9 +389,11 @@ export default function ScreenerView({ email }: { email: string }) {
     });
   }, [rows, glance]);
 
+  // invalidate() also clears the in-session 404 negative cache, without which a manifest that
+  // once 404'd would answer `absent` from memory forever and Retry could never reach the network.
   const retry = useCallback(() => {
     invalidate("/data/manifest.json");
-    setErr(false);
+    setErr(null);
     setLoaded(false);
     setReloadN((n) => n + 1);
   }, []);
@@ -826,14 +858,14 @@ export default function ScreenerView({ email }: { email: string }) {
               </tr>
             ))}
 
-            {/* error — never the no-match copy */}
+            {/* error — never the no-match copy; the why-line names WHICH failure */}
             {loaded && err && (
               <tr className="empty-row">
                 <td colSpan={cols.length}>
-                  <div className="fin-empty fin-empty-lg">
+                  <div className="fin-empty fin-empty-lg" data-scr-fault={err}>
                     <EmptyIcon />
                     <div className="fin-empty-title">{t("scr2ErrTitle")}</div>
-                    <div className="fin-empty-why">{t("scr2ErrWhy")}</div>
+                    <div className="fin-empty-why">{t(err === "absent" ? "scr2ErrWhyAbsent" : "scr2ErrWhy")}</div>
                     <button type="button" className="chip" onClick={retry}>{t("scr2Retry")}</button>
                   </div>
                 </td>
