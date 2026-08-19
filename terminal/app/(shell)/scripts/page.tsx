@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { createClient } from "@/lib/supabase/server";
 import { isPaidTier } from "@/lib/entitlement";
 import { PROPRIETARY_SCRIPT } from "@/lib/pine";
-import PineEditor from "@/components/PineEditor";
+import PineEditorMount from "@/components/mounts/PineEditorMount";
 import SignupGate from "@/components/gates/SignupGate";
 
 // Scripts (Wave-3 IA) — the Pine editor, split back out of the former Automate page
@@ -46,5 +46,5 @@ export default async function ScriptsPage() {
   // Locked flagship first (viewable/runnable, non-editable), then the user's scripts.
   const scripts: Script[] = [PROPRIETARY_SCRIPT as Script, ...saved];
 
-  return <PineEditor scripts={scripts} isPro={isPro} email={user.email || ""} />;
+  return <PineEditorMount scripts={scripts} isPro={isPro} email={user.email || ""} />;
 }

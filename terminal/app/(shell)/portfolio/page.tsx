@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import PortfolioView from "@/components/PortfolioView";
+import PortfolioViewMount from "@/components/mounts/PortfolioViewMount";
 import SignupGate from "@/components/gates/SignupGate";
 import { listPositions, type Position } from "@/lib/portfolio";
 import { createFixtureDb, fixtureUserId, FIXTURE_STORE_COOKIE } from "@/lib/watchlistsFixtureDb";
@@ -32,7 +32,7 @@ export default async function PortfolioPage() {
     const key = (await cookies()).get(FIXTURE_STORE_COOKIE)?.value || "default";
     const positions = await listPositions(createFixtureDb(key), fixtureUserId(key));
     return (
-      <PortfolioView
+      <PortfolioViewMount
         positions={positions}
         email={process.env.TERMINAL_E2E_EMAIL || "responsive@example.com"}
       />
@@ -54,5 +54,5 @@ export default async function PortfolioPage() {
     // its first mutation, so a transient failure heals without a reload.
     positions = [];
   }
-  return <PortfolioView positions={positions} email={user.email || ""} />;
+  return <PortfolioViewMount positions={positions} email={user.email || ""} />;
 }
