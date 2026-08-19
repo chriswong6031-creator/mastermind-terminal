@@ -1,5 +1,5 @@
 "use client";
-import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLang, useT } from "@/lib/i18n";
 import { CMP_PALETTE, CmpMode, CmpCfg } from "@/lib/compare";
@@ -408,9 +408,35 @@ export default function SearchModal({
   const titleKey = isAdd ? "addSymbolTitle" : "searchTitle";
   const placeholderKey = "searchInputPlaceholder";
 
+  // ── D6: accessible combobox ⇄ listbox selection ───────────────────────────────
+  // The custom ArrowUp/ArrowDown/Enter mechanism keeps focus in the input and moves a VISUAL
+  // highlight (`sel`). That was invisible to assistive technology: nothing said the field owned a
+  // result popup, nothing marked the rows as options, and nothing named the active one — a sighted
+  // keyboard user and a screen-reader user were reading two different products. The input is now a
+  // combobox pointing at the result list, each row carries a stable option id, and
+  // aria-activedescendant names the highlighted one. `useId` scopes the ids to this instance, so a
+  // second mounted SearchModal (hub + sheet) can never collide with this one's.
+  const uid = useId();
+  const listboxId = `${uid}-results`;
+  const optionDomId = (rowSel: number) => `${uid}-opt-${rowSel}`;
+  // Only the SEARCH body is the combobox's popup. The HOME body is the active watchlist — a
+  // different surface that arrow keys do not drive — so claiming it as a listbox would be a
+  // second lie of the same kind this fix exists to remove.
+  const listboxOpen = !isHome && totalRows > 0;
+  const activeOptionId = listboxOpen && sel >= 0 && sel < totalRows ? optionDomId(sel) : undefined;
+  const optionProps = (optionId: string | null, rowSel: number) =>
+    (optionId ? { role: "option", id: optionId, "aria-selected": rowSel === sel } : {});
+
   // Render one symbol row with the shared `.r` anatomy (used by SEARCH results, Recent, and the
   // HOME active-list body). `withAdd` shows the + / confirm button (SEARCH only).
-  function symRow(s: string, r: Row | undefined, rowSel: number, withAdd: boolean, watchlistQuote = false) {
+  //
+  // D6 anatomy: `.r` is a CONTAINER, not the option. The `role="option"` element is `.r-opt`,
+  // covering only the symbol-identity + info region; the row's actionable controls (add / picker /
+  // watchlist-member actions) live in `.r-act`, a SIBLING of the option. This split is required,
+  // not cosmetic: `option` is a "children presentational" role, so a <button> inside one is erased
+  // from the accessibility tree — marking the whole row an option would have traded the visible
+  // highlight for a silently unreachable Add control. Geometry is unchanged (see .r>.r-opt CSS).
+  function symRow(s: string, r: Row | undefined, rowSel: number, withAdd: boolean, watchlistQuote = false, optionId: string | null = null) {
     const buy = r ? isBuy(r.verdict) : false;
     const inWl = inWatchlist.has(s);
     const flagColor = flags[s];
@@ -427,56 +453,60 @@ export default function SearchModal({
         onMouseEnter={() => setSel(rowSel)}
         onClick={(e) => choose(s, e.shiftKey)}
       >
-        {inWl && (
-          <span
-            className={`s-flag-bar${flagColor ? " s-flag-bar--set" : ""}`}
-            style={flagColor ? { background: flagColor } : {}}
-          />
-        )}
-        {r ? (
-          <span className="ic" style={{ background: r.col }}>{s[0]}</span>
-        ) : (
-          <span className="ic ic-plain">{s[0]}</span>
-        )}
-        <div className="meta">
-          <div className="s-row-id">
-            <div className="tk">{s}</div>
-            {watchlistQuote && marketLabel && <span className="mkt">{marketLabel}</span>}
-          </div>
-          {/* ONE language, never both. This used to render `name · zh`, so an English user read
-              "Dogecoin · 狗狗币" and "Palladium · 钯金" — the last surface still doing it after
-              displayName() landed (reported 2026-07-27). Chinese stays SEARCHABLE either way:
-              scoreSymbol matches the zh field regardless of the display language. */}
-          <div className="nm">{r ? displayName(r, lang) || s : s}</div>
-        </div>
-        <div className="vr">
-          {watchlistQuote && snapshot ? (
-            <div
-              className="s-row-quote"
-              data-quote-source={snapshot.source}
-              data-quote-price={snapshot.price ?? ""}
-              data-quote-change={snapshot.change ?? ""}
-              aria-label={`${t("colLast")} ${priceText}, ${t("colChangePct")} ${changeText}`}
-            >
-              <span className="s-row-price num">{priceText}</span>
-              <span className={`s-row-change num ${quoteUp ? "up" : "down"}`}>{changeText}</span>
-            </div>
-          ) : (
-            <>
-              {r?.mkt && <span className="mkt">{r.mkt}</span>}
-              {r?.verdict && (
-                <span
-                  className={"verd" + (verdictIsStale(r.vts) ? " stale" : "")}
-                  title={r.vts ? `${r.verdict} · ${r.vts}` : undefined}
-                  style={{ color: buy ? "var(--buy)" : "var(--sell)", background: `color-mix(in srgb, ${buy ? "var(--buy)" : "var(--sell)"} 13%, transparent)` }}
-                >
-                  {r.verdict}
-                </span>
-              )}
-            </>
+        <div className="r-opt" {...optionProps(optionId, rowSel)}>
+          {inWl && (
+            <span
+              className={`s-flag-bar${flagColor ? " s-flag-bar--set" : ""}`}
+              style={flagColor ? { background: flagColor } : {}}
+            />
           )}
-          {withAdd && (
-            confirming
+          {r ? (
+            <span className="ic" style={{ background: r.col }}>{s[0]}</span>
+          ) : (
+            <span className="ic ic-plain">{s[0]}</span>
+          )}
+          <div className="meta">
+            <div className="s-row-id">
+              <div className="tk">{s}</div>
+              {watchlistQuote && marketLabel && <span className="mkt">{marketLabel}</span>}
+            </div>
+            {/* ONE language, never both. This used to render `name · zh`, so an English user read
+                "Dogecoin · 狗狗币" and "Palladium · 钯金" — the last surface still doing it after
+                displayName() landed (reported 2026-07-27). Chinese stays SEARCHABLE either way:
+                scoreSymbol matches the zh field regardless of the display language. */}
+            <div className="nm">{r ? displayName(r, lang) || s : s}</div>
+          </div>
+          <div className="vr">
+            {watchlistQuote && snapshot ? (
+              <div
+                className="s-row-quote"
+                data-quote-source={snapshot.source}
+                data-quote-price={snapshot.price ?? ""}
+                data-quote-change={snapshot.change ?? ""}
+                aria-label={`${t("colLast")} ${priceText}, ${t("colChangePct")} ${changeText}`}
+              >
+                <span className="s-row-price num">{priceText}</span>
+                <span className={`s-row-change num ${quoteUp ? "up" : "down"}`}>{changeText}</span>
+              </div>
+            ) : (
+              <>
+                {r?.mkt && <span className="mkt">{r.mkt}</span>}
+                {r?.verdict && (
+                  <span
+                    className={"verd" + (verdictIsStale(r.vts) ? " stale" : "")}
+                    title={r.vts ? `${r.verdict} · ${r.vts}` : undefined}
+                    style={{ color: buy ? "var(--buy)" : "var(--sell)", background: `color-mix(in srgb, ${buy ? "var(--buy)" : "var(--sell)"} 13%, transparent)` }}
+                  >
+                    {r.verdict}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+        {withAdd && (
+          <div className="r-act">
+            {confirming
               ? <span className="s-added-note"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg>{t("addedToList").replace("{list}", justAdded!.list)}</span>
               : <button
                   className={`add${inWl ? " added" : ""}`}
@@ -487,8 +517,9 @@ export default function SearchModal({
                     ? <svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg>
                     : <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>}
                 </button>
-          )}
-        </div>
+            }
+          </div>
+        )}
         {/* Add-to-list picker popover (F, multi-list) — anchored to the row in VIEWPORT space and
             PORTALLED to the body: it sits between two clips otherwise (`.sres` scrolls, `.smodal`
             hides overflow for its rounded corners), and both cropped it (see pickerPos). React
@@ -571,6 +602,12 @@ export default function SearchModal({
             onChange={(e) => { setQ(e.target.value); setSel(0); }}
             onFocus={() => setView("search")}
             onKeyDown={key}
+            role="combobox"
+            aria-expanded={listboxOpen}
+            aria-controls={listboxId}
+            aria-haspopup="listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={activeOptionId}
           />
           {/* Desktop keyboard hint. The mobile hub replaces it with the explicit view switch. */}
           <span className="sh-kbd" aria-hidden="true">
@@ -682,8 +719,10 @@ export default function SearchModal({
             )}
           </div>
         ) : (
-          /* SEARCH / compare / add body */
-          <div className="sres">
+          /* SEARCH / compare / add body — the combobox's popup (D6). The informational chrome
+             interleaved with the options (composite warning, section headers, empty states, the
+             market-filter disclosure) is marked presentational so it does not read as a result. */
+          <div className="sres" id={listboxId} role="listbox" aria-label={t(titleKey)}>
             {/* Composite first row (F2) */}
             {showCompositeRow && compositeExprStr && (
               <div
@@ -691,16 +730,20 @@ export default function SearchModal({
                 onMouseEnter={() => setSel(0)}
                 onClick={(e) => choose(compositeExprStr, e.shiftKey)}
               >
-                <span className="ic ic-composite">[M]</span>
-                <div className="meta">
-                  <div className="tk">{compositeLabel(compositeExprStr)}</div>
-                  <div className="nm">{compositeExprStr}</div>
+                <div className="r-opt" {...optionProps(optionDomId(0), 0)}>
+                  <span className="ic ic-composite">[M]</span>
+                  <div className="meta">
+                    <div className="tk">{compositeLabel(compositeExprStr)}</div>
+                    <div className="nm">{compositeExprStr}</div>
+                  </div>
+                  <div className="vr">
+                    <span className="mkt">{t("compositeType")}</span>
+                    {inWatchlist.has(compositeExprStr) && (
+                      <span className="s-flag-dot" style={{ background: flags[compositeExprStr] || "#888" }} />
+                    )}
+                  </div>
                 </div>
-                <div className="vr">
-                  <span className="mkt">{t("compositeType")}</span>
-                  {inWatchlist.has(compositeExprStr) && (
-                    <span className="s-flag-dot" style={{ background: flags[compositeExprStr] || "#888" }} />
-                  )}
+                <div className="r-act">
                   {isAdd && inWatchlist.has(compositeExprStr)
                     ? <WlMemberActions sym={compositeExprStr} t={t} onRemove={onRemove} onGo={() => { onPick(compositeExprStr); onClose(); }} />
                     : !isAdd && <button className={`add${inWatchlist.has(compositeExprStr) ? " added" : ""}`}
@@ -717,32 +760,32 @@ export default function SearchModal({
 
             {/* Invalid composite warning */}
             {compositeLegs && !compositeLegs.valid && compositeLegs.unknown && (
-              <div className="sres-warn">
+              <div className="sres-warn" role="presentation">
                 {t("compositeInvalid").replace("{syms}", compositeLegs.unknown.join(", "))}
               </div>
             )}
 
             {/* Recently viewed header */}
             {showRecentRows && recentResults.length > 0 && (
-              <div className="sres-section-hd">{t("searchRecentHeader")}</div>
+              <div className="sres-section-hd" role="presentation">{t("searchRecentHeader")}</div>
             )}
 
             {/* Recent is navigation history, so an empty list says that plainly. Category browse
                 content replaces this state whenever a category tab has rows. */}
             {!cmp && !isAdd && showRecentRows && displayRows.length === 0 && (
-              <div className="s-type-hint">{t("searchRecentEmpty")}</div>
+              <div className="s-type-hint" role="presentation">{t("searchRecentEmpty")}</div>
             )}
 
             {/* Empty state */}
             {!showCompositeRow && displayRows.length === 0 && !showRecentRows && (
-              <div className="empty">{t("noSymbolMatch")} "{q}".</div>
+              <div className="empty" role="presentation">{t("noSymbolMatch")} "{q}".</div>
             )}
 
             {/* Market-filter disclosure. A user who cannot find 0700.HK must be told it is their
                 own setting doing it — and be able to undo it right here, without hunting through
                 settings. Renders only when a switched-off market actually has matches. */}
             {hiddenByMarket && (
-              <div className="s-mkt-hidden">
+              <div className="s-mkt-hidden" role="presentation">
                 <span>
                   {t("mktHiddenLead")} {hiddenByMarket.n} {t("mktHiddenMore")}{" "}
                   {hiddenByMarket.from.map((m) => t(MARKET_TKEY[m])).join(" · ")}
@@ -753,7 +796,7 @@ export default function SearchModal({
               </div>
             )}
             {(cmp || isAdd) && showRecentRows && displayRows.length === 0 && (
-              <div className="empty">{t("searchRecentEmpty")}</div>
+              <div className="empty" role="presentation">{t("searchRecentEmpty")}</div>
             )}
 
             {displayRows.map(([s, r], i) => {
@@ -762,13 +805,13 @@ export default function SearchModal({
               // (index 0 when there are no recent views). Rendered inside the map so one flat row list
               // keeps driving `sel`/arrow-key nav across the seam.
               const seamHd = showRecentRows && browseResults.length > 0 && i === recentResults.length && catLabelKey
-                ? <div className="sres-section-hd">{t(catLabelKey)}</div>
+                ? <div className="sres-section-hd" role="presentation">{t(catLabelKey)}</div>
                 : null;
               // compare/add modes keep their bespoke row actions; go mode uses the shared symRow w/ add.
               if (!cmp && !isAdd) {
                 return seamHd
-                  ? <Fragment key={`seam-${s}`}>{seamHd}{symRow(s, r, rowSel, true)}</Fragment>
-                  : symRow(s, r, rowSel, true);
+                  ? <Fragment key={`seam-${s}`}>{seamHd}{symRow(s, r, rowSel, true, false, optionDomId(rowSel))}</Fragment>
+                  : symRow(s, r, rowSel, true, false, optionDomId(rowSel));
               }
               const buy = isBuy(r.verdict);
               const inCmp = cmp && compare.includes(s);
@@ -782,28 +825,32 @@ export default function SearchModal({
                   onMouseEnter={() => setSel(rowSel)}
                   onClick={(e) => choose(s, e.shiftKey)}
                 >
-                  {inWl && (
-                    <span
-                      className={`s-flag-bar${flagColor ? " s-flag-bar--set" : ""}`}
-                      style={flagColor ? { background: flagColor } : {}}
-                    />
-                  )}
-                  <span className="ic" style={{ background: r.col }}>{s[0]}</span>
-                  <div className="meta">
-                    <div className="tk">{s}</div>
-                    <div className="nm">{displayName(r, lang) || s}</div>
-                  </div>
-                  <div className="vr">
-                    {r.mkt && <span className="mkt">{r.mkt}</span>}
-                    {r.verdict && (
+                  <div className="r-opt" {...optionProps(optionDomId(rowSel), rowSel)}>
+                    {inWl && (
                       <span
-                        className={"verd" + (verdictIsStale(r.vts) ? " stale" : "")}
-                        title={r.vts ? `${r.verdict} · ${r.vts}` : undefined}
-                        style={{ color: buy ? "var(--buy)" : "var(--sell)", background: `color-mix(in srgb, ${buy ? "var(--buy)" : "var(--sell)"} 13%, transparent)` }}
-                      >
-                        {r.verdict}
-                      </span>
+                        className={`s-flag-bar${flagColor ? " s-flag-bar--set" : ""}`}
+                        style={flagColor ? { background: flagColor } : {}}
+                      />
                     )}
+                    <span className="ic" style={{ background: r.col }}>{s[0]}</span>
+                    <div className="meta">
+                      <div className="tk">{s}</div>
+                      <div className="nm">{displayName(r, lang) || s}</div>
+                    </div>
+                    <div className="vr">
+                      {r.mkt && <span className="mkt">{r.mkt}</span>}
+                      {r.verdict && (
+                        <span
+                          className={"verd" + (verdictIsStale(r.vts) ? " stale" : "")}
+                          title={r.vts ? `${r.verdict} · ${r.vts}` : undefined}
+                          style={{ color: buy ? "var(--buy)" : "var(--sell)", background: `color-mix(in srgb, ${buy ? "var(--buy)" : "var(--sell)"} 13%, transparent)` }}
+                        >
+                          {r.verdict}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="r-act">
                     {cmp
                       ? <div className={"cmp-add-wrap" + (inCmp ? " is-added" : choosing === s ? " is-choosing" : "")}>
                           <button className="cmp-add-idle add cmp" title={t("addToCompare")} onClick={(e) => { e.stopPropagation(); setChoosing(s); }}>
