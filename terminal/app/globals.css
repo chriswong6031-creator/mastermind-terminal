@@ -1362,6 +1362,19 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .alerts-signedout{padding:30px 16px;display:flex;flex-direction:column;align-items:flex-start;gap:9px}
 .alerts-signedout-h{font:600 14px/1.3 var(--font-ui);color:var(--text)}
 .alerts-signedout-p{margin:0;max-width:46ch;font-size:13px;line-height:1.55;color:var(--muted)}
+/* store-unavailable state — same shape as signed-out (both are "we cannot show your list"),
+   distinct copy + a retry that actually re-reads. */
+.alerts-unavailable{padding:30px 16px;display:flex;flex-direction:column;align-items:flex-start;gap:9px}
+/* re-read control, always available when signed in. 32px square keeps it touch-usable at 390px. */
+.alerts-refresh{margin-left:auto;width:32px;height:32px;flex:0 0 auto;display:flex;align-items:center;
+  justify-content:center;border:1px solid var(--line-3);border-radius:var(--r-md);background:transparent;
+  color:var(--muted);font-size:14px;line-height:1;cursor:pointer}
+.alerts-refresh:hover:not(:disabled){background:var(--panel-2);color:var(--text)}
+.alerts-refresh:disabled{opacity:.55;cursor:default}
+/* failed REFRESH over rows we already have: the list stays, labelled with its provenance */
+.alerts-stale{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 15px;
+  border-bottom:1px solid var(--line);background:var(--panel-2);
+  font-size:12.5px;line-height:1.5;color:var(--muted)}
 @media(max-width:640px){
   /* 6 fixed columns overflow a 375px phone. Reflowing them into 3 columns is NOT enough
      on its own — grid auto-placement drops the created-date into the 22px dot column,
