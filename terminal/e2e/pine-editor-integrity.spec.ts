@@ -179,16 +179,20 @@ test.describe("D4 — the visible script and the ?id= deep link agree", () => {
 
     // The URL names the visible script on ARRIVAL, before any switch — the list is ordered by
     // updated_at, so "whatever is first" is not a stable thing to share.
+    //
+    // POLL, never read once: mirroring is an effect, so it necessarily lands a tick AFTER the
+    // editor paints. Reading the URL immediately raced it and CI got `null` — a harness bug that
+    // reads exactly like "the product never mirrored".
     await expect(editor(page)).toHaveValue(/Beta Study/);        // fixture: newest first
+    await expect.poll(() => new URL(page.url()).searchParams.get("id")).toBeTruthy();
     const bId = new URL(page.url()).searchParams.get("id");
-    expect(bId).toBeTruthy();
 
     // Selecting the OTHER script must move the URL with it — this is what used to drift.
     await sideRow(page, A).click();
     await expect(editor(page)).toHaveValue(/Alpha Study/);
+    await expect.poll(() => new URL(page.url()).searchParams.get("id")).not.toBe(bId);
     const aId = new URL(page.url()).searchParams.get("id");
     expect(aId).toBeTruthy();
-    expect(aId).not.toBe(bId);
 
     // Reload lands on the SAME script the URL names, not on the first one.
     await page.reload();
@@ -207,9 +211,9 @@ test.describe("D4 — the visible script and the ?id= deep link agree", () => {
 
     await sideRow(page, A).click();
     await expect(editor(page)).toHaveValue(/Alpha Study/);
+    await expect.poll(() => new URL(page.url()).searchParams.get("id")).toBeTruthy();
     const url = new URL(page.url());
     expect(url.searchParams.get("keep")).toBe("yes");
-    expect(url.searchParams.get("id")).toBeTruthy();
   });
 
   test("an unknown ?id= falls back predictably instead of blanking the editor", async ({ page, baseURL }, testInfo) => {
