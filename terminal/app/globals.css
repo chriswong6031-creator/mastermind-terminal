@@ -1482,6 +1482,18 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .menu-save{display:flex;gap:6px;padding:7px}
 .menu-save input{flex:1;height:30px;padding:0 9px;border-radius:var(--r);background:var(--inset);border:1px solid var(--line);color:var(--text);font:12.5px var(--font-ui);outline:none}
 .menu-save button{padding:0 11px;border-radius:var(--r);background:var(--brand);color:#fff;font:600 12px/1 var(--font-ui)}
+/* A disabled Save must LOOK unavailable — the guest bug was an inviting button wired to a 401. */
+.menu-save input:disabled,.menu-save button:disabled{opacity:.45;cursor:not-allowed}
+/* Store-state lines (saved / failed / unavailable). Deliberately not .menu-row: they are not
+   pickable, and a wrapping line is better than a truncated failure message. */
+.menu-note{display:flex;align-items:center;gap:8px;margin:1px 7px 3px;padding:6px 9px;border-radius:var(--r);font-size:11.5px;line-height:1.35;white-space:normal}
+/* NOT --buy/--sell/--up: those swap red and green under the east convention (`.east` block), so a
+   "saved" line would render red for a zh reader. Status here is success-vs-failure, not direction. */
+.menu-note.ok{color:var(--brand-2);background:color-mix(in srgb,var(--brand-2) 12%,transparent)}
+.menu-note.bad{color:var(--danger);background:color-mix(in srgb,var(--danger) 12%,transparent)}
+.menu-note-retry{margin-left:auto;padding:2px 8px;border:1px solid currentColor;border-radius:var(--r-pill);color:inherit;font:600 11px/1.5 var(--font-ui);background:none;white-space:nowrap}
+.menu-row.layout-gate{white-space:normal;color:var(--text-2)}
+.menu-row.layout-gate .layout-gate-cta{margin-left:auto;color:var(--brand-2);font-weight:700;white-space:nowrap}
 
 /* live badge */
 .livebadge{display:inline-flex;align-items:center;gap:5px;font:600 9.5px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);padding:3px 7px;border:1px solid var(--line);border-radius:var(--r-pill)}
