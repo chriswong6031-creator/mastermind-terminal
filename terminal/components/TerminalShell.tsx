@@ -1889,11 +1889,19 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         if (!symbols.length) continue;
         try {
           const response = await post({ action: "remove", symbols, ...wlTargetRef.current(listName) });
-          // 404 = the list is already gone, so the rows are too: the intent is satisfied either way.
-          if (response.ok || response.status === 404) {
+          // The intent is SATISFIED, and so cleared, when the server confirms the rows are gone —
+          // and equally when it says the target does not exist (404 "list not found", 400 "no
+          // watchlist"): the rows cannot be in a list that is not there, and re-sending a request
+          // the route rejects on its face would just retry forever.
+          //
+          // 401/403 (session lapsed), 429 and 5xx are the opposite: the delete has NOT been
+          // decided, so the intent stands, the row stays hidden, and the next mount tries again.
+          // TTL bounds the pathological case where a target is permanently unresolvable.
+          const settled = response.ok || response.status === 404 || response.status === 400;
+          if (settled) {
             clearWatchlistTombstones(localStorage, owner, listName, symbols);
             delete tombstones[listName];
-            retried = true;
+            retried = response.ok;
           }
         } catch {
           // Still offline. The tombstone stands and the rows stay deleted locally.
