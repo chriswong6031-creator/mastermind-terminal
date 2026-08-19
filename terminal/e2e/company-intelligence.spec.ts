@@ -778,10 +778,11 @@ const AAPL_EVENT_ID = "evt_cik0000320193_2026q3_results";
 const AAPL_GENERATION = "f709a0a6ec514282d5769e7d";
 
 function aaplWorkspacePayload(overrides: Record<string, unknown> = {}) {
-  const workspace = { ...aaplWorkspace, ...overrides } as typeof aaplWorkspace & { generation_id: string; lifecycle: { state: string } };
+  const { state, ...workspaceOverrides } = overrides;
+  const workspace = { ...aaplWorkspace, ...workspaceOverrides } as typeof aaplWorkspace & { generation_id: string; lifecycle: { state: string } };
   return {
     ok: true,
-    state: "ready",
+    state: typeof state === "string" ? state : "ready",
     available: true,
     event_id: AAPL_EVENT_ID,
     workspace,
@@ -797,30 +798,75 @@ function aaplWorkspacePayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function openAaplWorkspace(page: Page, payload = aaplWorkspacePayload()) {
+function aaplOverlayContext() {
+  const overlay = structuredClone(contextFixture());
+  overlay.company.ticker = "AAPL";
+  overlay.company.display_name = "Apple Inc.";
+  overlay.latest_event.ticker = "AAPL";
+  overlay.latest_event.fiscal_year = 2026;
+  overlay.latest_event.fiscal_quarter = 3;
+  overlay.latest_event.call_date = "2026-07-30";
+  overlay.latest_event.summary = "Apple beats consensus after 14 analyst questions and a clear earnings miss recovery.";
+  overlay.latest_event.metrics.questions_count = 14;
+  overlay.latest_event.field_lineage.metrics.questions_count = "score_overlay";
+  overlay.history = overlay.history.map((row) => (
+    row.event_id === overlay.latest_event.event_id ? { ...overlay.latest_event } : { ...row, ticker: "AAPL" }
+  ));
+  return overlay;
+}
+
+async function openAaplWorkspace(page: Page, payload = aaplWorkspacePayload(), options: { v1?: "not_found" | "park" | "overlay" } = {}) {
+  let releaseV1 = () => {};
+  await page.unroute("**/api/event-workspace/**");
   await page.route("**/api/event-workspace/AAPL**", async (route) => {
     await route.fulfill({ json: payload });
   });
-  await page.route("**/api/company-intelligence/AAPL**", async (route) => {
-    await route.fulfill({
-      status: 404,
-      json: { ok: false, state: "error", error: { code: "not_found", message: "Company intelligence is not covered", retryable: false } },
+  if (options.v1 === "park") {
+    const parked = new Promise<void>((resolve) => {
+      releaseV1 = resolve;
     });
-  });
-  await page.route("**/api/company-theme-context/AAPL**", async (route) => {
-    await route.fulfill({
-      status: 404,
-      json: { ok: false, state: "error", error: { code: "not_found", message: "Theme context is not covered", retryable: false } },
+    await page.route("**/api/company-intelligence/AAPL**", async (route) => {
+      await parked;
+      await route.fulfill({
+        status: 404,
+        json: { ok: false, state: "error", error: { code: "not_found", message: "Company intelligence is not covered", retryable: false } },
+      });
     });
-  });
-  await page.route("**/api/company-institutional-context/AAPL**", async (route) => {
-    await route.fulfill({
-      status: 404,
-      json: { ok: false, state: "error", error: { code: "not_found", message: "Institutional context is not covered", retryable: false } },
+  } else if (options.v1 === "overlay") {
+    await page.route("**/api/company-intelligence/AAPL**", async (route) => {
+      await route.fulfill({ json: { ok: true, state: "ready", context: aaplOverlayContext() } });
     });
-  });
+    await page.route("**/api/company-theme-context/AAPL**", async (route) => {
+      await route.fulfill({ json: { ok: true, state: "partial", context: { ...themeContextFixture(), company: { ticker: "AAPL" } } } });
+    });
+    await page.route("**/api/company-institutional-context/AAPL**", async (route) => {
+      await route.fulfill({ json: { ok: true, state: "ready", context: { ...institutionalContextFixture(), company: { ticker: "AAPL" } } } });
+    });
+  } else {
+    await page.route("**/api/company-intelligence/AAPL**", async (route) => {
+      await route.fulfill({
+        status: 404,
+        json: { ok: false, state: "error", error: { code: "not_found", message: "Company intelligence is not covered", retryable: false } },
+      });
+    });
+  }
+  if (options.v1 !== "overlay") {
+    await page.route("**/api/company-theme-context/AAPL**", async (route) => {
+      await route.fulfill({
+        status: 404,
+        json: { ok: false, state: "error", error: { code: "not_found", message: "Theme context is not covered", retryable: false } },
+      });
+    });
+    await page.route("**/api/company-institutional-context/AAPL**", async (route) => {
+      await route.fulfill({
+        status: 404,
+        json: { ok: false, state: "error", error: { code: "not_found", message: "Institutional context is not covered", retryable: false } },
+      });
+    });
+  }
   await page.goto("/analysis?symbol=AAPL&page=intelligence");
   await expect(page.locator(".ci-page")).toBeVisible({ timeout: 15_000 });
+  return { releaseV1 };
 }
 
 test("AAPL intelligence opens the verified FY2026 Q3 event workspace", async ({ page }, testInfo) => {
@@ -846,12 +892,18 @@ test("AAPL intelligence opens the verified FY2026 Q3 event workspace", async ({ 
   await expect(page.locator(".ci-honest")).toContainText("unlicensed");
   await expect(page.locator(".ci-honest")).toContainText("absent");
   await expect(page.locator(".ci-honest")).toContainText("not joined");
+  await expect(page.locator(".ci-theme-card")).toHaveCount(0);
+  await expect(page.locator(".ci-inst-card")).toHaveCount(0);
+  await expect(page.locator(".ci-page")).not.toContainText("Current event");
+  await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-aapl-brief.png`), fullPage: false });
 
   await page.getByRole("button", { name: "Revenue $109.4B · +16%" }).click();
   await expect(page.locator(".ci-receipt-card")).toHaveAttribute("data-ci-receipt-state", "byte_replayed");
   await expect(page.locator(".ci-evidence")).toContainText("Byte-replayed");
   await expect(page.locator(".ci-evidence")).toContainText("109,417");
-  await expect(page.locator(".ci-evidence-note")).toHaveCount(0);
+  await expect(page.locator(".ci-evidence-note")).toContainText("producer-issued receipt");
+  await expect(page.locator(".ci-evidence-note")).toContainText("did not recompute");
+  await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-aapl-revenue-receipt.png`), fullPage: false });
 
   await closeEvidenceOverlay(page);
   await page.getByRole("button", { name: /Q4 revenue growth/ }).click();
@@ -862,12 +914,14 @@ test("AAPL intelligence opens the verified FY2026 Q3 event workspace", async ({ 
   await page.locator(".ci-lenses").getByRole("tab", { name: "Results" }).click();
   await expect(page.locator("#ci-panel-results")).toContainText("No beat/miss");
   await expect(page.locator("#ci-panel-results")).toContainText("$109.4B");
+  await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-aapl-results.png`), fullPage: false });
 
   await closeEvidenceOverlay(page);
   await page.locator(".ci-lenses").getByRole("tab", { name: "Sources" }).click();
   await expect(page.locator("[data-ci-source-kind='issuer_release']")).toContainText("8-K / Exhibit 99.1");
   await expect(page.locator("[data-ci-source-kind='transcript']")).toContainText("2026Q3");
   await expect(page.locator("[data-ci-source-kind='issuer_release']")).toContainText("0000320193-26-000018");
+  await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-aapl-sources.png`), fullPage: false });
 
   await closeEvidenceOverlay(page);
   await page.locator(".ci-lenses").getByRole("tab", { name: "Transcript" }).click();
@@ -877,6 +931,7 @@ test("AAPL intelligence opens the verified FY2026 Q3 event workspace", async ({ 
   await expectNoDocumentOverflow(page);
   expect(errors).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-aapl-event-workspace.png`), fullPage: false });
+  await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-aapl-transcript.png`), fullPage: false });
 });
 
 test("AAPL workspace correction advances generation without changing event identity", async ({ page }, testInfo) => {
@@ -914,7 +969,60 @@ test("AAPL workspace remains usable in Chinese without overflow", async ({ page 
   await page.getByRole("button", { name: "查看凭证" }).click();
   await expect(page.locator(".ci-evidence")).toHaveAttribute("aria-hidden", "false");
   expect((await close.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await closeEvidenceOverlay(page);
+  await page.getByRole("button", { name: /营收/ }).click();
+  await expect(page.locator(".ci-evidence-note")).toContainText("生产者凭证");
+  await expect(page.locator(".ci-evidence-note")).toContainText("并未根据文档字节重新计算");
+  expect((await close.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
   await expectNoDocumentOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("mobile-aapl-event-workspace-zh.png"), fullPage: false });
+});
+
+test("AAPL last-verified state is visibly stale, not a live current event", async ({ page }, testInfo) => {
+  await openAaplWorkspace(page, aaplWorkspacePayload({ state: "stale" }));
+  const root = page.locator(".ci-page");
+  await expect(root).toHaveAttribute("data-ci-freshness", "stale");
+  await expect(page.locator(".ci-live-dot")).toHaveClass(/stale/);
+  await expect(page.locator(".ci-hero")).toContainText("Last verified");
+  await expect(page.locator("[data-ci-stale-banner]")).toContainText("Last verified · upstream temporarily unavailable");
+  await expect(page.locator(".ci-page")).not.toContainText("Current event");
+  await expect(page.locator(".ci-brief")).toContainText("$109.4B");
+  await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-aapl-stale.png`), fullPage: false });
+});
+
+test("AAPL v2 brief renders while v1 is still parked", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.endsWith("desktop"), "one desktop independence contract is sufficient");
+  const { releaseV1 } = await openAaplWorkspace(page, aaplWorkspacePayload(), { v1: "park" });
+  try {
+    await expect(page.locator(".ci-page")).toHaveAttribute("data-ci-plane", "event_workspace.v1");
+    await expect(page.locator(".ci-brief")).toContainText("$109.4B");
+    await expect(page.locator(".ci-brief")).toContainText("9–11%");
+    await expect(page.locator(".ci-theme-card")).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-aapl-v2-without-v1.png`), fullPage: false });
+  } finally {
+    releaseV1();
+  }
+});
+
+test("AAPL v1 score overlay cannot populate current Brief, Results, or Sources", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.endsWith("desktop"), "one desktop overlay isolation contract is sufficient");
+  await openAaplWorkspace(page, aaplWorkspacePayload(), { v1: "overlay" });
+  await expect(page.locator(".ci-brief")).toContainText("$109.4B");
+  await page.locator(".ci-lenses").getByRole("tab", { name: "History" }).click();
+  await expect(page.locator("#ci-panel-history")).toContainText("cie_d8488221fd8c710c53d6537d");
+  await page.locator(".ci-lenses").getByRole("tab", { name: "Brief" }).click();
+  await expect(page.locator(".ci-brief")).toContainText("$109.4B");
+  await expect(page.locator(".ci-brief")).not.toContainText("14");
+  await expect(page.locator(".ci-brief")).not.toContainText(/beats?/i);
+  await expect(page.locator(".ci-honest")).not.toContainText("14");
+  await expect(page.locator(".ci-theme-card")).toHaveCount(0);
+  await expect(page.locator(".ci-inst-card")).toHaveCount(0);
+  await page.locator(".ci-lenses").getByRole("tab", { name: "Results" }).click();
+  await expect(page.locator("#ci-panel-results")).toContainText("$109.4B");
+  await expect(page.locator("#ci-panel-results")).not.toContainText("14");
+  await page.locator(".ci-lenses").getByRole("tab", { name: "Sources" }).click();
+  await expect(page.locator("#ci-panel-sources")).toContainText("8-K / Exhibit 99.1");
+  await expect(page.locator("#ci-panel-sources")).not.toContainText("14");
+  await expect(page.locator("#ci-panel-sources")).not.toContainText(/score overlay/i);
 });
 

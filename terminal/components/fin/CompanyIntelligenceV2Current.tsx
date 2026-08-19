@@ -11,11 +11,10 @@ import {
   type EventWorkspacePresentedItem,
 } from "../../lib/eventWorkspacePresent";
 import type { EventWorkspaceResult } from "../../lib/eventWorkspace";
+import { tickerPeriodAliasFromWorkspace } from "../../lib/eventWorkspace";
 import CompanySourceManifest from "./CompanySourceManifest";
 import EvidenceRail, { type CompanyEvidenceSelection } from "./EvidenceRail";
 import TranscriptSearchWorkspace from "./TranscriptSearchWorkspace";
-import CompanyThemeContextCard from "./CompanyThemeContextCard";
-import CompanyInstitutionalContextCard from "./CompanyInstitutionalContextCard";
 import { openMastermindBrainForSymbol } from "../../lib/mastermindBrain";
 import type { TranscriptOpenTarget } from "../../lib/transcriptSearch";
 
@@ -88,6 +87,7 @@ function workspaceStubEvent(presented: EventWorkspacePresented, ticker: string, 
 function receiptColor(state: EventWorkspacePresentedItem["evidence"]["receipt_state"]): string {
   if (state === "byte_replayed") return "var(--rcpt-exact)";
   if (state === "address_only") return "var(--rcpt-superseded)";
+  if (state === "status_only") return "var(--rcpt-meta)";
   return "var(--rcpt-absent)";
 }
 
@@ -245,9 +245,13 @@ export default function CompanyIntelligenceV2Current({
       fiscal_quarter: result.workspace.fiscal_period.quarter,
     },
   ];
-  const lifecycleLabel = presented.lifecycle_state === "corrected"
-    ? pick(zh, "Corrected", "已更正")
-    : pick(zh, "Current event", "当期事件");
+  const lifecycleLabel = result.state === "stale"
+    ? pick(zh, "Last verified", "最近验证")
+    : presented.lifecycle_state === "corrected"
+      ? pick(zh, "Corrected", "已更正")
+      : pick(zh, "Verified event", "已验证事件");
+  const freshness = result.state === "stale" ? "stale" : "live";
+  const eventAlias = tickerPeriodAliasFromWorkspace(result.workspace, ticker);
 
   return (
     <div
@@ -256,6 +260,8 @@ export default function CompanyIntelligenceV2Current({
       data-ci-event-id={presented.event_id}
       data-ci-generation-id={presented.generation_id}
       data-ci-transcript-id={txId ?? ""}
+      data-ci-freshness={freshness}
+      data-ci-event-alias={eventAlias ?? ""}
     >
       <header className="ci-hero">
         <div className="ci-hero-main">
@@ -265,7 +271,7 @@ export default function CompanyIntelligenceV2Current({
               <div className="ci-title-line">
                 <h2>{displayName}</h2>
                 <span className="ci-ticker num">{ticker}</span>
-                <span className="fin-tag" style={{ "--c": "var(--rcpt-exact)" } as React.CSSProperties}>{lifecycleLabel}</span>
+                <span className="fin-tag" style={{ "--c": freshness === "stale" ? "var(--warn)" : "var(--rcpt-exact)" } as React.CSSProperties}>{lifecycleLabel}</span>
               </div>
               <p data-ci-glance-title="">{pick(zh, "Company Intelligence", "公司情报")} · {glance}</p>
             </div>
@@ -276,7 +282,7 @@ export default function CompanyIntelligenceV2Current({
               <select
                 value={presented.event_id}
                 disabled
-                aria-label={pick(zh, "Current event from workspace aliases", "来自工作区别名的当期事件")}
+                aria-label={pick(zh, "Event selected from workspace aliases", "来自工作区别名的事件")}
               >
                 <option value={presented.event_id}>{presented.period_label} · {presented.event_date}</option>
               </select>
@@ -295,11 +301,23 @@ export default function CompanyIntelligenceV2Current({
           </div>
         </div>
         <div className="ci-provenance-bar">
-          <span><i className="ci-live-dot" />{pick(zh, "As known at", "截至")} <time className="num" dateTime={presented.event_date}>{fmtDate(presented.event_date)}</time></span>
+          <span>
+            <i className={`ci-live-dot${freshness === "stale" ? " stale" : ""}`} />
+            {freshness === "stale"
+              ? pick(zh, "Last verified", "最近验证")
+              : pick(zh, "As known at", "截至")}
+            {" "}
+            <time className="num" dateTime={presented.event_date}>{fmtDate(presented.event_date)}</time>
+          </span>
           <span>{pick(zh, "Generation", "版本")} <code>{presented.generation_id.slice(0, 12)}</code></span>
           <span>{pick(zh, "Authority", "权限")} <b>{pick(zh, "Context only", "仅供背景参考")}</b></span>
           <span>{pick(zh, "Plane", "平面")} <code>event_workspace.v1</code></span>
         </div>
+        {freshness === "stale" && (
+          <p className="ci-stale-banner" role="status" data-ci-stale-banner="">
+            {pick(zh, "Last verified · upstream temporarily unavailable", "最近验证 · 上游暂时不可用")}
+          </p>
+        )}
       </header>
 
       <nav className="ci-lenses" role="tablist" aria-label={pick(zh, "Company intelligence lenses", "公司情报视图")}>
@@ -336,7 +354,7 @@ export default function CompanyIntelligenceV2Current({
             <div className="ci-brief">
               <section className="ci-stance">
                 <div className="ci-section-label">
-                  <span>{pick(zh, "CURRENT EVENT", "当期事件")}</span>
+                  <span>{pick(zh, "EVENT", "事件")}</span>
                   <small>{pick(zh, "Source-backed facts · not a model summary", "来源支持的事实 · 非模型摘要")}</small>
                 </div>
                 <p className="ci-glance-lede">{glance}</p>
@@ -360,20 +378,6 @@ export default function CompanyIntelligenceV2Current({
                   ))}
                 </div>
               </section>
-              <CompanyThemeContextCard
-                ticker={ticker}
-                selectedEventId={presented.event_id}
-                companyIntelligenceGenerationId={v1?.generation_id ?? presented.generation_id}
-                latestEventId={presented.event_id}
-                selectedEventLabel={presented.period_label}
-              />
-              <CompanyInstitutionalContextCard
-                ticker={ticker}
-                selectedEventId={presented.event_id}
-                companyIntelligenceGenerationId={v1?.generation_id ?? presented.generation_id}
-                latestEventId={presented.event_id}
-                selectedEventLabel={presented.period_label}
-              />
               <section className="ci-coverage">
                 <div>
                   <strong>{pick(zh, "Current sources", "当期来源")}</strong>
@@ -415,7 +419,7 @@ export default function CompanyIntelligenceV2Current({
               </div>
               <p className="ci-event-identity">
                 <code>{presented.event_id}</code>
-                <span>AAPL/{result.workspace.fiscal_period.year}Q{result.workspace.fiscal_period.quarter}</span>
+                <span>{eventAlias ?? presented.period_label}</span>
               </p>
               {txId ? (
                 <div className="ci-transcript-launch">

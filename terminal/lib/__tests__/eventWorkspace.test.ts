@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  __expireEventWorkspaceCacheForTests,
   __resetEventWorkspaceCacheForTests,
   normalizeEventWorkspace,
   normalizeEventWorkspaceManifest,
@@ -140,6 +141,130 @@ describe("normalizeEventWorkspace golden AAPL", () => {
   });
 });
 
+function cloneGolden(): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(GOLDEN));
+}
+
+function revenueFact(payload: Record<string, unknown>): Record<string, unknown> {
+  return (payload.facts as Array<Record<string, unknown>>).find((row) => row.fact_id === "fact_revenue_gaap")!;
+}
+
+function firstClaim(payload: Record<string, unknown>): Record<string, unknown> {
+  return (payload.claims as Array<Record<string, unknown>>)[0];
+}
+
+function asAddressOnly(span: Record<string, unknown>): Record<string, unknown> {
+  span.receipt_state = "address_only";
+  span.locator = { kind: "table_cell", table: "income", row: 1, column: 2 };
+  span.receipt = null;
+  span.text_sha256 = null;
+  span.unreplayable_reason = "document bytes are not held by this estate";
+  return span;
+}
+
+describe("normalizeEventWorkspace contract mutations", () => {
+  it("rejects a fact with no span and no typed absence", () => {
+    const payload = cloneGolden();
+    const fact = revenueFact(payload);
+    delete fact.source_span;
+    delete fact.typed_absence;
+    expect(normalizeEventWorkspace(payload)).toBeNull();
+  });
+
+  it("rejects a claim with no span and no typed absence", () => {
+    const payload = cloneGolden();
+    const claim = firstClaim(payload);
+    delete claim.source_span;
+    delete claim.typed_absence;
+    expect(normalizeEventWorkspace(payload)).toBeNull();
+  });
+
+  it("rejects a fact that carries both a span and a typed absence", () => {
+    const payload = cloneGolden();
+    const fact = revenueFact(payload);
+    fact.typed_absence = {
+      schema: "typed_absence.v1",
+      authority: "context_only",
+      reason: "no_span_addressable_evidence",
+      subject: "revenue",
+      detail: "both present",
+      event_id: FLAGSHIP,
+      document_id: null,
+      missing_fields: [],
+    };
+    expect(normalizeEventWorkspace(payload)).toBeNull();
+  });
+
+  it("rejects a byte_replayed span with no receipt", () => {
+    const payload = cloneGolden();
+    (revenueFact(payload).source_span as Record<string, unknown>).receipt = null;
+    expect(normalizeEventWorkspace(payload)).toBeNull();
+  });
+
+  it("rejects a byte_replayed span with a missing receipt key", () => {
+    const payload = cloneGolden();
+    const receipt = (revenueFact(payload).source_span as Record<string, unknown>).receipt as Record<string, unknown>;
+    delete receipt.segment_sha256;
+    expect(normalizeEventWorkspace(payload)).toBeNull();
+  });
+
+  it("rejects a span whose text_sha disagrees with its receipt", () => {
+    const payload = cloneGolden();
+    (revenueFact(payload).source_span as Record<string, unknown>).text_sha256 = "c".repeat(64);
+    expect(normalizeEventWorkspace(payload)).toBeNull();
+  });
+
+  it("rejects a span whose locator bytes disagree with its receipt", () => {
+    const payload = cloneGolden();
+    const span = revenueFact(payload).source_span as Record<string, unknown>;
+    (span.locator as Record<string, unknown>).span_start_byte = 0;
+    expect(normalizeEventWorkspace(payload)).toBeNull();
+  });
+
+  it("rejects address_only that still carries a receipt", () => {
+    const payload = cloneGolden();
+    const span = asAddressOnly(revenueFact(payload).source_span as Record<string, unknown>);
+    span.receipt = {
+      source_sha256: "d".repeat(64),
+      segment_index: 0,
+      segment_sha256: "e".repeat(64),
+      segment_bytes: 10,
+      span_start_byte: 0,
+      span_end_byte: 1,
+      text_sha256: "f".repeat(64),
+    };
+    expect(normalizeEventWorkspace(payload)).toBeNull();
+  });
+
+  it("rejects address_only that still carries text_sha", () => {
+    const payload = cloneGolden();
+    const span = asAddressOnly(revenueFact(payload).source_span as Record<string, unknown>);
+    span.text_sha256 = "a".repeat(64);
+    expect(normalizeEventWorkspace(payload)).toBeNull();
+  });
+
+  it("rejects address_only without unreplayable_reason", () => {
+    const payload = cloneGolden();
+    const span = asAddressOnly(revenueFact(payload).source_span as Record<string, unknown>);
+    span.unreplayable_reason = "";
+    expect(normalizeEventWorkspace(payload)).toBeNull();
+  });
+
+  it("rejects an unknown typed-absence reason", () => {
+    const payload = cloneGolden();
+    const questions = (payload.facts as Array<Record<string, unknown>>).find((row) => row.metric === "questions_count")!;
+    (questions.typed_absence as Record<string, unknown>).reason = "made_up_reason";
+    expect(normalizeEventWorkspace(payload)).toBeNull();
+  });
+
+  it("rejects a typed absence for a different event_id", () => {
+    const payload = cloneGolden();
+    const questions = (payload.facts as Array<Record<string, unknown>>).find((row) => row.metric === "questions_count")!;
+    (questions.typed_absence as Record<string, unknown>).event_id = PRIOR;
+    expect(normalizeEventWorkspace(payload)).toBeNull();
+  });
+});
+
 describe("presentEventWorkspace", () => {
   it("formats the golden AAPL glance from payload values, never overlay 14 or beat/miss", () => {
     const workspace = normalizeEventWorkspace(GOLDEN, FLAGSHIP, GEN)!;
@@ -171,6 +296,26 @@ describe("presentEventWorkspace", () => {
     expect(presented.transcript_id).toBe("2026Q3");
     expect(presented.reported[0]?.evidence.receipt_state).toBe("byte_replayed");
     expect(presented.guidance[0]?.evidence.receipt_state).toBe("byte_replayed");
+    expect(presented.facts.find((item) => item.id === "fact_questions_count")?.evidence.typed_absence?.reason)
+      .toBe("no_span_addressable_evidence");
+    expect(presented.completeness.find((item) => item.id === "completeness:consensus")?.evidence.typed_absence?.reason)
+      .toBe("missing_source");
+    expect(presented.completeness.find((item) => item.id === "completeness:reaction")?.evidence.receipt_state)
+      .toBe("status_only");
+    expect(presented.completeness.find((item) => item.id === "completeness:reaction")?.evidence.typed_absence)
+      .toBeNull();
+    const presentedAbsences = [
+      ...presented.reported, ...presented.guidance, ...presented.watch, ...presented.facts, ...presented.deltas, ...presented.completeness,
+    ].map((item) => item.evidence.typed_absence?.reason).filter((reason): reason is string => Boolean(reason));
+    const workspaceAbsenceReasons = [
+      ...workspace.facts.map((fact) => fact.typed_absence?.reason),
+      ...workspace.claims.map((claim) => claim.typed_absence?.reason),
+      ...workspace.guidance.map((item) => item.typed_absence?.reason),
+      workspace.completeness.consensus.typed_absence?.reason,
+      workspace.completeness.slides.typed_absence?.reason,
+      workspace.completeness.reaction.typed_absence?.reason,
+    ].filter((reason): reason is string => Boolean(reason));
+    expect(presentedAbsences.every((reason) => workspaceAbsenceReasons.includes(reason))).toBe(true);
   });
 });
 
@@ -246,6 +391,32 @@ describe("resolveCurrentEventWorkspaceFromR2", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe("not_found");
+  });
+
+  it("returns last-good as stale when the marker becomes unavailable", async () => {
+    const q3 = workspaceBody();
+    const manifest = manifestFor([{ eventId: FLAGSHIP, body: q3, aliases: ["AAPL/2026Q3"] }]);
+    let live = true;
+    installR2((url) => {
+      if (!live) return new Response("down", { status: 503 });
+      if (url.endsWith("/event_workspaces/manifest.json") || url.includes(`/generations/${GEN}/manifest.json`)) {
+        return jsonResponse(manifest);
+      }
+      if (url.endsWith(`/workspaces/${FLAGSHIP}.json`)) return bytesResponse(q3.bytes);
+      return new Response("missing", { status: 404 });
+    });
+    const first = await resolveCurrentEventWorkspaceFromR2("AAPL", R2);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.state).toBe("ready");
+    __expireEventWorkspaceCacheForTests();
+    live = false;
+    const second = await resolveCurrentEventWorkspaceFromR2("AAPL", R2);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.state).toBe("stale");
+    expect(second.event_id).toBe(FLAGSHIP);
+    expect(second.workspace.generation_id).toBe(GEN);
   });
 });
 

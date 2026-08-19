@@ -42,14 +42,45 @@ export interface EventWorkspaceSpanLocator {
   role?: string | null;
 }
 
+export const EVENT_WORKSPACE_RECEIPT_KEYS = [
+  "source_sha256",
+  "segment_index",
+  "segment_sha256",
+  "segment_bytes",
+  "span_start_byte",
+  "span_end_byte",
+  "text_sha256",
+] as const;
+
+export const EVENT_WORKSPACE_ABSENCE_REASONS = new Set([
+  "no_source_document",
+  "no_transcript",
+  "no_primary_release",
+  "no_span_addressable_evidence",
+  "document_bytes_not_held",
+  "scanned_image_no_text_layer",
+  "unjoinable_filing_identity",
+  "speaker_unresolvable",
+  "slide_family_discontinued",
+  "superseded_by_duplicate",
+  "missing_basis",
+  "missing_units",
+  "missing_period",
+  "missing_source",
+]);
+
+export const EVENT_WORKSPACE_LOCATOR_KINDS = new Set(["text_span", "table_cell", "slide_region"]);
+export const EVENT_WORKSPACE_REPLAYABLE_LOCATOR_KINDS = new Set(["text_span"]);
+const LOCATOR_ALIASES: Record<string, string> = { transcript_segment: "text_span" };
+
 export interface EventWorkspaceSpanReceipt {
-  source_sha256?: string;
-  text_sha256?: string;
-  segment_sha256?: string;
-  segment_index?: number;
-  segment_bytes?: number;
-  span_start_byte?: number;
-  span_end_byte?: number;
+  source_sha256: string;
+  segment_index: number;
+  segment_sha256: string;
+  segment_bytes: number;
+  span_start_byte: number;
+  span_end_byte: number;
+  text_sha256: string;
 }
 
 export interface EventWorkspaceSourceSpan {
@@ -508,7 +539,7 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-function normalizeAbsence(raw: unknown): EventWorkspaceTypedAbsence | null {
+function normalizeAbsence(raw: unknown, expectedEventId: string): EventWorkspaceTypedAbsence | null {
   const obj = object(raw);
   if (!obj || obj.schema !== "typed_absence.v1" || obj.authority !== "context_only") return null;
   const reason = requiredString(obj.reason, 80);
@@ -516,6 +547,8 @@ function normalizeAbsence(raw: unknown): EventWorkspaceTypedAbsence | null {
   const detail = requiredString(obj.detail, MAX_TEXT);
   const eventId = requiredString(obj.event_id, MAX_ID);
   if (!reason || !subject || !detail || !eventId || !isEventWorkspaceEventId(eventId)) return null;
+  if (!EVENT_WORKSPACE_ABSENCE_REASONS.has(reason)) return null;
+  if (eventId !== expectedEventId) return null;
   const documentId = obj.document_id === null ? null : requiredString(obj.document_id, MAX_ID);
   if (obj.document_id !== null && obj.document_id !== undefined && !documentId) return null;
   if (!Array.isArray(obj.missing_fields) || obj.missing_fields.length > 24) return null;
@@ -537,6 +570,42 @@ function normalizeAbsence(raw: unknown): EventWorkspaceTypedAbsence | null {
   };
 }
 
+function locatorKind(raw: unknown): string | null {
+  const kind = requiredString(raw, 80);
+  if (!kind) return null;
+  const normalized = LOCATOR_ALIASES[kind] ?? kind;
+  return EVENT_WORKSPACE_LOCATOR_KINDS.has(normalized) ? normalized : null;
+}
+
+function exactReceipt(raw: unknown): EventWorkspaceSpanReceipt | null {
+  const obj = object(raw);
+  if (!obj) return null;
+  const keys = Object.keys(obj);
+  if (keys.length !== EVENT_WORKSPACE_RECEIPT_KEYS.length || EVENT_WORKSPACE_RECEIPT_KEYS.some((key) => !keys.includes(key))) {
+    return null;
+  }
+  const sourceSha = validSha(obj.source_sha256) ? obj.source_sha256 : null;
+  const segmentSha = validSha(obj.segment_sha256) ? obj.segment_sha256 : null;
+  const textSha = validSha(obj.text_sha256) ? obj.text_sha256 : null;
+  const segmentIndex = boundedInt(obj.segment_index, 0, 1_000_000);
+  const segmentBytes = boundedInt(obj.segment_bytes, 0, 50_000_000);
+  const start = boundedInt(obj.span_start_byte, 0, 50_000_000);
+  const end = boundedInt(obj.span_end_byte, 0, 50_000_000);
+  if (!sourceSha || !segmentSha || !textSha || segmentIndex === null || segmentBytes === null || start === null || end === null) {
+    return null;
+  }
+  if (!(start <= end) || end > segmentBytes) return null;
+  return {
+    source_sha256: sourceSha,
+    segment_index: segmentIndex,
+    segment_sha256: segmentSha,
+    segment_bytes: segmentBytes,
+    span_start_byte: start,
+    span_end_byte: end,
+    text_sha256: textSha,
+  };
+}
+
 function normalizeSpan(raw: unknown): EventWorkspaceSourceSpan | null {
   const obj = object(raw);
   if (!obj || obj.schema !== "source_span.v1" || obj.authority !== "context_only") return null;
@@ -545,12 +614,14 @@ function normalizeSpan(raw: unknown): EventWorkspaceSourceSpan | null {
   const version = boundedInt(obj.document_version, 1, 10_000);
   if (!spanId || !documentId || version === null) return null;
   if (obj.receipt_state !== "byte_replayed" && obj.receipt_state !== "address_only") return null;
-  const excerpt = obj.display_excerpt === null ? null : requiredString(obj.display_excerpt, MAX_TEXT);
+  const excerpt = obj.display_excerpt === null || obj.display_excerpt === undefined
+    ? null
+    : requiredString(obj.display_excerpt, MAX_TEXT);
   if (obj.display_excerpt != null && !excerpt) return null;
-  const locatorRaw = object(obj.locator) ?? {};
-  const locator: EventWorkspaceSpanLocator = {
-    kind: requiredString(locatorRaw.kind, 80) ?? "text_span",
-  };
+  const locatorRaw = object(obj.locator);
+  const kind = locatorRaw ? locatorKind(locatorRaw.kind) : null;
+  if (!locatorRaw || !kind) return null;
+  const locator: EventWorkspaceSpanLocator = { kind };
   if (typeof locatorRaw.sub_kind === "string") locator.sub_kind = locatorRaw.sub_kind.slice(0, 80);
   if (typeof locatorRaw.segment_index === "number" && Number.isInteger(locatorRaw.segment_index)) {
     locator.segment_index = locatorRaw.segment_index;
@@ -563,34 +634,49 @@ function normalizeSpan(raw: unknown): EventWorkspaceSourceSpan | null {
   }
   if (typeof locatorRaw.speaker === "string") locator.speaker = locatorRaw.speaker.slice(0, 160);
   if (typeof locatorRaw.role === "string") locator.role = locatorRaw.role.slice(0, 80);
-  let receipt: EventWorkspaceSpanReceipt | null = null;
-  const receiptRaw = object(obj.receipt);
-  if (receiptRaw) {
-    receipt = {};
-    if (validSha(receiptRaw.source_sha256)) receipt.source_sha256 = receiptRaw.source_sha256;
-    if (validSha(receiptRaw.text_sha256)) receipt.text_sha256 = receiptRaw.text_sha256;
-    if (validSha(receiptRaw.segment_sha256)) receipt.segment_sha256 = receiptRaw.segment_sha256;
-    if (typeof receiptRaw.segment_index === "number") receipt.segment_index = receiptRaw.segment_index;
-    if (typeof receiptRaw.segment_bytes === "number") receipt.segment_bytes = receiptRaw.segment_bytes;
-    if (typeof receiptRaw.span_start_byte === "number") receipt.span_start_byte = receiptRaw.span_start_byte;
-    if (typeof receiptRaw.span_end_byte === "number") receipt.span_end_byte = receiptRaw.span_end_byte;
+  if (obj.receipt_state === "byte_replayed") {
+    if (!EVENT_WORKSPACE_REPLAYABLE_LOCATOR_KINDS.has(kind)) return null;
+    if (obj.unreplayable_reason != null) return null;
+    const receipt = exactReceipt(obj.receipt);
+    if (!receipt) return null;
+    const textSha = validSha(obj.text_sha256) ? obj.text_sha256 : null;
+    if (!textSha || textSha !== receipt.text_sha256) return null;
+    if (locator.segment_index !== receipt.segment_index) return null;
+    if (locator.span_start_byte !== receipt.span_start_byte) return null;
+    if (locator.span_end_byte !== receipt.span_end_byte) return null;
+    return {
+      schema: "source_span.v1",
+      span_id: spanId,
+      document_id: documentId,
+      document_version: version,
+      display_excerpt: excerpt,
+      receipt_state: "byte_replayed",
+      locator,
+      receipt,
+      text_sha256: textSha,
+      unreplayable_reason: null,
+      authority: "context_only",
+      rights_profile: obj.rights_profile === null || obj.rights_profile === undefined ? null : requiredString(obj.rights_profile, 80),
+    };
   }
-  const textSha = obj.text_sha256 === null ? null : validSha(obj.text_sha256) ? obj.text_sha256 : undefined;
-  if (textSha === undefined) return null;
-  if (obj.receipt_state === "byte_replayed" && !textSha) return null;
+  if (EVENT_WORKSPACE_REPLAYABLE_LOCATOR_KINDS.has(kind)) return null;
+  if (obj.receipt != null) return null;
+  if (obj.text_sha256 != null) return null;
+  const reason = requiredString(obj.unreplayable_reason, 240);
+  if (!reason) return null;
   return {
     schema: "source_span.v1",
     span_id: spanId,
     document_id: documentId,
     document_version: version,
     display_excerpt: excerpt,
-    receipt_state: obj.receipt_state,
+    receipt_state: "address_only",
     locator,
-    receipt,
-    text_sha256: textSha,
-    unreplayable_reason: obj.unreplayable_reason === null ? null : requiredString(obj.unreplayable_reason, 240),
+    receipt: null,
+    text_sha256: null,
+    unreplayable_reason: reason,
     authority: "context_only",
-    rights_profile: obj.rights_profile === null ? null : requiredString(obj.rights_profile, 80),
+    rights_profile: obj.rights_profile === null || obj.rights_profile === undefined ? null : requiredString(obj.rights_profile, 80),
   };
 }
 
@@ -604,7 +690,7 @@ function filingKey(raw: unknown): { cik: string; accession: string } | null | un
   return { cik, accession };
 }
 
-function normalizeCompletenessBlock(raw: unknown): EventWorkspaceCompletenessBlock | null {
+function normalizeCompletenessBlock(raw: unknown, eventId: string): EventWorkspaceCompletenessBlock | null {
   const obj = object(raw);
   if (!obj) return null;
   const status = requiredString(obj.status, 40);
@@ -621,25 +707,25 @@ function normalizeCompletenessBlock(raw: unknown): EventWorkspaceCompletenessBlo
     block.filing_key = key;
   }
   if ("typed_absence" in obj && obj.typed_absence != null) {
-    const absence = normalizeAbsence(obj.typed_absence);
+    const absence = normalizeAbsence(obj.typed_absence, eventId);
     if (!absence) return null;
     block.typed_absence = absence;
   }
   return block;
 }
 
-function spanOrAbsence(obj: JsonRecord): {
+function spanOrAbsence(obj: JsonRecord, eventId: string): {
   source_span: EventWorkspaceSourceSpan | null;
   typed_absence: EventWorkspaceTypedAbsence | null;
 } | null {
   const hasSpan = obj.source_span != null;
   const hasAbsence = obj.typed_absence != null;
-  if (hasSpan === hasAbsence) return hasSpan ? null : { source_span: null, typed_absence: null };
+  if (hasSpan === hasAbsence) return null;
   if (hasSpan) {
     const span = normalizeSpan(obj.source_span);
     return span ? { source_span: span, typed_absence: null } : null;
   }
-  const absence = normalizeAbsence(obj.typed_absence);
+  const absence = normalizeAbsence(obj.typed_absence, eventId);
   return absence ? { source_span: null, typed_absence: absence } : null;
 }
 
@@ -650,7 +736,7 @@ function normalizeFact(raw: unknown, eventId: string): EventWorkspaceFact | null
   const metric = requiredString(obj.metric, 80);
   const boundEvent = requiredString(obj.event_id, MAX_ID);
   if (!factId || !metric || boundEvent !== eventId) return null;
-  const evidence = spanOrAbsence(obj);
+  const evidence = spanOrAbsence(obj, eventId);
   if (!evidence) return null;
   const value = obj.value === undefined ? null : finiteNumber(obj.value);
   if (value === undefined) return null;
@@ -673,10 +759,10 @@ function normalizeFact(raw: unknown, eventId: string): EventWorkspaceFact | null
   };
 }
 
-function deltaSide(raw: unknown): EventWorkspaceDeltaValue | EventWorkspaceTypedAbsence | null | undefined {
+function deltaSide(raw: unknown, eventId: string): EventWorkspaceDeltaValue | EventWorkspaceTypedAbsence | null | undefined {
   if (raw == null) return null;
-  const absence = object(raw)?.schema === "typed_absence.v1" ? normalizeAbsence(raw) : null;
-  if (absence) return absence;
+  const absence = object(raw)?.schema === "typed_absence.v1" ? normalizeAbsence(raw, eventId) : null;
+  if (object(raw)?.schema === "typed_absence.v1") return absence ?? undefined;
   const obj = object(raw);
   if (!obj) return undefined;
   const value = finiteNumber(obj.value);
@@ -688,27 +774,27 @@ function deltaSide(raw: unknown): EventWorkspaceDeltaValue | EventWorkspaceTyped
   return { value, unit, basis };
 }
 
-function normalizeDelta(raw: unknown): EventWorkspaceDelta | null {
+function normalizeDelta(raw: unknown, eventId: string): EventWorkspaceDelta | null {
   const obj = object(raw);
   if (!obj || obj.schema !== "metric_delta.v1") return null;
   if (obj.basis_match !== false) return null;
   if ("beat" in obj || "miss" in obj || "beat_miss" in obj || "verdict" in obj) return null;
   const metric = requiredString(obj.metric, 80);
   if (!metric) return null;
-  const current = deltaSide(obj.current);
-  const prior = deltaSide(obj.prior);
-  const consensus = deltaSide(obj.consensus);
+  const current = deltaSide(obj.current, eventId);
+  const prior = deltaSide(obj.prior, eventId);
+  const consensus = deltaSide(obj.consensus, eventId);
   if (current === undefined || prior === undefined || consensus === undefined) return null;
   return { schema: "metric_delta.v1", metric, current, prior, consensus, basis_match: false };
 }
 
-function normalizeGuidance(raw: unknown): EventWorkspaceGuidance | null {
+function normalizeGuidance(raw: unknown, eventId: string): EventWorkspaceGuidance | null {
   const obj = object(raw);
   if (!obj || obj.schema !== "guidance_item.v1") return null;
   const metric = requiredString(obj.metric, 80);
   const status = requiredString(obj.status, 40);
   if (!metric || !status) return null;
-  const evidence = spanOrAbsence(obj);
+  const evidence = spanOrAbsence(obj, eventId);
   if (!evidence) return null;
   const low = finiteNumber(obj.low);
   const high = finiteNumber(obj.high);
@@ -725,14 +811,14 @@ function normalizeGuidance(raw: unknown): EventWorkspaceGuidance | null {
   };
 }
 
-function normalizeClaim(raw: unknown): EventWorkspaceClaim | null {
+function normalizeClaim(raw: unknown, eventId: string): EventWorkspaceClaim | null {
   const obj = object(raw);
   if (!obj || obj.schema !== "event_claim.v1") return null;
   const claimId = requiredString(obj.claim_id, MAX_ID);
   const text = requiredString(obj.text, MAX_TEXT);
   const kind = requiredString(obj.kind, 40);
   if (!claimId || !text || !kind) return null;
-  const evidence = spanOrAbsence(obj);
+  const evidence = spanOrAbsence(obj, eventId);
   if (!evidence) return null;
   return {
     schema: "event_claim.v1",
@@ -756,7 +842,7 @@ function isSafeHttpsUrl(value: unknown): value is string {
   }
 }
 
-function normalizeSource(raw: unknown): EventWorkspaceSource | null {
+function normalizeSource(raw: unknown, eventId: string): EventWorkspaceSource | null {
   const obj = object(raw);
   if (!obj) return null;
   const kind = requiredString(obj.kind, 40);
@@ -764,7 +850,7 @@ function normalizeSource(raw: unknown): EventWorkspaceSource | null {
   if (obj.receipt_state !== "byte_replayed" && obj.receipt_state !== "address_only" && obj.receipt_state !== "typed_absence") {
     return null;
   }
-  const absence = obj.typed_absence == null ? null : normalizeAbsence(obj.typed_absence);
+  const absence = obj.typed_absence == null ? null : normalizeAbsence(obj.typed_absence, eventId);
   if (obj.typed_absence != null && !absence) return null;
   if (obj.receipt_state === "typed_absence" && !absence) return null;
   const key = "filing_key" in obj ? filingKey(obj.filing_key) : null;
@@ -842,12 +928,12 @@ export function normalizeEventWorkspace(
   }
   const completenessRaw = object(obj.completeness);
   if (!completenessRaw) return null;
-  const release = normalizeCompletenessBlock(completenessRaw.release);
-  const filing = normalizeCompletenessBlock(completenessRaw.filing);
-  const transcript = normalizeCompletenessBlock(completenessRaw.transcript);
-  const slides = normalizeCompletenessBlock(completenessRaw.slides);
-  const consensus = normalizeCompletenessBlock(completenessRaw.consensus);
-  const reaction = normalizeCompletenessBlock(completenessRaw.reaction);
+  const release = normalizeCompletenessBlock(completenessRaw.release, eventId);
+  const filing = normalizeCompletenessBlock(completenessRaw.filing, eventId);
+  const transcript = normalizeCompletenessBlock(completenessRaw.transcript, eventId);
+  const slides = normalizeCompletenessBlock(completenessRaw.slides, eventId);
+  const consensus = normalizeCompletenessBlock(completenessRaw.consensus, eventId);
+  const reaction = normalizeCompletenessBlock(completenessRaw.reaction, eventId);
   if (!release || !filing || !transcript || !slides || !consensus || !reaction) return null;
   if (!Array.isArray(obj.facts) || obj.facts.length > MAX_FACTS) return null;
   const facts: EventWorkspaceFact[] = [];
@@ -859,28 +945,28 @@ export function normalizeEventWorkspace(
   if (!Array.isArray(obj.deltas) || obj.deltas.length > MAX_FACTS) return null;
   const deltas: EventWorkspaceDelta[] = [];
   for (const item of obj.deltas) {
-    const delta = normalizeDelta(item);
+    const delta = normalizeDelta(item, eventId);
     if (!delta) return null;
     deltas.push(delta);
   }
   if (!Array.isArray(obj.guidance) || obj.guidance.length > MAX_FACTS) return null;
   const guidance: EventWorkspaceGuidance[] = [];
   for (const item of obj.guidance) {
-    const row = normalizeGuidance(item);
+    const row = normalizeGuidance(item, eventId);
     if (!row) return null;
     guidance.push(row);
   }
   if (!Array.isArray(obj.claims) || obj.claims.length > MAX_CLAIMS) return null;
   const claims: EventWorkspaceClaim[] = [];
   for (const item of obj.claims) {
-    const claim = normalizeClaim(item);
+    const claim = normalizeClaim(item, eventId);
     if (!claim) return null;
     claims.push(claim);
   }
   if (!Array.isArray(obj.sources) || obj.sources.length > MAX_SOURCES) return null;
   const sources: EventWorkspaceSource[] = [];
   for (const item of obj.sources) {
-    const source = normalizeSource(item);
+    const source = normalizeSource(item, eventId);
     if (!source) return null;
     sources.push(source);
   }
@@ -980,6 +1066,13 @@ export function resolveWorkspaceEventId(eventId: string, aliases: Record<string,
   if (aliases[text]) return aliases[text];
   if (isEventWorkspaceEventId(text)) return text;
   return null;
+}
+
+export function tickerPeriodAliasFromWorkspace(workspace: EventWorkspace, ticker: string): string | null {
+  const symbol = normalizeCompanyIntelligenceSymbol(ticker);
+  if (!symbol) return null;
+  const pattern = tickerPeriodAliasPattern(symbol);
+  return workspace.aliases.find((alias) => pattern.test(alias)) ?? null;
 }
 
 export function transcriptIdFromWorkspace(workspace: EventWorkspace): string | null {
@@ -1170,4 +1263,10 @@ export async function getCurrentEventWorkspace(
 export function __resetEventWorkspaceCacheForTests(): void {
   manifestCache = null;
   workspaceCache.clear();
+}
+
+/** Test-only: expire TTLs so the next read must re-fetch while last-good remains. */
+export function __expireEventWorkspaceCacheForTests(): void {
+  if (manifestCache) manifestCache.at = 0;
+  for (const entry of workspaceCache.values()) entry.at = 0;
 }
