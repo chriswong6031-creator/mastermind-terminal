@@ -34,3 +34,15 @@ export async function injectLayoutFault(page: Page, fault: "list" | "save" | "de
 export async function renderAsGuest(page: Page, baseURL?: string) {
   await page.context().addCookies([{ name: "mm_e2e_guest", value: "1", url: baseURL ?? DEFAULT_BASE }]);
 }
+
+/**
+ * Force a locale before the app boots, the same way e2e/terminal-chrome-responsive.spec.ts does.
+ * `lib/i18n.tsx` reads `mm.lang` and the `data-lang` attribute, so both are set.
+ */
+export async function useLang(page: Page, locale: "en" | "zh") {
+  await page.addInitScript((l) => {
+    localStorage.setItem("mm.lang", l);
+    document.documentElement.setAttribute("data-lang", l);
+    document.documentElement.setAttribute("lang", l === "zh" ? "zh-CN" : "en");
+  }, locale);
+}

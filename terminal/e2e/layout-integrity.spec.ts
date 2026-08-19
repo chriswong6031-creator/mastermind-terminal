@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import { injectLayoutFault, isolateLayoutStore, renderAsGuest } from "./layoutStore";
+import { injectLayoutFault, isolateLayoutStore, renderAsGuest, useLang } from "./layoutStore";
 import { isPhoneViewport } from "./phoneChrome";
-import { openLayoutMenu } from "./terminalToolbar";
+import { chooseToolbarSplit, openLayoutMenu, toggleToolbarSync } from "./terminalToolbar";
 
 // Saved-layout integrity, in the browser, at all three contract viewports.
 //
@@ -146,6 +146,68 @@ test.describe("saved layouts", () => {
     await expect(menu.locator("[data-layout-delete-error]")).toBeVisible();
     await expect(menu.locator('[data-layout-row="Keeper"]')).toBeVisible();   // rolled back, not vanished
     expect((await inventory(page)).map((l) => l.name)).toEqual(["Keeper"]);
+  });
+
+  test("a loaded layout restores the workspace it saved, through the real UI", async ({ page, baseURL }, testInfo) => {
+    skipWithoutLayoutMenu(page);
+    await isolateLayoutStore(page, testInfo, baseURL);
+    await gotoTerminal(page);
+
+    // Build a workspace that is NOT the default, save it, then change it and load it back. The pure
+    // capture/apply contract is unit-tested in lib/__tests__/layoutConfig.test.ts; what this proves
+    // is the WIRING — that the shell captures the live workspace and re-applies all of it.
+    await chooseToolbarSplit(page, 4);
+    await expect(page.locator(".pane, .chart-pane").first()).toBeVisible();
+    await saveLayout(page, "Workspace A");
+    await expect((await openLayoutMenu(page)).locator('[data-layout-feedback="saved"]')).toBeVisible();
+
+    const configA = (await inventory(page)).find((l) => l.name === "Workspace A")!.config;
+    expect(configA.schemaVersion).toBe(2);
+    expect(configA.split).toBe(4);
+    expect(configA.panes).toHaveLength(4);
+    // The four fields the shipped v1 config silently dropped are now part of the contract…
+    for (const owned of ["sync", "split", "indParams", "hidden"]) expect(configA).toHaveProperty(owned);
+    // …and the device preference it used to overwrite is not.
+    expect(configA).not.toHaveProperty("favTF");
+
+    // Mutate: flip Sync away from what was saved, then collapse the grid.
+    await toggleToolbarSync(page);
+    await chooseToolbarSplit(page, 1);
+
+    const menu = await openLayoutMenu(page);
+    await menu.locator('[data-layout-row="Workspace A"]').click();
+
+    // Re-capturing the restored workspace must reproduce the stored contract exactly. Any field the
+    // shell fails to restore shows up here as a difference.
+    await saveLayout(page, "Workspace B");
+    await expect((await openLayoutMenu(page)).locator('[data-layout-feedback="saved"]')).toBeVisible();
+    const configB = (await inventory(page)).find((l) => l.name === "Workspace B")!.config;
+    expect(configB).toEqual(configA);
+  });
+
+  // Every string this wave adds ships as an EN/ZH LEX tuple, and the repo's verification law says a
+  // UI change is not done until zh is checked — specifically that neither language leaks into the
+  // other's view. Asserting the tuples render is deterministic where a screenshot is not.
+  test("new layout copy renders in zh, with no English leaking through", async ({ page, baseURL }, testInfo) => {
+    skipWithoutLayoutMenu(page);
+    await isolateLayoutStore(page, testInfo, baseURL);
+    await useLang(page, "zh");
+    await renderAsGuest(page, baseURL);
+    await gotoTerminal(page);
+
+    const guestMenu = await openLayoutMenu(page);
+    await expect(guestMenu.locator("[data-layout-gate]")).toContainText("注册免费账户即可保存图表布局");
+    await expect(guestMenu.locator("[data-layout-save] input")).toHaveAttribute("placeholder", "登录后可保存布局");
+    await expect(guestMenu.locator("[data-layout-gate]")).not.toContainText(/[A-Za-z]{4,}/);
+
+    // The outage line and its Retry, in zh — the states C2 added.
+    await page.context().clearCookies({ name: "mm_e2e_guest" });
+    await injectLayoutFault(page, "list", baseURL);
+    await gotoTerminal(page);
+    const menu = await openLayoutMenu(page);
+    await expect(menu.locator('[data-layout-status="unavailable"]')).toContainText("已存布局暂时不可用");
+    await expect(menu.locator("[data-layout-retry]")).toHaveText("重试");
+    await expect(menu.locator('[data-layout-status="unavailable"]')).not.toContainText("unavailable");
   });
 
   test("a read outage says unavailable, not 'no saved layouts'", async ({ page, baseURL }, testInfo) => {
