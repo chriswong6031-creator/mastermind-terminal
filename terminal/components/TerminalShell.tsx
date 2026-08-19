@@ -1126,6 +1126,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   );
   // ── custom scripts (Pine): the user's saved scripts + which are ENABLED on the chart + param overrides ──
   const [scripts, setScripts] = useState<UserScript[]>([]);
+  const [scriptsUnavailable, setScriptsUnavailable] = useState(false);
   const [enabledIds, setEnabledIds] = useState<string[]>([]);                           // enabled script ids (persisted 'mm.pineOn')
   const [pineParams, setPineParamsState] = useState<Record<string, Record<string, any>>>({}); // per-script overrides ('mm.pineParams')
   const loggedIn = !!email;
@@ -3782,13 +3783,26 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // ── custom-script wiring ──────────────────────────────────────────────────────────────────────
   // load scripts + enable-state + param overrides on mount (dual-tier: API for members, LS for guests)
   const scriptsLoadedRef = useRef(false);
+  // C7: a failed read must not overwrite the last-good library with []. `listScripts` now reports
+  // `unavailable` separately; on that answer we keep whatever is on screen and raise a flag the
+  // Indicator Library renders as "unavailable · Retry" instead of "No scripts yet".
+  //
+  // ONE loader serves both the mount read and the Retry button, so the two cannot disagree about
+  // what an outage does. `scriptsLoadedRef` is still set on failure: it gates the ?addScript= retry,
+  // which asks only "has the list settled", not "did it succeed".
+  const loadScripts = useCallback(async () => {
+    const result = await listScripts(loggedIn).catch(() => ({ status: "unavailable" as const }));
+    scriptsLoadedRef.current = true;
+    if (result.status === "unavailable") { setScriptsUnavailable(true); return false; }
+    setScripts(result.scripts);
+    setScriptsUnavailable(false);
+    return true;
+  }, [loggedIn]);
   useEffect(() => {
     setEnabledIds(enabledScriptIds());
     setPineParamsState(pineParamStore());
-    let alive = true;
-    listScripts(loggedIn).then((list) => { if (alive) { setScripts(list); scriptsLoadedRef.current = true; } }).catch(() => { if (alive) scriptsLoadedRef.current = true; });
-    return () => { alive = false; };
-  }, [loggedIn]);
+    void loadScripts();
+  }, [loadScripts]);
   // persist enable-state + overrides (both tiers use localStorage — mirrors mm.inds / mm.indParams).
   // skip the mount write so the pre-load default can't clobber the saved value.
   const pineOnMounted = useRef(false); const pinePMounted = useRef(false);
@@ -5319,7 +5333,8 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
             const entry = getSuiteModuleCatalogEntry(id);
             if (entry) setGuide({ suite: entry.suiteKey, mod: entry.moduleKey, label: entry.label });
           }}
-          scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
+          scripts={scripts} scriptsUnavailable={scriptsUnavailable} onRetryScripts={loadScripts}
+          enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
       )}
       {settingsKey && (isCmpKey(settingsKey)
         ? <CompareSettings sym={cmpSymOf(settingsKey)} cfg={compareCfg[cmpSymOf(settingsKey)] || defaultCmpCfg(0)} onChange={(patch) => setCompareCfg((c) => ({ ...c, [cmpSymOf(settingsKey)]: { ...(c[cmpSymOf(settingsKey)] || defaultCmpCfg(0)), ...patch } }))} onClose={() => setSettingsKey(null)} />
