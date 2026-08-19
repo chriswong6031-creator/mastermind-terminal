@@ -40,8 +40,8 @@ export interface CompanyIntelligencePageProps {
 interface LoadState {
   sym: string;
   nonce: number;
-  v1: CompanyIntelligenceResult | null;
-  v2: EventWorkspaceResult | null;
+  v1: CompanyIntelligenceResult | null | undefined;
+  v2: EventWorkspaceResult | null | undefined;
 }
 
 const LENSES: readonly Lens[] = ["brief", "transcript", "history", "topics", "sources"];
@@ -199,7 +199,7 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
   const zh = lang === "zh";
   const ticker = sym.trim().toUpperCase();
   const [retryNonce, setRetryNonce] = useState(0);
-  const [load, setLoad] = useState<LoadState>({ sym: "", nonce: -1, v1: null, v2: null });
+  const [load, setLoad] = useState<LoadState>({ sym: "", nonce: -1, v1: undefined, v2: undefined });
   const [lens, setLens] = useState<Lens>("brief");
   const [eventState, setEventState] = useState<{ sym: string; id: string }>({ sym: "", id: "" });
   const [evidence, setEvidence] = useState<CompanyEvidenceSelection | null>(null);
@@ -219,15 +219,21 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
 
   useEffect(() => {
     const controller = new AbortController();
+    setLoad({ sym: ticker, nonce: retryNonce, v1: undefined, v2: undefined });
     const v1Fail: CompanyIntelligenceResult = { ok: false, state: "error", error: { code: "upstream_unavailable", message: "Company intelligence request failed", retryable: true } };
     const v2Fail: EventWorkspaceResult = { ok: false, state: "error", available: false, error: { code: "upstream_unavailable", message: "Event workspace request failed", retryable: true } };
-    Promise.all([
-      getCompanyIntelligence(ticker, { signal: controller.signal, retryNonce }).catch(() => v1Fail),
-      getCurrentEventWorkspace(ticker, { signal: controller.signal, retryNonce }).catch(() => v2Fail),
-    ]).then(([v1, v2]) => {
-      if (controller.signal.aborted) return;
-      setLoad({ sym: ticker, nonce: retryNonce, v1, v2 });
-    });
+    void getCurrentEventWorkspace(ticker, { signal: controller.signal, retryNonce })
+      .catch(() => v2Fail)
+      .then((v2) => {
+        if (controller.signal.aborted) return;
+        setLoad((current) => current.sym === ticker && current.nonce === retryNonce ? { ...current, v2 } : current);
+      });
+    void getCompanyIntelligence(ticker, { signal: controller.signal, retryNonce })
+      .catch(() => v1Fail)
+      .then((v1) => {
+        if (controller.signal.aborted) return;
+        setLoad((current) => current.sym === ticker && current.nonce === retryNonce ? { ...current, v1 } : current);
+      });
     return () => controller.abort();
   }, [retryNonce, ticker]);
 
@@ -256,9 +262,10 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
     return () => onEvidenceOpenChange?.(false);
   }, [evidenceOpen, evidenceOverlay, onEvidenceOpenChange]);
 
-  const loading = load.sym !== ticker || load.nonce !== retryNonce;
-  const result = loading ? null : load.v1;
-  const v2 = loading ? null : load.v2;
+  const v2Pending = load.sym !== ticker || load.nonce !== retryNonce || load.v2 === undefined;
+  const v1Pending = load.sym !== ticker || load.nonce !== retryNonce || load.v1 === undefined;
+  const result = v1Pending ? null : load.v1 ?? null;
+  const v2 = v2Pending ? null : load.v2 ?? null;
   const context = result?.ok ? result.context : null;
   const events = useMemo(() => context ? allEvents(context) : [], [context]);
   const transcriptSearchEvents = useMemo(() => events.map((candidate) => ({
@@ -309,7 +316,7 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
     window.location.assign(`/terminal?symbol=${encodeURIComponent(ticker)}&ai=1`);
   }, [ticker]);
 
-  if (loading) {
+  if (v2Pending) {
     return (
       <div className="ci-page" aria-busy="true">
         <span className="fin-skel-sr">{pick(zh, `Loading ${ticker} company intelligence…`, `正在加载 ${ticker} 公司情报…`)}</span>
@@ -342,6 +349,16 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
             <button className="btn btn-primary" onClick={() => setRetryNonce(Date.now())}>{pick(zh, "Retry", "重试")}</button>
           ) : undefined}
         />
+      </div>
+    );
+  }
+
+  if (v2 && !v2.ok && v2.error.code === "not_found" && v1Pending) {
+    return (
+      <div className="ci-page" aria-busy="true">
+        <span className="fin-skel-sr">{pick(zh, `Loading ${ticker} company intelligence…`, `正在加载 ${ticker} 公司情报…`)}</span>
+        <div className="ci-skeleton-head fin-skel" aria-hidden />
+        <div className="ci-skeleton-grid" aria-hidden><div className="fin-skel" /><div className="fin-skel" /></div>
       </div>
     );
   }

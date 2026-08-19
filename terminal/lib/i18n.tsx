@@ -787,6 +787,9 @@ export const LEX: Record<string, [string, string]> = {
   ],
   scr2ErrTitle: ["Could not load the scan", "无法加载扫描"],
   scr2ErrWhy: ["The market manifest failed to load — check your connection.", "行情清单加载失败——请检查网络连接。"],
+  // 404/410: the file answered, and the answer was "I am not here". A different fact from a
+  // failed request, so it gets its own line rather than blaming the user's connection.
+  scr2ErrWhyAbsent: ["The market manifest is not published right now.", "行情清单目前尚未发布。"],
   scr2Retry: ["Retry", "重试"],
   // chart frame bar (items 6, 7, 8)
   gotoDate: ["Go to date", "跳转到日期"],
@@ -1373,7 +1376,12 @@ export const LEX: Record<string, [string, string]> = {
   // ─── F3 smart dialogs ─────────────────────────────────────────────────────
   searchTitle: ["Symbol search", "代码搜索"],
   addSymbolTitle: ["Add symbol", "添加代码"],
-  searchInputPlaceholder: ["Symbol, ISIN, or CUSIP", "代码、ISIN或CUSIP"],
+  // The placeholder is a capability promise. scoreSymbol() ranks on ticker, English name and
+  // Chinese name ONLY — there is no ISIN/CUSIP field anywhere in the search contract, so the
+  // former "Symbol, ISIN, or CUSIP" told a user to paste an identifier that could only ever
+  // answer "No match". Identifier lookup stays a future capability (it needs licensed
+  // first-party identifier data); until it exists the placeholder names what actually works.
+  searchInputPlaceholder: ["Symbol or company name", "代码或公司名称"],
   searchRecentEmpty: ["No symbols viewed yet", "暂无最近浏览的标的"],
   searchRecentHeader: ["Recently viewed", "最近浏览"],
   searchShowRecent: ["Recent", "最近"],
