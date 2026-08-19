@@ -631,9 +631,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const symbolRef = useRef(symbol);                          // current symbol (Effect 1 mounts once; symbol changes in Effect 2)
   const companyNameRef = useRef(companyName);                 // proper name for the snapshot header (zh preferred over English)
   const renderSignalsRef = useRef<() => void>(() => {});
-  // B7: the suite-runtime preload effect repaints through these, so it can live above the
-  // definitions it calls without capturing a stale closure.
-  const rerenderOverlaysRef = useRef<(() => void) | null>(null);
+  // B7: the suite-runtime loader repaints through this, so it can live above the definition it
+  // calls without capturing a stale closure.
   const applySuitePaintRef = useRef<(() => void) | null>(null);
   // ── B7: suite COMPUTATION is fetched per suite, on first use ───────────────────────────────
   //
@@ -2046,7 +2045,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ind fills, price tag) — they gate themselves off while a sub-pane is maximized and must clear/
   // restore NOW, not on the next pan/zoom.
   const rerenderOverlays = () => { try { renderSignalsRef.current(); renderRef.current(); renderTagRef.current?.(); } catch {} };
-  rerenderOverlaysRef.current = rerenderOverlays;
 
   const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { if (panesMeta.current.length <= 1) return; ctl.maximized = key; ctl.collapsed.delete(key); } applyStretch(); rerenderOverlays(); requestAnimationFrame(() => { measure(); rerenderOverlays(); }); };
   const doCollapse = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; ctl.maximized = null; if (ctl.collapsed.has(key)) ctl.collapsed.delete(key); else ctl.collapsed.add(key); applyStretch(); rerenderOverlays(); requestAnimationFrame(() => { measure(); rerenderOverlays(); }); };
