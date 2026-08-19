@@ -1777,7 +1777,23 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   }, []);
   // Persist under the CURRENT owner. `wlOwner` is a dependency so the swap itself re-persists,
   // which is what carries a guest's promoted lists into the account they just signed into.
+  //
+  // MOUNT-SKIP, for the reason every other persist effect in this file already carries one: on the
+  // mount pass `lists` still holds the useState seed (`{ Default: <server rows> }`) and the restore
+  // effect above has not committed yet, so writing here CLOBBERS the saved payload with a
+  // single-list default for the width of the mount→restore window. Measured directly, not
+  // theorised: sampling the owner slot straight after navigation shows
+  // ["Default","Gold Miners","Space"] → ["Default"] → ["Default","Gold Miners","Space"]. A reload
+  // or a closed tab inside that window permanently destroyed a guest's named lists, and it is what
+  // made `watchlist-server-migration` fail on CI once the e2e seed stopped being re-applied on
+  // every navigation and could no longer mask it.
+  //
+  // Nothing is lost by skipping: the restore effect's `setLists` is itself a change, so the first
+  // real write happens right after it commits. A session where `lists` never changes has nothing
+  // new to save.
+  const wlsMounted = useRef(false);
   useEffect(() => {
+    if (!wlsMounted.current) { wlsMounted.current = true; return; }
     if (Object.keys(lists).length) writeOwnerWatchlists(localStorage, wlOwner, { lists, active: activeList, meta: listMeta });
   }, [lists, activeList, listMeta, wlOwner]);
   // ── W1b: signed-in named lists become SERVER-BACKED; `mm.wls` demotes to an optimistic cache.
@@ -1799,13 +1815,30 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const inventory = async (): Promise<ServerWatchlist[] | null> => {
+    const readInventory = async (): Promise<ServerWatchlist[] | null> => {
       try {
         const response = await fetch("/api/watchlist", { headers: { Accept: "application/json" } });
         if (!response.ok) return null;
         const payload = await response.json();
         return Array.isArray(payload?.lists) ? payload.lists as ServerWatchlist[] : null;
       } catch { return null; }
+    };
+    /**
+     * Bounded retry, because a null read here does not just skip a step — it abandons the WHOLE
+     * migration for this mount. `wlMigrationRef.current = false` lets it run again, but the effect
+     * is keyed on `[loggedIn, wlsRestored, registerServerListIds]`, none of which change again, so
+     * nothing re-fires it until the next page load. One slow response therefore meant no server
+     * adopt and no marker written for the entire session (reproduced on a loaded CI runner, where
+     * the receipt this wave's spec polls for simply never appeared).
+     */
+    const inventory = async (attempts = 3): Promise<ServerWatchlist[] | null> => {
+      for (let attempt = 0; attempt < attempts; attempt++) {
+        if (cancelled) return null;
+        const lists = await readInventory();
+        if (lists) return lists;
+        if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+      }
+      return null;
     };
 
     // F1: membership snapshot taken BEFORE the read goes out, per list. Anything the user removes

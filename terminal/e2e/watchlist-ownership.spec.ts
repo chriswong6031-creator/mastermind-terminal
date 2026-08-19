@@ -104,6 +104,44 @@ test.describe("A1 — one browser, two accounts", () => {
   });
 });
 
+test.describe("saved lists survive the mount window", () => {
+  test("the mount pass never writes its seed over the owner's saved payload", async ({ page, baseURL }, testInfo) => {
+    test.setTimeout(120_000);
+    const storeKey = `own-mount-${testInfo.project.name}-${testInfo.retry}`;
+    await signInAs(page, storeKey, baseURL);
+    await seedOwnerWatchlists(page, storeKey, {
+      lists: {
+        Default: [{ symbol: "MSFT", section: "Equities" }],
+        "Gold Miners": [{ symbol: "NEM", section: "Miners" }],
+        Space: [{ symbol: "RKLB", section: "Growth" }],
+      },
+      active: "Gold Miners",
+      meta: {},
+    });
+
+    const savedListNames = () => page.evaluate(([key, slot]) => {
+      try { return Object.keys(JSON.parse(localStorage.getItem(key) || "{}")[slot]?.lists ?? {}); }
+      catch { return ["<unreadable>"]; }
+    }, [E2E_WLS_KEY, e2eWatchlistOwner(storeKey)] as const);
+
+    await page.goto("/terminal?symbol=AAPL");
+    // Sample as fast as the browser will answer, from the moment navigation commits. On the mount
+    // pass `lists` still holds the useState seed (`{ Default: <server rows> }`) and the restore
+    // effect has not committed, so an unguarded persist wrote a SINGLE-LIST default over the saved
+    // payload — measured as ["Default","Gold Miners","Space"] → ["Default"] → back. A reload or a
+    // closed tab inside that window destroyed a guest's named lists for good.
+    const samples: string[][] = [];
+    for (let i = 0; i < 40; i++) {
+      samples.push(await savedListNames());
+      if (samples.length > 2 && samples.at(-1)!.length > 1 && samples.at(-2)!.length > 1) break;
+    }
+    expect(samples.filter((names) => names.length === 1 && names[0] === "Default")).toEqual([]);
+
+    await expect(page.locator(".mm-ptag")).toBeVisible({ timeout: 60_000 });
+    expect(await savedListNames()).toEqual(expect.arrayContaining(["Default", "Gold Miners", "Space"]));
+  });
+});
+
 test.describe("A3 — a delete survives a failed write", () => {
   test("a symbol deleted while the server is unreachable does not resurrect", async ({ page, baseURL }, testInfo) => {
     // The delete is driven through the rail's RIGHT-CLICK context menu, a pointer affordance the
