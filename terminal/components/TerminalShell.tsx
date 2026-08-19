@@ -139,6 +139,8 @@ import { type CmpCfg, type CmpMode, defaultCmpCfg, cmpKey, isCmpKey, cmpSymOf } 
 import { isComposite, parseComposite, compositeQuote as calcCompositeQuote } from "@/lib/composite";
 import { pushRecentlyViewed } from "@/lib/recentlyViewed";
 import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
+import LayoutMenu, { type LayoutFeedback, type LayoutStatus } from "@/components/LayoutMenu";
+import { nextLayoutName, type SavedLayout } from "@/lib/layouts";
 import { type PineScript } from "@/components/ChartPanel";
 
 type ShellDrawingStyle = { color: string; width: number; dash: Dash };
@@ -1215,7 +1217,14 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   const [intel, setIntel] = useState<any>(null);
   // R3.2: the ticker page's dealer-positioning block (raw gexstate:{ROOT}; StockAnalysis parses)
   const [railGex, setRailGex] = useState<unknown>(null);
-  const [layouts, setLayouts] = useState<any[]>([]); const [layoutOpen, setLayoutOpen] = useState(false); const [layoutName, setLayoutName] = useState("");
+  // ── saved layouts (S6) ──
+  // `layouts` is the last AUTHORITATIVE answer and is never replaced by [] on a failure; the store
+  // state lives beside it in `layoutStatus` so "unavailable" and "you have none" stay distinct.
+  const [layouts, setLayouts] = useState<SavedLayout[]>([]); const [layoutOpen, setLayoutOpen] = useState(false); const [layoutName, setLayoutName] = useState("");
+  const [layoutStatus, setLayoutStatus] = useState<LayoutStatus>("loading");
+  const [layoutSaving, setLayoutSaving] = useState(false);
+  const [layoutFeedback, setLayoutFeedback] = useState<LayoutFeedback>({ kind: "idle" });
+  const [layoutDeleteError, setLayoutDeleteError] = useState<string | null>(null);
   const [livePx, setLivePx] = useState<number | null>(null);
   // symbol-keyed live top-of-book — ONE source for the header AND every watchlist row (via a single
   // batched /api/quote?syms= poll), so the detail pane and the watchlist can't disagree on a price.
@@ -2437,7 +2446,21 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     return () => clearTimeout(id);
   }, [extSymsKey, pollExtQuotes]);
 
-  useEffect(() => { fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || [])).catch(() => {}); }, []);
+  // Read the saved-layout library. Returns whether the read was authoritative, so a save can decide
+  // whether the list it just refreshed is trustworthy. A failure keeps the last-good list on screen
+  // (replacing it with [] is the "outage looks like an empty library" bug) and only moves the state.
+  const refreshLayouts = useCallback(async (): Promise<boolean> => {
+    try {
+      const r = await fetch("/api/layouts", { headers: { Accept: "application/json" } });
+      if (r.status === 401) { setLayouts([]); setLayoutStatus("auth"); return false; }
+      if (!r.ok) { setLayoutStatus("unavailable"); return false; }
+      const d = await r.json();
+      setLayouts(Array.isArray(d.layouts) ? d.layouts : []);
+      setLayoutStatus("ready");
+      return true;
+    } catch { setLayoutStatus("unavailable"); return false; }
+  }, []);
+  useEffect(() => { void refreshLayouts(); }, [refreshLayouts]);
   useEffect(() => {
     // Open the Brain widget. The script is deferred + cross-origin, so on early ?ai=1 deep-links
     // window.MMBrain may not exist yet — retry once after 800ms before giving up.
@@ -3980,14 +4003,99 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     }
   };
 
-  function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, paneTfs, activePane, tf, chartType, inds: [...inds], favTF, compare, compareCfg, lockedVLine }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
-  function loadLayout(l: any) { const c = l.config || {}; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (c.compareCfg) setCompareCfg(c.compareCfg); if (typeof c.lockedVLine === "string" || c.lockedVLine === null) setLockedVLine(c.lockedVLine);
+  // ── saved-layout writes ───────────────────────────────────────────────────────────────────────
+  // Three rules, each replacing a specific defect:
+  //   1. A guest never fires a POST that is guaranteed to 401 — Save is disabled and the sign-up
+  //      path is offered instead (the old menu let a guest configure, name and "save" into nothing).
+  //   2. A blank name is auto-generated as the first FREE `Layout N`, sent in create-only mode, and
+  //      retried on 409. `layouts.length + 1` was a counter, not a name: with 1/2/3 saved and 2
+  //      deleted it generated "Layout 3" and the server's upsert-by-name overwrote the real one.
+  //   3. Success is only claimed when the authoritative write said so. The old path resolved on any
+  //      response — 401, 400, 503 — cleared the name box and refetched, so a failed save was
+  //      indistinguishable from a good one.
+  const postLayout = (name: string, config: unknown, mode: "create" | "overwrite") =>
+    fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config, mode }) });
+
+  async function saveLayout() {
+    if (layoutSaving) return;                       // busy guard: a double-click is one save
+    if (!loggedIn) { promptLayoutSignup(); return; }
+    const typed = layoutName.trim();
+    const config = { panes, paneTfs, activePane, tf, chartType, inds: [...inds], favTF, compare, compareCfg, lockedVLine };
+    setLayoutSaving(true); setLayoutFeedback({ kind: "saving" }); setLayoutDeleteError(null);
+    try {
+      let saved: string | null = null;
+      let failure = t("layoutSaveFailed");
+      if (typed) {
+        const r = await postLayout(typed, config, "overwrite");
+        if (r.ok) saved = typed;
+        else if (r.status === 401) { setLayoutStatus("auth"); failure = t("layoutSignInToSave"); }
+      } else {
+        // Collision-free auto-naming. The local list can be stale, so create-mode 409s are expected:
+        // treat the rejected candidate as taken and step to the next free one.
+        const taken = layouts.map((l) => l.name);
+        for (let attempt = 0; attempt < 5 && saved === null; attempt++) {
+          const candidate = nextLayoutName(taken);
+          const r = await postLayout(candidate, config, "create");
+          if (r.ok) { saved = candidate; break; }
+          if (r.status === 409) { taken.push(candidate); continue; }
+          if (r.status === 401) { setLayoutStatus("auth"); failure = t("layoutSignInToSave"); }
+          break;
+        }
+      }
+      if (saved === null) { setLayoutFeedback({ kind: "error", message: failure }); return; }
+      setLayoutFeedback({ kind: "saved", name: saved });
+      setLayoutName("");                            // only cleared once the name is really stored
+      await refreshLayouts();
+    } catch {
+      setLayoutFeedback({ kind: "error", message: t("layoutSaveFailed") });
+    } finally { setLayoutSaving(false); }
+  }
+  function loadLayout(l: SavedLayout) { const c = (l.config || {}) as any; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (c.compareCfg) setCompareCfg(c.compareCfg); if (typeof c.lockedVLine === "string" || c.lockedVLine === null) setLockedVLine(c.lockedVLine);
     if (Array.isArray(c.panes) && c.panes.length) {
       setPanes(c.panes); setActivePane(Math.min(c.activePane || 0, c.panes.length - 1)); setSplit(c.panes.length >= 4 ? 4 : c.panes.length >= 2 ? 2 : 1);
       setPaneTfs(Array.isArray(c.paneTfs) && c.paneTfs.length === c.panes.length ? c.paneTfs : c.panes.map(() => c.tf || "D"));   // back-compat: older layouts have a single tf
     } else if (c.active) { setPanes([c.active]); setActivePane(0); setSplit(1); setPaneTfs([c.tf || "D"]); }
     setLayoutOpen(false); }
-  function delLayout(id: string) { fetch(`/api/layouts?id=${id}`, { method: "DELETE" }).then(() => setLayouts((ls) => ls.filter((x) => x.id !== id))); }
+  // Optimistic removal WITH rollback. The old version dropped the row when the request merely
+  // resolved — a 401/503 delete vanished from the menu and came back on the next load, which is the
+  // worst of both worlds: the user believes it is gone and the account still holds it.
+  // A 404 is not an error to roll back: the row is genuinely absent, so the removal already agrees
+  // with the store. It is still not reported as a successful delete.
+  async function delLayout(id: string) {
+    const snapshot = layouts;
+    setLayoutDeleteError(null);
+    setLayouts((ls) => ls.filter((x) => x.id !== id));
+    const restore = () => { setLayouts(snapshot); setLayoutDeleteError(t("layoutDeleteFailed")); };
+    try {
+      const r = await fetch(`/api/layouts?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (r.ok || r.status === 404) return;
+      if (r.status === 401) { setLayouts([]); setLayoutStatus("auth"); return; }
+      restore();
+    } catch { restore(); }
+  }
+  // A guest's Save is disabled, so this is reached from the menu's own sign-up row: the same nudge
+  // + onboarding path the watchlist gate uses, not a silent no-op.
+  function promptLayoutSignup() {
+    showGateNudge(t("gateLayouts"));
+    window.dispatchEvent(new CustomEvent("mm:onboard", { detail: { mode: "signup" } }));
+  }
+  // One props object for both render sites (toolbar popover + responsive overflow menu) so the two
+  // menus cannot drift. `loggedIn` short-circuits the status: a guest must see the honest gate from
+  // the first paint, not for however long the mount GET takes to come back 401.
+  const layoutMenuProps = {
+    status: (loggedIn ? layoutStatus : "auth") as LayoutStatus,
+    layouts,
+    name: layoutName,
+    onNameChange: setLayoutName,
+    onSave: saveLayout,
+    saving: layoutSaving,
+    feedback: layoutFeedback,
+    deleteError: layoutDeleteError,
+    onLoad: loadLayout,
+    onDelete: delLayout,
+    onRetry: () => { setLayoutStatus("loading"); void refreshLayouts(); },
+    onSignUp: promptLayoutSignup,
+  };
 
   const colList = (): [string, string][] => { const a: [string, string][] = [["last", t("colLast")]]; if (set.cols.change) a.push(["change", t("colChgShort")]); if (set.cols.changePct) a.push(["changePct", t("colChgPctShort")]); if (set.cols.volume) a.push(["volume", t("colVolShort")]); if (set.cols.ext) a.push(["ext", t("colExtShort")]); if (set.cols.extPct) a.push(["extPct", t("colExtPctShort")]); return a; };
   // Plain-word label for an ext window. The hub's classification when it has one; "Overnight"
@@ -4350,12 +4458,10 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
                 {DETECTORS.map(([k]) => <div key={k} className="menu-row" onClick={() => detect(k)}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t(DET_TKEY[k])}</div>)}
               </div>
             </div>
-            <div className="pophost tool-adv toolbar-overflow-item" data-toolbar-item>
+            <div className="pophost tool-adv toolbar-overflow-item" data-toolbar-item data-toolbar-action="layouts">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !layoutOpen; closeAll(); setLayoutOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M9 9v10" /></svg>{t("layouts")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${layoutOpen ? " show" : ""}`} style={{ top: 32, right: 0, minWidth: 230 }} onClick={(e) => e.stopPropagation()}>
-                <div className="menu-save"><input placeholder={t("saveCurrentAs")} value={layoutName} onChange={(e) => setLayoutName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLayout(); }} /><button onClick={saveLayout}>{t("save")}</button></div>
-                {layouts.length === 0 && <div className="menu-row" style={{ color: "var(--text-dim)" }}>{t("noSavedLayouts")}</div>}
-                {layouts.map((l) => <div key={l.id} className="menu-row" onClick={() => loadLayout(l)}>{l.name}<span className="rm" onClick={(e) => { e.stopPropagation(); delLayout(l.id); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span></div>)}
+                <LayoutMenu {...layoutMenuProps} />
               </div>
             </div>
             <div className="pophost tool-adv toolbar-overflow-item" data-toolbar-item>
@@ -4460,9 +4566,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
                 ))}
 
                 {toolbarMoreView === "layouts" && (<>
-                  <div className="menu-save"><input placeholder={t("saveCurrentAs")} value={layoutName} onChange={(e) => setLayoutName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLayout(); }} /><button onClick={saveLayout}>{t("save")}</button></div>
-                  {layouts.length === 0 && <div className="menu-row empty">{t("noSavedLayouts")}</div>}
-                  {layouts.map((l) => <button type="button" role="menuitem" key={l.id} className="menu-row" onClick={() => { loadLayout(l); setToolbarMoreOpen(false); }}>{l.name}<span className="rm" onClick={(e) => { e.stopPropagation(); delLayout(l.id); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span></button>)}
+                  <LayoutMenu {...layoutMenuProps} rowAs="button" onPicked={() => setToolbarMoreOpen(false)} />
                 </>)}
 
                 {toolbarMoreView === "snapshot" && (<>

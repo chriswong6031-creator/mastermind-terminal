@@ -1,4 +1,6 @@
+import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
+import { GUEST_COOKIE } from "@/lib/layoutsFixtureDb";
 import TerminalShell from "@/components/TerminalShell";
 import { canonicalChartSymbol, criticalTerminalDataUrls, resolveTerminalLandingSymbol } from "@/lib/terminalBoot";
 import { preload } from "react-dom";
@@ -61,17 +63,23 @@ export default async function Terminal({ searchParams }: { searchParams: Promise
   const guestSymbols: [string, string][] = [["Crypto", "BTC-USD"], ["Crypto", "ETH-USD"], ["Equities", "NVDA"], ["Equities", "AAPL"], ["Equities", "MSFT"], ["Equities", "QQQ"]];
   const guestRows = guestSymbols.map(([section, symbol]) => ({ symbol, section }));
   if (e2eFixture) {
-    // Imported lazily: the fixture store must stay unreachable from a production bundle.
-    const { cookies } = await import("next/headers");
+    // The fixture server signs every session in (TERMINAL_E2E_EMAIL), which leaves the signed-OUT
+    // workspace — the one that carried a Save button wired to a guaranteed 401 — untestable. One
+    // cookie renders a genuine guest, and `/api/layouts` honours the same cookie, so the page and
+    // the API agree about who is asking. Fixture branch only: unreachable in production.
+    const jar = await cookies();
+    const guest = jar.get(GUEST_COOKIE)?.value === "1";
+    const fixtureEmail = guest ? "" : (process.env.TERMINAL_E2E_EMAIL || "");
+    // Imported lazily: the watchlist fixture store must stay unreachable from a production bundle.
     const { createFixtureDb, fixtureUserId, FIXTURE_STORE_COOKIE } = await import("@/lib/watchlistsFixtureDb");
     const { listWatchlists } = await import("@/lib/watchlists");
-    const fixtureKey = (await cookies()).get(FIXTURE_STORE_COOKIE)?.value || "default";
-    const fixtureEmail = process.env.TERMINAL_E2E_EMAIL || "";
+    const fixtureKey = jar.get(FIXTURE_STORE_COOKIE)?.value || "default";
     // Read the SAME store `/api/watchlist` serves, through the same service, instead of handing
     // down a constant. The constant made the harness disagree with itself: a spec could delete a
     // symbol through the real route and the very next render would still prop in the seeded six,
     // so the shell adopted the "server-only" row straight back — a resurrection the product does
     // not have. The seed is identical to `guestRows`, so every existing spec sees what it did.
+    // A cookie-declared GUEST has no server store to read and gets the plain seed.
     const fixtureRows = fixtureEmail
       ? ((await listWatchlists(createFixtureDb(fixtureKey), fixtureUserId(fixtureKey)))[0]?.symbols
           .map(({ symbol, section }) => ({ symbol, section })) ?? [])
