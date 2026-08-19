@@ -198,6 +198,14 @@ export default function EvidenceRail({
                         <time className="num" dateTime={v2.source_clock}>{v2.source_clock.slice(0, 10)}</time>
                       </div>
                     )}
+                    <div className="ci-evidence-note" role="note">
+                      <span aria-hidden>i</span>
+                      <p>{pick(
+                        zh,
+                        "This is the producer-issued receipt carried inside a SHA-verified workspace. Terminal did not recompute the source span from document bytes.",
+                        "这是随 SHA 已验证工作区携带的生产者凭证。终端并未根据文档字节重新计算该来源片段。",
+                      )}</p>
+                    </div>
                   </>
                 )}
                 {v2.receipt_state === "typed_absence" && v2.typed_absence && (
@@ -216,6 +224,16 @@ export default function EvidenceRail({
                   <div className="ci-evidence-note" role="note">
                     <span aria-hidden>i</span>
                     <p>{pick(zh, "The document address is known but the bytes cannot be replayed.", "文档地址已知，但无法回放其字节。")}</p>
+                  </div>
+                )}
+                {v2.receipt_state === "status_only" && (
+                  <div className="ci-evidence-note" role="note">
+                    <span aria-hidden>i</span>
+                    <p>{pick(
+                      zh,
+                      `Producer completeness status: ${v2.status_label ?? "recorded"}. This is not a line citation.`,
+                      `生产者完整性状态：${v2.status_label ?? "已记录"}。这不是逐行引用。`,
+                    )}</p>
                   </div>
                 )}
               </div>
