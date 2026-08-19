@@ -50,6 +50,7 @@ import {
   idbClear,
   isAvailable as idbAvailable,
 } from "./idbJsonStore";
+import { canonicalChartSymbol } from "./terminalBoot";
 
 type Entry = { data: any; ts: number; inflight: Promise<CacheOutcome> | null };
 
@@ -496,14 +497,30 @@ export function _resetCoverage(): void {
   coverageInflight = null;
 }
 
-/** Fetch a symbol's OHLC file: /data/<sym>.json */
-export function getOhlc(sym: string): Promise<any> {
-  return getJSON("/data/" + sym + ".json");
+/**
+ * The `/data` file URL for one symbol, or `null` when the value is not a usable symbol.
+ *
+ * `canonicalChartSymbol` is THE boundary (lib/terminalBoot.ts) and the same one the server route's
+ * preload uses. Concatenating the caller's string straight into the path — what this module did
+ * before — let `?sym=nvda` fetch `/data/nvda.json` while the route had already preloaded
+ * `/data/NVDA.json`: the preload missed and the fetch 404'd. It also meant a user-controlled query
+ * value reached the URL space verbatim.
+ */
+function dataFileUrl(sym: string, suffix: ".json" | ".slice.json"): string | null {
+  const symbol = canonicalChartSymbol(sym);
+  return symbol ? `/data/${encodeURIComponent(symbol)}${suffix}` : null;
 }
 
-/** Fetch a symbol's slice file: /data/<sym>.slice.json */
+/** Fetch a symbol's OHLC file: /data/<SYM>.json */
+export function getOhlc(sym: string): Promise<any> {
+  const url = dataFileUrl(sym, ".json");
+  return url ? getJSON(url) : Promise.resolve(null);
+}
+
+/** Fetch a symbol's slice file: /data/<SYM>.slice.json */
 export function getSlice(sym: string): Promise<any> {
-  return getJSON("/data/" + sym + ".slice.json");
+  const url = dataFileUrl(sym, ".slice.json");
+  return url ? getJSON(url) : Promise.resolve(null);
 }
 
 /**
