@@ -22,6 +22,16 @@ export const metadata: Metadata = { title: "Scripts · Mastermind Terminal" };
 type Script = { id: string; name: string; source: string; lang: string; params: Record<string, any>; updated_at: string; locked?: boolean };
 
 export default async function ScriptsPage() {
+  // e2e seam (TERMINAL_E2E_FIXTURE=1 only) — the editor's state contract is a browser behaviour, so
+  // it needs a real page with real scripts. Mirrors the watchlist/portfolio fixture precedent: the
+  // transport is replaced, the page, the editor and the save route are the real ones.
+  if (process.env.TERMINAL_E2E_FIXTURE === "1") {
+    const { cookies } = await import("next/headers");
+    const { listFixtureScripts, SCRIPTS_FIXTURE_COOKIE } = await import("@/lib/scriptsFixtureDb");
+    const key = (await cookies()).get(SCRIPTS_FIXTURE_COOKIE)?.value || "default";
+    return <PineEditor scripts={listFixtureScripts(key) as Script[]} isPro email="e2e@example.com" />;
+  }
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return <SignupGate surface="scripts" />;
