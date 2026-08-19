@@ -1,0 +1,261 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import {
+  __resetEventWorkspaceCacheForTests,
+  normalizeEventWorkspace,
+  normalizeEventWorkspaceManifest,
+  resolveCurrentEventWorkspaceFromR2,
+  resolveEventWorkspaceFromR2,
+  selectCurrentEventFromAliases,
+  transcriptIdFromWorkspace,
+} from "@/lib/eventWorkspace";
+import { presentEventWorkspace, eventWorkspaceGlanceTitle, eventWorkspaceHasBeatMissLanguage } from "@/lib/eventWorkspacePresent";
+
+const GOLDEN = JSON.parse(
+  readFileSync(path.join(__dirname, "fixtures/aapl-event-workspace.json"), "utf8"),
+) as Record<string, unknown>;
+
+const FLAGSHIP = "evt_cik0000320193_2026q3_results";
+const PRIOR = "evt_cik0000320193_2026q2_results";
+const GEN = "f709a0a6ec514282d5769e7d";
+const R2 = "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev";
+
+function sha(body: string | Uint8Array): string {
+  return createHash("sha256").update(body).digest("hex");
+}
+
+function workspaceBody(overrides: Record<string, unknown> = {}): { json: unknown; bytes: Uint8Array; hash: string } {
+  const payload = { ...GOLDEN, ...overrides };
+  const wire = `${JSON.stringify(payload)}\n`;
+  const bytes = new TextEncoder().encode(wire);
+  return { json: JSON.parse(wire), bytes, hash: sha(bytes) };
+}
+
+function manifestFor(workspaces: Array<{ eventId: string; body: ReturnType<typeof workspaceBody>; aliases: string[] }>, generation = GEN) {
+  const files: Record<string, { sha256: string; bytes: number }> = {};
+  const aliases: Record<string, string> = {};
+  for (const row of workspaces) {
+    files[`workspaces/${row.eventId}.json`] = { sha256: row.body.hash, bytes: row.body.bytes.byteLength };
+    aliases[row.eventId] = row.eventId;
+    for (const alias of row.aliases) aliases[alias] = row.eventId;
+  }
+  return {
+    schema: "event_workspace_manifest.v1",
+    generation_id: generation,
+    generated_at: "2026-07-30T20:30:28Z",
+    status: "ready",
+    event_count: workspaces.length,
+    files,
+    aliases,
+    authority: "context_only",
+    warnings: [],
+  };
+}
+
+let calls: string[] = [];
+let realFetch: typeof globalThis.fetch;
+
+function installR2(upstream: (url: string) => Response | Promise<Response>) {
+  globalThis.fetch = vi.fn(async (url: string) => {
+    calls.push(String(url));
+    return upstream(String(url));
+  }) as typeof fetch;
+}
+
+afterEach(() => {
+  __resetEventWorkspaceCacheForTests();
+  if (realFetch) globalThis.fetch = realFetch;
+  calls = [];
+});
+
+describe("selectCurrentEventFromAliases", () => {
+  it("picks the greatest AAPL fiscal period from at least two periods", () => {
+    const selected = selectCurrentEventFromAliases("AAPL", {
+      "AAPL/2026Q2": PRIOR,
+      "AAPL/2026Q3": FLAGSHIP,
+      "cie_98e318c37ec1a2a1f83c45e1": FLAGSHIP,
+    });
+    expect("error" in selected).toBe(false);
+    if ("error" in selected) return;
+    expect(selected.event_id).toBe(FLAGSHIP);
+    expect(selected.year).toBe(2026);
+    expect(selected.quarter).toBe(3);
+    expect(selected.alias).toBe("AAPL/2026Q3");
+  });
+
+  it("allows dual-class aliases that resolve to one canonical event", () => {
+    const selected = selectCurrentEventFromAliases("GOOG", {
+      "GOOG/2026Q3": "evt_cik0001652044_2026q3_results",
+      "GOOGL/2026Q3": "evt_cik0001652044_2026q3_results",
+    });
+    expect("error" in selected).toBe(false);
+    if ("error" in selected) return;
+    expect(selected.event_id).toBe("evt_cik0001652044_2026q3_results");
+  });
+
+  it("fails closed when the same period has two canonical owners", () => {
+    const selected = selectCurrentEventFromAliases("AAPL", [
+      ["AAPL/2026Q3", FLAGSHIP],
+      ["AAPL/2026Q3", "evt_cik0000999999_2026q3_results"],
+    ]);
+    expect(selected).toEqual({ error: "ambiguous_event" });
+  });
+
+  it("does not ask v1 overlay which event is latest", () => {
+    const selected = selectCurrentEventFromAliases("AAPL", {
+      "AAPL/2025Q4": "evt_cik0000320193_2025q4_results",
+      "AAPL/2026Q3": FLAGSHIP,
+    });
+    if ("error" in selected) throw new Error("expected a selection");
+    expect(selected.event_id).toBe(FLAGSHIP);
+  });
+});
+
+describe("normalizeEventWorkspace golden AAPL", () => {
+  it("accepts the production AAPL FY2026 Q3 shape", () => {
+    const workspace = normalizeEventWorkspace(GOLDEN, FLAGSHIP, GEN);
+    expect(workspace).not.toBeNull();
+    expect(workspace?.event_id).toBe(FLAGSHIP);
+    expect(workspace?.generation_id).toBe(GEN);
+    expect(workspace?.authority).toBe("context_only");
+    expect(workspace?.aliases).toEqual([
+      "cie_98e318c37ec1a2a1f83c45e1",
+      "AAPL/2026Q3",
+      "aapl-2026q3-call-record",
+    ]);
+    expect(workspace?.facts.some((fact) => fact.fact_id === "fact_revenue_gaap" && fact.value === 109417)).toBe(true);
+    expect(workspace?.facts.find((fact) => fact.metric === "questions_count")?.typed_absence?.reason).toBe("no_span_addressable_evidence");
+    expect(workspace?.deltas.every((delta) => delta.basis_match === false)).toBe(true);
+    expect(transcriptIdFromWorkspace(workspace!)).toBe("2026Q3");
+  });
+
+  it("refuses beat/miss on a delta", () => {
+    const poisoned = {
+      ...GOLDEN,
+      deltas: [{ ...(GOLDEN.deltas as object[])[0], beat: true }],
+    };
+    expect(normalizeEventWorkspace(poisoned)).toBeNull();
+  });
+});
+
+describe("presentEventWorkspace", () => {
+  it("formats the golden AAPL glance from payload values, never overlay 14 or beat/miss", () => {
+    const workspace = normalizeEventWorkspace(GOLDEN, FLAGSHIP, GEN)!;
+    const presented = presentEventWorkspace(workspace);
+    expect(eventWorkspaceGlanceTitle(presented)).toBe("AAPL · Q3 FY2026 · 30 Jul");
+    expect(presented.plane).toBe("event_workspace.v1");
+    expect(presented.event_id).toBe(FLAGSHIP);
+    expect(presented.reported[0]?.value).toMatch(/\$109\.4B/);
+    expect(presented.reported[0]?.value).toMatch(/\+16%/);
+    expect(presented.guidance[0]?.value).toBe("9–11%");
+    expect(presented.guidance[0]?.label).toMatch(/Q4/);
+    expect(presented.watch.some((item) => /100-year flood/.test(item.value))).toBe(true);
+    expect(presented.watch.some((item) => /two and a half percentage points/.test(item.value))).toBe(true);
+    expect(presented.honest.questions_count_unavailable).toBe(true);
+    expect(presented.honest.consensus_unlicensed).toBe(true);
+    expect(presented.honest.slides_absent).toBe(true);
+    expect(presented.honest.reaction_not_joined).toBe(true);
+    expect(presented.honest.no_beat_miss).toBe(true);
+    expect(presented.facts.find((item) => item.id === "fact_questions_count")?.value).toBe("Unavailable / unstructured");
+    const glance = [presented.reported, presented.guidance, presented.watch, presented.facts, presented.deltas]
+      .flat()
+      .map((item) => `${item.label} ${item.value}`)
+      .join("\n");
+    expect(glance).not.toMatch(/\b14\b/);
+    expect(eventWorkspaceHasBeatMissLanguage(glance)).toBe(false);
+    expect(presented.watch.some((item) => /remarkably better than we thought/.test(item.value))).toBe(true);
+    expect(presented.sources.some((source) => source.label.includes("Exhibit 99.1") && source.receipt_state === "byte_replayed")).toBe(true);
+    expect(presented.sources.some((source) => source.kind === "transcript" && source.transcript_id === "2026Q3")).toBe(true);
+    expect(presented.transcript_id).toBe("2026Q3");
+    expect(presented.reported[0]?.evidence.receipt_state).toBe("byte_replayed");
+    expect(presented.guidance[0]?.evidence.receipt_state).toBe("byte_replayed");
+  });
+});
+
+describe("resolveCurrentEventWorkspaceFromR2", () => {
+  beforeEach(() => {
+    realFetch = globalThis.fetch;
+  });
+
+  it("follows marker → immutable generation → receipt and selects AAPL/2026Q3 over an earlier period", async () => {
+    const q3 = workspaceBody();
+    const q2 = workspaceBody({
+      event_id: PRIOR,
+      generation_id: GEN,
+      aliases: ["AAPL/2026Q2"],
+      fiscal_period: { year: 2026, quarter: 2, calendar_end: "2026-03-28" },
+    });
+    const manifest = manifestFor([
+      { eventId: PRIOR, body: q2, aliases: ["AAPL/2026Q2"] },
+      { eventId: FLAGSHIP, body: q3, aliases: ["AAPL/2026Q3", "cie_98e318c37ec1a2a1f83c45e1", "aapl-2026q3-call-record"] },
+    ]);
+    installR2((url) => {
+      if (url.endsWith("/event_workspaces/manifest.json") || url.includes(`/generations/${GEN}/manifest.json`)) {
+        return jsonResponse(manifest);
+      }
+      if (url.endsWith(`/workspaces/${FLAGSHIP}.json`)) return bytesResponse(q3.bytes);
+      if (url.endsWith(`/workspaces/${PRIOR}.json`)) return bytesResponse(q2.bytes);
+      return new Response("missing", { status: 404 });
+    });
+    const result = await resolveCurrentEventWorkspaceFromR2("AAPL", R2);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.event_id).toBe(FLAGSHIP);
+    expect(result.workspace.generation_id).toBe(GEN);
+    expect(result.receipt.workspace_sha256).toBe(q3.hash);
+    expect(calls.some((url) => url.includes("/company_intelligence/event_workspaces/manifest.json"))).toBe(true);
+    expect(calls.some((url) => url.includes(`/generations/${GEN}/manifest.json`))).toBe(true);
+  });
+
+  it("advances a corrected generation without changing event identity", async () => {
+    const first = workspaceBody();
+    const correctedGen = "aaaaaaaaaaaaaaaaaaaaaaaa";
+    const second = workspaceBody({ generation_id: correctedGen, lifecycle: { ...(GOLDEN.lifecycle as object), state: "corrected" } });
+    const firstManifest = manifestFor([{ eventId: FLAGSHIP, body: first, aliases: ["AAPL/2026Q3"] }]);
+    const secondManifest = manifestFor([{ eventId: FLAGSHIP, body: second, aliases: ["AAPL/2026Q3"] }], correctedGen);
+    let generation = GEN;
+    installR2((url) => {
+      const manifest = generation === GEN ? firstManifest : secondManifest;
+      const body = generation === GEN ? first : second;
+      if (url.endsWith("/event_workspaces/manifest.json") || url.includes("/manifest.json")) return jsonResponse(manifest);
+      if (url.endsWith(`/workspaces/${FLAGSHIP}.json`)) return bytesResponse(body.bytes);
+      return new Response("missing", { status: 404 });
+    });
+    const before = await resolveEventWorkspaceFromR2(FLAGSHIP, R2);
+    expect(before.ok && before.workspace.generation_id).toBe(GEN);
+    __resetEventWorkspaceCacheForTests();
+    generation = correctedGen;
+    const after = await resolveEventWorkspaceFromR2(FLAGSHIP, R2);
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(after.event_id).toBe(FLAGSHIP);
+    expect(after.workspace.generation_id).toBe(correctedGen);
+    expect(after.workspace.lifecycle.state).toBe("corrected");
+  });
+
+  it("does not follow redirects or fetch v1 overlay", async () => {
+    installR2((url) => {
+      if (url.includes("score_overlay") || url.includes("/companies/")) {
+        throw new Error("v1 overlay must not be fetched");
+      }
+      return new Response(null, { status: 302, headers: { location: "https://example.com/x" } });
+    });
+    const result = await resolveCurrentEventWorkspaceFromR2("AAPL", R2);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("not_found");
+  });
+});
+
+function jsonResponse(body: unknown): Response {
+  const wire = JSON.stringify(body);
+  return new Response(wire, { status: 200, headers: { "content-type": "application/json" } });
+}
+
+function bytesResponse(bytes: Uint8Array): Response {
+  const copy = new Uint8Array(bytes);
+  return new Response(copy, { status: 200, headers: { "content-type": "application/json" } });
+}
+

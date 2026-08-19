@@ -1,0 +1,848 @@
+{
+  "aliases": [
+    "cie_98e318c37ec1a2a1f83c45e1",
+    "AAPL/2026Q3",
+    "aapl-2026q3-call-record"
+  ],
+  "authority": "context_only",
+  "claim_citations_pending": false,
+  "claims": [
+    {
+      "claim_id": "claim_revenue_lede",
+      "evidence_spans": [
+        {
+          "authority": "context_only",
+          "display_excerpt": "$109.4 billion in revenue, up 16%",
+          "document_id": "tx:AAPL/2026Q3",
+          "document_version": 1,
+          "locator": {
+            "kind": "text_span",
+            "role": "CEO",
+            "segment_index": 2,
+            "span_end_byte": 143,
+            "span_start_byte": 110,
+            "speaker": "Tim Cook",
+            "sub_kind": "transcript_segment"
+          },
+          "receipt": {
+            "segment_bytes": 889,
+            "segment_index": 2,
+            "segment_sha256": "7fdd5208fea587eaa41e7ba3639c60093700a85e7007e865f8bb9dd1ad9b799d",
+            "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+            "span_end_byte": 143,
+            "span_start_byte": 110,
+            "text_sha256": "7d80622f5638d9ee4313659a874e3e8c671610edc2da6406dde5fbe633c08de6"
+          },
+          "receipt_state": "byte_replayed",
+          "rights_profile": "rp_public_primary_v1",
+          "schema": "source_span.v1",
+          "span_id": "span_963da0716563054378f7",
+          "text_sha256": "7d80622f5638d9ee4313659a874e3e8c671610edc2da6406dde5fbe633c08de6",
+          "unreplayable_reason": null
+        }
+      ],
+      "kind": "numeric",
+      "metric": "revenue",
+      "role": "CEO",
+      "schema": "event_claim.v1",
+      "source_span": {
+        "authority": "context_only",
+        "display_excerpt": "$109.4 billion in revenue, up 16%",
+        "document_id": "tx:AAPL/2026Q3",
+        "document_version": 1,
+        "locator": {
+          "kind": "text_span",
+          "role": "CEO",
+          "segment_index": 2,
+          "span_end_byte": 143,
+          "span_start_byte": 110,
+          "speaker": "Tim Cook",
+          "sub_kind": "transcript_segment"
+        },
+        "receipt": {
+          "segment_bytes": 889,
+          "segment_index": 2,
+          "segment_sha256": "7fdd5208fea587eaa41e7ba3639c60093700a85e7007e865f8bb9dd1ad9b799d",
+          "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+          "span_end_byte": 143,
+          "span_start_byte": 110,
+          "text_sha256": "7d80622f5638d9ee4313659a874e3e8c671610edc2da6406dde5fbe633c08de6"
+        },
+        "receipt_state": "byte_replayed",
+        "rights_profile": "rp_public_primary_v1",
+        "schema": "source_span.v1",
+        "span_id": "span_963da0716563054378f7",
+        "text_sha256": "7d80622f5638d9ee4313659a874e3e8c671610edc2da6406dde5fbe633c08de6",
+        "unreplayable_reason": null
+      },
+      "speaker": "Tim Cook",
+      "text": "$109.4 billion in revenue, up 16%"
+    },
+    {
+      "claim_id": "claim_iphone_yoy",
+      "evidence_spans": [
+        {
+          "authority": "context_only",
+          "display_excerpt": "up 22% from a year ago",
+          "document_id": "tx:AAPL/2026Q3",
+          "document_version": 1,
+          "locator": {
+            "kind": "text_span",
+            "role": "CEO",
+            "segment_index": 5,
+            "span_end_byte": 77,
+            "span_start_byte": 55,
+            "speaker": "Tim Cook",
+            "sub_kind": "transcript_segment"
+          },
+          "receipt": {
+            "segment_bytes": 847,
+            "segment_index": 5,
+            "segment_sha256": "74d8d667f64b77540768e05dc5a5e2dc031a92893166102535a292a686f84ac5",
+            "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+            "span_end_byte": 77,
+            "span_start_byte": 55,
+            "text_sha256": "b427a2710c8e74d1e88defdfaae05ac5b0a1eb15a96088231acb61b151b8ece5"
+          },
+          "receipt_state": "byte_replayed",
+          "rights_profile": "rp_public_primary_v1",
+          "schema": "source_span.v1",
+          "span_id": "span_70564ea9634c1d8dab9e",
+          "text_sha256": "b427a2710c8e74d1e88defdfaae05ac5b0a1eb15a96088231acb61b151b8ece5",
+          "unreplayable_reason": null
+        }
+      ],
+      "kind": "numeric",
+      "metric": "iphone_revenue_yoy_pct",
+      "role": "CEO",
+      "schema": "event_claim.v1",
+      "source_span": {
+        "authority": "context_only",
+        "display_excerpt": "up 22% from a year ago",
+        "document_id": "tx:AAPL/2026Q3",
+        "document_version": 1,
+        "locator": {
+          "kind": "text_span",
+          "role": "CEO",
+          "segment_index": 5,
+          "span_end_byte": 77,
+          "span_start_byte": 55,
+          "speaker": "Tim Cook",
+          "sub_kind": "transcript_segment"
+        },
+        "receipt": {
+          "segment_bytes": 847,
+          "segment_index": 5,
+          "segment_sha256": "74d8d667f64b77540768e05dc5a5e2dc031a92893166102535a292a686f84ac5",
+          "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+          "span_end_byte": 77,
+          "span_start_byte": 55,
+          "text_sha256": "b427a2710c8e74d1e88defdfaae05ac5b0a1eb15a96088231acb61b151b8ece5"
+        },
+        "receipt_state": "byte_replayed",
+        "rights_profile": "rp_public_primary_v1",
+        "schema": "source_span.v1",
+        "span_id": "span_70564ea9634c1d8dab9e",
+        "text_sha256": "b427a2710c8e74d1e88defdfaae05ac5b0a1eb15a96088231acb61b151b8ece5",
+        "unreplayable_reason": null
+      },
+      "speaker": "Tim Cook",
+      "text": "up 22% from a year ago"
+    },
+    {
+      "claim_id": "claim_mac_yoy",
+      "evidence_spans": [
+        {
+          "authority": "context_only",
+          "display_excerpt": "growing an impressive 29%",
+          "document_id": "tx:AAPL/2026Q3",
+          "document_version": 1,
+          "locator": {
+            "kind": "text_span",
+            "role": "CEO",
+            "segment_index": 6,
+            "span_end_byte": 96,
+            "span_start_byte": 71,
+            "speaker": "Tim Cook",
+            "sub_kind": "transcript_segment"
+          },
+          "receipt": {
+            "segment_bytes": 899,
+            "segment_index": 6,
+            "segment_sha256": "33ce0e6d94527a62a806f3af5d5bc8f08b34869371ad02ee4040e4187db07f7c",
+            "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+            "span_end_byte": 96,
+            "span_start_byte": 71,
+            "text_sha256": "09613e33c4fa2edbaa7eb3c9be2c6194d41dcb2ffc7b02297503073a83a8c6ec"
+          },
+          "receipt_state": "byte_replayed",
+          "rights_profile": "rp_public_primary_v1",
+          "schema": "source_span.v1",
+          "span_id": "span_29c291917641307d0e39",
+          "text_sha256": "09613e33c4fa2edbaa7eb3c9be2c6194d41dcb2ffc7b02297503073a83a8c6ec",
+          "unreplayable_reason": null
+        }
+      ],
+      "kind": "numeric",
+      "metric": "mac_revenue_yoy_pct",
+      "role": "CEO",
+      "schema": "event_claim.v1",
+      "source_span": {
+        "authority": "context_only",
+        "display_excerpt": "growing an impressive 29%",
+        "document_id": "tx:AAPL/2026Q3",
+        "document_version": 1,
+        "locator": {
+          "kind": "text_span",
+          "role": "CEO",
+          "segment_index": 6,
+          "span_end_byte": 96,
+          "span_start_byte": 71,
+          "speaker": "Tim Cook",
+          "sub_kind": "transcript_segment"
+        },
+        "receipt": {
+          "segment_bytes": 899,
+          "segment_index": 6,
+          "segment_sha256": "33ce0e6d94527a62a806f3af5d5bc8f08b34869371ad02ee4040e4187db07f7c",
+          "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+          "span_end_byte": 96,
+          "span_start_byte": 71,
+          "text_sha256": "09613e33c4fa2edbaa7eb3c9be2c6194d41dcb2ffc7b02297503073a83a8c6ec"
+        },
+        "receipt_state": "byte_replayed",
+        "rights_profile": "rp_public_primary_v1",
+        "schema": "source_span.v1",
+        "span_id": "span_29c291917641307d0e39",
+        "text_sha256": "09613e33c4fa2edbaa7eb3c9be2c6194d41dcb2ffc7b02297503073a83a8c6ec",
+        "unreplayable_reason": null
+      },
+      "speaker": "Tim Cook",
+      "text": "growing an impressive 29%"
+    },
+    {
+      "claim_id": "claim_services_revenue",
+      "evidence_spans": [
+        {
+          "authority": "context_only",
+          "display_excerpt": "$30.7 billion",
+          "document_id": "tx:AAPL/2026Q3",
+          "document_version": 1,
+          "locator": {
+            "kind": "text_span",
+            "role": "CEO",
+            "segment_index": 11,
+            "span_end_byte": 46,
+            "span_start_byte": 33,
+            "speaker": "Tim Cook",
+            "sub_kind": "transcript_segment"
+          },
+          "receipt": {
+            "segment_bytes": 696,
+            "segment_index": 11,
+            "segment_sha256": "56b7ecee7bf37e44909d37aa218dbdf9d2b4fd7cb2bd01707146312fcb244097",
+            "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+            "span_end_byte": 46,
+            "span_start_byte": 33,
+            "text_sha256": "6ffa4b017a084e12757e312091f3d084f48e5679cd536d397056a2749cd31d25"
+          },
+          "receipt_state": "byte_replayed",
+          "rights_profile": "rp_public_primary_v1",
+          "schema": "source_span.v1",
+          "span_id": "span_293eddb7a42d57fd7adc",
+          "text_sha256": "6ffa4b017a084e12757e312091f3d084f48e5679cd536d397056a2749cd31d25",
+          "unreplayable_reason": null
+        }
+      ],
+      "kind": "numeric",
+      "metric": "services_revenue",
+      "role": "CEO",
+      "schema": "event_claim.v1",
+      "source_span": {
+        "authority": "context_only",
+        "display_excerpt": "$30.7 billion",
+        "document_id": "tx:AAPL/2026Q3",
+        "document_version": 1,
+        "locator": {
+          "kind": "text_span",
+          "role": "CEO",
+          "segment_index": 11,
+          "span_end_byte": 46,
+          "span_start_byte": 33,
+          "speaker": "Tim Cook",
+          "sub_kind": "transcript_segment"
+        },
+        "receipt": {
+          "segment_bytes": 696,
+          "segment_index": 11,
+          "segment_sha256": "56b7ecee7bf37e44909d37aa218dbdf9d2b4fd7cb2bd01707146312fcb244097",
+          "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+          "span_end_byte": 46,
+          "span_start_byte": 33,
+          "text_sha256": "6ffa4b017a084e12757e312091f3d084f48e5679cd536d397056a2749cd31d25"
+        },
+        "receipt_state": "byte_replayed",
+        "rights_profile": "rp_public_primary_v1",
+        "schema": "source_span.v1",
+        "span_id": "span_293eddb7a42d57fd7adc",
+        "text_sha256": "6ffa4b017a084e12757e312091f3d084f48e5679cd536d397056a2749cd31d25",
+        "unreplayable_reason": null
+      },
+      "speaker": "Tim Cook",
+      "text": "$30.7 billion"
+    },
+    {
+      "claim_id": "claim_install_base",
+      "evidence_spans": [
+        {
+          "authority": "context_only",
+          "display_excerpt": "over two and a half billion",
+          "document_id": "tx:AAPL/2026Q3",
+          "document_version": 1,
+          "locator": {
+            "kind": "text_span",
+            "role": "CFO",
+            "segment_index": 17,
+            "span_end_byte": 506,
+            "span_start_byte": 479,
+            "speaker": "Kevan Parekh",
+            "sub_kind": "transcript_segment"
+          },
+          "receipt": {
+            "segment_bytes": 858,
+            "segment_index": 17,
+            "segment_sha256": "9b15308a1b2ec467fa6f5b20b973c12784a93bb158dbfbd88c279b3e2c1a4caf",
+            "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+            "span_end_byte": 506,
+            "span_start_byte": 479,
+            "text_sha256": "c5fe98a85de2f7a9684b33a60cda2095411a6a873dd8b0ebf31d402152d1c0bd"
+          },
+          "receipt_state": "byte_replayed",
+          "rights_profile": "rp_public_primary_v1",
+          "schema": "source_span.v1",
+          "span_id": "span_bed077f895e2f3dc071e",
+          "text_sha256": "c5fe98a85de2f7a9684b33a60cda2095411a6a873dd8b0ebf31d402152d1c0bd",
+          "unreplayable_reason": null
+        }
+      ],
+      "kind": "numeric",
+      "metric": "active_devices",
+      "role": "CFO",
+      "schema": "event_claim.v1",
+      "source_span": {
+        "authority": "context_only",
+        "display_excerpt": "over two and a half billion",
+        "document_id": "tx:AAPL/2026Q3",
+        "document_version": 1,
+        "locator": {
+          "kind": "text_span",
+          "role": "CFO",
+          "segment_index": 17,
+          "span_end_byte": 506,
+          "span_start_byte": 479,
+          "speaker": "Kevan Parekh",
+          "sub_kind": "transcript_segment"
+        },
+        "receipt": {
+          "segment_bytes": 858,
+          "segment_index": 17,
+          "segment_sha256": "9b15308a1b2ec467fa6f5b20b973c12784a93bb158dbfbd88c279b3e2c1a4caf",
+          "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+          "span_end_byte": 506,
+          "span_start_byte": 479,
+          "text_sha256": "c5fe98a85de2f7a9684b33a60cda2095411a6a873dd8b0ebf31d402152d1c0bd"
+        },
+        "receipt_state": "byte_replayed",
+        "rights_profile": "rp_public_primary_v1",
+        "schema": "source_span.v1",
+        "span_id": "span_bed077f895e2f3dc071e",
+        "text_sha256": "c5fe98a85de2f7a9684b33a60cda2095411a6a873dd8b0ebf31d402152d1c0bd",
+        "unreplayable_reason": null
+      },
+      "speaker": "Kevan Parekh",
+      "text": "over two and a half billion"
+    },
+    {
+      "claim_id": "claim_demand_vs_supply",
+      "evidence_spans": [
+        {
+          "authority": "context_only",
+          "display_excerpt": "remarkably better than we thought",
+          "document_id": "tx:AAPL/2026Q3",
+          "document_version": 1,
+          "locator": {
+            "kind": "text_span",
+            "role": "CEO",
+            "segment_index": 55,
+            "span_end_byte": 407,
+            "span_start_byte": 374,
+            "speaker": "Tim Cook",
+            "sub_kind": "transcript_segment"
+          },
+          "receipt": {
+            "segment_bytes": 781,
+            "segment_index": 55,
+            "segment_sha256": "669a0b46cf1f36579b01d6313300c80d2fed7d2193b43f4a1de40d0efc203d14",
+            "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+            "span_end_byte": 407,
+            "span_start_byte": 374,
+            "text_sha256": "e8923d86b12a8955b036e88da9ee6f69680a35c6539c91c55abd2c1874b2c478"
+          },
+          "receipt_state": "byte_replayed",
+          "rights_profile": "rp_public_primary_v1",
+          "schema": "source_span.v1",
+          "span_id": "span_ad660a56b44f6d427ded",
+          "text_sha256": "e8923d86b12a8955b036e88da9ee6f69680a35c6539c91c55abd2c1874b2c478",
+          "unreplayable_reason": null
+        }
+      ],
+      "kind": "quote",
+      "metric": "demand_vs_supply",
+      "role": "CEO",
+      "schema": "event_claim.v1",
+      "source_span": {
+        "authority": "context_only",
+        "display_excerpt": "remarkably better than we thought",
+        "document_id": "tx:AAPL/2026Q3",
+        "document_version": 1,
+        "locator": {
+          "kind": "text_span",
+          "role": "CEO",
+          "segment_index": 55,
+          "span_end_byte": 407,
+          "span_start_byte": 374,
+          "speaker": "Tim Cook",
+          "sub_kind": "transcript_segment"
+        },
+        "receipt": {
+          "segment_bytes": 781,
+          "segment_index": 55,
+          "segment_sha256": "669a0b46cf1f36579b01d6313300c80d2fed7d2193b43f4a1de40d0efc203d14",
+          "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+          "span_end_byte": 407,
+          "span_start_byte": 374,
+          "text_sha256": "e8923d86b12a8955b036e88da9ee6f69680a35c6539c91c55abd2c1874b2c478"
+        },
+        "receipt_state": "byte_replayed",
+        "rights_profile": "rp_public_primary_v1",
+        "schema": "source_span.v1",
+        "span_id": "span_ad660a56b44f6d427ded",
+        "text_sha256": "e8923d86b12a8955b036e88da9ee6f69680a35c6539c91c55abd2c1874b2c478",
+        "unreplayable_reason": null
+      },
+      "speaker": "Tim Cook",
+      "text": "remarkably better than we thought"
+    },
+    {
+      "claim_id": "claim_memory_flood",
+      "evidence_spans": [
+        {
+          "authority": "context_only",
+          "display_excerpt": "100-year flood",
+          "document_id": "tx:AAPL/2026Q3",
+          "document_version": 1,
+          "locator": {
+            "kind": "text_span",
+            "role": "CEO",
+            "segment_index": 65,
+            "span_end_byte": 143,
+            "span_start_byte": 129,
+            "speaker": "Tim Cook",
+            "sub_kind": "transcript_segment"
+          },
+          "receipt": {
+            "segment_bytes": 622,
+            "segment_index": 65,
+            "segment_sha256": "966ef70c32345c453895d93b64a3cafc1640e030ab3ec3e46960a85290134833",
+            "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+            "span_end_byte": 143,
+            "span_start_byte": 129,
+            "text_sha256": "eab352ffd1206c70f3c08677ea12aec2341b8effbffcc4b2138a156c2d6e0afb"
+          },
+          "receipt_state": "byte_replayed",
+          "rights_profile": "rp_public_primary_v1",
+          "schema": "source_span.v1",
+          "span_id": "span_0c2732df9eb0d0854a6c",
+          "text_sha256": "eab352ffd1206c70f3c08677ea12aec2341b8effbffcc4b2138a156c2d6e0afb",
+          "unreplayable_reason": null
+        }
+      ],
+      "kind": "quote",
+      "metric": "memory",
+      "role": "CEO",
+      "schema": "event_claim.v1",
+      "source_span": {
+        "authority": "context_only",
+        "display_excerpt": "100-year flood",
+        "document_id": "tx:AAPL/2026Q3",
+        "document_version": 1,
+        "locator": {
+          "kind": "text_span",
+          "role": "CEO",
+          "segment_index": 65,
+          "span_end_byte": 143,
+          "span_start_byte": 129,
+          "speaker": "Tim Cook",
+          "sub_kind": "transcript_segment"
+        },
+        "receipt": {
+          "segment_bytes": 622,
+          "segment_index": 65,
+          "segment_sha256": "966ef70c32345c453895d93b64a3cafc1640e030ab3ec3e46960a85290134833",
+          "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+          "span_end_byte": 143,
+          "span_start_byte": 129,
+          "text_sha256": "eab352ffd1206c70f3c08677ea12aec2341b8effbffcc4b2138a156c2d6e0afb"
+        },
+        "receipt_state": "byte_replayed",
+        "rights_profile": "rp_public_primary_v1",
+        "schema": "source_span.v1",
+        "span_id": "span_0c2732df9eb0d0854a6c",
+        "text_sha256": "eab352ffd1206c70f3c08677ea12aec2341b8effbffcc4b2138a156c2d6e0afb",
+        "unreplayable_reason": null
+      },
+      "speaker": "Tim Cook",
+      "text": "100-year flood"
+    },
+    {
+      "claim_id": "claim_fx_headwind",
+      "evidence_spans": [
+        {
+          "authority": "context_only",
+          "display_excerpt": "two and a half percentage points to the year-over-year total company growth rate",
+          "document_id": "tx:AAPL/2026Q3",
+          "document_version": 1,
+          "locator": {
+            "kind": "text_span",
+            "role": "CFO",
+            "segment_index": 26,
+            "span_end_byte": 151,
+            "span_start_byte": 71,
+            "speaker": "Kevan Parekh",
+            "sub_kind": "transcript_segment"
+          },
+          "receipt": {
+            "segment_bytes": 768,
+            "segment_index": 26,
+            "segment_sha256": "a37015e6a16178c46a07eb3fd10c6e4a2999b681ec99608477eac878fc018e42",
+            "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+            "span_end_byte": 151,
+            "span_start_byte": 71,
+            "text_sha256": "8453e5960940235285f5e6fe8f85604d606886fe2f0ae3ec5dfee1a3d9de99ca"
+          },
+          "receipt_state": "byte_replayed",
+          "rights_profile": "rp_public_primary_v1",
+          "schema": "source_span.v1",
+          "span_id": "span_8bffbbe981378e3caa69",
+          "text_sha256": "8453e5960940235285f5e6fe8f85604d606886fe2f0ae3ec5dfee1a3d9de99ca",
+          "unreplayable_reason": null
+        }
+      ],
+      "kind": "numeric",
+      "metric": "fx_yoy_headwind",
+      "role": "CFO",
+      "schema": "event_claim.v1",
+      "source_span": {
+        "authority": "context_only",
+        "display_excerpt": "two and a half percentage points to the year-over-year total company growth rate",
+        "document_id": "tx:AAPL/2026Q3",
+        "document_version": 1,
+        "locator": {
+          "kind": "text_span",
+          "role": "CFO",
+          "segment_index": 26,
+          "span_end_byte": 151,
+          "span_start_byte": 71,
+          "speaker": "Kevan Parekh",
+          "sub_kind": "transcript_segment"
+        },
+        "receipt": {
+          "segment_bytes": 768,
+          "segment_index": 26,
+          "segment_sha256": "a37015e6a16178c46a07eb3fd10c6e4a2999b681ec99608477eac878fc018e42",
+          "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+          "span_end_byte": 151,
+          "span_start_byte": 71,
+          "text_sha256": "8453e5960940235285f5e6fe8f85604d606886fe2f0ae3ec5dfee1a3d9de99ca"
+        },
+        "receipt_state": "byte_replayed",
+        "rights_profile": "rp_public_primary_v1",
+        "schema": "source_span.v1",
+        "span_id": "span_8bffbbe981378e3caa69",
+        "text_sha256": "8453e5960940235285f5e6fe8f85604d606886fe2f0ae3ec5dfee1a3d9de99ca",
+        "unreplayable_reason": null
+      },
+      "speaker": "Kevan Parekh",
+      "text": "two and a half percentage points to the year-over-year total company growth rate"
+    }
+  ],
+  "completeness": {
+    "consensus": {
+      "status": "unlicensed",
+      "typed_absence": {
+        "authority": "context_only",
+        "detail": "consensus is unlicensed for this estate; no beat/miss is emitted",
+        "document_id": null,
+        "event_id": "evt_cik0000320193_2026q3_results",
+        "missing_fields": [],
+        "reason": "missing_source",
+        "schema": "typed_absence.v1",
+        "subject": "consensus"
+      }
+    },
+    "filing": {
+      "filing_key": {
+        "accession": "0000320193-26-000018",
+        "cik": "0000320193"
+      },
+      "status": "bound"
+    },
+    "reaction": {
+      "status": "not_joined"
+    },
+    "release": {
+      "document_id": "disclosure_document_6d2b525b388dbedb697802668c0efadbad40299712901063843b905672f5f7d1",
+      "status": "present"
+    },
+    "slides": {
+      "status": "absent",
+      "typed_absence": {
+        "authority": "context_only",
+        "detail": "no presentation body is held for this event",
+        "document_id": null,
+        "event_id": "evt_cik0000320193_2026q3_results",
+        "missing_fields": [],
+        "reason": "no_source_document",
+        "schema": "typed_absence.v1",
+        "subject": "slides"
+      }
+    },
+    "transcript": {
+      "document_id": "tx:AAPL/2026Q3",
+      "status": "present"
+    }
+  },
+  "deltas": [
+    {
+      "basis_match": false,
+      "consensus": {
+        "authority": "context_only",
+        "detail": "consensus is unlicensed for this estate; no beat/miss is emitted",
+        "document_id": null,
+        "event_id": "evt_cik0000320193_2026q3_results",
+        "missing_fields": [],
+        "reason": "missing_source",
+        "schema": "typed_absence.v1",
+        "subject": "consensus"
+      },
+      "current": {
+        "basis": "gaap",
+        "unit": "usd_millions",
+        "value": 109417.0
+      },
+      "metric": "revenue",
+      "prior": {
+        "authority": "context_only",
+        "detail": "prior-period revenue is not bound as a same-table companion in this wave",
+        "document_id": "disclosure_document_6d2b525b388dbedb697802668c0efadbad40299712901063843b905672f5f7d1",
+        "event_id": "evt_cik0000320193_2026q3_results",
+        "missing_fields": [],
+        "reason": "no_span_addressable_evidence",
+        "schema": "typed_absence.v1",
+        "subject": "revenue_prior"
+      },
+      "schema": "metric_delta.v1"
+    }
+  ],
+  "event_id": "evt_cik0000320193_2026q3_results",
+  "facts": [
+    {
+      "basis": "gaap",
+      "event_id": "evt_cik0000320193_2026q3_results",
+      "fact_id": "fact_revenue_gaap",
+      "metric": "revenue",
+      "period": "2026-06-27",
+      "schema": "event_fact.v1",
+      "source_span": {
+        "authority": "context_only",
+        "display_excerpt": "109,417",
+        "document_id": "disclosure_document_6d2b525b388dbedb697802668c0efadbad40299712901063843b905672f5f7d1",
+        "document_version": 1,
+        "locator": {
+          "kind": "text_span",
+          "segment_index": 0,
+          "span_end_byte": 19526,
+          "span_start_byte": 19519,
+          "sub_kind": "transcript_segment"
+        },
+        "receipt": {
+          "segment_bytes": 173484,
+          "segment_index": 0,
+          "segment_sha256": "070abd6a9cdb7070e546d24ffcbc41c65450d939c6f88f189cb18ec711cf5fdb",
+          "source_sha256": "070abd6a9cdb7070e546d24ffcbc41c65450d939c6f88f189cb18ec711cf5fdb",
+          "span_end_byte": 19526,
+          "span_start_byte": 19519,
+          "text_sha256": "4a745d359dd176f4216117d625d1a5b92600458fe8e374d71ee3878b379f82c7"
+        },
+        "receipt_state": "byte_replayed",
+        "rights_profile": "rp_public_primary_v1",
+        "schema": "source_span.v1",
+        "span_id": "span_7e3f290d30832d798cea",
+        "text_sha256": "4a745d359dd176f4216117d625d1a5b92600458fe8e374d71ee3878b379f82c7",
+        "unreplayable_reason": null
+      },
+      "unit": "usd_millions",
+      "value": 109417.0
+    },
+    {
+      "event_id": "evt_cik0000320193_2026q3_results",
+      "fact_id": "fact_questions_count",
+      "metric": "questions_count",
+      "schema": "event_fact.v1",
+      "typed_absence": {
+        "authority": "context_only",
+        "detail": "analyst role is empty on the held transcript; 14 is overlay history, not a structured Q&A count",
+        "document_id": "tx:AAPL/2026Q3",
+        "event_id": "evt_cik0000320193_2026q3_results",
+        "missing_fields": [],
+        "reason": "no_span_addressable_evidence",
+        "schema": "typed_absence.v1",
+        "subject": "questions_count"
+      }
+    }
+  ],
+  "fiscal_period": {
+    "calendar_end": "2026-06-27",
+    "quarter": 3,
+    "year": 2026
+  },
+  "generated_at": "2026-07-30T20:30:28Z",
+  "generation_id": "f709a0a6ec514282d5769e7d",
+  "guidance": [
+    {
+      "high": 11.0,
+      "horizon": "FY2026 Q4",
+      "low": 9.0,
+      "metric": "revenue_yoy_pct",
+      "schema": "guidance_item.v1",
+      "source_span": {
+        "authority": "context_only",
+        "display_excerpt": "grow between 9%-11% year-over-year",
+        "document_id": "tx:AAPL/2026Q3",
+        "document_version": 1,
+        "locator": {
+          "kind": "text_span",
+          "role": "CFO",
+          "segment_index": 26,
+          "span_end_byte": 485,
+          "span_start_byte": 451,
+          "speaker": "Kevan Parekh",
+          "sub_kind": "transcript_segment"
+        },
+        "receipt": {
+          "segment_bytes": 768,
+          "segment_index": 26,
+          "segment_sha256": "a37015e6a16178c46a07eb3fd10c6e4a2999b681ec99608477eac878fc018e42",
+          "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f",
+          "span_end_byte": 485,
+          "span_start_byte": 451,
+          "text_sha256": "52288830a4c55ada7d850d445fa57229272e35864bb8c95f91bfeb139eebe328"
+        },
+        "receipt_state": "byte_replayed",
+        "rights_profile": "rp_public_primary_v1",
+        "schema": "source_span.v1",
+        "span_id": "span_96a25c0040fedc0c5ad2",
+        "text_sha256": "52288830a4c55ada7d850d445fa57229272e35864bb8c95f91bfeb139eebe328",
+        "unreplayable_reason": null
+      },
+      "status": "introduced",
+      "unit": "percent"
+    }
+  ],
+  "issuer": {
+    "company_id": "cik:0000320193",
+    "display_name": "Apple Inc.",
+    "listings": [
+      {
+        "is_primary": true,
+        "mic": "XNAS",
+        "security_id": "xnas:AAPL",
+        "share_class": "common",
+        "ticker": "AAPL",
+        "trading_currency": "USD",
+        "valid_from": "1970-01-01",
+        "valid_to": null
+      }
+    ]
+  },
+  "lifecycle": {
+    "observed_at": "2026-07-30T20:30:28Z",
+    "source_available_at": "2026-07-30T20:30:28Z",
+    "state": "complete"
+  },
+  "prophet_flags": {
+    "may_gate": false,
+    "may_rank": false,
+    "may_size": false,
+    "prophet_authority": false
+  },
+  "qa_exchanges": [],
+  "schema": "event_workspace.v1",
+  "sources": [
+    {
+      "document_id": "disclosure_document_6d2b525b388dbedb697802668c0efadbad40299712901063843b905672f5f7d1",
+      "filing_key": {
+        "accession": "0000320193-26-000018",
+        "cik": "0000320193"
+      },
+      "kind": "issuer_release",
+      "receipt_state": "byte_replayed",
+      "source_sha256": "070abd6a9cdb7070e546d24ffcbc41c65450d939c6f88f189cb18ec711cf5fdb",
+      "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/a8-kex991q3202606272026.htm"
+    },
+    {
+      "document_id": "tx:AAPL/2026Q3",
+      "kind": "transcript",
+      "receipt_state": "byte_replayed",
+      "source_sha256": "a8ff5d03e875fef5604791edbf625186c447af049e6e02f55bb89c68c7cc9f9f"
+    },
+    {
+      "kind": "public_wire",
+      "receipt_state": "typed_absence",
+      "slug": "aapl-2026q3-call-record",
+      "typed_absence": {
+        "authority": "context_only",
+        "detail": "aapl-2026q3-call-record was 404 on 2026-08-16",
+        "document_id": null,
+        "event_id": "evt_cik0000320193_2026q3_results",
+        "missing_fields": [],
+        "reason": "no_source_document",
+        "schema": "typed_absence.v1",
+        "subject": "public_wire"
+      }
+    },
+    {
+      "join_status": "unjoinable",
+      "kind": "edgar_collector",
+      "receipt_state": "typed_absence",
+      "typed_absence": {
+        "authority": "context_only",
+        "detail": "no collector rows were supplied to join the bound filing",
+        "document_id": null,
+        "event_id": "evt_cik0000320193_2026q3_results",
+        "missing_fields": [],
+        "reason": "unjoinable_filing_identity",
+        "schema": "typed_absence.v1",
+        "subject": "edgar_earnings_8k"
+      }
+    }
+  ],
+  "warnings": [
+    "collector_filing_unjoinable",
+    "consensus_unlicensed",
+    "questions_count_unstructured",
+    "reaction_not_joined",
+    "slides_absent",
+    "wire_record_not_found"
+  ]
+}

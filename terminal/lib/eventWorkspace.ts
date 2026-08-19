@@ -1,0 +1,1173 @@
+/**
+ * Verified server-side reader for event_workspace.v1.
+ *
+ * Mirrors engine.neuralweb.company_intelligence_reader.read_event_workspace:
+ * trusted R2 origin → marker → immutable generation → alias resolution →
+ * expected object receipt → fetch workspace → verify bytes + SHA → closed-schema
+ * normalize. No redirect following, arbitrary source URL, checkout fallback,
+ * latest.json, v1 overlay fallback, or client-side R2 fetch.
+ */
+
+import { normalizeCompanyIntelligenceSymbol } from "./companyIntelligence";
+
+export { normalizeCompanyIntelligenceSymbol };
+
+export const EVENT_WORKSPACE_SCHEMA = "event_workspace.v1" as const;
+export const EVENT_WORKSPACE_MANIFEST_SCHEMA = "event_workspace_manifest.v1" as const;
+export const EVENT_WORKSPACE_NEST = "event_workspaces";
+
+export type EventWorkspaceAuthority = "context_only";
+export type EventWorkspaceReceiptState = "byte_replayed" | "address_only" | "typed_absence";
+export type EventWorkspaceLifecycleState = "complete" | "corrected" | "partial" | "empty";
+export type EventWorkspaceManifestStatus = "ready" | "degraded" | "partial" | "empty";
+
+export interface EventWorkspaceTypedAbsence {
+  schema: "typed_absence.v1";
+  authority: EventWorkspaceAuthority;
+  reason: string;
+  subject: string;
+  detail: string;
+  event_id: string;
+  document_id: string | null;
+  missing_fields: string[];
+}
+
+export interface EventWorkspaceSpanLocator {
+  kind: string;
+  sub_kind?: string;
+  segment_index?: number;
+  span_start_byte?: number;
+  span_end_byte?: number;
+  speaker?: string | null;
+  role?: string | null;
+}
+
+export interface EventWorkspaceSpanReceipt {
+  source_sha256?: string;
+  text_sha256?: string;
+  segment_sha256?: string;
+  segment_index?: number;
+  segment_bytes?: number;
+  span_start_byte?: number;
+  span_end_byte?: number;
+}
+
+export interface EventWorkspaceSourceSpan {
+  schema: "source_span.v1";
+  span_id: string;
+  document_id: string;
+  document_version: number;
+  display_excerpt: string | null;
+  receipt_state: "byte_replayed" | "address_only";
+  locator: EventWorkspaceSpanLocator;
+  receipt: EventWorkspaceSpanReceipt | null;
+  text_sha256: string | null;
+  unreplayable_reason: string | null;
+  authority: EventWorkspaceAuthority;
+  rights_profile: string | null;
+}
+
+export interface EventWorkspaceFact {
+  schema: "event_fact.v1";
+  fact_id: string;
+  event_id: string;
+  metric: string;
+  value: number | null;
+  unit: string | null;
+  period: string | null;
+  basis: string | null;
+  source_span: EventWorkspaceSourceSpan | null;
+  typed_absence: EventWorkspaceTypedAbsence | null;
+}
+
+export interface EventWorkspaceDeltaValue {
+  value: number;
+  unit: string | null;
+  basis: string | null;
+}
+
+export interface EventWorkspaceDelta {
+  schema: "metric_delta.v1";
+  metric: string;
+  current: EventWorkspaceDeltaValue | EventWorkspaceTypedAbsence | null;
+  prior: EventWorkspaceDeltaValue | EventWorkspaceTypedAbsence | null;
+  consensus: EventWorkspaceTypedAbsence | EventWorkspaceDeltaValue | null;
+  basis_match: false;
+}
+
+export interface EventWorkspaceGuidance {
+  schema: "guidance_item.v1";
+  metric: string;
+  low: number | null;
+  high: number | null;
+  unit: string | null;
+  horizon: string | null;
+  status: string;
+  source_span: EventWorkspaceSourceSpan | null;
+  typed_absence: EventWorkspaceTypedAbsence | null;
+}
+
+export interface EventWorkspaceClaim {
+  schema: "event_claim.v1";
+  claim_id: string;
+  text: string;
+  kind: string;
+  metric: string | null;
+  speaker: string | null;
+  role: string | null;
+  source_span: EventWorkspaceSourceSpan | null;
+  typed_absence: EventWorkspaceTypedAbsence | null;
+}
+
+export interface EventWorkspaceSource {
+  kind: string;
+  receipt_state: EventWorkspaceReceiptState;
+  document_id: string | null;
+  source_sha256: string | null;
+  url: string | null;
+  slug: string | null;
+  join_status: string | null;
+  filing_key: { cik: string; accession: string } | null;
+  typed_absence: EventWorkspaceTypedAbsence | null;
+}
+
+export interface EventWorkspaceCompletenessBlock {
+  status: string;
+  document_id?: string | null;
+  filing_key?: { cik: string; accession: string } | null;
+  typed_absence?: EventWorkspaceTypedAbsence | null;
+}
+
+export interface EventWorkspace {
+  schema: typeof EVENT_WORKSPACE_SCHEMA;
+  event_id: string;
+  aliases: string[];
+  issuer: {
+    company_id: string;
+    display_name: string;
+    listings: Array<{
+      ticker: string;
+      mic: string;
+      security_id: string | null;
+      share_class: string | null;
+      trading_currency: string | null;
+      is_primary: boolean;
+      valid_from: string | null;
+      valid_to: string | null;
+    }>;
+  };
+  fiscal_period: { year: number; quarter: number; calendar_end: string | null };
+  lifecycle: {
+    state: EventWorkspaceLifecycleState;
+    observed_at: string | null;
+    source_available_at: string | null;
+  };
+  completeness: {
+    release: EventWorkspaceCompletenessBlock;
+    filing: EventWorkspaceCompletenessBlock;
+    transcript: EventWorkspaceCompletenessBlock;
+    slides: EventWorkspaceCompletenessBlock;
+    consensus: EventWorkspaceCompletenessBlock;
+    reaction: EventWorkspaceCompletenessBlock;
+  };
+  facts: EventWorkspaceFact[];
+  deltas: EventWorkspaceDelta[];
+  guidance: EventWorkspaceGuidance[];
+  claims: EventWorkspaceClaim[];
+  sources: EventWorkspaceSource[];
+  warnings: string[];
+  generation_id: string;
+  generated_at: string;
+  authority: EventWorkspaceAuthority;
+  prophet_flags: {
+    may_rank: false;
+    may_size: false;
+    may_gate: false;
+    prophet_authority: false;
+  };
+  claim_citations_pending: boolean;
+  qa_exchanges: unknown[];
+}
+
+export interface EventWorkspaceManifest {
+  schema: typeof EVENT_WORKSPACE_MANIFEST_SCHEMA;
+  generation_id: string;
+  generated_at: string;
+  status: EventWorkspaceManifestStatus;
+  event_count: number;
+  files: Record<string, { sha256: string; bytes: number }>;
+  aliases: Record<string, string>;
+  authority: EventWorkspaceAuthority;
+  warnings: string[];
+}
+
+export interface EventWorkspaceVerifiedReceipt {
+  generation_id: string;
+  workspace_sha256: string;
+  marker_sha256: string;
+  workspace_url: string;
+}
+
+export type EventWorkspaceErrorCode =
+  | "invalid_symbol"
+  | "not_found"
+  | "ambiguous_event"
+  | "upstream_unavailable"
+  | "invalid_payload";
+
+export type EventWorkspaceResult =
+  | {
+    ok: true;
+    state: "ready" | "partial" | "stale";
+    available: true;
+    event_id: string;
+    workspace: EventWorkspace;
+    authority: EventWorkspaceAuthority;
+    is_context_only: true;
+    display_only: true;
+    receipt: EventWorkspaceVerifiedReceipt;
+  }
+  | {
+    ok: false;
+    state: "error";
+    available: false;
+    error: { code: EventWorkspaceErrorCode; message: string; retryable: boolean };
+  };
+
+const WORKSPACE_KEYS = [
+  "schema", "event_id", "aliases", "issuer", "fiscal_period", "lifecycle",
+  "completeness", "facts", "deltas", "guidance", "claims", "sources", "warnings",
+  "generation_id", "generated_at", "authority", "prophet_flags",
+  "claim_citations_pending", "qa_exchanges",
+] as const;
+
+const MANIFEST_KEYS = [
+  "schema", "generation_id", "generated_at", "status", "event_count", "files",
+  "aliases", "authority", "warnings",
+] as const;
+
+const WORKSPACE_WARNINGS = new Set([
+  "wire_record_not_found",
+  "collector_filing_unjoinable",
+  "consensus_unlicensed",
+  "slides_absent",
+  "reaction_not_joined",
+  "questions_count_unstructured",
+]);
+
+const EVENT_ID_RE = /^evt_cik\d{10}_\d{4}(?:q[1-4]|fy)_[a-z0-9]+$/;
+const GENERATION_RE = /^[a-f0-9]{24,64}$/;
+const SHA256 = /^[a-f0-9]{64}$/;
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const TICKER_PERIOD_ALIAS = /^([A-Z0-9](?:[A-Z0-9.-]{0,14}[A-Z0-9])?)\/(\d{4})Q([1-4])$/;
+const ACCESSION = /^\d{10}-\d{2}-\d{6}$/;
+const COMPANY_INTELLIGENCE_R2_HOST = "pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev";
+const FETCH_TIMEOUT_MS = 2_500;
+const MANIFEST_TTL_MS = 30_000;
+const WORKSPACE_TTL_MS = 30_000;
+export const EVENT_WORKSPACE_MAX_R2_JSON_BYTES = 512 * 1024;
+const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
+const MAX_ALIASES = 64;
+const MAX_FACTS = 64;
+const MAX_CLAIMS = 64;
+const MAX_SOURCES = 24;
+const MAX_WARNINGS = 32;
+const MAX_CACHE_ENTRIES = 256;
+const MAX_TEXT = 4_000;
+const MAX_ID = 160;
+const USER_AGENT = "MastermindCompanyIntelligence/1.0";
+
+type JsonRecord = Record<string, unknown>;
+type ManifestCache = { data: EventWorkspaceManifest; sha256: string; at: number };
+type WorkspaceCache = { data: EventWorkspace; receipt: EventWorkspaceVerifiedReceipt; at: number };
+
+let manifestCache: ManifestCache | null = null;
+const workspaceCache = new Map<string, WorkspaceCache>();
+
+function object(value: unknown): JsonRecord | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as JsonRecord
+    : null;
+}
+
+function exactKeys(value: JsonRecord, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
+
+function requiredString(value: unknown, max: number): string | null {
+  return typeof value === "string" && value.length > 0 && value.length <= max ? value : null;
+}
+
+function validTimestamp(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 64 && ISO_TIMESTAMP.test(value)
+    && Number.isFinite(new Date(value).getTime());
+}
+
+function validDate(value: unknown): value is string {
+  if (typeof value !== "string" || !DATE.test(value)) return false;
+  const d = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+
+function validSha(value: unknown): value is string {
+  return typeof value === "string" && SHA256.test(value);
+}
+
+function boundedInt(value: unknown, min: number, max: number): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : null;
+}
+
+function finiteNumber(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+export function isEventWorkspaceEventId(value: string): boolean {
+  return EVENT_ID_RE.test(value);
+}
+
+export function isEventWorkspaceGenerationId(value: string): boolean {
+  return GENERATION_RE.test(value) && !value.includes("..");
+}
+
+export function tickerPeriodAliasPattern(ticker: string): RegExp {
+  return new RegExp(`^${ticker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(\\d{4})Q([1-4])$`);
+}
+
+export interface SelectedTickerEvent {
+  event_id: string;
+  ticker: string;
+  year: number;
+  quarter: number;
+  alias: string;
+}
+
+/**
+ * Derive the current v2 event solely from verified workspace manifest aliases.
+ * Admit aliases matching exactly T/YYYYQn, choose the greatest fiscal period,
+ * and require an unambiguous canonical owner.
+ */
+export function selectCurrentEventFromAliases(
+  ticker: string,
+  aliases: Record<string, string> | Iterable<readonly [string, string]>,
+): SelectedTickerEvent | { error: "not_found" | "ambiguous_event" } {
+  const symbol = normalizeCompanyIntelligenceSymbol(ticker);
+  if (!symbol) return { error: "not_found" };
+  const entries: Array<readonly [string, string]> = Array.isArray(aliases)
+    ? aliases
+    : Object.entries(aliases as Record<string, string>);
+  const pattern = tickerPeriodAliasPattern(symbol);
+  const matched: SelectedTickerEvent[] = [];
+  for (const [alias, canonical] of entries) {
+    if (typeof alias !== "string" || typeof canonical !== "string") continue;
+    const key = alias.trim();
+    if (!pattern.test(key) || !isEventWorkspaceEventId(canonical)) continue;
+    const parsed = TICKER_PERIOD_ALIAS.exec(key);
+    if (!parsed || parsed[1] !== symbol) continue;
+    matched.push({
+      event_id: canonical,
+      ticker: symbol,
+      year: Number(parsed[2]),
+      quarter: Number(parsed[3]),
+      alias: key,
+    });
+  }
+  if (matched.length === 0) return { error: "not_found" };
+  const byPeriod = new Map<string, Set<string>>();
+  for (const row of matched) {
+    const period = `${row.year}Q${row.quarter}`;
+    const owners = byPeriod.get(period) ?? new Set<string>();
+    owners.add(row.event_id);
+    byPeriod.set(period, owners);
+  }
+  for (const owners of byPeriod.values()) {
+    if (owners.size > 1) return { error: "ambiguous_event" };
+  }
+  matched.sort((a, b) => (a.year - b.year) || (a.quarter - b.quarter));
+  return matched[matched.length - 1];
+}
+
+function canonicalJson(value: unknown): string | null {
+  try {
+    const normalize = (item: unknown): unknown => {
+      if (Array.isArray(item)) return item.map(normalize);
+      if (item !== null && typeof item === "object") {
+        const source = item as Record<string, unknown>;
+        const target: Record<string, unknown> = {};
+        for (const key of Object.keys(source).sort()) target[key] = normalize(source[key]);
+        return target;
+      }
+      if (typeof item === "number" && !Number.isFinite(item)) throw new Error("non-finite");
+      return item;
+    };
+    return `${JSON.stringify(normalize(value))}\n`;
+  } catch {
+    return null;
+  }
+}
+
+function validateR2Base(base: string): string | null {
+  try {
+    const parsed = new URL(base);
+    return parsed.protocol === "https:" && parsed.hostname === COMPANY_INTELLIGENCE_R2_HOST && !parsed.port
+      && parsed.pathname === "/" && !parsed.username && !parsed.password && !parsed.search && !parsed.hash
+      ? parsed.toString().replace(/\/$/, "")
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isPinnedR2FinalUrl(requestedUrl: string, finalUrl: string): boolean {
+  if (!finalUrl) return true;
+  try {
+    const requested = new URL(requestedUrl);
+    const final = new URL(finalUrl);
+    return final.protocol === "https:" && final.hostname === COMPANY_INTELLIGENCE_R2_HOST && !final.port
+      && final.origin === requested.origin && final.pathname === requested.pathname
+      && final.search === requested.search && final.hash === "";
+  } catch {
+    return false;
+  }
+}
+
+type FetchedJson = { kind: "ok"; raw: unknown; bytes: Uint8Array } | { kind: "missing" } | { kind: "failure" };
+
+async function boundedResponseBytes(response: Response, controller: AbortController, limit: number): Promise<Uint8Array | null> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null) {
+    const advertised = Number(contentLength);
+    if (!Number.isSafeInteger(advertised) || advertised < 0 || advertised > limit) return null;
+  }
+  if (!response.body) return null;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (total > limit) {
+        controller.abort();
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(chunk.value);
+    }
+  } catch {
+    return null;
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+async function fetchJson(url: string, limit: number, signal?: AbortSignal): Promise<FetchedJson> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const onAbort = () => controller.abort();
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      redirect: "error",
+      signal: controller.signal,
+      headers: { accept: "application/json", "user-agent": USER_AGENT },
+    });
+    if (!isPinnedR2FinalUrl(url, response.url)) return { kind: "failure" };
+    if (response.status === 404) return { kind: "missing" };
+    if (!response.ok) return { kind: "failure" };
+    try {
+      const bytes = await boundedResponseBytes(response, controller, limit);
+      if (!bytes) return { kind: "failure" };
+      return { kind: "ok", raw: JSON.parse(new TextDecoder().decode(bytes)), bytes };
+    } catch {
+      return { kind: "failure" };
+    }
+  } catch {
+    return { kind: "failure" };
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const body = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(body).set(bytes);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", body);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function normalizeAbsence(raw: unknown): EventWorkspaceTypedAbsence | null {
+  const obj = object(raw);
+  if (!obj || obj.schema !== "typed_absence.v1" || obj.authority !== "context_only") return null;
+  const reason = requiredString(obj.reason, 80);
+  const subject = requiredString(obj.subject, 80);
+  const detail = requiredString(obj.detail, MAX_TEXT);
+  const eventId = requiredString(obj.event_id, MAX_ID);
+  if (!reason || !subject || !detail || !eventId || !isEventWorkspaceEventId(eventId)) return null;
+  const documentId = obj.document_id === null ? null : requiredString(obj.document_id, MAX_ID);
+  if (obj.document_id !== null && obj.document_id !== undefined && !documentId) return null;
+  if (!Array.isArray(obj.missing_fields) || obj.missing_fields.length > 24) return null;
+  const missing: string[] = [];
+  for (const item of obj.missing_fields) {
+    const field = requiredString(item, 80);
+    if (!field) return null;
+    missing.push(field);
+  }
+  return {
+    schema: "typed_absence.v1",
+    authority: "context_only",
+    reason,
+    subject,
+    detail,
+    event_id: eventId,
+    document_id: documentId ?? null,
+    missing_fields: missing,
+  };
+}
+
+function normalizeSpan(raw: unknown): EventWorkspaceSourceSpan | null {
+  const obj = object(raw);
+  if (!obj || obj.schema !== "source_span.v1" || obj.authority !== "context_only") return null;
+  const spanId = requiredString(obj.span_id, MAX_ID);
+  const documentId = requiredString(obj.document_id, MAX_ID);
+  const version = boundedInt(obj.document_version, 1, 10_000);
+  if (!spanId || !documentId || version === null) return null;
+  if (obj.receipt_state !== "byte_replayed" && obj.receipt_state !== "address_only") return null;
+  const excerpt = obj.display_excerpt === null ? null : requiredString(obj.display_excerpt, MAX_TEXT);
+  if (obj.display_excerpt != null && !excerpt) return null;
+  const locatorRaw = object(obj.locator) ?? {};
+  const locator: EventWorkspaceSpanLocator = {
+    kind: requiredString(locatorRaw.kind, 80) ?? "text_span",
+  };
+  if (typeof locatorRaw.sub_kind === "string") locator.sub_kind = locatorRaw.sub_kind.slice(0, 80);
+  if (typeof locatorRaw.segment_index === "number" && Number.isInteger(locatorRaw.segment_index)) {
+    locator.segment_index = locatorRaw.segment_index;
+  }
+  if (typeof locatorRaw.span_start_byte === "number" && Number.isInteger(locatorRaw.span_start_byte)) {
+    locator.span_start_byte = locatorRaw.span_start_byte;
+  }
+  if (typeof locatorRaw.span_end_byte === "number" && Number.isInteger(locatorRaw.span_end_byte)) {
+    locator.span_end_byte = locatorRaw.span_end_byte;
+  }
+  if (typeof locatorRaw.speaker === "string") locator.speaker = locatorRaw.speaker.slice(0, 160);
+  if (typeof locatorRaw.role === "string") locator.role = locatorRaw.role.slice(0, 80);
+  let receipt: EventWorkspaceSpanReceipt | null = null;
+  const receiptRaw = object(obj.receipt);
+  if (receiptRaw) {
+    receipt = {};
+    if (validSha(receiptRaw.source_sha256)) receipt.source_sha256 = receiptRaw.source_sha256;
+    if (validSha(receiptRaw.text_sha256)) receipt.text_sha256 = receiptRaw.text_sha256;
+    if (validSha(receiptRaw.segment_sha256)) receipt.segment_sha256 = receiptRaw.segment_sha256;
+    if (typeof receiptRaw.segment_index === "number") receipt.segment_index = receiptRaw.segment_index;
+    if (typeof receiptRaw.segment_bytes === "number") receipt.segment_bytes = receiptRaw.segment_bytes;
+    if (typeof receiptRaw.span_start_byte === "number") receipt.span_start_byte = receiptRaw.span_start_byte;
+    if (typeof receiptRaw.span_end_byte === "number") receipt.span_end_byte = receiptRaw.span_end_byte;
+  }
+  const textSha = obj.text_sha256 === null ? null : validSha(obj.text_sha256) ? obj.text_sha256 : undefined;
+  if (textSha === undefined) return null;
+  if (obj.receipt_state === "byte_replayed" && !textSha) return null;
+  return {
+    schema: "source_span.v1",
+    span_id: spanId,
+    document_id: documentId,
+    document_version: version,
+    display_excerpt: excerpt,
+    receipt_state: obj.receipt_state,
+    locator,
+    receipt,
+    text_sha256: textSha,
+    unreplayable_reason: obj.unreplayable_reason === null ? null : requiredString(obj.unreplayable_reason, 240),
+    authority: "context_only",
+    rights_profile: obj.rights_profile === null ? null : requiredString(obj.rights_profile, 80),
+  };
+}
+
+function filingKey(raw: unknown): { cik: string; accession: string } | null | undefined {
+  if (raw == null) return null;
+  const obj = object(raw);
+  if (!obj) return undefined;
+  const cik = requiredString(obj.cik, 16);
+  const accession = requiredString(obj.accession, 24);
+  if (!cik || !accession || !ACCESSION.test(accession)) return undefined;
+  return { cik, accession };
+}
+
+function normalizeCompletenessBlock(raw: unknown): EventWorkspaceCompletenessBlock | null {
+  const obj = object(raw);
+  if (!obj) return null;
+  const status = requiredString(obj.status, 40);
+  if (!status) return null;
+  const block: EventWorkspaceCompletenessBlock = { status };
+  if ("document_id" in obj) {
+    const documentId = obj.document_id === null ? null : requiredString(obj.document_id, MAX_ID);
+    if (obj.document_id != null && !documentId) return null;
+    block.document_id = documentId ?? null;
+  }
+  if ("filing_key" in obj) {
+    const key = filingKey(obj.filing_key);
+    if (key === undefined) return null;
+    block.filing_key = key;
+  }
+  if ("typed_absence" in obj && obj.typed_absence != null) {
+    const absence = normalizeAbsence(obj.typed_absence);
+    if (!absence) return null;
+    block.typed_absence = absence;
+  }
+  return block;
+}
+
+function spanOrAbsence(obj: JsonRecord): {
+  source_span: EventWorkspaceSourceSpan | null;
+  typed_absence: EventWorkspaceTypedAbsence | null;
+} | null {
+  const hasSpan = obj.source_span != null;
+  const hasAbsence = obj.typed_absence != null;
+  if (hasSpan === hasAbsence) return hasSpan ? null : { source_span: null, typed_absence: null };
+  if (hasSpan) {
+    const span = normalizeSpan(obj.source_span);
+    return span ? { source_span: span, typed_absence: null } : null;
+  }
+  const absence = normalizeAbsence(obj.typed_absence);
+  return absence ? { source_span: null, typed_absence: absence } : null;
+}
+
+function normalizeFact(raw: unknown, eventId: string): EventWorkspaceFact | null {
+  const obj = object(raw);
+  if (!obj || obj.schema !== "event_fact.v1") return null;
+  const factId = requiredString(obj.fact_id, MAX_ID);
+  const metric = requiredString(obj.metric, 80);
+  const boundEvent = requiredString(obj.event_id, MAX_ID);
+  if (!factId || !metric || boundEvent !== eventId) return null;
+  const evidence = spanOrAbsence(obj);
+  if (!evidence) return null;
+  const value = obj.value === undefined ? null : finiteNumber(obj.value);
+  if (value === undefined) return null;
+  const unit = obj.unit === null || obj.unit === undefined ? null : requiredString(obj.unit, 40);
+  if (obj.unit != null && !unit) return null;
+  const period = obj.period === null || obj.period === undefined ? null : (validDate(obj.period) ? obj.period : requiredString(obj.period, 40));
+  if (obj.period != null && !period) return null;
+  const basis = obj.basis === null || obj.basis === undefined ? null : requiredString(obj.basis, 40);
+  if (obj.basis != null && !basis) return null;
+  return {
+    schema: "event_fact.v1",
+    fact_id: factId,
+    event_id: eventId,
+    metric,
+    value,
+    unit,
+    period,
+    basis,
+    ...evidence,
+  };
+}
+
+function deltaSide(raw: unknown): EventWorkspaceDeltaValue | EventWorkspaceTypedAbsence | null | undefined {
+  if (raw == null) return null;
+  const absence = object(raw)?.schema === "typed_absence.v1" ? normalizeAbsence(raw) : null;
+  if (absence) return absence;
+  const obj = object(raw);
+  if (!obj) return undefined;
+  const value = finiteNumber(obj.value);
+  if (value === undefined || value === null) return undefined;
+  const unit = obj.unit === null || obj.unit === undefined ? null : requiredString(obj.unit, 40);
+  if (obj.unit != null && !unit) return undefined;
+  const basis = obj.basis === null || obj.basis === undefined ? null : requiredString(obj.basis, 40);
+  if (obj.basis != null && !basis) return undefined;
+  return { value, unit, basis };
+}
+
+function normalizeDelta(raw: unknown): EventWorkspaceDelta | null {
+  const obj = object(raw);
+  if (!obj || obj.schema !== "metric_delta.v1") return null;
+  if (obj.basis_match !== false) return null;
+  if ("beat" in obj || "miss" in obj || "beat_miss" in obj || "verdict" in obj) return null;
+  const metric = requiredString(obj.metric, 80);
+  if (!metric) return null;
+  const current = deltaSide(obj.current);
+  const prior = deltaSide(obj.prior);
+  const consensus = deltaSide(obj.consensus);
+  if (current === undefined || prior === undefined || consensus === undefined) return null;
+  return { schema: "metric_delta.v1", metric, current, prior, consensus, basis_match: false };
+}
+
+function normalizeGuidance(raw: unknown): EventWorkspaceGuidance | null {
+  const obj = object(raw);
+  if (!obj || obj.schema !== "guidance_item.v1") return null;
+  const metric = requiredString(obj.metric, 80);
+  const status = requiredString(obj.status, 40);
+  if (!metric || !status) return null;
+  const evidence = spanOrAbsence(obj);
+  if (!evidence) return null;
+  const low = finiteNumber(obj.low);
+  const high = finiteNumber(obj.high);
+  if (low === undefined || high === undefined) return null;
+  return {
+    schema: "guidance_item.v1",
+    metric,
+    low,
+    high,
+    unit: obj.unit === null || obj.unit === undefined ? null : requiredString(obj.unit, 40),
+    horizon: obj.horizon === null || obj.horizon === undefined ? null : requiredString(obj.horizon, 80),
+    status,
+    ...evidence,
+  };
+}
+
+function normalizeClaim(raw: unknown): EventWorkspaceClaim | null {
+  const obj = object(raw);
+  if (!obj || obj.schema !== "event_claim.v1") return null;
+  const claimId = requiredString(obj.claim_id, MAX_ID);
+  const text = requiredString(obj.text, MAX_TEXT);
+  const kind = requiredString(obj.kind, 40);
+  if (!claimId || !text || !kind) return null;
+  const evidence = spanOrAbsence(obj);
+  if (!evidence) return null;
+  return {
+    schema: "event_claim.v1",
+    claim_id: claimId,
+    text,
+    kind,
+    metric: obj.metric === null || obj.metric === undefined ? null : requiredString(obj.metric, 80),
+    speaker: obj.speaker === null || obj.speaker === undefined ? null : requiredString(obj.speaker, 160),
+    role: obj.role === null || obj.role === undefined ? null : requiredString(obj.role, 80),
+    ...evidence,
+  };
+}
+
+function isSafeHttpsUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2_048 || /[\\\r\n]/.test(value)) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeSource(raw: unknown): EventWorkspaceSource | null {
+  const obj = object(raw);
+  if (!obj) return null;
+  const kind = requiredString(obj.kind, 40);
+  if (!kind) return null;
+  if (obj.receipt_state !== "byte_replayed" && obj.receipt_state !== "address_only" && obj.receipt_state !== "typed_absence") {
+    return null;
+  }
+  const absence = obj.typed_absence == null ? null : normalizeAbsence(obj.typed_absence);
+  if (obj.typed_absence != null && !absence) return null;
+  if (obj.receipt_state === "typed_absence" && !absence) return null;
+  const key = "filing_key" in obj ? filingKey(obj.filing_key) : null;
+  if (key === undefined) return null;
+  const url = obj.url == null ? null : isSafeHttpsUrl(obj.url) ? obj.url : undefined;
+  if (url === undefined) return null;
+  return {
+    kind,
+    receipt_state: obj.receipt_state,
+    document_id: obj.document_id == null ? null : requiredString(obj.document_id, MAX_ID),
+    source_sha256: obj.source_sha256 == null ? null : validSha(obj.source_sha256) ? obj.source_sha256 : null,
+    url,
+    slug: obj.slug == null ? null : requiredString(obj.slug, 120),
+    join_status: obj.join_status == null ? null : requiredString(obj.join_status, 40),
+    filing_key: key,
+    typed_absence: absence,
+  };
+}
+
+export function normalizeEventWorkspace(
+  raw: unknown,
+  expectedEventId?: string,
+  expectedGenerationId?: string,
+): EventWorkspace | null {
+  const obj = object(raw);
+  if (!obj || !exactKeys(obj, WORKSPACE_KEYS) || obj.schema !== EVENT_WORKSPACE_SCHEMA || obj.authority !== "context_only") {
+    return null;
+  }
+  const eventId = requiredString(obj.event_id, MAX_ID);
+  const generationId = typeof obj.generation_id === "string" ? obj.generation_id : "";
+  if (!eventId || !isEventWorkspaceEventId(eventId) || !isEventWorkspaceGenerationId(generationId) || !validTimestamp(obj.generated_at)) {
+    return null;
+  }
+  if (expectedEventId && eventId !== expectedEventId) return null;
+  if (expectedGenerationId && generationId !== expectedGenerationId) return null;
+  const flags = object(obj.prophet_flags);
+  if (!flags || flags.may_rank !== false || flags.may_size !== false || flags.may_gate !== false || flags.prophet_authority !== false) {
+    return null;
+  }
+  if (typeof obj.claim_citations_pending !== "boolean") return null;
+  if (!Array.isArray(obj.aliases) || obj.aliases.length > MAX_ALIASES) return null;
+  const aliases: string[] = [];
+  for (const alias of obj.aliases) {
+    const safe = requiredString(alias, MAX_ID);
+    if (!safe) return null;
+    aliases.push(safe);
+  }
+  const issuerRaw = object(obj.issuer);
+  const displayName = issuerRaw ? requiredString(issuerRaw.display_name, 240) : null;
+  const companyId = issuerRaw ? requiredString(issuerRaw.company_id, 32) : null;
+  if (!issuerRaw || !displayName || !companyId || !Array.isArray(issuerRaw.listings) || issuerRaw.listings.length > 8) return null;
+  const listings: EventWorkspace["issuer"]["listings"] = [];
+  for (const listingRaw of issuerRaw.listings) {
+    const listing = object(listingRaw);
+    const ticker = listing && typeof listing.ticker === "string" ? normalizeCompanyIntelligenceSymbol(listing.ticker) : null;
+    if (!listing || !ticker) return null;
+    listings.push({
+      ticker,
+      mic: requiredString(listing.mic, 16) ?? "",
+      security_id: listing.security_id == null ? null : requiredString(listing.security_id, 40),
+      share_class: listing.share_class == null ? null : requiredString(listing.share_class, 40),
+      trading_currency: listing.trading_currency == null ? null : requiredString(listing.trading_currency, 8),
+      is_primary: listing.is_primary === true,
+      valid_from: listing.valid_from == null ? null : (validDate(listing.valid_from) ? listing.valid_from : null),
+      valid_to: listing.valid_to == null ? null : (validDate(listing.valid_to) ? listing.valid_to : null),
+    });
+  }
+  const fiscal = object(obj.fiscal_period);
+  const year = fiscal ? boundedInt(fiscal.year, 2000, 2100) : null;
+  const quarter = fiscal ? boundedInt(fiscal.quarter, 1, 4) : null;
+  if (!fiscal || year === null || quarter === null) return null;
+  const lifecycle = object(obj.lifecycle);
+  if (!lifecycle || (lifecycle.state !== "complete" && lifecycle.state !== "corrected" && lifecycle.state !== "partial" && lifecycle.state !== "empty")) {
+    return null;
+  }
+  const completenessRaw = object(obj.completeness);
+  if (!completenessRaw) return null;
+  const release = normalizeCompletenessBlock(completenessRaw.release);
+  const filing = normalizeCompletenessBlock(completenessRaw.filing);
+  const transcript = normalizeCompletenessBlock(completenessRaw.transcript);
+  const slides = normalizeCompletenessBlock(completenessRaw.slides);
+  const consensus = normalizeCompletenessBlock(completenessRaw.consensus);
+  const reaction = normalizeCompletenessBlock(completenessRaw.reaction);
+  if (!release || !filing || !transcript || !slides || !consensus || !reaction) return null;
+  if (!Array.isArray(obj.facts) || obj.facts.length > MAX_FACTS) return null;
+  const facts: EventWorkspaceFact[] = [];
+  for (const item of obj.facts) {
+    const fact = normalizeFact(item, eventId);
+    if (!fact) return null;
+    facts.push(fact);
+  }
+  if (!Array.isArray(obj.deltas) || obj.deltas.length > MAX_FACTS) return null;
+  const deltas: EventWorkspaceDelta[] = [];
+  for (const item of obj.deltas) {
+    const delta = normalizeDelta(item);
+    if (!delta) return null;
+    deltas.push(delta);
+  }
+  if (!Array.isArray(obj.guidance) || obj.guidance.length > MAX_FACTS) return null;
+  const guidance: EventWorkspaceGuidance[] = [];
+  for (const item of obj.guidance) {
+    const row = normalizeGuidance(item);
+    if (!row) return null;
+    guidance.push(row);
+  }
+  if (!Array.isArray(obj.claims) || obj.claims.length > MAX_CLAIMS) return null;
+  const claims: EventWorkspaceClaim[] = [];
+  for (const item of obj.claims) {
+    const claim = normalizeClaim(item);
+    if (!claim) return null;
+    claims.push(claim);
+  }
+  if (!Array.isArray(obj.sources) || obj.sources.length > MAX_SOURCES) return null;
+  const sources: EventWorkspaceSource[] = [];
+  for (const item of obj.sources) {
+    const source = normalizeSource(item);
+    if (!source) return null;
+    sources.push(source);
+  }
+  if (!Array.isArray(obj.warnings) || obj.warnings.length > MAX_WARNINGS) return null;
+  const warnings: string[] = [];
+  for (const warning of obj.warnings) {
+    if (typeof warning !== "string" || !WORKSPACE_WARNINGS.has(warning)) return null;
+    warnings.push(warning);
+  }
+  if (warnings.join("\0") !== [...new Set(warnings)].sort().join("\0")) return null;
+  if (!Array.isArray(obj.qa_exchanges) || obj.qa_exchanges.length > MAX_CLAIMS) return null;
+  return {
+    schema: EVENT_WORKSPACE_SCHEMA,
+    event_id: eventId,
+    aliases,
+    issuer: { company_id: companyId, display_name: displayName, listings },
+    fiscal_period: {
+      year,
+      quarter,
+      calendar_end: fiscal.calendar_end == null ? null : (validDate(fiscal.calendar_end) ? fiscal.calendar_end : null),
+    },
+    lifecycle: {
+      state: lifecycle.state,
+      observed_at: lifecycle.observed_at == null ? null : (validTimestamp(lifecycle.observed_at) ? lifecycle.observed_at : null),
+      source_available_at: lifecycle.source_available_at == null ? null : (validTimestamp(lifecycle.source_available_at) ? lifecycle.source_available_at : null),
+    },
+    completeness: { release, filing, transcript, slides, consensus, reaction },
+    facts,
+    deltas,
+    guidance,
+    claims,
+    sources,
+    warnings,
+    generation_id: generationId,
+    generated_at: obj.generated_at,
+    authority: "context_only",
+    prophet_flags: { may_rank: false, may_size: false, may_gate: false, prophet_authority: false },
+    claim_citations_pending: obj.claim_citations_pending,
+    qa_exchanges: obj.qa_exchanges,
+  };
+}
+
+export function normalizeEventWorkspaceManifest(raw: unknown): EventWorkspaceManifest | null {
+  const obj = object(raw);
+  if (!obj || !exactKeys(obj, MANIFEST_KEYS) || obj.schema !== EVENT_WORKSPACE_MANIFEST_SCHEMA || obj.authority !== "context_only") {
+    return null;
+  }
+  const generationId = typeof obj.generation_id === "string" ? obj.generation_id : "";
+  if (!isEventWorkspaceGenerationId(generationId) || !validTimestamp(obj.generated_at)) return null;
+  if (obj.status !== "ready" && obj.status !== "degraded" && obj.status !== "partial" && obj.status !== "empty") return null;
+  const eventCount = boundedInt(obj.event_count, 0, 20_000);
+  if (eventCount === null) return null;
+  const filesRaw = object(obj.files);
+  if (!filesRaw || Object.keys(filesRaw).length !== eventCount) return null;
+  const files: Record<string, { sha256: string; bytes: number }> = {};
+  for (const [key, rawFile] of Object.entries(filesRaw)) {
+    if (!key.startsWith("workspaces/") || !key.endsWith(".json") || key.includes("..")) return null;
+    const eventId = key.slice("workspaces/".length, -".json".length);
+    if (!isEventWorkspaceEventId(eventId)) return null;
+    const file = object(rawFile);
+    const bytes = file ? boundedInt(file.bytes, 1, EVENT_WORKSPACE_MAX_R2_JSON_BYTES) : null;
+    if (!file || !validSha(file.sha256) || bytes === null) return null;
+    files[key] = { sha256: file.sha256, bytes };
+  }
+  const aliasesRaw = object(obj.aliases);
+  if (!aliasesRaw) return null;
+  const aliases: Record<string, string> = {};
+  for (const [alias, canonical] of Object.entries(aliasesRaw)) {
+    if (typeof alias !== "string" || alias.length === 0 || alias.length > MAX_ID || typeof canonical !== "string" || !isEventWorkspaceEventId(canonical)) {
+      return null;
+    }
+    aliases[alias] = canonical;
+  }
+  if (!Array.isArray(obj.warnings)) return null;
+  const warnings: string[] = [];
+  for (const warning of obj.warnings) {
+    if (typeof warning !== "string" || warning.length > 120) return null;
+    warnings.push(warning);
+  }
+  if (warnings.join("\0") !== [...new Set(warnings)].sort().join("\0")) return null;
+  return {
+    schema: EVENT_WORKSPACE_MANIFEST_SCHEMA,
+    generation_id: generationId,
+    generated_at: obj.generated_at,
+    status: obj.status,
+    event_count: eventCount,
+    files,
+    aliases,
+    authority: "context_only",
+    warnings,
+  };
+}
+
+export function resolveWorkspaceEventId(eventId: string, aliases: Record<string, string>): string | null {
+  const text = eventId.trim();
+  if (!text || text.length > 128) return null;
+  if (aliases[text]) return aliases[text];
+  if (isEventWorkspaceEventId(text)) return text;
+  return null;
+}
+
+export function transcriptIdFromWorkspace(workspace: EventWorkspace): string | null {
+  const fromDoc = workspace.completeness.transcript.document_id;
+  const match = typeof fromDoc === "string" ? /\/(\d{4}Q[1-4])$/.exec(fromDoc) : null;
+  if (match) return match[1];
+  for (const alias of workspace.aliases) {
+    const period = TICKER_PERIOD_ALIAS.exec(alias);
+    if (period) return `${period[2]}Q${period[3]}`;
+  }
+  return null;
+}
+
+function error(code: EventWorkspaceErrorCode, message: string, retryable: boolean): EventWorkspaceResult {
+  return { ok: false, state: "error", available: false, error: { code, message, retryable } };
+}
+
+function workspaceResult(workspace: EventWorkspace, receipt: EventWorkspaceVerifiedReceipt, stale = false): EventWorkspaceResult {
+  return {
+    ok: true,
+    state: stale ? "stale" : workspace.lifecycle.state === "partial" ? "partial" : "ready",
+    available: true,
+    event_id: workspace.event_id,
+    workspace,
+    authority: "context_only",
+    is_context_only: true,
+    display_only: true,
+    receipt,
+  };
+}
+
+async function loadManifest(base: string, signal?: AbortSignal): Promise<{ manifest: EventWorkspaceManifest; sha256: string; stale: boolean } | null | "invalid"> {
+  const now = Date.now();
+  if (manifestCache && now - manifestCache.at < MANIFEST_TTL_MS) {
+    return { manifest: manifestCache.data, sha256: manifestCache.sha256, stale: false };
+  }
+  const markerUrl = `${base}/company_intelligence/${EVENT_WORKSPACE_NEST}/manifest.json`;
+  const fetched = await fetchJson(markerUrl, MAX_MANIFEST_BYTES, signal);
+  if (fetched.kind !== "ok") return manifestCache ? { manifest: manifestCache.data, sha256: manifestCache.sha256, stale: true } : fetched.kind === "missing" ? null : null;
+  const marker = normalizeEventWorkspaceManifest(fetched.raw);
+  if (!marker) return manifestCache ? { manifest: manifestCache.data, sha256: manifestCache.sha256, stale: true } : "invalid";
+  const immutableUrl = `${base}/company_intelligence/${EVENT_WORKSPACE_NEST}/generations/${marker.generation_id}/manifest.json`;
+  const immutableFetched = await fetchJson(immutableUrl, MAX_MANIFEST_BYTES, signal);
+  if (immutableFetched.kind !== "ok") return "invalid";
+  const immutable = normalizeEventWorkspaceManifest(immutableFetched.raw);
+  const markerCanonical = canonicalJson(fetched.raw);
+  const immutableCanonical = canonicalJson(immutableFetched.raw);
+  if (!immutable || !markerCanonical || markerCanonical !== immutableCanonical || immutable.generation_id !== marker.generation_id) {
+    return "invalid";
+  }
+  const sha = await sha256Hex(fetched.bytes);
+  manifestCache = { data: marker, sha256: sha, at: now };
+  return { manifest: marker, sha256: sha, stale: false };
+}
+
+/**
+ * Server-only R2 resolver. `base` must be the trusted R2_BASE from upstreams.ts.
+ * Current-event selection uses only verified manifest aliases of the form T/YYYYQn.
+ */
+export async function resolveCurrentEventWorkspaceFromR2(
+  symbol: string,
+  base: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<EventWorkspaceResult> {
+  const ticker = normalizeCompanyIntelligenceSymbol(symbol);
+  if (!ticker) return error("invalid_symbol", "Invalid ticker", false);
+  const safeBase = validateR2Base(base);
+  if (!safeBase) return error("upstream_unavailable", "Event workspace is unavailable", true);
+  const manifestRead = await loadManifest(safeBase, options.signal);
+  if (manifestRead === "invalid") return error("invalid_payload", "Event workspace manifest is invalid", true);
+  if (!manifestRead) return error("not_found", "Event workspace is not covered", false);
+  const selected = selectCurrentEventFromAliases(ticker, manifestRead.manifest.aliases);
+  if ("error" in selected) {
+    return selected.error === "ambiguous_event"
+      ? error("ambiguous_event", "Event workspace period is ambiguous", false)
+      : error("not_found", "Event workspace is not covered", false);
+  }
+  return resolveEventWorkspaceFromR2(selected.event_id, safeBase, options, manifestRead);
+}
+
+export async function resolveEventWorkspaceFromR2(
+  eventId: string,
+  base: string,
+  options: { signal?: AbortSignal } = {},
+  preloaded?: { manifest: EventWorkspaceManifest; sha256: string; stale: boolean },
+): Promise<EventWorkspaceResult> {
+  const safeBase = validateR2Base(base);
+  if (!safeBase) return error("upstream_unavailable", "Event workspace is unavailable", true);
+  const manifestRead = preloaded ?? await loadManifest(safeBase, options.signal);
+  if (manifestRead === "invalid") return error("invalid_payload", "Event workspace manifest is invalid", true);
+  if (!manifestRead) return error("not_found", "Event workspace is not covered", false);
+  const { manifest, sha256: markerSha, stale } = manifestRead;
+  const canonicalId = resolveWorkspaceEventId(eventId, manifest.aliases);
+  if (!canonicalId) return error("not_found", "Event workspace alias could not be resolved", false);
+  const relative = `workspaces/${canonicalId}.json`;
+  const file = manifest.files[relative];
+  if (!file) return error("not_found", "Event workspace does not cover this event", false);
+  const cacheKey = `${manifest.generation_id}:${canonicalId}`;
+  const cached = workspaceCache.get(cacheKey);
+  const now = Date.now();
+  if (stale) return cached ? workspaceResult(cached.data, cached.receipt, true) : error("upstream_unavailable", "Event workspace is temporarily unavailable", true);
+  if (cached && now - cached.at < WORKSPACE_TTL_MS) return workspaceResult(cached.data, cached.receipt);
+  const workspaceUrl = `${safeBase}/company_intelligence/${EVENT_WORKSPACE_NEST}/generations/${manifest.generation_id}/${relative}`;
+  const fetched = await fetchJson(workspaceUrl, EVENT_WORKSPACE_MAX_R2_JSON_BYTES, options.signal);
+  if (fetched.kind !== "ok") {
+    return cached ? workspaceResult(cached.data, cached.receipt, true) : error("upstream_unavailable", "Event workspace is temporarily unavailable", true);
+  }
+  const contentHash = await sha256Hex(fetched.bytes);
+  if (fetched.bytes.byteLength !== file.bytes || contentHash !== file.sha256.toLowerCase()) {
+    return cached ? workspaceResult(cached.data, cached.receipt, true) : error("invalid_payload", "Event workspace failed its manifest receipt", true);
+  }
+  const workspace = normalizeEventWorkspace(fetched.raw, canonicalId, manifest.generation_id);
+  if (!workspace) {
+    return cached ? workspaceResult(cached.data, cached.receipt, true) : error("invalid_payload", "Event workspace payload is invalid", true);
+  }
+  const receipt: EventWorkspaceVerifiedReceipt = {
+    generation_id: manifest.generation_id,
+    workspace_sha256: file.sha256,
+    marker_sha256: markerSha,
+    workspace_url: workspaceUrl,
+  };
+  if (!workspaceCache.has(cacheKey) && workspaceCache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = workspaceCache.keys().next().value as string | undefined;
+    if (oldest) workspaceCache.delete(oldest);
+  }
+  workspaceCache.set(cacheKey, { data: workspace, receipt, at: now });
+  return workspaceResult(workspace, receipt);
+}
+
+export async function getCurrentEventWorkspace(
+  symbol: string,
+  options: { signal?: AbortSignal; retryNonce?: number } = {},
+): Promise<EventWorkspaceResult> {
+  const ticker = normalizeCompanyIntelligenceSymbol(symbol);
+  if (!ticker) return error("invalid_symbol", "Invalid ticker", false);
+  const suffix = options.retryNonce === undefined ? "" : `?retry=${encodeURIComponent(String(options.retryNonce))}`;
+  try {
+    const response = await fetch(`/api/event-workspace/${encodeURIComponent(ticker)}${suffix}`, {
+      cache: "no-store",
+      signal: options.signal,
+      headers: { accept: "application/json", "cache-control": "no-store" },
+    });
+    let raw: unknown;
+    try { raw = await response.json(); } catch {
+      return error("upstream_unavailable", "Event workspace returned malformed JSON", true);
+    }
+    const payload = object(raw);
+    if (!payload) return error("upstream_unavailable", "Event workspace returned malformed JSON", true);
+    if (payload.ok === false && payload.state === "error") {
+      const err = object(payload.error);
+      const code = err?.code;
+      const message = requiredString(err?.message, 300);
+      const retryable = err?.retryable;
+      if (
+        (code === "invalid_symbol" || code === "not_found" || code === "ambiguous_event"
+          || code === "upstream_unavailable" || code === "invalid_payload")
+        && message && typeof retryable === "boolean"
+      ) return error(code, message, retryable);
+    }
+    if (payload.ok === true && payload.available === true && (payload.state === "ready" || payload.state === "partial" || payload.state === "stale")) {
+      const eventId = requiredString(payload.event_id, MAX_ID);
+      const workspace = eventId ? normalizeEventWorkspace(payload.workspace, eventId) : null;
+      const receiptRaw = object(payload.receipt);
+      const generationId = receiptRaw && typeof receiptRaw.generation_id === "string" ? receiptRaw.generation_id : "";
+      const workspaceSha = receiptRaw && validSha(receiptRaw.workspace_sha256) ? receiptRaw.workspace_sha256 : null;
+      const markerSha = receiptRaw && validSha(receiptRaw.marker_sha256) ? receiptRaw.marker_sha256 : null;
+      const workspaceUrl = receiptRaw && requiredString(receiptRaw.workspace_url, 2_048);
+      if (
+        workspace && eventId && workspace.event_id === eventId && isEventWorkspaceGenerationId(generationId)
+        && workspace.generation_id === generationId && workspaceSha && markerSha && workspaceUrl
+        && payload.authority === "context_only"
+      ) {
+        return workspaceResult(workspace, {
+          generation_id: generationId,
+          workspace_sha256: workspaceSha,
+          marker_sha256: markerSha,
+          workspace_url: workspaceUrl,
+        }, payload.state === "stale");
+      }
+    }
+    return error(response.status === 404 ? "not_found" : "upstream_unavailable", "Event workspace returned an invalid response", response.status !== 404);
+  } catch {
+    return error("upstream_unavailable", "Event workspace could not be reached", true);
+  }
+}
+
+/** Test-only cache reset; production paths never call this. */
+export function __resetEventWorkspaceCacheForTests(): void {
+  manifestCache = null;
+  workspaceCache.clear();
+}

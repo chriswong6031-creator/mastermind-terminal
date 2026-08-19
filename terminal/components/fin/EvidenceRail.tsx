@@ -7,6 +7,7 @@ import type {
   CompanyIntelligenceEvent,
   CompanyIntelligenceSource,
 } from "../../lib/companyIntelligence";
+import type { EventWorkspaceEvidenceView } from "../../lib/eventWorkspacePresent";
 
 export type CompanyEvidenceKind = "summary" | "highlight" | "quote" | "metric";
 
@@ -18,6 +19,7 @@ export interface CompanyEvidenceSelection {
   /** A deterministic cross-event calculation, deliberately separate from the source receipt. */
   derived_comparison?: string | null;
   source: CompanyIntelligenceSource | null;
+  v2?: EventWorkspaceEvidenceView;
 }
 
 export interface EvidenceRailProps {
@@ -27,6 +29,7 @@ export interface EvidenceRailProps {
   overlay: boolean;
   onClose: () => void;
   onOpenTranscript: (id: string) => void;
+  periodCode?: string;
 }
 
 function sourceLabel(kind: CompanyIntelligenceSource["kind"], zh: boolean): string {
@@ -59,14 +62,17 @@ export default function EvidenceRail({
   overlay,
   onClose,
   onOpenTranscript,
+  periodCode,
 }: EvidenceRailProps) {
   const { lang } = useLang();
   const zh = lang === "zh";
   const closeRef = useRef<HTMLButtonElement>(null);
   const railRef = useRef<HTMLElement>(null);
-  const txId = transcriptId(evidence?.source ?? null);
+  const txId = evidence?.v2?.transcript_id ?? transcriptId(evidence?.source ?? null);
   const receipt = receiptValue(evidence?.source ?? null);
   const precision = evidence?.source?.citation_precision ?? "metadata";
+  const v2 = evidence?.v2 ?? null;
+  const period = periodCode ?? `${event.fiscal_year}Q${event.fiscal_quarter}`;
 
   useEffect(() => {
     if (!open || !overlay) return;
@@ -142,10 +148,79 @@ export default function EvidenceRail({
               <span className="fin-tag" style={{ "--c": "var(--brand-2)" } as React.CSSProperties}>
                 {pick(zh, evidence.label, evidence.label)}
               </span>
-              <span className="ci-event-code num">{event.fiscal_year}Q{event.fiscal_quarter}</span>
+              <span className="ci-event-code num">{period}</span>
             </div>
-            <blockquote>{evidence.text}</blockquote>
+            <blockquote>{v2?.excerpt || evidence.text}</blockquote>
 
+            {v2 ? (
+              <div className="ci-receipt-card" data-ci-receipt-state={v2.receipt_state}>
+                <div className="ci-receipt-row">
+                  <span>{pick(zh, "Receipt state", "凭证状态")}</span>
+                  <b>{v2.receipt_state === "byte_replayed"
+                    ? pick(zh, "Byte-replayed", "字节回放")
+                    : v2.receipt_state === "address_only"
+                      ? pick(zh, "Address only", "仅地址")
+                      : pick(zh, "Typed absence", "类型化缺项")}</b>
+                </div>
+                <div className="ci-receipt-row">
+                  <span>{pick(zh, "Source document", "来源文档")}</span>
+                  <b>{v2.document_label}</b>
+                </div>
+                {v2.receipt_state === "byte_replayed" && (
+                  <>
+                    {v2.speaker && (
+                      <div className="ci-receipt-row">
+                        <span>{pick(zh, "Speaker", "发言人")}</span>
+                        <b>{v2.speaker}{v2.role ? ` · ${v2.role}` : ""}</b>
+                      </div>
+                    )}
+                    {v2.segment_index != null && (
+                      <div className="ci-receipt-row">
+                        <span>{pick(zh, "Segment / bytes", "段落 / 字节")}</span>
+                        <b className="num">{v2.segment_index}{v2.span_start_byte != null && v2.span_end_byte != null ? ` · ${v2.span_start_byte}–${v2.span_end_byte}` : ""}</b>
+                      </div>
+                    )}
+                    {v2.text_sha256 && (
+                      <div className="ci-receipt-hash">
+                        <span>{pick(zh, "Text receipt", "文本凭证")}</span>
+                        <code title={v2.text_sha256}>{`${v2.text_sha256.slice(0, 12)}…${v2.text_sha256.slice(-8)}`}</code>
+                      </div>
+                    )}
+                    {v2.source_sha256 && (
+                      <div className="ci-receipt-hash">
+                        <span>{pick(zh, "Source hash", "来源哈希")}</span>
+                        <code title={v2.source_sha256}>{`${v2.source_sha256.slice(0, 12)}…${v2.source_sha256.slice(-8)}`}</code>
+                      </div>
+                    )}
+                    {v2.source_clock && (
+                      <div className="ci-receipt-row">
+                        <span>{pick(zh, "Source clock", "来源时钟")}</span>
+                        <time className="num" dateTime={v2.source_clock}>{v2.source_clock.slice(0, 10)}</time>
+                      </div>
+                    )}
+                  </>
+                )}
+                {v2.receipt_state === "typed_absence" && v2.typed_absence && (
+                  <>
+                    <div className="ci-receipt-row">
+                      <span>{pick(zh, "Reason", "原因")}</span>
+                      <b>{v2.typed_absence.reason.replaceAll("_", " ")}</b>
+                    </div>
+                    <div className="ci-receipt-row">
+                      <span>{pick(zh, "Detail", "说明")}</span>
+                      <b>{v2.typed_absence.detail}</b>
+                    </div>
+                  </>
+                )}
+                {v2.receipt_state === "address_only" && (
+                  <div className="ci-evidence-note" role="note">
+                    <span aria-hidden>i</span>
+                    <p>{pick(zh, "The document address is known but the bytes cannot be replayed.", "文档地址已知，但无法回放其字节。")}</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
             {evidence.derived_comparison && (
               <div className="ci-evidence-derived" role="note">
                 <span>{pick(zh, "DERIVED COMPARISON", "派生比较")}</span>
@@ -200,6 +275,8 @@ export default function EvidenceRail({
                     )}
               </p>
             </div>
+              </>
+            )}
 
             <div className="ci-evidence-actions">
               {txId && (
@@ -207,8 +284,8 @@ export default function EvidenceRail({
                   {pick(zh, "Open transcript", "打开电话会")}
                 </button>
               )}
-              {evidence.source?.url?.startsWith("https://") && (
-                <a className="btn btn-ghost" href={evidence.source.url} target="_blank" rel="noreferrer">
+              {(v2?.source_url?.startsWith("https://") || evidence.source?.url?.startsWith("https://")) && (
+                <a className="btn btn-ghost" href={v2?.source_url || evidence.source?.url || undefined} target="_blank" rel="noreferrer">
                   {pick(zh, "Open source", "打开来源")}
                 </a>
               )}
