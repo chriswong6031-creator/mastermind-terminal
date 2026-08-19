@@ -123,6 +123,7 @@ import { pushRecentlyViewed } from "@/lib/recentlyViewed";
 import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
 import LayoutMenu, { type LayoutFeedback, type LayoutStatus } from "@/components/LayoutMenu";
 import { nextLayoutName, type SavedLayout } from "@/lib/layouts";
+import { applyLayoutConfig, captureLayoutConfig, normalizeLayoutConfig, type LayoutWorkspace } from "@/lib/layoutConfig";
 import { type PineScript } from "@/components/ChartPanel";
 
 type ShellDrawingStyle = { color: string; width: number; dash: Dash };
@@ -2329,7 +2330,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       if (r.status === 401) { setLayouts([]); setLayoutStatus("auth"); return false; }
       if (!r.ok) { setLayoutStatus("unavailable"); return false; }
       const d = await r.json();
-      setLayouts(Array.isArray(d.layouts) ? d.layouts : []);
+      // A 200 whose body is not a list is a BROKEN read, not an empty library — the same rule the
+      // status codes above encode, applied one level down. Coercing it to [] here would reintroduce
+      // the exact confusion this wave removes, just past the point where the status looked fine.
+      if (!Array.isArray(d?.layouts)) { setLayoutStatus("unavailable"); return false; }
+      setLayouts(d.layouts);
       setLayoutStatus("ready");
       return true;
     } catch { setLayoutStatus("unavailable"); return false; }
@@ -3878,11 +3883,19 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const postLayout = (name: string, config: unknown, mode: "create" | "overwrite") =>
     fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config, mode }) });
 
+  // The single place that says what "the current workspace" IS, for both save and load. Keeping one
+  // definition is what makes the round trip provable: the same shape is captured and re-applied.
+  const currentWorkspace = (): LayoutWorkspace => ({
+    panes, paneTfs, split, activePane, sync, chartType,
+    inds: [...inds], indParams, hidden: [...hidden],
+    compare, compareCfg, lockedVLine,
+  });
+
   async function saveLayout() {
     if (layoutSaving) return;                       // busy guard: a double-click is one save
     if (!loggedIn) { promptLayoutSignup(); return; }
     const typed = layoutName.trim();
-    const config = { panes, paneTfs, activePane, tf, chartType, inds: [...inds], favTF, compare, compareCfg, lockedVLine };
+    const config = captureLayoutConfig(currentWorkspace());
     setLayoutSaving(true); setLayoutFeedback({ kind: "saving" }); setLayoutDeleteError(null);
     try {
       let saved: string | null = null;
@@ -3912,12 +3925,28 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       setLayoutFeedback({ kind: "error", message: t("layoutSaveFailed") });
     } finally { setLayoutSaving(false); }
   }
-  function loadLayout(l: SavedLayout) { const c = (l.config || {}) as any; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (c.compareCfg) setCompareCfg(c.compareCfg); if (typeof c.lockedVLine === "string" || c.lockedVLine === null) setLockedVLine(c.lockedVLine);
-    if (Array.isArray(c.panes) && c.panes.length) {
-      setPanes(c.panes); setActivePane(Math.min(c.activePane || 0, c.panes.length - 1)); setSplit(c.panes.length >= 4 ? 4 : c.panes.length >= 2 ? 2 : 1);
-      setPaneTfs(Array.isArray(c.paneTfs) && c.paneTfs.length === c.panes.length ? c.paneTfs : c.panes.map(() => c.tf || "D"));   // back-compat: older layouts have a single tf
-    } else if (c.active) { setPanes([c.active]); setActivePane(0); setSplit(1); setPaneTfs([c.tf || "D"]); }
-    setLayoutOpen(false); }
+  // Load = normalize at the read boundary, fold onto the live workspace, then apply. The old loader
+  // reconstructed `split` from pane count, never restored Sync, indicator PARAMETERS or eye state,
+  // and re-applied the layout's timeframe favourites over the user's own — so a loaded layout was
+  // partly the saved workspace and partly whatever was already on screen. `lib/layoutConfig.ts`
+  // owns which fields a layout claims and how a legacy config is read; this function only wires the
+  // result into React state.
+  function loadLayout(l: SavedLayout) {
+    const next = applyLayoutConfig(normalizeLayoutConfig(l.config), currentWorkspace());
+    setPanes(next.panes);
+    setPaneTfs(next.paneTfs);
+    setSplit(next.split);
+    setActivePane(next.activePane);
+    setSync(next.sync);
+    setChartType(next.chartType);
+    setInds(new Set(next.inds));
+    setIndParams(next.indParams);
+    setHidden(new Set(next.hidden));
+    setCompare(next.compare);
+    setCompareCfg(next.compareCfg as Record<string, CmpCfg>);
+    setLockedVLine(next.lockedVLine);
+    setLayoutOpen(false);
+  }
   // Optimistic removal WITH rollback. The old version dropped the row when the request merely
   // resolved — a 401/503 delete vanished from the menu and came back on the next load, which is the
   // worst of both worlds: the user believes it is gone and the account still holds it.
@@ -4305,7 +4334,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
             <div className="seg tool-adv toolbar-overflow-item" data-toolbar-item data-toolbar-action="split" title={t("splitLayout")}>{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
             <button className={`tbtn tool-adv toolbar-overflow-item${isMtf ? " on" : ""}`} data-toolbar-item title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
             <button className={`tbtn dtm toolbar-overflow-item${dtm ? " on" : ""}`} data-toolbar-item title={t("dtmTip")} onClick={toggleDtm}><svg viewBox="0 0 24 24" style={{ width: 13, height: 13 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>{t("dtmBtn")}</button>
-            {panes.length > 1 && <button className={`tbtn tool-adv toolbar-overflow-item${sync && !mixedTfs ? " on" : ""}`} data-toolbar-item disabled={mixedTfs} title={mixedTfs ? t("syncMixedTip") : t("syncTip")} onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
+            {panes.length > 1 && <button className={`tbtn tool-adv toolbar-overflow-item${sync && !mixedTfs ? " on" : ""}`} data-toolbar-item data-toolbar-action="sync" data-sync-on={sync && !mixedTfs ? "1" : "0"} disabled={mixedTfs} title={mixedTfs ? t("syncMixedTip") : t("syncTip")} onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
             <button
               className={`tbtn tool-adv toolbar-overflow-item${replayOn ? " on" : ""}`}
               data-toolbar-item
