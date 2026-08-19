@@ -1376,7 +1376,12 @@ export const LEX: Record<string, [string, string]> = {
   // ─── F3 smart dialogs ─────────────────────────────────────────────────────
   searchTitle: ["Symbol search", "代码搜索"],
   addSymbolTitle: ["Add symbol", "添加代码"],
-  searchInputPlaceholder: ["Symbol, ISIN, or CUSIP", "代码、ISIN或CUSIP"],
+  // The placeholder is a capability promise. scoreSymbol() ranks on ticker, English name and
+  // Chinese name ONLY — there is no ISIN/CUSIP field anywhere in the search contract, so the
+  // former "Symbol, ISIN, or CUSIP" told a user to paste an identifier that could only ever
+  // answer "No match". Identifier lookup stays a future capability (it needs licensed
+  // first-party identifier data); until it exists the placeholder names what actually works.
+  searchInputPlaceholder: ["Symbol or company name", "代码或公司名称"],
   searchRecentEmpty: ["No symbols viewed yet", "暂无最近浏览的标的"],
   searchRecentHeader: ["Recently viewed", "最近浏览"],
   searchShowRecent: ["Recent", "最近"],
