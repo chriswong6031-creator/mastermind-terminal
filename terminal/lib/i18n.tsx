@@ -2020,6 +2020,17 @@ export const LEX: Record<string, [string, string]> = {
     "Free accounts can read & experiment with scripts; saving custom indicators & adding the proprietary Mastermind suite to charts requires",
     "免费账户可以阅读和试写脚本；保存自定义指标、以及把自研的 Mastermind 套件加到图表上，需要",
   ],
+  // D3a — switching scripts used to reset the editable buffers with no decision, so an unsaved
+  // edit vanished on a single click. Leaving one script for another is now an explicit choice.
+  peUnsavedTitle: ["Unsaved changes", "有未保存的修改"],
+  peUnsavedBody: [
+    "“{name}” has edits you haven't saved. Switching scripts will replace the editor's contents.",
+    "“{name}” 有尚未保存的修改。切换脚本会替换编辑器中的内容。",
+  ],
+  peUnsavedSave: ["Save and switch", "保存并切换"],
+  peUnsavedDiscard: ["Discard changes", "放弃修改"],
+  peUnsavedCancel: ["Keep editing", "继续编辑"],
+  peUnsavedSaveFailed: ["Couldn't save — you're still on “{name}”, nothing was lost.", "保存失败 —— 仍停留在 “{name}”，没有丢失任何内容。"],
 
   // ---- fundamentals ----
   fdBackToChart: ["Back to chart", "返回图表"],
