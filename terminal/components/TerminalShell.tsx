@@ -62,6 +62,24 @@ import {
   planWatchlistMigration,
   type ServerWatchlist,
 } from "@/lib/watchlists";
+import {
+  adoptLegacyWatchlistState,
+  clearWatchlistTombstones,
+  forgetListTombstones,
+  GUEST_OWNER,
+  readOwnerMigrationMarker,
+  readOwnerStringMap,
+  readOwnerWatchlists,
+  readWatchlistTombstones,
+  recordWatchlistTombstones,
+  tombstonedSymbols,
+  watchlistOwnerKey,
+  writeOwnerMigrationMarker,
+  writeOwnerStringMap,
+  writeOwnerWatchlists,
+  WL_FLAGS_KEY,
+  WL_NOTES_KEY,
+} from "@/lib/watchlistOwner";
 import { useEntitlement } from "@/lib/useEntitlement";
 import { normalizeDevTierOverride } from "@/lib/subscriptionTier";
 import { useChartBus } from "@/lib/useChartBus";
@@ -128,7 +146,7 @@ import ChartTableView from "@/components/ChartTableView";
 import { type OTEntry } from "@/components/ChartObjectTree";
 import { listTemplates, saveTemplate } from "@/lib/chartTemplates";
 import { FLAG_DEFAULT, FLAG_COLORS } from "@/lib/flagPalette";
-import { TERMINAL_VISUAL_READY_EVENT } from "@/lib/terminalBoot";
+import { resolveTerminalLandingSymbol, TERMINAL_VISUAL_READY_EVENT } from "@/lib/terminalBoot";
 import AssetLogo from "@/components/AssetLogo";
 import {
   DEFAULT_WATCHLIST_SETTINGS,
@@ -844,7 +862,10 @@ const sameRows = (a: { symbol: string; section: string }[], b?: { symbol: string
 // W1b: the one-time `mm.wls` -> `watchlists` migration marker. Deliberately a PER-LIST success
 // map (`{ "Gold Miners": true }`), not a single boolean: a run where two lists migrate and a
 // third 500s must retry only the third on the next mount. Absent/false = still to do.
-const WLS_MIGRATED_KEY = "mm.wls.migrated.v1";
+//
+// A1: the marker is OWNER-SCOPED now (lib/watchlistOwner.ts). While it was browser-global, one
+// account's "already migrated" receipt suppressed another account's real migration in the same
+// browser — the same unscoped-state failure as `mm.wls` itself, one layer down.
 
 // Guest drawings tier: login is disabled site-wide, so /api/drawings is a no-op for
 // everyone and chart drawings were destroyed on symbol switch / reload. Persist them
@@ -889,8 +910,16 @@ function btMark(name: string) {
   console.log(`[boottrace] ${name} +${(now - _btStart).toFixed(1)}ms`);
 }
 
-export default function TerminalShell({ symbols, email, initialSymbol, shellMode = false, shellTray = false, shellDossier = false, secondBarsEnabled = false }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string; shellMode?: boolean; shellTray?: boolean; shellDossier?: boolean; secondBarsEnabled?: boolean }) {
+export default function TerminalShell({ symbols, email, userId, initialSymbol, shellMode = false, shellTray = false, shellDossier = false, secondBarsEnabled = false }: { symbols: { symbol: string; section: string }[]; email: string; userId?: string; initialSymbol?: string; shellMode?: boolean; shellTray?: boolean; shellDossier?: boolean; secondBarsEnabled?: boolean }) {
   const [man, setMan] = useState<Manifest | null>(null);
+  // A1: which identity the LOCAL watchlist state on this browser belongs to. `guest` when signed
+  // out, `account:<auth uuid>` otherwise — the immutable id, never the email (see
+  // lib/watchlistOwner.ts). Every read and write of lists/flags/notes/receipts/tombstones below is
+  // scoped by it, so a second user in the same browser can neither see nor re-POST the first
+  // user's rows.
+  const wlOwner = watchlistOwnerKey(userId);
+  const wlOwnerRef = useRef(wlOwner);
+  wlOwnerRef.current = wlOwner;
   // named watchlists — client-side + localStorage-backed so switching / creating lists works for guests
   // (no auth needed). The server-provided `symbols` seed becomes the "Default" list.
   const [lists, setLists] = useState<Record<string, { symbol: string; section: string }[]>>({ Default: normalizeWatchlistRows(symbols) });
@@ -935,6 +964,9 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // mid-interaction, and broke master #409's context-menu tests (the flag row measured as not
   // visible). Ids are plumbing, not rendered state.
   const serverListIdsRef = useRef<Record<string, string>>({});
+  /** `wlTarget` is declared far below the migration effect that needs it (A3's delete retry), so
+   *  it is reached through a ref rather than duplicated into a second copy of the targeting rule. */
+  const wlTargetRef = useRef<(listName: string) => Record<string, string>>(() => ({}));
   /** F5: fold an inventory's ids INTO the map, never over it. */
   const registerServerListIds = useCallback((rows: readonly { id: string; name: string }[]) => {
     const merged = { ...serverListIdsRef.current };
@@ -943,14 +975,15 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     serverListIdsRef.current = merged;
   }, []);
 
-  /** Drop one name from the per-list migration marker. */
+  /** Drop one name from THIS owner's per-list migration marker. */
   const forgetListMigrated = useCallback((name: string) => {
-    try {
-      const marker = load(WLS_MIGRATED_KEY, {}) as Record<string, unknown>;
-      if (!marker || typeof marker !== "object" || !(name in marker)) return;
-      delete marker[name];
-      localStorage.setItem(WLS_MIGRATED_KEY, JSON.stringify(marker));
-    } catch {}
+    const owner = wlOwnerRef.current;
+    const marker = readOwnerMigrationMarker(localStorage, owner);
+    if (!(name in marker)) return;
+    delete marker[name];
+    writeOwnerMigrationMarker(localStorage, owner, marker);
+    // The list is gone; its unconfirmed deletions have nothing left to protect.
+    forgetListTombstones(localStorage, owner, name);
   }, []);
   const wlMigrationRef = useRef(false);
   // Set by the mount-restore effect. The migration must not read `lists` until the saved `mm.wls`
@@ -993,15 +1026,6 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // on `loggedIn` alone, so a symbol edit mid-migration cannot restart the whole run.
   const listsRef = useRef(lists);
   listsRef.current = lists;
-  // F7: sign-out -> sign-in (especially as a DIFFERENT user) must not inherit the previous
-  // session's list ids or its "already migrated" latch.
-  const wlMigrationEmailRef = useRef(email);
-  useEffect(() => {
-    if (wlMigrationEmailRef.current === email) return;
-    wlMigrationEmailRef.current = email;
-    wlMigrationRef.current = false;
-    serverListIdsRef.current = {};
-  }, [email]);
   // Memoized so its identity is stable: `lists[activeList] || []` allocated a fresh [] on every
   // render whenever the list was missing, which re-ran every useMemo downstream of `wl`.
   const wl = useMemo(() => lists[activeList] || [], [lists, activeList]);
@@ -1045,7 +1069,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // ent.tier is already normalized by useEntitlement (legacy `insider` → `essential`).
   const userTier: "free" | "essential" | "pro" = devTier ?? (ent.tier === "essential" || ent.tier === "pro" ? ent.tier : "free");
 
-  const seed0 = initialSymbol || symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA";
+  // A4/A5: ONE landing-symbol rule, shared with the server route (lib/terminalBoot.ts). The route
+  // preloads exactly this symbol's OHLC + slice; a second copy of the rule here is how a plain
+  // `/terminal` boot ended up preloading nothing while the shell went on to fetch NVDA, and how a
+  // `?sym=nvda` deep link preloaded `/data/NVDA.json` and then fetched `/data/nvda.json`.
+  const seed0 = resolveTerminalLandingSymbol(initialSymbol, symbols);
   const [panes, setPanes] = useState<string[]>([seed0]);
   const [activePane, setActivePane] = useState(0);
   const [sync, setSync] = useState(true);
@@ -1113,6 +1141,53 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const [lastFlagColor, setLastFlagColor] = useState<string>(FLAG_DEFAULT);
   // Symbol notes are symbol-scoped, not chart-coordinate drawings.
   const [symbolNotes, setSymbolNotes] = useState<Record<string, string>>({});
+
+  // ── A1: the owner boundary, adjusted DURING RENDER ──────────────────────────────────────────
+  // Same idiom as `pfEmail` further down, and for the same reason: an effect runs AFTER paint, so
+  // for one frame the rail would render the OUTGOING owner's watchlists under the INCOMING
+  // owner's session — and the persist effects, keyed on the state itself, could write them into
+  // the incoming owner's namespace. React re-invokes this component before committing, so
+  // adjusting here makes the identity swap atomic with the state it owns.
+  //
+  // This replaces W1b's F7 (`email`-keyed ref reset, which cleared list ids but left the LISTS
+  // themselves in place) and TRAP-1's `prevEmailRef` effect, folding both into one authority.
+  const [wlOwnerState, setWlOwnerState] = useState(wlOwner);
+  if (wlOwnerState !== wlOwner) {
+    const previous = wlOwnerState;
+    setWlOwnerState(wlOwner);
+    // A different identity owns the workspace now: none of the previous owner's server list ids
+    // may be reused, and its "already migrated" latch must not suppress this owner's migration.
+    wlMigrationRef.current = false;
+    serverListIdsRef.current = {};
+    const serverDefault = normalizeWatchlistRows(symbols);
+    if (previous === GUEST_OWNER && wlOwner !== GUEST_OWNER) {
+      // The ONE promotion the product keeps (TRAP-1): a guest signed in IN THIS TAB, so the lists
+      // they just built follow them into their new account and the server's Default wins. That is
+      // a live, user-initiated edge. It is NOT the ambient adoption A1 closes — that one happens
+      // across a page load, where the incoming owner now reads its own namespace and nothing else.
+      setLists((current) => ({ ...current, [DEFAULT_LIST]: serverDefault }));
+      setActiveList(DEFAULT_LIST);
+    } else {
+      // Sign-out, or a straight account→account switch: load the INCOMING owner's own state.
+      // Nothing carries over — a signed-out browser must not inherit the account's cache, and
+      // account B must not inherit account A's.
+      const restored = readOwnerWatchlists(localStorage, wlOwner);
+      const deleted = tombstonedSymbols(readWatchlistTombstones(localStorage, wlOwner), DEFAULT_LIST);
+      const savedDefault = restored?.lists?.[DEFAULT_LIST];
+      const nextLists = { ...(restored?.lists ?? {}) };
+      // For an account the server row is authoritative for MEMBERSHIP but not for ORDER, so the
+      // saved list is reconciled additively rather than clobbered. A guest has no server row at
+      // all — the `symbols` prop is just the seed — so their own saved Default wins outright.
+      nextLists[DEFAULT_LIST] = wlOwner === GUEST_OWNER
+        ? (savedDefault ?? serverDefault)
+        : adoptServerSymbols(savedDefault ?? [], serverDefault, undefined, deleted);
+      setLists(nextLists);
+      setListMeta(restored?.meta ?? {});
+      setActiveList(restored?.active && nextLists[restored.active] ? restored.active : DEFAULT_LIST);
+      setFlags(readOwnerStringMap(localStorage, WL_FLAGS_KEY, wlOwner));
+      setSymbolNotes(readOwnerStringMap(localStorage, WL_NOTES_KEY, wlOwner));
+    }
+  }
   // ── F3 add-symbol dialog mode (distinct from "go" search) ──
   const [addSymOpen, setAddSymOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false); const [seed, setSeed] = useState("");
@@ -1635,13 +1710,19 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   useEffect(() => { if (!favTFMounted.current) { favTFMounted.current = true; return; } localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
   useEffect(() => { if (!setMounted.current) { setMounted.current = true; return; } localStorage.setItem(WATCHLIST_SETTINGS_KEY, JSON.stringify(set)); }, [set]);
   useEffect(() => { if (!dtmMounted.current) { dtmMounted.current = true; return; } localStorage.setItem("mm.dtm", JSON.stringify(dtm)); }, [dtm]);
-  // restore saved named watchlists (falls back to the server-seeded Default list)
+  // restore THIS OWNER's saved named watchlists (falls back to the server-seeded Default list)
   useEffect(() => {
-    const saved = load("mm.wls", null);
-    if (saved && saved.lists && typeof saved.lists === "object" && Object.keys(saved.lists).length) {
-      const savedLists = Object.fromEntries(Object.entries(saved.lists as Record<string, unknown>)
-        .filter(([, rows]) => Array.isArray(rows))
-        .map(([name, rows]) => [name, normalizeWatchlistRows(rows as { symbol: string; section?: unknown }[])]));
+    // A1: fold the pre-boundary browser-global payloads into the guest namespace exactly once,
+    // before the first owner-scoped read. See the policy note in lib/watchlistOwner.ts — they are
+    // never adopted into an account, because nothing in them says whose they were.
+    adoptLegacyWatchlistState(localStorage);
+    const owner = wlOwnerRef.current;
+    const saved = readOwnerWatchlists(localStorage, owner);
+    // A3: deletions this owner made that the server has not confirmed. A stale server row named
+    // here is one the user already deleted, so it must not be re-adopted as an other-device add.
+    const tombstones = readWatchlistTombstones(localStorage, owner);
+    if (saved) {
+      const savedLists = saved.lists;
       // TRAP 1 (mount side): when signed in, RECONCILE the local Default against the server's
       // Default membership — do NOT wholesale-replace it. The server row only carries add/remove
       // (it knows MEMBERSHIP, not ORDER), and the /api/watchlist adds are fire-and-forget (they can
@@ -1654,62 +1735,51 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       //      each by firing the idempotent POST {action:"add"} (fire-and-forget, matching the sync
       //      idiom at addSymbol/addToList) so the server catches up;
       //   4. APPEND server rows missing locally (adds from other devices) at the end, with their
-      //      server section.
+      //      server section — EXCEPT rows with an outstanding deletion intent.
+      // Every row read here now belongs to the signed-in owner, so step 3 can no longer copy one
+      // user's symbols into another user's account: that heal POST is what made A1 a write bug and
+      // not just a display bug.
       let restored: Record<string, { symbol: string; section: string }[]>;
       if (loggedIn) {
         const serverRows = normalizeWatchlistRows(symbols);
-        const localDefault = savedLists.Default ?? [];
+        const localDefault = savedLists[DEFAULT_LIST] ?? [];
         const serverSyms = new Set(serverRows.map((s) => s.symbol));
-        const localSyms = new Set(localDefault.map((r) => r.symbol));
-        // 2+3: keep every local row (present-on-server or local-only), local order + section intact.
-        const reconciledDefault = [...localDefault];
+        const deletedDefault = tombstonedSymbols(tombstones, DEFAULT_LIST);
         // heal local-only rows: fire the idempotent add so the server converges (fire-and-forget).
         for (const r of localDefault) {
           if (!serverSyms.has(r.symbol)) {
             fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: r.symbol, section: r.section }) }).catch(() => {});
           }
         }
-        // 4: append server rows missing locally (other-device adds), with their server section.
-        for (const s of serverRows) {
-          if (!localSyms.has(s.symbol)) reconciledDefault.push(s);
-        }
-        restored = { ...savedLists, Default: reconciledDefault };
+        // 2+3+4 in one pass, through the same additive reconcile the inventory adopt uses.
+        restored = { ...savedLists, [DEFAULT_LIST]: adoptServerSymbols(localDefault, serverRows, undefined, deletedDefault) };
       } else {
         restored = savedLists;
       }
       setLists(restored);
-      setActiveList(saved.active && restored[saved.active] ? saved.active : (loggedIn ? "Default" : Object.keys(restored)[0]));
+      setActiveList(saved.active && restored[saved.active] ? saved.active : (loggedIn ? DEFAULT_LIST : Object.keys(restored)[0]));
       // Section metadata is additive: saves written before sections existed simply have no
       // `meta` key and fall back to derived first-appearance order.
-      if (saved.meta && typeof saved.meta === "object") {
-        const clean: Record<string, { sections: string[]; collapsed: string[] }> = {};
-        for (const [k, v] of Object.entries(saved.meta as Record<string, unknown>)) {
-          const m = v as { sections?: unknown; collapsed?: unknown };
-          clean[k] = {
-            sections: Array.isArray(m?.sections) ? m.sections.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean) : [],
-            collapsed: Array.isArray(m?.collapsed) ? m.collapsed.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean) : [],
-          };
-        }
-        setListMeta(clean);
-      }
+      if (Object.keys(saved.meta).length) setListMeta(saved.meta);
     }
-    // F1 flags: stored alongside wls (additive — old saves without flags load fine)
-    const savedFlags = load("mm.flags", {});
-    if (savedFlags && typeof savedFlags === "object") setFlags(savedFlags);
+    // F1 flags: owner-scoped alongside the lists.
+    setFlags(readOwnerStringMap(localStorage, WL_FLAGS_KEY, owner));
     const savedLastColor = load("mm.lastFlagColor", FLAG_DEFAULT);
     if (typeof savedLastColor === "string") setLastFlagColor(savedLastColor);
     setWlsRestored(true);
-    const savedNotes = load("mm.symbolNotes", {});
-    if (savedNotes && typeof savedNotes === "object" && !Array.isArray(savedNotes)) {
-      setSymbolNotes(Object.fromEntries(Object.entries(savedNotes).filter(([symbol, note]) =>
-        !!symbol && typeof note === "string" && !!note.trim()).map(([symbol, note]) => [symbol, (note as string).slice(0, 500)])));
-    }
+    setSymbolNotes(Object.fromEntries(Object.entries(readOwnerStringMap(localStorage, WL_NOTES_KEY, owner))
+      .filter(([symbol, note]) => !!symbol && !!note.trim())
+      .map(([symbol, note]) => [symbol, note.slice(0, 500)])));
     // Mount-only restore: loggedIn/symbols are read for the signed-in Default override but must NOT
-    // re-trigger this (re-reading localStorage mid-session would clobber live edits; the guest→signin
-    // transition is handled by the prevEmailRef effect below).
+    // re-trigger this (re-reading localStorage mid-session would clobber live edits; a live
+    // sign-in/sign-out is handled by the render-time owner transition above).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => { if (Object.keys(lists).length) localStorage.setItem("mm.wls", JSON.stringify({ lists, active: activeList, meta: listMeta })); }, [lists, activeList, listMeta]);
+  // Persist under the CURRENT owner. `wlOwner` is a dependency so the swap itself re-persists,
+  // which is what carries a guest's promoted lists into the account they just signed into.
+  useEffect(() => {
+    if (Object.keys(lists).length) writeOwnerWatchlists(localStorage, wlOwner, { lists, active: activeList, meta: listMeta });
+  }, [lists, activeList, listMeta, wlOwner]);
   // ── W1b: signed-in named lists become SERVER-BACKED; `mm.wls` demotes to an optimistic cache.
   //    1. read the owner's inventory (RLS-scoped) and register its ids BEFORE any write (F2);
   //    2. run the one-time ADDITIVE migration for every non-`Default` local list the marker does
@@ -1744,6 +1814,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     for (const [name, rows] of Object.entries(listsRef.current)) {
       if (Array.isArray(rows)) beforeRead[name] = new Set(rows.map((row) => row.symbol));
     }
+    // A3: the same protection for deletes that happened BEFORE this mount and never reached the
+    // server. `beforeRead` cannot see those — the row is already gone from local state — which is
+    // exactly why W1b had to accept them resurrecting.
+    const owner = wlOwnerRef.current;
+    const tombstones = readWatchlistTombstones(localStorage, owner);
 
     // DEFERRED to idle. The migration is one-time BACKGROUND reconciliation — nothing on screen
     // waits for it — but before this it started during mount, adding an inventory GET (plus a
@@ -1768,10 +1843,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       const localLists = Object.entries(listsRef.current)
         .filter(([, rows]) => Array.isArray(rows))
         .map(([name, rows]) => ({ name, rows }));
-      const marker = (() => {
-        const raw = load(WLS_MIGRATED_KEY, {});
-        return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, boolean> : {};
-      })();
+      const marker = readOwnerMigrationMarker(localStorage, owner);
       const plan = planWatchlistMigration(localLists, server, marker);
       const nextMarker: Record<string, boolean> = { ...marker };
 
@@ -1805,10 +1877,30 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       // Written even if the component has since unmounted (StrictMode's double mount): the work
       // reached the server, so the receipt must reflect it. `cancelled` gates React writes only.
       if (JSON.stringify(nextMarker) !== JSON.stringify(marker)) {
-        try { localStorage.setItem(WLS_MIGRATED_KEY, JSON.stringify(nextMarker)); } catch {}
+        writeOwnerMigrationMarker(localStorage, owner, nextMarker);
       }
 
-      const fresh = plan.lists.length ? ((await inventory()) ?? server) : server;
+      // A3: retry every deletion the server never confirmed, BEFORE re-reading the inventory, so
+      // the response this mount adopts from is one the retry has already corrected. A failure just
+      // leaves the tombstone standing — the row stays hidden and the next mount tries again.
+      let retried = false;
+      for (const [listName, entry] of Object.entries(tombstones)) {
+        const symbols = Object.keys(entry);
+        if (!symbols.length) continue;
+        try {
+          const response = await post({ action: "remove", symbols, ...wlTargetRef.current(listName) });
+          // 404 = the list is already gone, so the rows are too: the intent is satisfied either way.
+          if (response.ok || response.status === 404) {
+            clearWatchlistTombstones(localStorage, owner, listName, symbols);
+            delete tombstones[listName];
+            retried = true;
+          }
+        } catch {
+          // Still offline. The tombstone stands and the rows stay deleted locally.
+        }
+      }
+
+      const fresh = (plan.lists.length || retried) ? ((await inventory()) ?? server) : server;
       if (cancelled) return true;
       registerServerListIds(fresh);
       // W5, residual (a) from the W1b review — the list `Default`'s writes ACTUALLY land in.
@@ -1840,11 +1932,14 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
             if (beforeRead[list.name]) continue;
             // …or unless it is the row Default is already being rendered from (residual (a)).
             if (list.name === defaultMirrorName) continue;
-            next[list.name] = serverRows;
+            // A wholesale adopt still honours outstanding deletions: a list the user cleared and
+            // then dropped locally must not come back row by row from a stale inventory.
+            const deleted = tombstonedSymbols(tombstones, list.name);
+            next[list.name] = deleted.size ? serverRows.filter((row) => !deleted.has(row.symbol)) : serverRows;
             changed = true;
             continue;
           }
-          const adopted = adoptServerSymbols(localRows, serverRows, beforeRead[list.name]);
+          const adopted = adoptServerSymbols(localRows, serverRows, beforeRead[list.name], tombstonedSymbols(tombstones, list.name));
           if (sameRows(adopted, localRows)) continue;
           next[list.name] = adopted;
           changed = true;
@@ -1900,26 +1995,16 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     setPfLoaded(false);
   }
 
-  // ── TRAP 1: guest → signed-in reconciliation (AuthSheet router.refresh delivers a real `email`
-  //    + the server's Default symbols, but client `lists` was seeded from the guest state in the
-  //    useState initializer and never re-seeds on its own; stale mm.wls also shadows the server list).
-  //    Reconciliation: the SERVER wins for "Default" (overwrite with the fresh `symbols` prop);
-  //    any extra lists the guest built are KEPT as local lists so nothing they made vanishes. Runs
-  //    only on the "" → non-empty email edge, and only once (prevEmailRef guards re-refreshes). ──
-  const prevEmailRef = useRef(email);
-  useEffect(() => {
-    const was = prevEmailRef.current;
-    prevEmailRef.current = email;
-    if (was === "" && email !== "") {
-      setLists((l) => ({ ...l, Default: normalizeWatchlistRows(symbols) }));   // server Default authoritative; guest extras preserved
-      setActiveList("Default");
-    }
-  }, [email, symbols]);
-  // persist flags separately (not inside mm.wls to avoid shape-breaking old saves)
+  // ── TRAP 1 (guest → signed-in reconciliation) now lives in the render-time owner transition
+  //    above, together with sign-out and account→account. It used to be an `email`-keyed effect
+  //    here, which could only ever handle ONE of the four edges and ran a frame after paint. ──
+  // persist flags separately (not inside the lists payload to avoid shape-breaking old saves).
+  // `wlOwner` is a dependency for the same reason the lists effect carries it: the write must
+  // follow the identity, and the swap itself must re-persist under the new owner.
   const flagsMounted = useRef(false);
-  useEffect(() => { if (!flagsMounted.current) { flagsMounted.current = true; return; } localStorage.setItem("mm.flags", JSON.stringify(flags)); }, [flags]);
+  useEffect(() => { if (!flagsMounted.current) { flagsMounted.current = true; return; } writeOwnerStringMap(localStorage, WL_FLAGS_KEY, wlOwner, flags); }, [flags, wlOwner]);
   const notesMounted = useRef(false);
-  useEffect(() => { if (!notesMounted.current) { notesMounted.current = true; return; } localStorage.setItem("mm.symbolNotes", JSON.stringify(symbolNotes)); }, [symbolNotes]);
+  useEffect(() => { if (!notesMounted.current) { notesMounted.current = true; return; } writeOwnerStringMap(localStorage, WL_NOTES_KEY, wlOwner, symbolNotes); }, [symbolNotes, wlOwner]);
   // paneSync mirrors same-timeframe peers only — disable it entirely when the panes carry mixed timeframes
   // (the Sync button is rendered disabled in that case), so a stale sync=true can't silently half-work.
   useEffect(() => { setPaneSync(sync && panes.length > 1 && new Set(paneTfs.slice(0, panes.length)).size <= 1); }, [sync, panes.length, paneTfs]);
@@ -2647,6 +2732,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     if (listId) return { listId };
     return listName === DEFAULT_LIST ? {} : { listName };
   }, []);
+  wlTargetRef.current = wlTarget;
 
   // One serialized request, preserving master's `wlServerChainRef` ordering guarantee: watchlist
   // writes must not race each other, or a move can land before the add it depends on.
@@ -2679,19 +2765,30 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     if (!loggedIn || !symbolsToSync.length) return Promise.resolve(true);
     const target = wlTarget(listName);
     const chunks = chunkSymbols(symbolsToSync);
+    // A3: a REMOVE records its intent BEFORE the request leaves, and the intent is cleared only
+    // once the server confirms. The order matters — a crash, a closed tab, or a dead network
+    // between the two leaves the tombstone standing, which is the safe direction: the row stays
+    // deleted on screen and the next mount retries. Written the other way round, the failure mode
+    // is the bug this fixes (the row silently returns).
+    const owner = wlOwnerRef.current;
+    if (action === "remove") recordWatchlistTombstones(localStorage, owner, listName, symbolsToSync);
+    const settle = (ok: boolean) => {
+      if (action === "remove" && ok) clearWatchlistTombstones(localStorage, owner, listName, symbolsToSync);
+      return ok;
+    };
     if (chunks.length <= 1) {
       return wlPost({
         action, symbols: symbolsToSync, ...target,
         ...(section !== undefined ? { section } : {}),
         ...(sections ? { sections } : {}),
-      });
+      }).then(settle);
     }
     // One failed chunk must read as a failed sync, not a partial success.
     return chunks.reduce<Promise<boolean>>((carry, chunk) => carry.then((okSoFar) => wlPost({
       action, symbols: chunk, ...target,
       ...(section !== undefined ? { section } : {}),
       ...(sections ? { sections: Object.fromEntries(chunk.map((symbol) => [symbol, sections[symbol]]).filter(([, v]) => v !== undefined)) } : {}),
-    }).then((ok) => ok && okSoFar)), Promise.resolve(true));
+    }).then((ok) => ok && okSoFar)), Promise.resolve(true)).then(settle);
   }, [loggedIn, wlPost, wlTarget]);
 
   // Kept as thin wrappers so master's call sites read unchanged; the NAME is now a parameter

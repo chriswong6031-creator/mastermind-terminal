@@ -1,4 +1,6 @@
 import type { Page, TestInfo } from "@playwright/test";
+import { watchlistOwnerKey, WL_FLAGS_KEY, WL_NOTES_KEY, WLS_KEY, WLS_MIGRATED_KEY } from "../lib/watchlistOwner";
+import { fixtureUserId } from "../lib/watchlistsFixtureDb";
 
 /**
  * Give one test its own server-side watchlist store.
@@ -29,3 +31,45 @@ export async function isolateWatchlistStore(page: Page, testInfo: TestInfo, base
   }]);
   return key;
 }
+
+/**
+ * A1: local watchlist state is OWNER-SCOPED, so a spec cannot seed it by writing `mm.wls` any more
+ * — an unscoped payload now belongs to nobody and is swept into the guest namespace, exactly as a
+ * real browser's pre-boundary leftovers are. Seeding goes through the same owner key the shell
+ * derives from the signed-in user id, which is what makes these specs exercise the real path.
+ *
+ * `storeKey` is what `isolateWatchlistStore` returned (the `mm_e2e_wl` cookie); "default" is the
+ * shared store used by specs that never isolate.
+ */
+export function e2eWatchlistOwner(storeKey = "default"): string {
+  return watchlistOwnerKey(fixtureUserId(storeKey));
+}
+
+type SeededState = {
+  lists: Record<string, { symbol: string; section: string }[]>;
+  active?: string;
+  meta?: Record<string, { sections: string[]; collapsed: string[] }>;
+};
+
+/**
+ * Seed one owner's saved lists BEFORE the shell mounts.
+ *
+ * The seed is applied ONLY when that owner's slot is absent, and the guard is load-bearing:
+ * `addInitScript` runs on EVERY navigation, so an unconditional write re-seeds on each reload and
+ * silently discards whatever the test just did. (That is why the pre-A1 seeding in
+ * `watchlist-bulk-actions.spec.ts` carried the same `if (!localStorage.getItem(...))` guard.)
+ */
+export async function seedOwnerWatchlists(page: Page, storeKey: string, state: SeededState) {
+  const owner = e2eWatchlistOwner(storeKey);
+  await page.addInitScript(([key, slot, payload]) => {
+    let envelope: Record<string, unknown> = {};
+    try { envelope = JSON.parse(localStorage.getItem(key as string) || "{}"); } catch { envelope = {}; }
+    if (envelope && typeof envelope === "object" && (slot as string) in envelope) return;
+    localStorage.setItem(key as string, JSON.stringify({ ...envelope, [slot as string]: payload }));
+  }, [WLS_KEY, owner, { meta: {}, active: Object.keys(state.lists)[0], ...state }] as const);
+}
+
+export const E2E_WLS_KEY = WLS_KEY;
+export const E2E_WL_FLAGS_KEY = WL_FLAGS_KEY;
+export const E2E_WL_NOTES_KEY = WL_NOTES_KEY;
+export const E2E_WLS_MIGRATED_KEY = WLS_MIGRATED_KEY;

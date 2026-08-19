@@ -91,8 +91,9 @@ class FixtureQuery implements WatchlistQuery {
   private orderAsc = true;
   private limitTo: number | null = null;
   private projection: string[] | null = null;
-  private mode: "read" | "insert" | "update" | "delete" = "read";
+  private mode: "read" | "insert" | "upsert" | "update" | "delete" = "read";
   private payload: DbRow[] = [];
+  private ignoreDuplicates = false;
 
   constructor(private store: Store, private table: Table) {}
 
@@ -156,6 +157,13 @@ class FixtureQuery implements WatchlistQuery {
     return this;
   }
 
+  upsert(values: DbRow | DbRow[], options?: { onConflict?: string; ignoreDuplicates?: boolean }): WatchlistQuery {
+    this.mode = "upsert";
+    this.payload = Array.isArray(values) ? values : [values];
+    this.ignoreDuplicates = options?.ignoreDuplicates === true;
+    return this;
+  }
+
   update(values: DbRow): WatchlistQuery {
     this.mode = "update";
     this.payload = [values];
@@ -168,7 +176,7 @@ class FixtureQuery implements WatchlistQuery {
   }
 
   private run(): DbResult {
-    if (this.mode === "insert") {
+    if (this.mode === "insert" || this.mode === "upsert") {
       const incoming: DbRow[] = this.payload.map((row) => ({
         id: `${this.table}-${++this.store.seq}`,
         // Server-side column DEFAULTS the writer never supplies (migration 0007): `created_at`
@@ -184,12 +192,30 @@ class FixtureQuery implements WatchlistQuery {
       if (this.table === "watchlists") {
         for (const row of incoming) {
           if (this.store.lists.some((list) => list.user_id === row.user_id && list.name === row.name)) {
+            if (this.mode === "upsert" && this.ignoreDuplicates) continue;
             return { data: null, error: { message: "duplicate key value violates unique constraint" } };
           }
         }
       }
-      this.rows.push(...incoming);
-      return { data: this.project(incoming), error: null };
+      // …and unique (watchlist_id, symbol) since migration 0008. Modelling it here is what lets
+      // the browser suite prove that concurrent adds converge on ONE row: without it the fixture
+      // would happily hold the duplicates the real table now refuses, and an e2e "proof" of
+      // uniqueness would be proving a property the product does not have.
+      const accepted: DbRow[] = [];
+      for (const row of incoming) {
+        if (this.table === "watchlist_symbols") {
+          const clash = this.store.symbols.some((existing) =>
+            existing.watchlist_id === row.watchlist_id && existing.symbol === row.symbol)
+            || accepted.some((queued) => queued.watchlist_id === row.watchlist_id && queued.symbol === row.symbol);
+          if (clash) {
+            if (this.mode === "upsert" && this.ignoreDuplicates) continue;
+            return { data: null, error: { message: "duplicate key value violates unique constraint" } };
+          }
+        }
+        accepted.push(row);
+      }
+      this.rows.push(...accepted);
+      return { data: this.project(accepted), error: null };
     }
     if (this.mode === "update") {
       const targets = this.matched();

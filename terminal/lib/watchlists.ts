@@ -33,6 +33,7 @@ export type WatchlistQuery = PromiseLike<DbResult> & {
   order: (column: string, options?: { ascending?: boolean }) => WatchlistQuery;
   limit: (count: number) => WatchlistQuery;
   insert: (values: DbRow | DbRow[]) => WatchlistQuery;
+  upsert: (values: DbRow | DbRow[], options?: { onConflict?: string; ignoreDuplicates?: boolean }) => WatchlistQuery;
   update: (values: DbRow) => WatchlistQuery;
   delete: () => WatchlistQuery;
   maybeSingle: () => Promise<DbResult>;
@@ -273,6 +274,13 @@ export async function deleteList(
  * and continues numbering from the list's current tail so `position` never collides.
  * A batch whose symbols all exist is a successful no-op — this is what makes the migration
  * safe to re-run.
+ *
+ * The read below is an OPTIMISATION (it skips work and picks the append position); it is NOT what
+ * makes membership unique. `unique (watchlist_id, symbol)` (migration 0008) is, and the write is an
+ * UPSERT against that conflict target. Before the index existed, two writers that both read "NVDA
+ * absent" both inserted it and the list held the same symbol twice — a read-then-write with no
+ * lock and nothing behind it. `ignoreDuplicates` makes the loser of that race a silent no-op
+ * rather than an error, which is the correct outcome: the row the user asked for exists.
  */
 export async function addSymbols(
   db: WatchlistDb,
@@ -299,8 +307,11 @@ export async function addSymbols(
     section: sectionBySymbol?.[symbol] ?? section,
     position: tail + 1 + index,
   }));
-  const { error } = await db.from("watchlist_symbols").insert(inserts);
+  const { error } = await db.from("watchlist_symbols")
+    .upsert(inserts, { onConflict: "watchlist_id,symbol", ignoreDuplicates: true });
   if (error) return { ok: false, added: [], error: "watchlist update failed" };
+  // `added` means "absent when this call read, and present now" — the caller's contract is that
+  // the symbols are in the list, not that this particular request wrote the row.
   return { ok: true, added: missing };
 }
 
@@ -431,9 +442,15 @@ export function planWatchlistMigration(
  *
  * `alreadyLocal` is the local membership snapshot taken BEFORE the inventory request went out. A
  * server row named there is one the user removed while the request was in flight, so the response
- * is simply stale about it and it must not be re-appended. (An offline-window delete made BEFORE
- * mount is absent from that snapshot and CAN still resurrect — an accepted, documented W1b
- * tradeoff.)
+ * is simply stale about it and it must not be re-appended.
+ *
+ * `deletedLocally` closes the other half — the half W1b accepted as a tradeoff ("an offline-window
+ * delete made BEFORE the read can still resurrect"). It is the set of symbols this owner has
+ * DELETED without the server confirming it (lib/watchlistOwner.ts tombstones). Additive adoption
+ * cannot otherwise tell "another device added AAPL" from "this device deleted AAPL and the DELETE
+ * never landed", so it re-appended the row and silently reversed the user's action on the next
+ * reload. A tombstoned symbol is never re-adopted; once the delete converges the tombstone clears
+ * and a genuinely new server row is adopted normally.
  *
  * ── W5 DISPOSITION OF THE ORDER-SYNC LINE ITEM (third refusal; read this before the fourth) ──
  *
@@ -473,6 +490,7 @@ export function adoptServerSymbols(
   local: readonly { symbol: string; section: string }[],
   server: readonly { symbol: string; section: string }[],
   alreadyLocal?: ReadonlySet<string>,
+  deletedLocally?: ReadonlySet<string>,
 ): { symbol: string; section: string }[] {
   const adopted: { symbol: string; section: string }[] = [];
   const seen = new Set<string>();
@@ -488,6 +506,7 @@ export function adoptServerSymbols(
   for (const row of server) {
     if (!row?.symbol || seen.has(row.symbol)) continue;
     if (alreadyLocal?.has(row.symbol)) continue;   // removed locally while the read was in flight
+    if (deletedLocally?.has(row.symbol)) continue; // deleted locally; the server has not caught up
     seen.add(row.symbol);
     adopted.push({ symbol: row.symbol, section: row.section ?? DEFAULT_SECTION });
   }
