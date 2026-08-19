@@ -94,13 +94,27 @@ test("a coverage-asserted absence also expires, so the index cannot outlive what
 
   let published = false;
   const intelRequests: number[] = [];
+  let coverageServed = 0;
 
   await page.route("**/data/manifest.json**", (route) => route.fulfill({ json: MANIFEST }));
-  // A FRESH coverage index that lists neither symbol as having intel — the pre-seed path, which
+  // A FRESH coverage index listing neither symbol as having intel — the pre-seed path, which
   // suppresses the request before any 404 is ever observed.
-  await page.route("**/data/coverage.json**", (route) => route.fulfill({
-    json: { as_of: new Date().toISOString(), generation: Math.floor(Date.now() / 1000), intel: [], fund: [], opts: [], ohlc: [ABSENT_SYM, OTHER_SYM] },
-  }));
+  //
+  // `as_of` is stamped from the PAGE's clock, not the test runner's. With page.clock.install()
+  // the two are separate timelines, and the client gates pre-seeding on how old the document
+  // looks to IT; a Node-side `new Date()` here can therefore read as stale and silently disable
+  // the seeding this test is about.
+  await page.route("**/data/coverage.json**", async (route) => {
+    const now = await page.evaluate(() => Date.now()).catch(() => Date.now());
+    coverageServed += 1;
+    return route.fulfill({
+      json: {
+        as_of: new Date(now).toISOString(),
+        generation: Math.floor(now / 1000),
+        intel: [], fund: [], opts: [], ohlc: [ABSENT_SYM, OTHER_SYM],
+      },
+    });
+  });
   await page.route(`**/data/${ABSENT_SYM}.intel.json`, async (route) => {
     intelRequests.push(Date.now());
     if (!published) return route.fulfill({ status: 404, contentType: "application/json", body: '{"error":"absent"}' });
@@ -108,15 +122,24 @@ test("a coverage-asserted absence also expires, so the index cannot outlive what
   });
 
   await page.goto(`/terminal?symbol=${OTHER_SYM}`);
-  await page.waitForTimeout(2_000);                // let coverage load + pre-seed
+  // Wait for the index to have been SERVED, then let the client's seeding promise settle. A fixed
+  // sleep raced the fetch on a loaded runner and the seeding had not happened yet, which made the
+  // "zero network cost" assertion fail for the wrong reason.
+  await expect.poll(() => coverageServed, { timeout: 45_000 }).toBeGreaterThan(0);
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
 
   await pick(page, ABSENT_SYM);
   await page.waitForTimeout(500);
   expect(intelRequests.length).toBe(0);            // coverage said absent: zero network cost
 
+  // …and after the window the client asks again and finds what the publisher wrote.
   published = true;
   await page.clock.fastForward("31:00");           // COVERAGE_ABSENCE_TTL is 30 minutes
-  await pick(page, OTHER_SYM);
-  await pick(page, ABSENT_SYM);
-  await expect.poll(() => intelRequests.length, { timeout: 20_000 }).toBe(1);
+  // The per-symbol read is deferred to an idle callback, so give the switch more than one chance
+  // to land rather than assuming a single pick schedules it.
+  await expect.poll(async () => {
+    await pick(page, OTHER_SYM);
+    await pick(page, ABSENT_SYM);
+    return intelRequests.length;
+  }, { timeout: 45_000, intervals: [500, 1000, 2000, 3000] }).toBeGreaterThan(0);
 });
