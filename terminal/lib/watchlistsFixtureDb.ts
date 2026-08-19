@@ -23,6 +23,27 @@ import type { DbResult, DbRow, WatchlistDb, WatchlistQuery } from "@/lib/watchli
 
 export const FIXTURE_STORE_COOKIE = "mm_e2e_wl";
 
+/**
+ * Fault-injection cookie — comma-separated tokens naming a transport failure to simulate.
+ *
+ * A failure state is only proven if the REAL code path produces it. Mocking `/api/portfolio` from
+ * the browser proves the client renders a 503; it does not prove the server page, the canonical
+ * read and the route agree about what a broken store is. This flips the transport underneath all
+ * three at once, exactly where Supabase would fail.
+ *
+ * Tokens: `positions_read` — every read of `portfolio_positions` answers the supabase-js failure
+ * shape `{data:null, error}`.
+ *
+ * Test-only by construction: like the rest of this module it is reachable only from the
+ * `TERMINAL_E2E_FIXTURE=1` branches.
+ */
+export const FIXTURE_FAULT_COOKIE = "mm_e2e_fault";
+export const FAULT_POSITIONS_READ = "positions_read";
+
+export function fixtureFaults(raw: string | undefined | null): Set<string> {
+  return new Set((raw || "").split(",").map((token) => token.trim()).filter(Boolean));
+}
+
 type Store = { lists: DbRow[]; symbols: DbRow[]; positions: DbRow[]; seq: number };
 
 const SEED_SYMBOLS: [string, string][] = [
@@ -95,7 +116,7 @@ class FixtureQuery implements WatchlistQuery {
   private payload: DbRow[] = [];
   private ignoreDuplicates = false;
 
-  constructor(private store: Store, private table: Table) {}
+  constructor(private store: Store, private table: Table, private faults: Set<string>) {}
 
   private get rows(): DbRow[] {
     if (this.table === "watchlists") return this.store.lists;
@@ -176,6 +197,10 @@ class FixtureQuery implements WatchlistQuery {
   }
 
   private run(): DbResult {
+    // Injected transport failure — the supabase-js shape, at the same place a real read fails.
+    if (this.table === "portfolio_positions" && this.mode === "read" && this.faults.has(FAULT_POSITIONS_READ)) {
+      return { data: null, error: { message: "fixture: positions store unavailable" } };
+    }
     if (this.mode === "insert" || this.mode === "upsert") {
       const incoming: DbRow[] = this.payload.map((row) => ({
         id: `${this.table}-${++this.store.seq}`,
@@ -256,7 +281,8 @@ class FixtureQuery implements WatchlistQuery {
   }
 }
 
-export function createFixtureDb(key: string): WatchlistDb {
+export function createFixtureDb(key: string, faults?: Iterable<string>): WatchlistDb {
   const store = fixtureStore(key);
-  return { from: (table: string) => new FixtureQuery(store, table as Table) };
+  const faultSet = faults instanceof Set ? faults : new Set(faults ?? []);
+  return { from: (table: string) => new FixtureQuery(store, table as Table, faultSet) };
 }
