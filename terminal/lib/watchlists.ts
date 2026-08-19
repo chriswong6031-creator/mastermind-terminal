@@ -511,17 +511,24 @@ export function planWatchlistMigration(
  *   > Visual row order remains the established local watchlist preference until the backend has
  *   > an atomic ordered-list RPC.
  *
- * The commissioning packet forbids silent schema additions riding this program (section 4), so
- * that work belongs to a deliberate schema wave with the duplicate-reconciliation question
- * answered, not to a portfolio wave.
+ * ── STATUS UPDATE (bug sweep A, 2026-08-19): THE SCHEMA HALF OF THAT PRECONDITION IS NOW MET ──
  *
- * The READ side would not be safe even if the write existed: making server `position` authoritative
- * on adopt is exactly the construction W1b round 1 was BLOCKED for — a stale inventory response
- * replaying a user's pre-drag order (and their just-deleted rows) over live local state. That fix
- * is what this function is.
+ * `supabase/migrations/0008_watchlist_symbol_unique.sql` created
+ * `unique (watchlist_id, symbol)` — for A2 (concurrent adds were duplicating membership), not for
+ * ordering, but the index is the index. It is APPLIED to production: the pre-flight census found
+ * 269 rows / 269 distinct pairs / 0 duplicates, so the "duplicates may exist and would have to be
+ * reconciled first" question above is ANSWERED for that database — there were none, the reconcile
+ * deleted nothing, and no survivor had to be chosen. A batched `on_conflict` upsert of a whole
+ * list's positions is therefore now expressible in one request.
  *
- * So: three independent refusals now (W1b's reviewer, master #409, and this wave), one named
- * precondition, and one open schema question. A fourth lane should ship the RPC or ship nothing.
+ * That removes the schema blocker. It does NOT by itself make order-sync correct, and the READ
+ * side is still the harder half: making server `position` authoritative on adopt is exactly the
+ * construction W1b round 1 was BLOCKED for — a stale inventory response replaying a user's
+ * pre-drag order (and their just-deleted rows) over live local state. That fix is what this
+ * function is, and a fifth lane still has to answer it before treating server order as truth.
+ *
+ * So: three independent refusals (W1b's reviewer, master #409, W5), one precondition now HALF
+ * satisfied, and the read-side staleness question still open.
  */
 export function adoptServerSymbols(
   local: readonly { symbol: string; section: string }[],
