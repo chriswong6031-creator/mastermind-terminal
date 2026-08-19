@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Page, TestInfo } from "@playwright/test";
 import { watchlistOwnerKey, WL_FLAGS_KEY, WL_NOTES_KEY, WLS_KEY, WLS_MIGRATED_KEY } from "../lib/watchlistOwner";
 import { fixtureUserId } from "../lib/watchlistsFixtureDb";
@@ -19,7 +20,12 @@ import { fixtureUserId } from "../lib/watchlistsFixtureDb";
 // run N's rows and a clean branch fails on nothing. The module loads once per worker process, so
 // the value is stable within a run and fresh across runs; `repeatEachIndex` separates --repeat-each
 // copies of one title inside a single run, and `retry` separates a retry from the attempt it follows.
-const RUN_NONCE = `${process.env.TEST_WORKER_INDEX ?? "0"}${Math.random().toString(36).slice(2, 8)}`;
+//
+// `randomUUID`, not `Math.random`: since A1 this key also derives the OWNER the shell scopes its
+// local watchlist state by (`e2eWatchlistOwner` below), and CodeQL correctly refuses to see an
+// insecure PRNG flow into an identity. The value is test-only either way, and a UUID separates
+// runs at least as well as six base-36 characters did.
+const RUN_NONCE = `${process.env.TEST_WORKER_INDEX ?? "0"}${randomUUID().slice(0, 8)}`;
 
 export async function isolateWatchlistStore(page: Page, testInfo: TestInfo, baseURL?: string) {
   const key = `${testInfo.project.name}-${testInfo.title}-${testInfo.repeatEachIndex}-${testInfo.retry}-${RUN_NONCE}`
