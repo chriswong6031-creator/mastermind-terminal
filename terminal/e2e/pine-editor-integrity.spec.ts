@@ -22,9 +22,17 @@ import { expect, test, type Page, type TestInfo } from "@playwright/test";
 const A = "Alpha Study";
 const B = "Beta Study";
 
+// Per-RUN nonce, for the same reason e2e/watchlistStore.ts carries one. `reuseExistingServer: !CI`
+// means a second local run usually attaches to the FIRST run's dev server, and the fixture store is
+// process-global — so without this, run N+1 inherits run N's saved scripts. That matters here more
+// than most places: these specs SAVE, and the script list is ordered by `updated_at`, so an
+// inherited save reorders the list and a spec that expects the seeded order fails on nothing. The
+// module loads once per worker process, so the value is stable within a run and fresh across runs.
+const RUN_NONCE = `${process.env.TEST_WORKER_INDEX ?? "0"}${Math.random().toString(36).slice(2, 8)}`;
+
 /** Own store per test — the three viewport projects share one dev server. */
 async function isolateScripts(page: Page, testInfo: TestInfo, baseURL?: string) {
-  const key = `${testInfo.project.name}-${testInfo.title}-${testInfo.retry}`
+  const key = `${testInfo.project.name}-${testInfo.title}-${testInfo.retry}-${RUN_NONCE}`
     .toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 90);
   await page.context().addCookies([{
     name: "mm_e2e_scripts",
