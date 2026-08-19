@@ -1059,6 +1059,19 @@ export const LEX: Record<string, [string, string]> = {
     "Your alerts live with your account — sign in to see and manage them. Alerts keep running server-side while you're away.",
     "提醒与您的账户绑定 —— 登录后即可查看和管理。您离开期间，提醒仍在服务器端持续运行。",
   ],
+  // ...and the state one level down from signed-out: signed in, but the alert store did not
+  // answer. "No alerts yet" would claim an empty inventory off a read that never landed.
+  alertsUnavailTitle: ["Could not load your alerts", "无法加载您的提醒"],
+  alertsUnavailBody: [
+    "The alert store did not answer, so we cannot show what you have. Your alerts are unaffected — they keep running server-side.",
+    "提醒存储未响应，因此无法显示您的提醒。您的提醒不受影响 —— 它们仍在服务器端持续运行。",
+  ],
+  alertsRetry: ["Retry", "重试"],
+  alertsRefresh: ["Refresh alerts", "刷新提醒"],
+  alertsStaleNote: [
+    "Showing the list from the last successful load — the refresh failed.",
+    "显示的是上次成功加载的列表 —— 本次刷新失败。",
+  ],
   deleteAlertQ: ["Delete this alert?", "删除此提醒？"],
   deleteConfirm: ["Delete", "删除"],
   deleteCancel: ["Keep", "保留"],

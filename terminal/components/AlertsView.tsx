@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLang, useT } from "@/lib/i18n";
 import { getJSON } from "@/lib/dataCache";
 import {
@@ -169,6 +169,12 @@ export default function AlertsView({ email }: { email: string }) {
   // Coercing it to {alerts:[]} showed anon visitors the signed-in "no alerts yet" copy, which
   // reads as "you have none" when the truth is "we can't see yours".
   const [signedOut, setSignedOut] = useState(false);
+  // ...and the same distinction one level down: the store failing to answer is NOT an empty
+  // inventory. The route now says 503 for that; this flag is what keeps the view from
+  // rendering "No alerts yet" over an unread list. It never clears `alerts`, so a failed
+  // REFRESH leaves the last good list on screen, labelled.
+  const [unavailable, setUnavailable] = useState(false);
+  const [reloading, setReloading] = useState(false);
   // two-step delete: first click arms the row, second confirms (touch + keyboard safe)
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [syms, setSyms] = useState<string[]>([]);
@@ -223,20 +229,44 @@ export default function AlertsView({ email }: { email: string }) {
     gateTimer.current = setTimeout(() => setGateNudge(null), 5000);
   };
 
+  /**
+   * Read the inventory. FOUR outcomes, none of them allowed to wear another's clothes:
+   * 401 → signed out · non-2xx or unusable body → unavailable (existing rows kept) ·
+   * 2xx with rows → data · 2xx with zero rows → a real empty book.
+   *
+   * `response.ok` is the gate. Parsing the body first and trusting `d.alerts || []` is exactly
+   * how a 503 would have become an empty list again.
+   */
+  const loadAlerts = useCallback(async (aliveRef?: { alive: boolean }) => {
+    const alive = () => aliveRef?.alive !== false;
+    try {
+      const r = await fetch("/api/alerts");
+      if (r.status === 401) {
+        if (alive()) { setSignedOut(true); setUnavailable(false); }
+        return;
+      }
+      if (!r.ok) { if (alive()) setUnavailable(true); return; }
+      const d = await r.json().catch(() => null);
+      if (!d || !Array.isArray(d.alerts)) { if (alive()) setUnavailable(true); return; }
+      if (alive()) { setAlerts(d.alerts); setUnavailable(false); setSignedOut(false); }
+    } catch {
+      // Transport failure. Say nothing about the inventory — and above all do not empty it.
+      if (alive()) setUnavailable(true);
+    } finally {
+      if (alive()) setLoaded(true);
+    }
+  }, []);
+
+  const retryLoad = useCallback(async () => {
+    setReloading(true);
+    await loadAlerts();
+    setReloading(false);
+  }, [loadAlerts]);
+
   useEffect(() => {
     let alive = true;
-    // 401 = no session → render the signed-out state, never a fake empty list.
-    fetch("/api/alerts")
-      .then((r) => {
-        if (r.status === 401) {
-          if (alive) setSignedOut(true);
-          return { alerts: [] };
-        }
-        return r.json();
-      })
-      .then((d) => { if (alive) setAlerts(d.alerts || []); })
-      .catch(() => {})
-      .finally(() => { if (alive) setLoaded(true); });
+    const guard = { alive: true };
+    void loadAlerts(guard);
     // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
     // onRevalidate so a symbol added by the latest ingest is selectable on the first load
     // after it lands, rather than only after this browser's cached manifest expires.
@@ -260,8 +290,8 @@ export default function AlertsView({ email }: { email: string }) {
       }
       consumePendingPrefill();
     }
-    return () => { alive = false; clearTimeout(gateTimer.current); };
-  }, []);
+    return () => { alive = false; guard.alive = false; clearTimeout(gateTimer.current); };
+  }, [loadAlerts]);
 
   // The condition the CURRENT form would POST (drives the preview + create()).
   const optCondition = buildOptCondition(optKind, optRoot, optParams);
@@ -532,7 +562,7 @@ export default function AlertsView({ email }: { email: string }) {
             )}
 
             <button className="btn btn-primary" style={{ height: 34 }} onClick={create} disabled={busy}>{busy ? t("creating") : t("createAlert")}</button>
-            {err && <span style={{ color: "var(--danger)", fontSize: 12.5 }}>{err}</span>}
+            {err && <span className="alert-err" style={{ color: "var(--danger)", fontSize: 12.5 }}>{err}</span>}
           </div>
           {/* plain-word "what will fire" preview — options + suite events */}
           {cat === "options" && (
@@ -553,7 +583,24 @@ export default function AlertsView({ email }: { email: string }) {
           )}
         </div>
         <div className="panel">
-          <div className="ph">{t("activeAlerts")}{!signedOut && <span className="sub">{alerts.length} {t("total")}</span>}</div>
+          {/* The count is a claim about the inventory — it must not print "0 total" over a
+              read that never landed. The re-read control is always present when signed in: a
+              retry path that only exists once a failure is already on screen cannot recover a
+              refresh that failed over rows the user can still see. */}
+          <div className="ph">
+            {t("activeAlerts")}
+            {!signedOut && !(unavailable && alerts.length === 0) && <span className="sub">{alerts.length} {t("total")}</span>}
+            {!signedOut && loaded && (
+              <button
+                type="button"
+                className="alerts-refresh"
+                onClick={retryLoad}
+                disabled={reloading}
+                aria-label={t("alertsRefresh")}
+                title={t("alertsRefresh")}
+              >{reloading ? "…" : "↻"}</button>
+            )}
+          </div>
           {!loaded && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>{t("loadingAlerts")}</div>}
           {/* Signed out: say so plainly. "No alerts yet" would be a lie — we cannot see theirs. */}
           {loaded && signedOut && (
@@ -563,7 +610,28 @@ export default function AlertsView({ email }: { email: string }) {
               <a className="btn btn-primary" href="/login">{t("gateSignupCta")}</a>
             </div>
           )}
-          {loaded && !signedOut && alerts.length === 0 && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>{t("noAlertsYet")}</div>}
+          {/* Store unavailable with nothing loaded: the read failed, so we know NOTHING about
+              the inventory. Distinct copy, distinct marker, and a retry that actually re-reads. */}
+          {loaded && !signedOut && unavailable && alerts.length === 0 && (
+            <div className="alerts-unavailable" data-alerts-state="unavailable">
+              <div className="alerts-signedout-h">{t("alertsUnavailTitle")}</div>
+              <p className="alerts-signedout-p">{t("alertsUnavailBody")}</p>
+              <button type="button" className="btn" onClick={retryLoad} disabled={reloading}>
+                {reloading ? t("loadingAlerts") : t("alertsRetry")}
+              </button>
+            </div>
+          )}
+          {/* A failed REFRESH over a list we already have: keep the rows, label them, offer the
+              retry. Silently swapping in [] here is the same lie one beat later. */}
+          {loaded && !signedOut && unavailable && alerts.length > 0 && (
+            <div className="alerts-stale" role="status" data-alerts-state="stale">
+              <span>{t("alertsStaleNote")}</span>
+              <button type="button" className="btn" onClick={retryLoad} disabled={reloading}>
+                {reloading ? t("loadingAlerts") : t("alertsRetry")}
+              </button>
+            </div>
+          )}
+          {loaded && !signedOut && !unavailable && alerts.length === 0 && <div data-alerts-state="empty" style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>{t("noAlertsYet")}</div>}
           {!signedOut && alerts.map((a) => {
             const trig = !a.active && a.condition?.triggered; // engine one-shot: fired -> disarmed + stamped
             const note = trig ? String(a.condition.triggered.note ?? "") : "";
