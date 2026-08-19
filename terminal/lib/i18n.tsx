@@ -1670,6 +1670,13 @@ export const LEX: Record<string, [string, string]> = {
   obDoneTitle: ["You're in", "欢迎加入"],
   obDoneConfirm: ["Confirm your email to activate your account — we sent a link to {email}. Your preferences are saved and apply on first sign-in.", "请查收 {email} 的确认邮件以激活账户——你的偏好已保存，首次登录时自动生效。"],
   obDoneReady: ["Your desk is set. Jump in whenever you're ready.", "你的工作台已就绪。准备好就随时进入。"],
+  // D5 — an unacknowledged preference write. Stated as a status, not an error: the account is
+  // usable, the outbox keeps retrying, and there is nothing for the user to do. The one thing this
+  // line must NOT do is let the screen imply the choice was saved when it was not.
+  obDonePrefsSyncing: [
+    "Your preferences are still syncing — we'll keep trying in the background.",
+    "你的偏好设置仍在同步中 —— 我们会在后台继续尝试。",
+  ],
   obOpenTerminal: ["Open the Terminal", "进入终端"],
   // onboarding wiring (W1)
   obwCreateAccount: ["Create account", "创建账户"],
