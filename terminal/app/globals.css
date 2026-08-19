@@ -1283,6 +1283,10 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .pf-confirm{display:inline-flex;align-items:center;gap:7px}
 .pf-confirm-q{color:var(--text-2);font-size:12px}
 .pf-empty{display:flex;flex-direction:column;align-items:center;gap:9px;padding:46px 16px;text-align:center}
+/* store-unreadable book — same panel shape as the empty book, deliberately different copy.
+   `.pf-empty span` is already width-bounded; this only gives the standalone panel its margin. */
+.pf-unreadable{margin-top:12px}
+.pf-unreadable .pf-empty span{max-width:52ch}
 .pf-empty b{font:650 14px/1.3 var(--font-ui);color:var(--text)}
 .pf-empty span{max-width:46ch;color:var(--muted);font-size:12.5px;line-height:1.6}
 .pf-empty .pf-add-btn{margin:5px 0 0}

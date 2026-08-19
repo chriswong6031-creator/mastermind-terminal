@@ -907,6 +907,15 @@ export const LEX: Record<string, [string, string]> = {
   positionSaveFailed: ["That didn't save. Check the values and try again.", "未能保存。请检查填写内容后重试。"],
   emptyPortfolioTitle: ["Nothing in your portfolio yet", "投资组合暂无持仓"],
   emptyPortfolioBody: ["Add what you hold and this page prices it live. Watchlists stay on the chart — this page is holdings only.", "添加你的持仓，本页会实时计价。自选列表仍在图表侧栏 —— 本页只放真实持仓。"],
+  // The state that used to render as the empty book: the store did not answer, so NOTHING is
+  // known about the holdings. "Nothing in your portfolio yet" would be a fabrication here.
+  portfolioUnreadableTitle: ["Could not read your portfolio", "无法读取你的投资组合"],
+  portfolioUnreadableBody: [
+    "The positions store did not answer, so we cannot show your book. Nothing has changed — your positions are exactly as you left them.",
+    "持仓存储未响应，因此无法显示你的持仓。持仓本身没有任何变化 —— 一切保持原样。",
+  ],
+  portfolioUnreadableRetry: ["Try again", "重试"],
+  portfolioUnreadableRetrying: ["Reading…", "读取中…"],
   bookCoverageUnpriced: ["Valued {valued} of {total} — no live price yet for {names}.", "已计价 {valued}/{total} —— {names} 暂无实时价格。"],
   bookCoverageUnsized: ["Valued {valued} of {total} — the rest have no share count yet.", "已计价 {valued}/{total} —— 其余持仓尚未填写股数。"],
   // A missing PRICE and a missing ENTRY PRICE are different silences: the first keeps a name out of

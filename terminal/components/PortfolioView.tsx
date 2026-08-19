@@ -47,10 +47,17 @@ const signed = (n: number | null | undefined) =>
 const signedPct = (n: number | null | undefined) =>
   (n == null || !isFinite(n) ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`);
 
-export default function PortfolioView({ positions: seed }: { positions: Position[]; email: string }) {
+export default function PortfolioView(
+  { positions: seed, unreadable = false }: { positions: Position[]; email: string; unreadable?: boolean },
+) {
   const t = useT();
   const { lang } = useLang();
   const [positions, setPositions] = useState<Position[]>(seed);
+  // The server could not read the book. `positions` is [] here because there is nothing to show
+  // — NOT because the user holds nothing. Everything that would assert a count or a total is
+  // suppressed while this is true, and it clears the moment a read lands.
+  const [unread, setUnread] = useState(unreadable);
+  const [retrying, setRetrying] = useState(false);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [man, setMan] = useState<Record<string, ManifestRow>>({});
   const [editing, setEditing] = useState<{ mode: "add" | "edit"; position: Position | null } | null>(null);
@@ -70,21 +77,32 @@ export default function PortfolioView({ positions: seed }: { positions: Position
   if (seed !== seededFrom) {
     setSeededFrom(seed);
     setPositions(seed);
+    setUnread(unreadable);
   }
 
   const open = useMemo(() => positions.filter((p) => p.status === "open"), [positions]);
   const closed = useMemo(() => positions.filter((p) => p.status === "closed"), [positions]);
 
+  // The re-read every mutation and the retry share. A NON-OK response (503 = the store did not
+  // answer) leaves `positions` untouched and raises the unreadable flag: it must never overwrite
+  // a book the user can see, and it must never be reported as a successful empty read.
   const reload = useCallback(async () => {
     try {
       const response = await fetch("/api/portfolio", { headers: { Accept: "application/json" } });
-      if (!response.ok) return false;
+      if (!response.ok) { setUnread(true); return false; }
       const payload = await response.json();
-      if (!Array.isArray(payload?.positions)) return false;
+      if (!Array.isArray(payload?.positions)) { setUnread(true); return false; }
       setPositions(payload.positions as Position[]);
+      setUnread(false);
       return true;
-    } catch { return false; }
+    } catch { setUnread(true); return false; }
   }, []);
+
+  const retryRead = useCallback(async () => {
+    setRetrying(true);
+    await reload();
+    setRetrying(false);
+  }, [reload]);
 
   /** One serialized write + re-read. Serialization matters for the same reason the rail's watchlist
    *  chain is serialized: two mutations in flight can land out of order, and the second re-read
@@ -230,9 +248,16 @@ export default function PortfolioView({ positions: seed }: { positions: Position
   );
 
   return (
-    <main className="main2" data-portfolio="w5-positions" data-position-count={open.length}>
+    <main
+      className="main2"
+      data-portfolio="w5-positions"
+      data-portfolio-state={unread ? "unreadable" : open.length ? "book" : "empty"}
+      {...(unread ? {} : { "data-position-count": open.length })}
+    >
       <div className="pg">
-        <PortfolioBriefPanel population={{ kind: "positions", count: open.length }} />
+        {/* Every count, total and coverage line below is a CLAIM about what the user holds.
+            None of them may be rendered from a read that did not land — including "0". */}
+        {!unread && <PortfolioBriefPanel population={{ kind: "positions", count: open.length }} />}
 
         <div className="pg-head pf-head">
           <h2>{t("pagePortfolio")}</h2>
@@ -245,6 +270,19 @@ export default function PortfolioView({ positions: seed }: { positions: Position
 
         {failure && <div className="pf-failure" role="alert">{failure}</div>}
 
+        {unread && (
+          <div className="panel pf-unreadable" data-testid="portfolio-unreadable">
+            <div className="pf-empty">
+              <b>{t("portfolioUnreadableTitle")}</b>
+              <span>{t("portfolioUnreadableBody")}</span>
+              <button type="button" className="pf-add-btn" onClick={retryRead} disabled={retrying}>
+                {retrying ? t("portfolioUnreadableRetrying") : t("portfolioUnreadableRetry")}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!unread && <>
         <div className="kpis">
           <div className="kpi">
             <small>{t("bookValue")}</small>
@@ -345,6 +383,7 @@ export default function PortfolioView({ positions: seed }: { positions: Position
             </div>
           </details>
         )}
+        </>}
       </div>
 
       {editing && (

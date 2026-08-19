@@ -172,18 +172,72 @@ export function rowToPosition(row: DbRow): Position | null {
 
 /** The owner's whole book, oldest first — the order every read in the estate already uses
  *  (`order by created_at`, migration 0007's header). Open and closed both; the UI separates them. */
-export async function listPositions(db: PortfolioDb, userId: string): Promise<Position[]> {
-  const result = await db.from(POSITIONS_TABLE)
-    .select("id,ticker,shares,entry_price,entry_date,notes,status,created_at")
-    .eq("user_id", userId)
-    .order("created_at")
-    .limit(MAX_POSITIONS);
+/**
+ * The book, or the fact that it could not be read. These are DIFFERENT, and on a holdings
+ * surface the difference is the whole point: "you hold nothing" and "we could not read what you
+ * hold" must never render as each other.
+ *
+ * The bug this replaces: `listPositions` fed the query result through `rows()`, which answers
+ * `[]` for any non-array `data` — so a Supabase error, an RLS refusal or a dropped connection
+ * came back as an empty book with the error dropped on the floor. `/api/portfolio` then had no
+ * way to tell an outage from a genuinely empty portfolio, and the page's own try/catch could not
+ * help: the error was already swallowed one layer below it.
+ */
+export type PositionsRead =
+  | { ok: true; positions: Position[] }
+  | { ok: false; error: string };
+
+/** Thrown by `listPositions` when the store did not answer. Never caught-and-emptied. */
+export class PortfolioReadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PortfolioReadError";
+  }
+}
+
+/**
+ * readPositions — the CANONICAL owner-scoped read. Both `/api/portfolio` and the server page
+ * consume this one contract, so the two surfaces cannot disagree about what happened.
+ *
+ * Three ways this reports failure, all of them explicit:
+ *   - the driver returned an `error` (the normal supabase-js failure shape);
+ *   - the query threw (transport died mid-flight);
+ *   - `data` is not an array, i.e. the result is not a row set at all — the exact case the old
+ *     `rows()` helper silently turned into zero positions.
+ *
+ * A row that fails `rowToPosition` is still skipped rather than failing the whole read: a single
+ * corrupt row must not blank a book the user can otherwise see. That is a per-row judgement about
+ * DATA, not a claim that the store answered when it did not.
+ */
+export async function readPositions(db: PortfolioDb, userId: string): Promise<PositionsRead> {
+  let result: DbResult;
+  try {
+    result = await db.from(POSITIONS_TABLE)
+      .select("id,ticker,shares,entry_price,entry_date,notes,status,created_at")
+      .eq("user_id", userId)
+      .order("created_at")
+      .limit(MAX_POSITIONS);
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause.message : "portfolio read failed" };
+  }
+  if (result?.error) return { ok: false, error: result.error.message || "portfolio read failed" };
+  if (!Array.isArray(result?.data)) return { ok: false, error: "portfolio read returned no row set" };
   const positions: Position[] = [];
-  for (const row of rows(result)) {
+  for (const row of result.data) {
     const position = rowToPosition(row);
     if (position) positions.push(position);
   }
-  return positions;
+  return { ok: true, positions };
+}
+
+/**
+ * listPositions — `readPositions` for callers that want the array. It THROWS on failure by
+ * design: the one thing this module must never do again is hand back `[]` for "we don't know".
+ */
+export async function listPositions(db: PortfolioDb, userId: string): Promise<Position[]> {
+  const read = await readPositions(db, userId);
+  if (!read.ok) throw new PortfolioReadError(read.error);
+  return read.positions;
 }
 
 /** Resolve one owned position. `null` when it does not exist or is not this user's — the check
