@@ -22,6 +22,30 @@ export const metadata: Metadata = { title: "Scripts · Mastermind Terminal" };
 type Script = { id: string; name: string; source: string; lang: string; params: Record<string, any>; updated_at: string; locked?: boolean };
 
 export default async function ScriptsPage() {
+  // e2e seam (TERMINAL_E2E_FIXTURE=1 only) — the editor's STATE contract is a browser behaviour, so
+  // it needs a real page with real scripts. Reads through #433's lib/scriptsFixtureDb, which is
+  // deliberately READ-ONLY: proving that a save updates the editor's baseline does not require the
+  // save to persist (that never broke — the write always reached the database; the CLIENT baseline
+  // was what went stale), so the spec intercepts /api/scripts/save instead of this seam writing.
+  // That keeps one fixture for scripts rather than a second, divergent writable one.
+  //
+  // Goes through PineEditorMount like the member branch below: #431 made that the guest/member
+  // module boundary for this route, and bypassing it would test a graph the product no longer has.
+  if (process.env.TERMINAL_E2E_FIXTURE === "1") {
+    const { cookies } = await import("next/headers");
+    const { readFixtureScripts, SCRIPTS_STORE_COOKIE, SCRIPTS_FAULT_COOKIE } = await import("@/lib/scriptsFixtureDb");
+    const jar = await cookies();
+    const read = readFixtureScripts(jar.get(SCRIPTS_STORE_COOKIE)?.value || "default", !!jar.get(SCRIPTS_FAULT_COOKIE)?.value);
+    return (
+      <PineEditorMount
+        scripts={[PROPRIETARY_SCRIPT as Script, ...(read.ok ? (read.scripts as Script[]) : [])]}
+        isPro
+        email="e2e@example.com"
+        libraryUnavailable={!read.ok}
+      />
+    );
+  }
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return <SignupGate surface="scripts" />;

@@ -38,6 +38,12 @@ function seed(key: string): FixtureScript[] {
   const base = { source: "//@version=6\nindicator('x')\nplot(close)", lang: "pine", params: {}, is_public: false };
   return [
     { ...base, id: `${key}-mine`, user_id: fixtureScriptUserId(key), name: "My Momentum", updated_at: "2026-08-03T00:00:00Z" },
+    // A SECOND script owned by the same user. The editor's state contract (D3/D4) is only
+    // observable by leaving a script and coming back to it — a save that looks lost, an unsaved
+    // edit discarded without a decision, a ?id= that stops matching the visible script all need
+    // somewhere to switch TO. Owned and private, so it changes nothing about the C6 ownership
+    // assertion above; it just gives the library two editable rows instead of one.
+    { ...base, id: `${key}-second`, user_id: fixtureScriptUserId(key), name: "My Reversion", source: "//@version=6\nindicator('second')\nplot(open)", updated_at: "2026-08-02T00:00:00Z" },
     // Owned by someone else and PUBLIC — readable under RLS, and never part of My Scripts.
     { ...base, id: `${key}-foreign`, user_id: fixtureOtherUserId(key), name: "Someone Else's Public Script", is_public: true, updated_at: "2026-08-04T00:00:00Z" },
   ];
