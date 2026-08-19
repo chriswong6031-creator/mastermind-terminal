@@ -914,6 +914,18 @@ test("AAPL intelligence opens the verified FY2026 Q3 event workspace", async ({ 
   await page.locator(".ci-lenses").getByRole("tab", { name: "Results" }).click();
   await expect(page.locator("#ci-panel-results")).toContainText("No beat/miss");
   await expect(page.locator("#ci-panel-results")).toContainText("$109.4B");
+  const typedAbsences = page.locator('[data-ci-results-region="typed-absences"]');
+  const coverageStates = page.locator('[data-ci-results-region="coverage-states"]');
+  await expect(typedAbsences).toContainText("TYPED ABSENCES");
+  await expect(typedAbsences).toContainText("Analyst questions");
+  await expect(typedAbsences).toContainText("Consensus");
+  await expect(typedAbsences).toContainText("Slides");
+  await expect(typedAbsences).not.toContainText("0000320193-26-000018");
+  await expect(typedAbsences).not.toContainText("not joined");
+  await expect(coverageStates).toContainText("COVERAGE STATES");
+  await expect(coverageStates).toContainText("not joined");
+  await expect(coverageStates).not.toContainText("TYPED ABSENCES");
+  await expect(coverageStates).not.toContainText("0000320193-26-000018");
   await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-aapl-results.png`), fullPage: false });
 
   await closeEvidenceOverlay(page);

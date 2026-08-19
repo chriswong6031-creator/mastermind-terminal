@@ -317,6 +317,27 @@ describe("presentEventWorkspace", () => {
     ].filter((reason): reason is string => Boolean(reason));
     expect(presentedAbsences.every((reason) => workspaceAbsenceReasons.includes(reason))).toBe(true);
   });
+
+  it("does not borrow a present public_wire address onto reaction:not_joined", () => {
+    const payload = cloneGolden();
+    const sources = payload.sources as Array<Record<string, unknown>>;
+    const wire = sources.find((row) => row.kind === "public_wire");
+    expect(wire).toBeDefined();
+    delete wire!.typed_absence;
+    wire!.receipt_state = "address_only";
+    wire!.document_id = "wire_doc_should_not_bind_reaction";
+    wire!.url = "https://example.com/wire-address";
+    const workspace = normalizeEventWorkspace(payload, FLAGSHIP, GEN);
+    expect(workspace).not.toBeNull();
+    const presented = presentEventWorkspace(workspace!);
+    const reaction = presented.completeness.find((item) => item.id === "completeness:reaction");
+    expect(reaction?.value).toBe("not joined");
+    expect(reaction?.evidence.receipt_state).toBe("status_only");
+    expect(reaction?.evidence.typed_absence).toBeNull();
+    expect(reaction?.evidence.document_id).not.toBe("wire_doc_should_not_bind_reaction");
+    expect(reaction?.evidence.source_url).not.toBe("https://example.com/wire-address");
+    expect(presented.sources.find((source) => source.kind === "public_wire")?.receipt_state).toBe("address_only");
+  });
 });
 
 describe("resolveCurrentEventWorkspaceFromR2", () => {

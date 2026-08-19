@@ -238,7 +238,7 @@ function completenessItem(
     || (key === "release" && (row.kind === "issuer_release" || row.kind === "release"))
     || (key === "slides" && (row.kind === "presentation" || row.kind === "slides"))
     || (key === "consensus" && row.kind === "consensus")
-    || (key === "reaction" && (row.kind === "public_wire" || row.kind === "reaction"))
+    || (key === "reaction" && (row.kind === "reaction" || row.kind === "market_reaction"))
   ));
   let evidence: EventWorkspaceEvidenceView;
   if (block.typed_absence) {

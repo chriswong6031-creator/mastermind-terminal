@@ -107,15 +107,17 @@ function GlanceRow({
   items,
   selectedId,
   onChoose,
+  region,
 }: {
   kicker: string;
   items: EventWorkspacePresentedItem[];
   selectedId: string | undefined;
   onChoose: (item: EventWorkspacePresentedItem) => void;
+  region?: "typed-absences" | "coverage-states";
 }) {
   if (!items.length) return null;
   return (
-    <section className="ci-glance-block">
+    <section className="ci-glance-block" {...(region ? { "data-ci-results-region": region } : {})}>
       <div className="ci-section-label"><span>{kicker}</span></div>
       <div className="ci-glance-rows">
         {items.map((item) => (
@@ -400,9 +402,24 @@ export default function CompanyIntelligenceV2Current({
               <GlanceRow kicker={pick(zh, "REPORTED FACTS", "已报告事实")} items={presented.facts.filter((item) => item.id !== "fact_questions_count")} selectedId={evidence?.id} onChoose={chooseItem} />
               <GlanceRow kicker={pick(zh, "DELTAS", "变动")} items={presented.deltas} selectedId={evidence?.id} onChoose={chooseItem} />
               <GlanceRow kicker={pick(zh, "GUIDANCE", "指引")} items={presented.guidance} selectedId={evidence?.id} onChoose={chooseItem} />
-              <GlanceRow kicker={pick(zh, "TYPED ABSENCES", "类型化缺项")} items={presented.completeness.filter((item) => (
-                item.id === "fact_questions_count" || item.evidence.receipt_state !== "byte_replayed"
-              ))} selectedId={evidence?.id} onChoose={chooseItem} />
+              <GlanceRow
+                kicker={pick(zh, "TYPED ABSENCES", "类型化缺项")}
+                region="typed-absences"
+                items={presented.completeness.filter((item) => item.evidence.receipt_state === "typed_absence")}
+                selectedId={evidence?.id}
+                onChoose={chooseItem}
+              />
+              <GlanceRow
+                kicker={pick(zh, "COVERAGE STATES", "覆盖状态")}
+                region="coverage-states"
+                items={presented.completeness.filter((item) => (
+                  item.evidence.receipt_state === "status_only"
+                  && item.evidence.status_label !== "present"
+                  && item.evidence.status_label !== "bound"
+                ))}
+                selectedId={evidence?.id}
+                onChoose={chooseItem}
+              />
             </section>
           )}
 
