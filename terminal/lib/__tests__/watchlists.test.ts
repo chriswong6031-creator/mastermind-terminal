@@ -347,6 +347,61 @@ describe("A2 — concurrent adds converge on ONE row per symbol", () => {
     await addSymbols(db(), id, ["NVDA", "AAPL"], "Equities");
     expect(fixtureStore("unit").symbols).toEqual(before);
   });
+
+  // `supabase/` is explicitly NOT deployed (DEPLOY.md), so the schema change and the code deploy
+  // are separate operations. An upsert whose conflict target has no matching unique index does not
+  // degrade — Postgres refuses the statement (42P10) — so without a fallback, shipping this code
+  // to a database that has not had 0008 applied would break EVERY watchlist add.
+  it("still adds the symbol on a database where migration 0008 has not landed yet", async () => {
+    const id = await listId();
+    const real = createFixtureDb("unit");
+    let upsertAttempts = 0;
+    let insertFallbacks = 0;
+    const preMigration = {
+      from: (table: string) => {
+        const query = real.from(table);
+        return {
+          ...query,
+          select: (...args: [string?]) => query.select(...args),
+          eq: (...args: [string, unknown]) => query.eq(...args),
+          insert: (values: unknown) => { insertFallbacks += 1; return query.insert(values as never); },
+          upsert: () => {
+            upsertAttempts += 1;
+            return Object.assign(Promise.resolve({
+              data: null,
+              error: { message: 'there is no unique or exclusion constraint matching the ON CONFLICT specification' },
+            }), query);
+          },
+        } as unknown as ReturnType<typeof real.from>;
+      },
+    };
+    const result = await addSymbols(preMigration, id, ["RBLX"], "Growth");
+    expect(result).toEqual({ ok: true, added: ["RBLX"] });
+    expect(upsertAttempts).toBe(1);
+    expect(insertFallbacks).toBe(1);
+    expect(fixtureStore("unit").symbols.filter((row) => row.symbol === "RBLX")).toHaveLength(1);
+  });
+
+  it("does NOT fall back when the write failed for any other reason", async () => {
+    const id = await listId();
+    const real = createFixtureDb("unit");
+    let insertFallbacks = 0;
+    const brokenDb = {
+      from: (table: string) => {
+        const query = real.from(table);
+        return {
+          ...query,
+          select: (...args: [string?]) => query.select(...args),
+          eq: (...args: [string, unknown]) => query.eq(...args),
+          insert: (values: unknown) => { insertFallbacks += 1; return query.insert(values as never); },
+          upsert: () => Object.assign(Promise.resolve({ data: null, error: { message: "permission denied for table watchlist_symbols" } }), query),
+        } as unknown as ReturnType<typeof real.from>;
+      },
+    };
+    const result = await addSymbols(brokenDb, id, ["RBLX"], "Growth");
+    expect(result.ok).toBe(false);
+    expect(insertFallbacks).toBe(0);
+  });
 });
 
 describe("chunkSymbols (F6)", () => {

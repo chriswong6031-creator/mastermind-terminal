@@ -114,9 +114,9 @@ export default async function Terminal({ searchParams }: { searchParams: Promise
       const { count, error: countError } = await supabase.from("watchlist_symbols")
         .select("watchlist_id", { count: "exact", head: true }).eq("watchlist_id", wl.id);
       if (!countError && !count) {
-        await supabase.from("watchlist_symbols")
-          .upsert(guestSymbols.map(([section, symbol], i) => ({ watchlist_id: wl.id, section, symbol, position: i })),
-            { onConflict: "watchlist_id,symbol", ignoreDuplicates: true });
+        const { seedMembership } = await import("@/lib/watchlists");
+        await seedMembership(supabase as never,
+          guestSymbols.map(([section, symbol], i) => ({ watchlist_id: wl.id, section, symbol, position: i })));
       }
     }
     // Re-read with a short backoff — the concurrent request's commit can land a beat later.

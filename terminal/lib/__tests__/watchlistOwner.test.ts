@@ -227,7 +227,9 @@ describe("A2 — membership uniqueness is enforced by the database, not by appli
     const service = readFileSync(path.resolve(process.cwd(), "lib", "watchlists.ts"), "utf8");
     const route = readFileSync(path.resolve(process.cwd(), "app", "terminal", "page.tsx"), "utf8");
     expect(service).toContain('.upsert(inserts, { onConflict: "watchlist_id,symbol", ignoreDuplicates: true })');
-    expect(route).toContain('{ onConflict: "watchlist_id,symbol", ignoreDuplicates: true }');
+    // Both writers — the batched add and the first-login seed — go through the one helper.
+    expect(service).toContain("async function writeMembership(");
+    expect(route).toContain("seedMembership(supabase as never,");
     // An unknown count is not an empty count: a failed read must not read as permission to seed.
     expect(route).toContain("if (!countError && !count)");
   });

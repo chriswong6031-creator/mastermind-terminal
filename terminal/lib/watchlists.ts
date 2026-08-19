@@ -307,12 +307,49 @@ export async function addSymbols(
     section: sectionBySymbol?.[symbol] ?? section,
     position: tail + 1 + index,
   }));
-  const { error } = await db.from("watchlist_symbols")
-    .upsert(inserts, { onConflict: "watchlist_id,symbol", ignoreDuplicates: true });
-  if (error) return { ok: false, added: [], error: "watchlist update failed" };
+  if (!await writeMembership(db, inserts)) return { ok: false, added: [], error: "watchlist update failed" };
   // `added` means "absent when this call read, and present now" — the caller's contract is that
   // the symbols are in the list, not that this particular request wrote the row.
   return { ok: true, added: missing };
+}
+
+/** Postgres 42P10: "there is no unique or exclusion constraint matching the ON CONFLICT
+ *  specification" — i.e. this database has not had migration 0008 applied yet. */
+const MISSING_CONFLICT_TARGET = /no unique or exclusion constraint/i;
+
+/**
+ * Write membership rows through the `(watchlist_id, symbol)` conflict target, falling back to a
+ * plain insert on a database where that index does not exist yet.
+ *
+ * The fallback exists because the schema change and the code deploy are SEPARATE operations here:
+ * `supabase/` is explicitly not deployed (DEPLOY.md), so migrations are applied out of band. An
+ * upsert whose conflict target has no matching unique index does not degrade — Postgres refuses
+ * the statement outright — so without this, shipping the code before the migration would break
+ * every watchlist add in production, and shipping the migration first would be the only safe
+ * order. This makes either order safe.
+ *
+ * It is deliberately LOUD, not silent: while the fallback is in use A2's guarantee does not hold
+ * (concurrent adds can still duplicate, exactly as they did before), so the missing migration has
+ * to be visible in the server log rather than absorbed.
+ */
+async function writeMembership(db: WatchlistDb, inserts: DbRow[]): Promise<boolean> {
+  const upserted = await db.from("watchlist_symbols")
+    .upsert(inserts, { onConflict: "watchlist_id,symbol", ignoreDuplicates: true });
+  if (!upserted.error) return true;
+  if (!MISSING_CONFLICT_TARGET.test(upserted.error.message ?? "")) return false;
+  console.error(
+    "[watchlists] unique (watchlist_id, symbol) is MISSING from this database — "
+    + "supabase/migrations/0008_watchlist_symbol_unique.sql has not been applied. "
+    + "Falling back to a plain insert; concurrent adds can duplicate until it lands.",
+  );
+  const inserted = await db.from("watchlist_symbols").insert(inserts);
+  return !inserted.error;
+}
+
+/** Seed a brand-new Default list. Same conflict target, same fallback — the two concurrent
+ *  post-signup requests `app/terminal/page.tsx` handles both run through here. */
+export function seedMembership(db: WatchlistDb, inserts: DbRow[]): Promise<boolean> {
+  return writeMembership(db, inserts);
 }
 
 export async function removeSymbols(
