@@ -356,7 +356,7 @@ test("phone: tapping the symbol wheel opens the ticker picker as a drawer", asyn
     .toBe("rgba(0, 0, 0, 0)");
 
   // Navigation, not a search: the field is present but was never focused, so no keyboard.
-  await expect(drawer.getByPlaceholder("Symbol, ISIN, or CUSIP")).not.toBeFocused();
+  await expect(drawer.getByPlaceholder("Symbol or company name")).not.toBeFocused();
   await expect(drawer.locator(".s-home")).toBeVisible();
 
   // The BODY is the scroller, so a drag that starts on a row moves the sheet.
@@ -381,7 +381,7 @@ test("phone: tapping the symbol wheel opens the ticker picker as a drawer", asyn
   // row is also the drag surface.
   await page.touchscreen.tap(wheel.x + wheel.width / 2, wheel.y + wheel.height / 2);
   await expect(drawer).toBeVisible();
-  await drawer.getByPlaceholder("Symbol, ISIN, or CUSIP").fill("AAPL");
+  await drawer.getByPlaceholder("Symbol or company name").fill("AAPL");
   const hit = drawer.locator(".sres .r").first();
   await expect(hit.locator(".tk")).toHaveText("AAPL");
   await hit.click();
