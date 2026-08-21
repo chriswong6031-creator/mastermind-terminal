@@ -57,5 +57,20 @@
 -- begins working on the very next save after this statement runs — no deploy, no restart.
 -- =====================================================================================
 
+-- ============================ APPLICATION STATUS (2026-08-20) ============================
+-- STILL NOT APPLIED. Censused read-only through the Management API: `chart_layouts_user_name` is
+-- absent from `pg_indexes`. `lib/layouts.ts` therefore remains on its 42P10 fallback path, exactly
+-- as the header above describes — nothing is broken, the atomic upsert simply has not switched on.
+--
+-- The sibling index from the same wave, `wls_watchlist_symbol`
+-- (`0009_watchlist_symbol_unique.sql`), IS applied. A higher-numbered file being live while this
+-- one is not is expected here, not a mistake: each file is applied by hand, independently, and
+-- there is no `supabase_migrations` ledger recording either. See `supabase/migrations/README.md`.
+--
+-- Re-run the census before applying this to any environment whose `chart_layouts` is non-empty:
+-- the "nothing to reconcile" reasoning above rests on the table being empty, and that is exactly
+-- what #427's fixed Save path is meant to change.
+-- =========================================================================================
+
 create unique index if not exists chart_layouts_user_name
   on public.chart_layouts (user_id, name);
