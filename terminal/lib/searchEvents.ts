@@ -41,6 +41,22 @@ export interface SearchStats {
   perDay14d: { day: string; count: number }[]; // UTC days, oldest first, zero-filled
 }
 
+// ── Read contracts: a read that did not land is NOT an empty result ────────────────────────────
+// Both readers used to log their error and return `[]` / zeroed stats, so a Supabase outage was
+// indistinguishable from "nobody has searched yet" — the admin console rendered "No searches
+// logged yet." and a `0` KPI row over an unread table. Callers now get a discriminated result and
+// decide, the same shape `lib/layouts.ts` and `lib/portfolio.ts` use.
+//
+// Events and stats are answered SEPARATELY on purpose: they are two independent reads, and a
+// failed aggregate must not take the usable log down with it.
+export type EventsResult =
+  | { ok: true; events: SearchEvent[] }
+  | { ok: false; error: string };
+
+export type StatsResult =
+  | { ok: true; stats: SearchStats }
+  | { ok: false; error: string };
+
 // ---------- dev fallback (memory ring) ----------
 const DEV_MAX = 2000;
 const devRows: SearchEvent[] = [];
@@ -71,7 +87,7 @@ export async function recordSearchEvent(evt: SearchEventInput): Promise<void> {
 }
 
 // ---------- read (admin) ----------
-export async function listSearchEvents(f: ListFilters): Promise<SearchEvent[]> {
+export async function listSearchEvents(f: ListFilters): Promise<EventsResult> {
   const supabase = createServiceClient();
   if (!supabase) {
     devWarnOnce();
@@ -80,7 +96,7 @@ export async function listSearchEvents(f: ListFilters): Promise<SearchEvent[]> {
     if (f.symbol) rows = rows.filter((r) => r.symbol === f.symbol);
     if (f.source) rows = rows.filter((r) => r.source === f.source);
     if (f.visitor) rows = rows.filter((r) => r.user_id === f.visitor || r.anon_id === f.visitor || r.ip === f.visitor);
-    return rows.slice(0, f.limit);
+    return { ok: true, events: rows.slice(0, f.limit) };
   }
   let q = supabase.from("search_events").select("*").order("id", { ascending: false }).limit(f.limit);
   if (f.beforeId != null) q = q.lt("id", f.beforeId);
@@ -99,9 +115,9 @@ export async function listSearchEvents(f: ListFilters): Promise<SearchEvent[]> {
   const { data, error } = await q;
   if (error) {
     console.error("[searchEvents] list failed:", error.message);
-    return [];
+    return { ok: false, error: error.message };
   }
-  return (data || []) as SearchEvent[];
+  return { ok: true, events: (data || []) as SearchEvent[] };
 }
 
 // Resolve user_ids → emails for the admin table. GoTrue admin lookups, memoised for the
@@ -134,7 +150,7 @@ export async function resolveUserEmails(ids: string[]): Promise<Record<string, s
 // search), so a capped 14-day fetch aggregated in JS beats adding RPC surface to the DB.
 const STATS_FETCH_CAP = 20_000;
 
-export async function searchStats(): Promise<SearchStats> {
+export async function searchStats(): Promise<StatsResult> {
   const supabase = createServiceClient();
   const since14 = new Date(Date.now() - 14 * 86_400_000).toISOString();
 
@@ -146,7 +162,7 @@ export async function searchStats(): Promise<SearchStats> {
     total = devRows.length;
     recent = devRows.filter((r) => r.created_at >= since14);
   } else {
-    const [{ count }, { data, error }] = await Promise.all([
+    const [countRes, windowRes] = await Promise.all([
       supabase.from("search_events").select("*", { count: "exact", head: true }),
       supabase
         .from("search_events")
@@ -155,9 +171,16 @@ export async function searchStats(): Promise<SearchStats> {
         .order("id", { ascending: false })
         .limit(STATS_FETCH_CAP),
     ]);
-    if (error) console.error("[searchEvents] stats failed:", error.message);
-    total = count ?? 0;
-    recent = (data || []) as typeof recent;
+    // BOTH queries are load-bearing and BOTH can fail independently. The count error used to be
+    // dropped on the floor entirely (`{ count }` destructured without `error`), so a failed count
+    // rendered as a confident `0` in the "Total searches" KPI.
+    const failure = countRes.error ?? windowRes.error;
+    if (failure) {
+      console.error("[searchEvents] stats failed:", failure.message);
+      return { ok: false, error: failure.message };
+    }
+    total = countRes.count ?? 0;
+    recent = (windowRes.data || []) as typeof recent;
   }
 
   const now = Date.now();
@@ -187,5 +210,5 @@ export async function searchStats(): Promise<SearchStats> {
     perDay14d.push({ day, count: dayCounts.get(day) || 0 });
   }
 
-  return { total, today, visitors7d: visitors.size, topSymbols7d, perDay14d };
+  return { ok: true, stats: { total, today, visitors7d: visitors.size, topSymbols7d, perDay14d } };
 }
