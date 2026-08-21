@@ -10,6 +10,11 @@ const terminalChromeIntermediateSpec = /terminal-chrome-responsive\.spec\.ts/;
 
 export default defineConfig({
   testDir: "./e2e",
+  // Compile every route the suite uses BEFORE any spec's clock starts. The suite runs against a
+  // DEV server, so a route's first request pays a Turbopack compile inside whichever spec
+  // happens to touch it first — the measured cause of CI's rotating e2e failures. See the
+  // module header in e2e/globalSetup.ts for the numbers.
+  globalSetup: "./e2e/globalSetup.ts",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
