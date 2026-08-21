@@ -63,6 +63,10 @@ export default defineConfig({
       // /analysis is normally member-gated. The page's local-only preview seam
       // keeps responsive visual tests focused on the workspace, not auth.
       ANALYSIS_LOCAL_PREVIEW: "1",
+      // The owner console's existing dev hatch (lib/adminGate.ts), not a new seam: it grants
+      // admin only when NODE_ENV === "development", which is exactly what `next dev` is here.
+      // Production runs `next start` and can never satisfy it.
+      ADMIN_DEV: "1",
       TERMINAL_E2E_FIXTURE: "1",
       TERMINAL_E2E_EMAIL: "responsive@example.com",
       TERMINAL_E2E_ENTITLEMENT: "unlimited",

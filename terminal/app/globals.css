@@ -2778,11 +2778,21 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 /* Fixed layout so an attacker-controlled 128-char query can't blow out the table width and clip
    the Visitor/IP columns. Only the Query column flexes (auto) + ellipsises; the rest are sized. */
 .adm-log{table-layout:fixed;width:100%}
-.adm-log th,.adm-log td{text-align:left}
-.adm-log td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The HEADER is clipped exactly like the body. `table-layout:fixed` gives every cell its column's
+   width and lets longer content spill out of it; with only `td` carrying the clamp, a squeezed
+   table ellipsised its rows cleanly while printing "QUERY" on top of "SOURCE" in the header. */
+.adm-log th,.adm-log td{text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* …except the full-width state rows. Loading / empty / unavailable are sentences, and an outage
+   notice truncated to "The search log could not be…" — with its Retry button pushed out of the
+   panel — is the failure state itself failing. They wrap. */
+.adm-log tr.empty-row td{white-space:normal;overflow:visible;text-overflow:clip}
 .adm-log col.c-time{width:192px}
-.adm-log col.c-sym{width:80px}
-.adm-log col.c-src{width:130px}
+/* 80px ellipsised the tickers themselves — "BTC-…", "0700…" — and a truncated symbol is a wrong
+   symbol. The width comes out of Query, which still has ~435px at 1440. */
+.adm-log col.c-sym{width:92px}
+/* Likewise 130px cut the longest source the app actually writes ("positioning-tab", from
+   components/msc/PositioningView.tsx) mid-word inside its pill. */
+.adm-log col.c-src{width:160px}
 .adm-log col.c-vis{width:140px}
 .adm-log col.c-ip{width:120px}
 .adm-log tbody tr{cursor:default}
@@ -2790,6 +2800,41 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .adm-top-row:last-child{border-bottom:0}
 .adm-top-row .bar{width:100%;max-width:240px;margin-left:0}
 @media(max-width:860px){.adm-body{flex-direction:column}.adm-side{width:100%;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line)}.adm-body .kpis{grid-template-columns:repeat(2,1fr)}}
+
+/* ── The Search Log stops being a table before it gets squeezed ───────────────────────────────
+   A six-column `table-layout:fixed` has no honest narrow form: the five sized columns claim
+   704px before the flexible Query column gets a single pixel. Below that, Query collapsed to 0,
+   its header printed on top of SOURCE (the clamp above now prevents the collision, but a 0px
+   column is still no column), and Visitor and IP were pushed past the panel's `overflow:hidden`
+   — invisible, with no scrollbar to reveal them.
+
+   1120 is that arithmetic, not a device: 48px shell rail + 190px console rail + 42px page padding
+   + 704px of sized columns, which leaves Query ~136px — about the narrowest it can be and still
+   show a query rather than an ellipsis. It sits well above the shell's own 860 breakpoint because
+   both rails come back at 861 and re-squeeze the table for another 250px; the e2e sweep in
+   e2e/admin-log-responsive.spec.ts walks the whole band and fails on a 0px column.
+
+   Each event becomes a record instead: symbol + time, the query on its own wrapping line (it is
+   the payload, not a detail), then source · visitor · ip. Nothing is dropped, nothing is
+   truncated to fit. The `role` attributes in components/AdminView.tsx preserve the table
+   semantics that changing `display` would otherwise drop from the a11y tree, and `data-col`
+   keys these rules to meaning rather than to column position. */
+@media(max-width:1120px){
+  .adm-log,.adm-log tbody,.adm-log tr,.adm-log td{display:block;width:auto}
+  .adm-log colgroup,.adm-log thead{display:none}
+  .adm-log tbody tr{display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 8px;padding:9px 12px;border-bottom:1px solid var(--line-2)}
+  .adm-log tbody tr:last-child{border-bottom:0}
+  .adm-log td{padding:0;border:0;max-width:100%}
+  /* Reading order is the record's, not the column order's: identity first, timestamp trailing. */
+  .adm-log td[data-col="sym"]{order:1;font-size:13.5px}
+  .adm-log td[data-col="time"]{order:2;margin-left:auto}
+  .adm-log td[data-col="query"]{order:3;flex-basis:100%;white-space:normal;overflow-wrap:anywhere}
+  .adm-log td[data-col="src"]{order:4}
+  .adm-log td[data-col="vis"]{order:5}
+  .adm-log td[data-col="ip"]{order:6;margin-left:auto}
+  /* The state rows own their whole card — their own padding is already generous. */
+  .adm-log tbody tr.empty-row{display:block;padding:0}
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    v6 — Tip primitive (the ONE tooltip). Portalled to <body> by components/ui/Tip.tsx,
