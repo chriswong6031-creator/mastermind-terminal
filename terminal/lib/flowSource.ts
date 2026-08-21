@@ -940,8 +940,8 @@ export async function intradayFixture(sym: string, tf: string): Promise<Bar6[] |
  * Options Prophet is an artifact-native feed, so it deliberately probes its
  * published R2 index before the backend route. This avoids paying the backend's
  * timeout on every first load when that optional route is absent or deploying.
- * `manifest` is a local static file on this box; `flow_idx` has a final GitHub-Pages
- * origin. Returns null when every source fails. (No scoring, no cache — callers own that.)
+ * `manifest` is a local static file on this box. Returns null when every source
+ * fails. (No scoring, no cache — callers own that.)
  */
 export type FlowUpstreamSource = "backend" | "r2";
 
@@ -973,15 +973,12 @@ export async function tryFetchUpstream(f: string): Promise<Record<string, unknow
       // Continue to the next configured source.
     }
   }
-  if (f === "flow_idx") {
-    try {
-      return await fetchWithUA(
-        "https://mastermindx-market-intelligence.github.io/macro/flow/index.json"
-      );
-    } catch {
-      return null;
-    }
-  }
+  // DEC:B1-MACRO-PRIVATE-CUTOVER: the canonical Macro repo is now private and its
+  // GitHub Pages mirror is retired, so `flow_idx` no longer has an anonymous public
+  // fallback here. It is supplied by backend -> R2 (`live_flow/flow_idx.json`,
+  // refreshed nightly by the macro repo's `scripts/mirror_flow_idx.py`); when both
+  // of those fail this path fails closed (null -> caller's 503 / stale cache)
+  // rather than reading an anonymous public copy.
   return null;
 }
 
