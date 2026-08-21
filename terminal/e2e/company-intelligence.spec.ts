@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { gzipSync } from "node:zlib";
+import { expectTapTarget } from "./tapTarget";
 import aaplWorkspace from "../lib/__tests__/fixtures/aapl-event-workspace.json";
 
 const SHA = "a".repeat(64);
@@ -629,7 +630,7 @@ test("theme context stays pinned to the latest event and makes its receipts insp
   await page.locator(".ci-theme-boundary").getByRole("button", { name: "Use latest event" }).click();
   await expect(page.getByRole("heading", { name: "Curated basket context" })).toBeVisible();
   const themeReceipts = page.getByRole("button", { name: "View receipts" }).last();
-  expect((await themeReceipts.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(40);
+  await expectTapTarget(themeReceipts, { height: 40 });
   await themeReceipts.click();
   await expect(page.locator(".ci-theme-receipts-panel")).toContainText("Latest event pin");
   await expect(page.locator(".ci-theme-receipts-panel")).toContainText("Context only");
@@ -663,7 +664,7 @@ test("institutional context preserves point-in-time boundaries and receipt prove
   await expect(card).toContainText("$28M");
   await expect(card).toContainText("Accumulating");
   const provenance = card.getByRole("button", { name: "View provenance" });
-  expect((await provenance.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(40);
+  await expectTapTarget(provenance, { height: 40 });
   await provenance.click();
   await expect(page.locator(".ci-inst-receipts-panel")).toContainText("Company-context receipt");
   await expect(page.locator(".ci-inst-receipts-panel")).toContainText("Context only");
@@ -980,12 +981,12 @@ test("AAPL workspace remains usable in Chinese without overflow", async ({ page 
   const close = page.locator(".ci-evidence-close");
   await page.getByRole("button", { name: "查看凭证" }).click();
   await expect(page.locator(".ci-evidence")).toHaveAttribute("aria-hidden", "false");
-  expect((await close.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await expectTapTarget(close, { height: 44 });
   await closeEvidenceOverlay(page);
   await page.getByRole("button", { name: /营收/ }).click();
   await expect(page.locator(".ci-evidence-note")).toContainText("生产者凭证");
   await expect(page.locator(".ci-evidence-note")).toContainText("并未根据文档字节重新计算");
-  expect((await close.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await expectTapTarget(close, { height: 44 });
   await expectNoDocumentOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("mobile-aapl-event-workspace-zh.png"), fullPage: false });
 });
