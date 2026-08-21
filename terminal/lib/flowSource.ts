@@ -299,7 +299,10 @@ export function r2Key(f: string): string {
   }
   if (f === "manifest") return "live_flow/manifest.json";
   if (f === "flow_idx") return "live_flow/flow_idx.json";
-  if (f === "prophet_idx") return "prophet/index.json";
+  // prophet_idx intentionally has NO r2Key mapping — DEC:B1-PROPHET-PUBLIC-SPLIT
+  // (Sol Day-5, 2026-08-21). tryFetchUpstream skips the "r2" source for this f
+  // outright, so this mapping would be dead/unreachable in production; it is
+  // omitted rather than left as a live landmine for a future caller to find.
   if (f === "prophet_marks") return "live_flow/prophet_marks.json";
   if (f === "options_prophet_idx") return "options_prophet/index.json";
   if (f === "enrich") return "live_flow/enrich_current.json";
@@ -956,6 +959,11 @@ export async function tryFetchUpstream(f: string): Promise<Record<string, unknow
     }
   }
   for (const source of upstreamSourceOrder(f)) {
+    // DEC:B1-PROPHET-PUBLIC-SPLIT (Sol Day-5, 2026-08-21): the full US Prophet
+    // plan book is premium/private. prophet_idx must never fall through to the
+    // anonymous public R2 object — when the backend is unavailable the caller
+    // fails closed (503 / stale in-memory cache), never anonymous fallthrough.
+    if (source === "r2" && f === "prophet_idx") continue;
     try {
       const url = source === "r2"
         ? `${R2_BASE}/${r2Key(f)}`
