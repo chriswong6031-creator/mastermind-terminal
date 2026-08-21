@@ -14,8 +14,8 @@ import type { SectionProps } from "./types";
 // user_metadata), so there is no save button and nothing to wire beyond the
 // store calls.
 
-export default function SectionTerminal({ t, email, onClose }: SectionProps) {
-  const { prefs, terminal, toggle, setStartTf, setUpDown } = useAccountPrefs(email);
+export default function SectionTerminal({ t, identity, onClose }: SectionProps) {
+  const { prefs, terminal, toggle, setStartTf, setUpDown } = useAccountPrefs(identity);
 
   return (
     <>

@@ -33,6 +33,7 @@ import { flowGet } from "@/lib/flowClientCache";
 import { parseGlanceState } from "@/lib/mscGlance";
 import { DEFAULT_START_TF, TF_CANONICAL_ORDER, mobileTimeframeOptions, readStartTf, resolveStartTf } from "@/lib/startTf";
 import { useMarketPrefs } from "@/lib/useMarketPrefs";
+import { accountIdentity } from "@/lib/accountIdentity";
 // Import the page ids from the import-free leaf, NOT from MegaPane: MegaPane is mounted
 // through next/dynamic below, and a value import out of it here would statically pull its
 // entire graph (14 fundamentals pages + statement/intelligence/transcript libs, ~709 KB of
@@ -920,6 +921,10 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // lib/watchlistOwner.ts). Every read and write of lists/flags/notes/receipts/tombstones below is
   // scoped by it, so a second user in the same browser can neither see nor re-POST the first
   // user's rows.
+  // ONE identity object for the whole shell, built from the two props the route resolves. It
+  // feeds the preference store, the settings panel and (via wlOwner) the watchlist boundary, so
+  // every owner-scoped lane on this page answers "who is this?" identically.
+  const identity = useMemo(() => accountIdentity(userId, email), [userId, email]);
   const wlOwner = watchlistOwnerKey(userId);
   const wlOwnerRef = useRef(wlOwner);
   wlOwnerRef.current = wlOwner;
@@ -1056,7 +1061,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // is the same store the macro site's onboarding writes, on the same Supabase project.
   // Read-only here: the editing controls live in the settings panel's Terminal section, which subscribes to the same
   // module store, so both always see identical state.
-  const { prefs: marketPrefs, ready: prefsReady, enableAll: showAllMarkets } = useMarketPrefs(email);
+  const { prefs: marketPrefs, ready: prefsReady, enableAll: showAllMarkets } = useMarketPrefs(identity);
   // premium-suite UI gate — client hint only, fail-closed to "free" (server authority stays macro-api)
   const ent = useEntitlement(email);
   // dev-only tier override (localStorage mm.devTier = "essential" | "pro") — read post-mount to
@@ -4328,7 +4333,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         can call useOnboarding() directly. Note this provider is a DESCENDANT of
         TerminalShell, so useSettings() *here* would be the no-op — the buttons
         below are children of it, which is what matters. */}
-    <SettingsProvider email={email} defaultSection="terminal">
+    <SettingsProvider identity={identity} defaultSection="terminal">
     <div className={`app${fullChart ? " fs" : ""}${shellMode ? " shell-app" : ""}`} data-shell={shellMode ? "app" : undefined} data-tray={shellMode && shellTray ? "1" : undefined} data-dossier={dossierMode ? "1" : undefined} style={{ ["--rail-w" as any]: `${railW}px` }}>
       {!shellMode && (
       <header className="topbar">

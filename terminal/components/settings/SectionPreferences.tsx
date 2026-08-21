@@ -38,9 +38,9 @@ function Chip({
   );
 }
 
-export default function SectionPreferences({ t, email, user, onClose, onPatchMeta }: SectionProps) {
+export default function SectionPreferences({ t, identity, email, user, onClose, onPatchMeta }: SectionProps) {
   const { lang, setLang } = useLang();
-  const { prefs, metaPrefs, setFollowed, setLangPref } = useAccountPrefs(email);
+  const { prefs, metaPrefs, setFollowed, setLangPref } = useAccountPrefs(identity);
 
   const [followMsg, setFollowMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [tradeMsg, setTradeMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
