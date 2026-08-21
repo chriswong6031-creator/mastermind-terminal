@@ -8,11 +8,14 @@ import { notFound, redirect } from "next/navigation";
 //
 // Owner plane. isAdminRequest reads cookies → auto-dynamic, never cached.
 // Non-admin gets a 404 (don't advertise the route exists); logged-out gets login.
+//
+// `unavailable` is deliberately NOT folded into either of those. Sending an admin to /login
+// during a Supabase blip invites them to re-authenticate against the same broken authority, and
+// `notFound()` tells them their console does not exist. Rendering the shell instead lets the
+// client's own retry path own the outage — it will get a 503 from the API and say so.
 export default async function AdminPage() {
-  const { admin, email } = await isAdminRequest();
-  if (!admin) {
-    if (!email) redirect("/login");
-    notFound();
-  }
-  return <AdminView email={email!} />;
+  const verdict = await isAdminRequest();
+  if (verdict.status === "anonymous") redirect("/login");
+  if (verdict.status === "denied") notFound();
+  return <AdminView email={verdict.email ?? ""} authorityUnavailable={verdict.status === "unavailable"} />;
 }
