@@ -1,5 +1,6 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { isolateWatchlistStore } from "./watchlistStore";
+import { expectTapTarget } from "./tapTarget";
 
 // W5 — `/portfolio` is the user's REAL portfolio (`portfolio_positions`).
 //
@@ -324,22 +325,21 @@ test("the page holds its shape at this viewport, in zh", async ({ page, baseURL 
   // applied by position, hid the actions column at 390px — a phone user could see their book and
   // change nothing in it. Asserted here so it cannot come back silently.
   //
-  // The bar is the CSS floor with NO slack: 44px wherever the input is a finger, 28px on
-  // pointer-precise desktop where the compact row is what makes a long book readable. Delete is
-  // the rightmost of three controls in one cell, so an undersized target there mis-taps into a
-  // destructive action.
+  // The bar is the CSS floor itself — 44px wherever the input is a finger, 28px on
+  // pointer-precise desktop where the compact row is what makes a long book readable — measured
+  // in whole CSS pixels by expectTapTarget, which absorbs sub-pixel layout noise and nothing
+  // more. Delete is the rightmost of three controls in one cell, so an undersized target there
+  // mis-taps into a destructive action.
   const touch = testInfo.project.name !== "desktop";
   const floor = touch ? 44 : 28;
   for (const name of [/^编辑 NVDA$/, /^平仓 NVDA$/, /^删除 NVDA$/]) {
     const control = row(page, "NVDA").getByRole("button", { name });
     await expect(control).toBeVisible();
-    const box = await control.boundingBox();
-    expect(box?.width ?? 0).toBeGreaterThan(0);
-    expect(box?.height ?? 0).toBeGreaterThanOrEqual(floor);
+    expect((await control.boundingBox())?.width ?? 0).toBeGreaterThan(0);
+    await expectTapTarget(control, { height: floor });
   }
   // The add-position button and the modal's own buttons take the same floor.
-  const addBox = await page.locator(".pf-add-btn").first().boundingBox();
-  expect(addBox?.height ?? 0).toBeGreaterThanOrEqual(touch ? 44 : 34);
+  await expectTapTarget(page.locator(".pf-add-btn").first(), { height: touch ? 44 : 34 });
   // …and the symbol stays legible next to them, never squeezed out by the controls.
   await expect(row(page, "NVDA").locator(".pf-tk")).toBeVisible();
 
