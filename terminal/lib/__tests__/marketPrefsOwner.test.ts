@@ -28,6 +28,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 type GetUserResult = { data: { user: unknown }; error: unknown };
 let getUser: () => Promise<GetUserResult> = async () => ({ data: { user: null }, error: new Error("unset") });
 const updates: Record<string, unknown>[] = [];
+/** Swappable so a case can make the authority resolve `{ error }` or reject. */
+let updateResult: () => Promise<{ error?: unknown }> = async () => ({ error: null });
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
@@ -35,7 +37,7 @@ vi.mock("@/lib/supabase/client", () => ({
       getUser: () => getUser(),
       updateUser: ({ data }: { data: Record<string, unknown> }) => {
         updates.push(data);
-        return Promise.resolve({ data: {}, error: null });
+        return updateResult();
       },
     },
   }),
@@ -45,7 +47,8 @@ vi.mock("@/lib/i18n", () => ({ applyLang: vi.fn() }));
 import { ownerKeyFor, GUEST_OWNER, accountIdentity } from "@/lib/accountIdentity";
 import {
   __loadOwner, __marketPrefsInternals, __marketPrefsSnapshot, __resetMarketPrefsStore,
-  __subscribeMarketPrefs, persistStartTf, persistUpDown, persistMetaPrefs,
+  __subscribeMarketPrefs, currentOwnerToken, ownerTokenIsCurrent, persistStartTf, persistUpDown,
+  persistMetaPrefs, persistTradeTypes, retryPrefSync,
 } from "@/lib/useMarketPrefs";
 
 const UUID_A = "8f2c41ba-7d19-4e6a-9c03-5b71ee0a4d22";
@@ -73,6 +76,7 @@ function slot(owner: string): Record<string, unknown> | undefined {
 beforeEach(async () => {
   store = new Map();
   updates.length = 0;
+  updateResult = async () => ({ error: null });
   const g = globalThis as unknown as Record<string, unknown>;
   g.localStorage = {
     getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
@@ -299,5 +303,192 @@ describe("writes carry the whole nested blob, and stop at the owner boundary", (
     await settle();
 
     expect(updates.some((u) => JSON.stringify(u).includes('"start_tf":"W"'))).toBe(false);
+  });
+});
+
+// ── E2: the serialized delivery lane, seen from the store ────────────────────────────────
+
+describe("delivery is serialized, acknowledged, and retryable", () => {
+  it("reports `saved` only after the AUTHORITY acknowledges, not when the request is fired", async () => {
+    getUser = async () => userWith(UUID_A, { terminal: { start_tf: "W" } });
+    __loadOwner(OWNER_A);
+    await settle();
+
+    let release: (v: { error?: unknown }) => void = () => {};
+    updateResult = () => new Promise((res) => { release = res; });
+
+    persistUpDown("east");
+    expect(__marketPrefsSnapshot().sync.phase).toBe("syncing");   // fired, NOT saved
+
+    release({ error: null });
+    await settle();
+    expect(__marketPrefsSnapshot().sync.phase).toBe("saved");
+  });
+
+  it("reports a RESOLVED `{ error }` as a failure — the pane used to call this Saved", async () => {
+    getUser = async () => userWith(UUID_A, {});
+    __loadOwner(OWNER_A);
+    await settle();
+
+    updateResult = async () => ({ error: { message: "row level security" } });
+    persistUpDown("east");
+    await settle();
+
+    expect(__marketPrefsSnapshot().sync.phase).toBe("failed");
+    expect(__marketPrefsInternals().undelivered).toBe(true);
+  });
+
+  it("runs ONE write at a time and coalesces the rest into the newest complete blob", async () => {
+    getUser = async () => userWith(UUID_A, { terminal: { start_tf: "W", updown: "west" } });
+    __loadOwner(OWNER_A);
+    await settle();
+    updates.length = 0;
+
+    let release: (v: { error?: unknown }) => void = () => {};
+    updateResult = () => new Promise((res) => { release = res; });
+
+    persistStartTf("D");            // v1 — goes out
+    persistUpDown("east");          // v2 — coalesced behind it
+    persistMetaPrefs({ lang: "zh" });
+    expect(updates).toHaveLength(1);
+
+    updateResult = async () => ({ error: null });
+    release({ error: null });
+    await settle();
+
+    // One follow-up carrying the CURRENT value of both blobs — never an older, smaller one.
+    expect(updates).toHaveLength(2);
+    expect(updates[1]).toEqual({
+      terminal: { start_tf: "D", updown: "east" },
+      prefs: { lang: "zh" },
+    });
+    expect(__marketPrefsSnapshot().sync.phase).toBe("saved");
+  });
+
+  it("delivers an intent held through a FAILED hydrate once a retried read answers", async () => {
+    vi.useFakeTimers();
+    try {
+      getUser = async () => { throw new Error("offline"); };
+      __loadOwner(OWNER_A);
+      await vi.advanceTimersByTimeAsync(0);
+
+      persistStartTf("W");                                  // held: no merge base yet
+      expect(updates).toEqual([]);
+      expect(__marketPrefsInternals().pendingTerminal).toEqual({ start_tf: "W" });
+
+      // The account comes back. The retry fetches the merge base and the held intent goes out
+      // MERGED with the account's own siblings — never as a partial blob.
+      getUser = async () => userWith(UUID_A, { terminal: { updown: "east" } });
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(updates).toEqual([{ terminal: { updown: "east", start_tf: "W" } }]);
+      expect(__marketPrefsInternals().pendingTerminal).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the hydrate retry when the owner changes", async () => {
+    vi.useFakeTimers();
+    try {
+      getUser = async () => { throw new Error("offline"); };
+      __loadOwner(OWNER_A);
+      await vi.advanceTimersByTimeAsync(0);
+      persistStartTf("W");
+
+      getUser = async () => userWith(UUID_B, {});
+      __loadOwner(OWNER_B);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // A's held intent never reaches the authority under B.
+      expect(updates.some((u) => JSON.stringify(u).includes("start_tf"))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retrySync() re-attempts a failed delivery immediately", async () => {
+    getUser = async () => userWith(UUID_A, {});
+    __loadOwner(OWNER_A);
+    await settle();
+
+    updateResult = async () => ({ error: { message: "down" } });
+    persistUpDown("east");
+    await settle();
+    expect(updates).toHaveLength(1);
+
+    updateResult = async () => ({ error: null });
+    retryPrefSync();
+    await settle();
+    expect(updates).toHaveLength(2);
+    expect(__marketPrefsSnapshot().sync.phase).toBe("saved");
+  });
+
+  it("a guest reads `local` and never queues a delivery", async () => {
+    __loadOwner(GUEST_OWNER);
+    await settle();
+    persistUpDown("east");
+    persistTradeTypes(["stocks"]);
+    expect(__marketPrefsSnapshot().sync.phase).toBe("local");
+    expect(updates).toEqual([]);
+  });
+});
+
+describe("a deferred mutation carries its owner (E5)", () => {
+  it("recognises its own owner, and stops recognising it after a switch", async () => {
+    getUser = async () => userWith(UUID_A, {});
+    __loadOwner(OWNER_A);
+    await settle();
+
+    const token = currentOwnerToken();
+    expect(ownerTokenIsCurrent(token)).toBe(true);
+
+    getUser = async () => userWith(UUID_B, {});
+    __loadOwner(OWNER_B);
+    await settle();
+
+    // The 500 ms trade-types timer captured this token when the user tapped the chip. Firing
+    // now would have written A's answer into B's account.
+    expect(ownerTokenIsCurrent(token)).toBe(false);
+    expect(ownerTokenIsCurrent(currentOwnerToken())).toBe(true);
+  });
+
+  it("routes trade_types through the SAME lane, so it cannot race the other writes", async () => {
+    getUser = async () => userWith(UUID_A, { terminal: { updown: "east" } });
+    __loadOwner(OWNER_A);
+    await settle();
+    updates.length = 0;
+
+    let release: (v: { error?: unknown }) => void = () => {};
+    updateResult = () => new Promise((res) => { release = res; });
+
+    persistTradeTypes(["stocks", "options"]);
+    persistStartTf("W");
+    expect(updates).toHaveLength(1);          // one authority, one write in flight
+
+    updateResult = async () => ({ error: null });
+    release({ error: null });
+    await settle();
+    expect(updates[1]).toEqual({
+      trade_types: ["stocks", "options"],
+      terminal: { updown: "east", start_tf: "W" },
+    });
+  });
+});
+
+describe("an in-flight hydrate cannot answer over a newer local edit", () => {
+  it("keeps the market choice the user made while the account read was still out", async () => {
+    let release: (v: GetUserResult) => void = () => {};
+    getUser = () => new Promise<GetUserResult>((res) => { release = res; });
+    __loadOwner(OWNER_A);
+
+    // The user narrows their universe before the account answers.
+    const { __persistMarketsForTest } = await import("@/lib/useMarketPrefs");
+    __persistMarketsForTest({ home: "cn", enabled: ["cn", "crypto"], autoNarrowed: false, followed: ["cn"] });
+
+    release(userWith(UUID_A, { markets: { home: "us", enabled: ["us", "ca", "hk", "intl", "crypto", "cn"] } }));
+    await settle();
+
+    expect(__marketPrefsSnapshot().prefs.enabled).toEqual(["cn", "crypto"]);
   });
 });
