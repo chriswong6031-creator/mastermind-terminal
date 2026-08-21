@@ -1899,6 +1899,11 @@ export const LEX: Record<string, [string, string]> = {
   acsPrefSaved: ["Saved", "已保存"],
   acsPrefLocal: ["Saved on this device — sign in to sync.", "已保存在本设备——登录后同步。"],
   acsPrefErr: ["Couldn't save — please try again.", "保存失败，请重试。"],
+  // E2 — delivery state, reported from the authority's acknowledgement rather than from the
+  // moment a request was fired. "Saved" is a claim about the account, not about this browser.
+  acsPrefSyncing: ["Saving…", "保存中…"],
+  acsPrefSyncFail: ["Couldn't reach your account — retrying.", "无法连接到你的账户——正在重试。"],
+  acsPrefRetry: ["Retry", "重试"],
   acsThemeLang: ["Theme & language", "主题与语言"],
   acsAppearance: ["Appearance", "外观"],
   // NEW — deliberately NOT macro's appearNote ("Auto follows your local time of

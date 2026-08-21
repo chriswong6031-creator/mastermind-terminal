@@ -102,3 +102,34 @@ test.describe("E1 — one browser, two accounts, one address", () => {
     await expect(marketToggle(page)).toHaveAttribute("aria-pressed", "false");
   });
 });
+
+/**
+ * E2 acceptance: the pane reports the AUTHORITY's answer, not its own optimism.
+ *
+ * The fixture server has no reachable Supabase, so every `updateUser` fails — which is exactly
+ * the condition the old code could not express. `toggleFollow` flashed "Saved" the instant a
+ * synchronous store call returned, and `updateUser({data}).catch(() => {})` swallowed both a
+ * rejection and the Supabase shape that RESOLVES with `{ error }`. A user whose preference never
+ * left the browser was told it had been saved to their account.
+ */
+test.describe("E2 — a write that did not land never reads as saved", () => {
+  test("an unreachable account is reported honestly, with a retry", async ({ page, baseURL }, testInfo) => {
+    test.setTimeout(120_000);
+    await signInAs(page, `pref-deliver-${testInfo.project.name}-${testInfo.retry}`, baseURL);
+    await boot(page);
+    await openTerminalSettings(page);
+
+    // Nothing has been touched, so the lane says nothing at all.
+    await expect(page.locator(".acs-msg.show")).toHaveCount(0);
+
+    await marketToggle(page).click();
+    // The local half applied immediately…
+    await expect(marketToggle(page)).toHaveAttribute("aria-pressed", "false");
+    // …and the delivery half tells the truth about the account.
+    const note = page.locator(".acs-msg.show");
+    await expect(note).toBeVisible({ timeout: 15_000 });
+    await expect(note).toContainText("Couldn't reach your account", { timeout: 15_000 });
+    await expect(note.getByRole("button", { name: "Retry" })).toBeVisible();
+    await expect(note).not.toContainText("Saved");
+  });
+});
