@@ -2114,6 +2114,7 @@ export const LEX: Record<string, [string, string]> = {
   // Failure states. "Unavailable" is deliberately worded as an outage, never as emptiness or as a
   // denial — the whole point of the state split is that the operator can tell the three apart.
   admRetry: ["Retry", "重试"],
+  admCheckAgain: ["Check again", "重新检查"],
   admStale: ["Refresh failed — showing the last rows that loaded successfully.", "刷新失败 — 显示最近一次成功加载的记录。"],
   admEventsUnavailable: ["The search log could not be read. This is an outage, not an empty log.", "无法读取搜索日志。这是服务故障，不是日志为空。"],
   admStatsUnavailable: ["Aggregates unavailable — the log below is unaffected.", "汇总数据不可用 — 下方日志不受影响。"],
