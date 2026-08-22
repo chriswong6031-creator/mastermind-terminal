@@ -5,6 +5,9 @@
  * Not a spec file: Playwright's default testMatch only collects *.spec.ts, so this module is
  * imported, never run.
  *
+ * This is NOT the fix for the rotating CI flake — that is the hydration race gated in
+ * e2e/hydration.ts. It removes a separate, real perturbation:
+ *
  * `next dev` broadcasts a `building`/`built` pair to every connected page on essentially every
  * request it serves, including requests that changed nothing — 158 such pairs in 51 seconds across
  * twelve tests, measured against a warm server. The page cannot tell them from real ones: `built`

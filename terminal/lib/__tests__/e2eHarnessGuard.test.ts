@@ -2,19 +2,22 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-// ── THE TWO ONE-LINE BYPASSES THAT PUT THE FLAKE BACK ─────────────────────────────────────────
+// ── THE ONE-LINE BYPASSES THAT PUT THE FLAKE BACK ─────────────────────────────────────────────
 //
-// e2e/fixtures.ts withholds `next dev`'s no-op build broadcasts, without which the dev server
-// re-renders whichever page another worker is mid-gesture on — the cause of the rotating CI
-// failures diagnosed on 2026-08-21 (the full account, and the measurements, are in that file).
-// e2e/warmup.setup.ts compiles the suite's surfaces up front so no test waits out a cold build.
+// e2e/fixtures.ts makes every navigation wait until React has actually wired the page up. Without
+// it a spec's first click lands on server-rendered markup that satisfies every Playwright
+// actionability check and has no handler behind it, and the event is DROPPED — the cause of the
+// rotating CI failures diagnosed on 2026-08-21, measured at 1.6s of dead markup on /scripts and
+// 8.5s on /terminal (e2e/hydration.ts carries the numbers). It also withholds `next dev`'s no-op
+// build broadcasts, and e2e/warmup.setup.ts compiles the suite's surfaces up front.
 //
-// Both are opt-in, and both fail OPEN — which is why they are pinned here rather than left to
-// review. A spec written with `import { test } from "@playwright/test"` compiles, runs, and passes
-// locally against a warm server; it has simply opted that one file back into the flake, and the
-// next slow CI run picks it as the victim. A route the specs reach but the warm-up misses is built
-// mid-run instead of up front. Playwright has no global beforeEach to enforce the import from, so
-// `npm test` enforces it — seconds after a spec is written, and long before the responsive job.
+// All of it is opt-in, and all of it fails OPEN — which is why it is pinned here rather than left
+// to review. A spec written with `import { test } from "@playwright/test"` compiles, runs, and
+// passes locally against a warm, fast machine; it has simply opted that one file back into the
+// flake, and the next loaded CI run picks it as the victim. A route the specs reach but the warm-up
+// misses is built mid-run instead of up front. Playwright has no global beforeEach to enforce the
+// import from, so `npm test` enforces it — seconds after a spec is written, and long before the
+// responsive job.
 
 const E2E = path.resolve(__dirname, "..", "..", "e2e");
 const specs = readdirSync(E2E).filter((f) => f.endsWith(".spec.ts"));
@@ -53,6 +56,23 @@ describe("responsive e2e specs run against a pre-compiled dev server", () => {
     }
     expect(visited.size).toBeGreaterThan(4);
     expect([...visited].filter((route) => !warmup.includes(`"${route}`))).toEqual([]);
+  });
+
+  it("gates every full navigation on the page being interactive", () => {
+    // The gate is a patch over the page's own navigation methods, so it cannot be reasoned about
+    // from the spec files: a spec looks identical whether or not it is protected. If a refactor
+    // drops one of these, the specs that use it go back to racing hydration and nothing says so.
+    const fixtures = readFileSync(path.join(E2E, "fixtures.ts"), "utf8");
+    const gated = fixtures.slice(fixtures.indexOf("page: async"));
+    for (const method of ["goto", "reload", "goBack", "goForward"]) {
+      expect(gated, `navigation method ${method}`).toContain(`"${method}"`);
+    }
+    expect(gated).toContain("waitForInteractive(page)");
+    expect(fixtures).toContain("addInitScript(CAPTURE_SSR_NODES)");
+    // …and the predicate must stay the framework's own answer. A sleep, or waiting on the DOM,
+    // is what this replaced: both are satisfied while the markup is still dead.
+    const hydration = readFileSync(path.join(E2E, "hydration.ts"), "utf8");
+    expect(hydration).toContain("__reactFiber$");
   });
 
   it("still routes the socket through the filter rather than around it", () => {

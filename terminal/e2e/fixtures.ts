@@ -1,13 +1,49 @@
-import { test as base } from "@playwright/test";
+import { test as base, type Page } from "@playwright/test";
 import { createHmrFilter } from "./hmrFilter";
+import {
+  CAPTURE_SSR_NODES, HYDRATION_TIMEOUT_MS, SSR_NODES_HYDRATED, UNHYDRATED_REPORT,
+} from "./hydration";
 
 /**
- * The suite's `test` — Playwright's, plus one thing: Fast Refresh cannot fire inside it.
+ * Block until the page React just served is actually wired up. e2e/hydration.ts carries the
+ * measurements and the reasoning; the short version is that every actionability check Playwright
+ * offers is answered by the DOM, and a server-rendered page satisfies all of them ~1.6s before
+ * React attaches a single handler — so the suite's first click after a navigation was landing on
+ * dead markup and being discarded.
+ */
+async function waitForInteractive(page: Page) {
+  try {
+    await page.waitForFunction(SSR_NODES_HYDRATED, undefined, { timeout: HYDRATION_TIMEOUT_MS, polling: 100 });
+  } catch (error) {
+    // A navigation during the wait invalidates the context rather than proving anything about the
+    // page; the next navigation installs its own capture and gates again.
+    if (String(error).includes("Execution context was destroyed")) return;
+    // Otherwise fail LOUDLY and name the surface. Continuing here would hand back exactly the silent
+    // dropped-click flake this gate exists to remove, hidden behind an unrelated assertion later.
+    const report = await page.evaluate(UNHYDRATED_REPORT).catch(() => null) as
+      { captured: number; stragglers: string[] } | null;
+    throw new Error(
+      `The page never became interactive: of ${report?.captured ?? "?"} server-rendered controls, `
+      + `these were still unwired after ${HYDRATION_TIMEOUT_MS}ms: ${JSON.stringify(report?.stragglers ?? [])}. `
+      + `React never hydrated them — see e2e/hydration.ts.`,
+    );
+  }
+}
+
+/**
+ * The suite's `test` — Playwright's, plus two things: every navigation waits for the page to be
+ * interactive (above), and Fast Refresh cannot fire inside it (below).
  *
  * Not a spec file: Playwright's default testMatch only collects *.spec.ts, so this module is
  * imported, never run.
  *
- * ── WHY THE GATE WAS UNTRUSTWORTHY ───────────────────────────────────────────────────────────
+ * NOT the cause of the rotating CI flake — that is the hydration race in e2e/hydration.ts, and this
+ * filter was built on a hypothesis its own CI runs disproved (the pine-editor failure reproduced
+ * unchanged with zero rebuilds recorded, and after the warm-up removed cold compiles 179 of 508
+ * tests saw a rebuild while passing). What it removes is real but separate: a no-op re-render the
+ * suite has no reason to tolerate.
+ *
+ * ── WHAT IT REMOVES ──────────────────────────────────────────────────────────────────────────
  *
  * `webServer` runs `next dev`, and its dev server broadcasts a `building`/`built` pair to EVERY
  * connected page on essentially every request it serves — including requests that changed nothing.
@@ -17,27 +53,17 @@ import { createHmrFilter } from "./hmrFilter";
  * refetches the RSC payload of whatever page happens to be open.
  *
  * In a fullyParallel run that means one worker's page traffic re-renders the page ANOTHER worker
- * is mid-gesture on. A re-render mid-interaction is not a slow UI, it is a DIFFERENT UI: server
- * props snap back to their initial values while client state (an open dialog, a drag in flight, a
- * chart's developing candle) survives, so the page reaches a combination no user can. That is what
- * the CI failures were. In run 32402339583 the Pine editor's D3a spec died with the "Unsaved
- * changes" scrim up while the textarea underneath held the CLEAN stored source; its trace shows
- * two rebuild cycles landing inside the test, and the click it was blocked on retried 57 times —
- * it would have failed at any timeout, because the state it needed had been destroyed rather than
- * delayed. Seven of the ten CI failure traces gathered that day carry the same mid-test rebuild,
- * and the victims rotate because the victim is whichever test is mid-gesture when another worker
- * loads a page.
- *
- * Nobody saw it locally because the failure needs two workers on one dev server and enough load to
- * widen the window; `reuseExistingServer: !CI` also means a developer's server has long since
- * compiled everything. Reproduced locally at CI's worker count on a cold cache: 2 failed, 1 flaky.
+ * is mid-gesture on: server props snap back to their initial values while client state survives.
+ * No test failure has been traced to it — the pine-editor traces that first suggested it turned out
+ * to fail identically with zero rebuilds — but a suite whose pages re-render on another worker's
+ * HTTP traffic is measuring something the product never does, so it is removed rather than
+ * tolerated. Measured: an idle page saw 24 such cycles while another context browsed, and ZERO
+ * with this in place, on both a warm and a cold server.
  *
  * ── WHAT THIS DOES, AND WHY NOT SOMETHING BLUNTER ────────────────────────────────────────────
  *
  * e2e/hmrFilter.ts withholds a `building`/`built` pair ONLY when nothing passed between the two —
- * exactly the no-op case, since such a pair has nothing for the page to apply. Measured: an idle
- * page saw 24 Fast Refresh cycles while another context browsed, and ZERO with this in place, on
- * both a warm and a cold server.
+ * exactly the no-op case, since such a pair has nothing for the page to apply.
  *
  * The "only when nothing passed between them" part is not fastidiousness, it is the whole safety
  * argument, and it was learned twice. Blackholing the socket outright breaks the suite: the same
@@ -54,6 +80,10 @@ import { createHmrFilter } from "./hmrFilter";
  */
 export const test = base.extend({
   context: async ({ context }, use) => {
+    // Runs before any page script on every new document, so the capture lands on the markup the
+    // SERVER sent — before hydration tags it, and before any effect adds DOM React never rendered.
+    await context.addInitScript(CAPTURE_SSR_NODES);
+
     await context.routeWebSocket(/\/_next\/webpack-hmr/, (ws) => {
       const server = ws.connectToServer();
       const filter = createHmrFilter();
@@ -65,12 +95,35 @@ export const test = base.extend({
     await use(context);
   },
 
-  // The tripwire. The filter above is matched against a shape Next owns, so a Next upgrade could
-  // rename these frames and hand the flake back silently — the perturbation leaves no trace in the
-  // failure it causes, which is why it went undiagnosed for so long: you get "element not found",
-  // or a count short by one, and nothing points at hot reload. If this annotation ever appears,
-  // the filter has stopped matching. Do not reach for a timeout; fix the filter.
+  // The filter above is matched against a frame shape Next owns, so an upgrade could rename these
+  // and silently stop it working. The annotation at the end of this fixture is the tripwire for
+  // that: it means the filter has stopped matching and should be re-read against the new Next.
   page: async ({ page }, use, testInfo) => {
+    // E2E_CPU_THROTTLE=8 reproduces a loaded CI runner on a fast laptop, and is how the dropped-
+    // click race above was found: the suite passed locally 4 runs in a row while failing CI, because
+    // a warm 24-core machine closes the hydration window before a test can lose a click in it. At 8x
+    // the pine-editor D3a spec failed 6/6 with the gate removed and 0/6 with it. Opt-in and unset in
+    // CI — this is a diagnostic lever for reproducing timing bugs locally, not part of the gate.
+    const throttle = Number(process.env.E2E_CPU_THROTTLE || 0);
+    if (throttle > 1) {
+      const cdp = await page.context().newCDPSession(page).catch(() => null);
+      await cdp?.send("Emulation.setCPUThrottlingRate", { rate: throttle }).catch(() => {});
+    }
+
+    // Every full navigation gates on interactivity. Patched here rather than offered as a helper
+    // the specs call, for the same reason the `test` import is pinned by npm test: an opt-in gate
+    // fails OPEN. A spec that forgot it would pass locally against a warm server and hand the
+    // dropped-click flake back on the next loaded CI run, with a new victim. Client-side
+    // navigations (a link, router.push) need no gate — that tree is built by React already running.
+    for (const name of ["goto", "reload", "goBack", "goForward"] as const) {
+      const original = page[name].bind(page) as (...args: unknown[]) => Promise<unknown>;
+      (page as unknown as Record<string, unknown>)[name] = async (...args: unknown[]) => {
+        const response = await original(...args);
+        await waitForInteractive(page);
+        return response;
+      };
+    }
+
     let rebuilds = 0;
     page.on("console", (message) => {
       if (message.text().startsWith("[Fast Refresh] rebuilding")) rebuilds += 1;
