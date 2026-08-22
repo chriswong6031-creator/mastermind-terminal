@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useIsMobile, useIsPhone } from "@/lib/useMediaQuery";
 import MobileSheet from "@/components/ui/MobileSheet";
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useDroppable, useSensor, useSensors, closestCenter, type CollisionDetection, type DragEndEvent, type DragStartEvent, type Modifier } from "@dnd-kit/core";
@@ -1726,8 +1726,45 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   useEffect(() => { if (!favTFMounted.current) { favTFMounted.current = true; return; } localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
   useEffect(() => { if (!setMounted.current) { setMounted.current = true; return; } localStorage.setItem(WATCHLIST_SETTINGS_KEY, JSON.stringify(set)); }, [set]);
   useEffect(() => { if (!dtmMounted.current) { dtmMounted.current = true; return; } localStorage.setItem("mm.dtm", JSON.stringify(dtm)); }, [dtm]);
-  // restore THIS OWNER's saved named watchlists (falls back to the server-seeded Default list)
-  useEffect(() => {
+  // Restore THIS OWNER's saved named watchlists (falls back to the server-seeded Default list).
+  //
+  // ── Why a LAYOUT effect, and not the passive effect this used to be ─────────────────────────
+  // Until the restore commits, the rail renders the `symbols` prop under the name `Default` — for
+  // a signed-in user that is the server's Default membership, in guest row order, with none of
+  // their named lists. That is the wrong answer, so the window in which it is on screen has to be
+  // zero, not "usually short".
+  //
+  // As a passive effect it was neither, and the reason is scheduling, not slowness. Traced with a
+  // per-render/per-commit probe: the effect itself ran at +700ms, right after hydration, with the
+  // owner resolved and the saved payload found — but its `setLists`/`setActiveList` sat in a
+  // lower-priority lane than the re-renders this shell takes all through boot, so React rendered
+  // the restored state, THREW THAT WORK AWAY, and committed base state instead. Five base-state
+  // commits went out in front of it; the restore did not reach the DOM until +1.9s, 1.2s after the
+  // effect that produced it.
+  //
+  // That starvation is superlinear in how loaded the machine is, because every restart costs a
+  // full render of this shell while the interrupting sources keep their own cadence. Measured
+  // against one seeded owner (`E2E_CPU_THROTTLE`, desktop project): the rail was still showing the
+  // wrong list at +2.1s unthrottled, and at 4x CPU throttle it never showed the right one inside a
+  // 300s budget at all. On a loaded machine a signed-in user therefore sits in front of the guest
+  // list for the whole session. It is also the window `e2e/watchlist-bulk-actions.spec.ts`'s shared
+  // `boot()` has to clear — it allows the default 5s after the chart paints for `.wl-select` to
+  // name the seeded list — which is how the defect shows up as watchlist specs going red on a
+  // loaded CI runner rather than as a bug report.
+  //
+  // A layout effect cannot be starved: React flushes updates scheduled here synchronously, before
+  // the browser paints. The restore now rides the hydration commit, so the wrong list is never
+  // presented — at 1x, 4x and 8x alike the rail is correct from the first frame the shell paints.
+  //
+  // Only the read-and-apply belongs here. It is localStorage plus pure functions — no layout
+  // measurement, no network in the critical path (the heal POSTs below are fire-and-forget) — so
+  // this costs one synchronous re-render of the shell at mount and nothing per frame afterwards.
+  //
+  // No isomorphic `useEffect`-on-the-server wrapper: this shell is server-rendered, and on React 19
+  // a layout effect in a prerendered client component is simply skipped there, silently (the old
+  // "useLayoutEffect does nothing on the server" warning is gone — verified against this app's
+  // dev-server output). Wrapping it would only cost the `react-hooks` lint rules their view of it.
+  useLayoutEffect(() => {
     // A1: fold the pre-boundary browser-global payloads into the guest namespace exactly once,
     // before the first owner-scoped read. See the policy note in lib/watchlistOwner.ts — they are
     // never adopted into an account, because nothing in them says whose they were.
