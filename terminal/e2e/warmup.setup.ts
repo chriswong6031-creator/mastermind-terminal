@@ -30,6 +30,7 @@ const ROUTES = [
   "/alerts",
   "/discover",
   "/scripts",
+  "/admin",
   "/analysis?symbol=NVDA&page=intelligence",
   "/embed/chart?symbol=NVDA",
 ];
