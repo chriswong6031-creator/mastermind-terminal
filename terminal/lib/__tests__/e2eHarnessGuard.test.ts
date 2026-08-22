@@ -22,7 +22,12 @@ import { describe, expect, it } from "vitest";
 const E2E = path.resolve(__dirname, "..", "..", "e2e");
 const specs = readdirSync(E2E).filter((f) => f.endsWith(".spec.ts"));
 const source = (f: string) => readFileSync(path.join(E2E, f), "utf8");
-const warmup = readFileSync(path.join(E2E, "warmup.setup.ts"), "utf8");
+// TWO warm-ups now, doing different jobs: #452's globalSetup compiles each route over HTTP before
+// the suite starts, and the browser warm-up project additionally pays the client bundle and the
+// Options tabs. A route only has to be in ONE of them — but their lists have already drifted once
+// (/scripts is in only one), so coverage is asserted against the union rather than either file.
+const warmup = readFileSync(path.join(E2E, "warmup.setup.ts"), "utf8")
+  + readFileSync(path.join(E2E, "globalSetup.ts"), "utf8");
 const config = readFileSync(path.resolve(__dirname, "..", "..", "playwright.config.ts"), "utf8");
 
 // Top-level `import … from "…"` only. Inline `import("@playwright/test").Page` type positions are
