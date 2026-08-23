@@ -6,8 +6,8 @@ Authority: REQUIRED
 Completion: REQUIRED
 
 <!--
-MAS28-V1-CONTRACT-SHA256: e78cbf00a952f7283a7e0f1e83eb4070c9049c1a445c9a035f9da8652dc6838c
-MAS28-V1-RULESET-SHA256: 41d5634a6ca6d4bbd993e728b73d839260452b24c891e556c59da52a184a1859
+MAS28-V1-CONTRACT-SHA256: 9c57ad499fa34ee32f0ffeb9f2f5928f0515dba1609f984e5a20ce6576e7f75e
+MAS28-V1-RULESET-SHA256: 2e97ad7acd0aec77ef18dbd76a1b3f2bbf8b7d4585e938498615de1917aa71aa
 
 Replace every REQUIRED value before opening this PR. The six fields must remain
 contiguous, column-zero, ordered exactly as shown, and use one ASCII colon plus
