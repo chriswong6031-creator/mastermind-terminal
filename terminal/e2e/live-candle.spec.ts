@@ -10,6 +10,10 @@ const trueMs = (hour: number, minute: number, second: number) =>
 async function armVisualReady(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem("mm.startTf", JSON.stringify("1s"));
+    // This contract measures the quote-to-candle handoff, not indicator construction. Keeping
+    // the default two subpanes enabled can monopolize a saturated CI page after visual-ready and
+    // starve the liveQuote effect even though the mocked packet has already reached the header.
+    localStorage.setItem("mm.inds", JSON.stringify([]));
     localStorage.removeItem("mm.ws");
     (window as Window & { __mmLiveCandleReady?: boolean }).__mmLiveCandleReady = false;
     window.addEventListener("mm:terminal-visual-ready", () => {
