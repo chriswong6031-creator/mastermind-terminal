@@ -6008,6 +6008,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // 350ms and <40px of each other → trigger the same pane maximize-toggle as dblclick.
     const onTouchDown = (e: PointerEvent) => {
       if (e.pointerType !== "touch") return;
+      // A one-shot drawing can disarm on pointerup before this gesture's
+      // wrapper-level onUp runs. Preserve its pointerdown ownership so the
+      // finishing tap cannot also become a pane-maximize double tap.
+      const startedWithTool = Boolean(toolRef.current);
       lastTouchTsRef.current = performance.now();   // for synthetic-hover suppression
       const now = performance.now();
       const x = e.clientX, y = e.clientY;
@@ -6029,7 +6033,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           // double-tap confirmed
           lastTapRef.current = null;
           if ((e.target as Element)?.closest?.(".chart-overlays")) return;
-          if (toolRef.current) return;
+          if (startedWithTool || toolRef.current) return;
           const w = wrapElRef.current; if (!w) return;
           const wr = w.getBoundingClientRect(); const py = eu.clientY - wr.top;
           if (inAxisBand(eu.clientX, wr)) return;

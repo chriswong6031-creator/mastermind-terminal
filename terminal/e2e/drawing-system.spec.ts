@@ -990,6 +990,10 @@ test("drawing lifecycle supports one-shot, sticky, history, visibility, and scop
 });
 
 test("flagship geometry, editing, and path limits survive adversarial interaction", async ({ page }) => {
+  // This intentionally monolithic contract performs several independent real
+  // pointer transactions; saturated shared runners can exceed the default
+  // budget while still advancing normally through every assertion.
+  test.slow();
   test.skip(
     (page.viewportSize()?.width ?? 1440) <= 860,
     "Dense pointer geometry is exercised once on the stable desktop canvas.",
