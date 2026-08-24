@@ -30,8 +30,9 @@ function finite(value: unknown): value is number {
 /**
  * Tencent keeps returning a syntactically valid A-share snapshot when a name did not trade:
  * last == prevClose, chg == 0, O/H/L are zero placeholders (already normalized to null by the
- * parser), and cumulative volume is zero. A suspended stock is the common case. Treating that
- * shape as a current quote invents a flat session and lets the chart splice a fake candle.
+ * parser), and cumulative volume/turnover are zero. A suspended stock is the common case.
+ * Treating that shape as a current quote invents a flat session and lets the chart splice a
+ * fake candle.
  *
  * Pre-open is deliberately excluded. The 09:15-09:29 call auction uses the same zero-O/H/L shape,
  * but `marketSession === "pre"` and its indicative/auction price is real information.
@@ -47,8 +48,9 @@ function isTencentCnNoTrade(quote: QuoteDisplayInput): boolean {
   const noHigh = !finite(quote.high) || quote.high <= 0;
   const noLow = !finite(quote.low) || quote.low <= 0;
   const noVolume = !finite(quote.vol) || quote.vol <= 0;
+  const noTurnover = !finite(quote.amount) || quote.amount <= 0;
 
-  return sameClose && noOpen && noHigh && noLow && noVolume;
+  return sameClose && noOpen && noHigh && noLow && noVolume && noTurnover;
 }
 
 /**
