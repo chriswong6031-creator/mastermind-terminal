@@ -68,6 +68,65 @@ describe("regular-session quote display", () => {
     expect(exposed.extChg).toBe(-0.51);
   });
 
+  it("treats a Tencent A-share no-trade snapshot as absent instead of a fake 0.00% session", () => {
+    const quote = {
+      last: 24.56,
+      prevClose: 24.56,
+      chg: 0,
+      open: null,
+      high: null,
+      low: null,
+      vol: 0,
+      amount: 0,
+      live: true,
+      source: "tencent",
+      market: "cn",
+      basis: "LIVE",
+    };
+
+    expect(resolveRegularSessionDisplay(quote)).toEqual({ regularPrice: null, regularChg: null });
+
+    const exposed = withRegularSessionDisplay(quote);
+    expect(exposed).toMatchObject({
+      last: null,
+      chg: null,
+      open: null,
+      high: null,
+      low: null,
+      vol: null,
+      amount: null,
+      live: false,
+      basis: "EOD",
+      regularPrice: null,
+      regularChg: null,
+    });
+    expect(exposed.prevClose).toBe(24.56);
+    expect(exposed.source).toBe("tencent");
+  });
+
+  it("does not suppress a genuinely traded A-share that happened to close flat", () => {
+    const quote = {
+      last: 24.56,
+      prevClose: 24.56,
+      chg: 0,
+      open: 24.34,
+      high: 25.39,
+      low: 24.20,
+      vol: 47_735_572,
+      source: "tencent",
+      market: "cn",
+      basis: "LIVE",
+    };
+
+    expect(resolveRegularSessionDisplay(quote)).toEqual({ regularPrice: 24.56, regularChg: 0 });
+    expect(withRegularSessionDisplay(quote)).toMatchObject({
+      last: 24.56,
+      chg: 0,
+      regularPrice: 24.56,
+      regularChg: 0,
+    });
+  });
+
   it("treats missing and invalid prices as absent", () => {
     expect(resolveRegularSessionDisplay({ last: 0, chg: Number.NaN, close: null })).toEqual({
       regularPrice: null,
