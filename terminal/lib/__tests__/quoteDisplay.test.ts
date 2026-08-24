@@ -43,6 +43,37 @@ describe("regular-session quote display", () => {
     })).toEqual({ regularPrice: 11.90, regularChg: 1.362862010221463 });
   });
 
+  it("preserves a real Tencent A-share opening auction even with zero O/H/L and volume", () => {
+    const exposed = withRegularSessionDisplay({
+      market: "cn",
+      marketSession: "pre",
+      source: "tencent",
+      basis: "LIVE",
+      live: true,
+      last: 11.74,
+      prevClose: 11.74,
+      chg: 0,
+      open: null,
+      high: null,
+      low: null,
+      vol: 0,
+      amount: 0,
+      auctionPrice: 11.90,
+      auctionChg: 1.362862010221463,
+    });
+
+    expect(exposed).toMatchObject({
+      last: 11.74,
+      chg: 0,
+      vol: 0,
+      amount: 0,
+      live: true,
+      basis: "LIVE",
+      regularPrice: 11.90,
+      regularChg: 1.362862010221463,
+    });
+  });
+
   it("never interprets a US pre-market print as an A-share auction", () => {
     expect(resolveRegularSessionDisplay({
       market: "us",
@@ -113,6 +144,7 @@ describe("regular-session quote display", () => {
       high: 25.39,
       low: 24.20,
       vol: 47_735_572,
+      amount: 1_180_000_000,
       source: "tencent",
       market: "cn",
       basis: "LIVE",
