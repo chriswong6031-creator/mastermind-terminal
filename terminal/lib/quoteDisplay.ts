@@ -4,6 +4,14 @@ export type QuoteDisplayInput = {
   close?: number | null;
   prevClose?: number | null;
   prevSessionChg?: number | null;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
+  vol?: number | null;
+  amount?: number | null;
+  live?: boolean | null;
+  source?: string | null;
+  basis?: string | null;
   market?: string | null;
   marketSession?: string | null;
   auctionPrice?: number | null;
@@ -20,6 +28,30 @@ function finite(value: unknown): value is number {
 }
 
 /**
+ * Tencent keeps returning a syntactically valid A-share snapshot when a name did not trade:
+ * last == prevClose, chg == 0, O/H/L are zero placeholders (already normalized to null by the
+ * parser), and cumulative volume is zero. A suspended stock is the common case. Treating that
+ * shape as a current quote invents a flat session and lets the chart splice a fake candle.
+ *
+ * Pre-open is deliberately excluded. The 09:15-09:29 call auction uses the same zero-O/H/L shape,
+ * but `marketSession === "pre"` and its indicative/auction price is real information.
+ */
+function isTencentCnNoTrade(quote: QuoteDisplayInput): boolean {
+  if (quote.market !== "cn" || quote.source !== "tencent" || quote.marketSession === "pre") return false;
+  if (!finite(quote.last) || quote.last <= 0 || !finite(quote.prevClose) || quote.prevClose <= 0) return false;
+  if (!finite(quote.chg) || Math.abs(quote.chg) > 1e-12) return false;
+
+  const sameClose = Math.abs(quote.last - quote.prevClose)
+    <= Math.max(1e-8, Math.abs(quote.prevClose) * 1e-10);
+  const noOpen = !finite(quote.open) || quote.open <= 0;
+  const noHigh = !finite(quote.high) || quote.high <= 0;
+  const noLow = !finite(quote.low) || quote.low <= 0;
+  const noVolume = !finite(quote.vol) || quote.vol <= 0;
+
+  return sameClose && noOpen && noHigh && noLow && noVolume;
+}
+
+/**
  * Resolve the primary quote lane shown by every Terminal client.
  *
  * During an A-share opening auction, the explicit auction lane replaces the primary price,
@@ -30,13 +62,16 @@ function finite(value: unknown): value is number {
  * performance instead of letting an overnight print turn the primary percentage
  * into an extended-hours move.
  *
+ * Tencent A-share no-trade placeholders are absent from the primary lane. They are not a
+ * 0.00% live session; callers fall back to the last real EOD row instead.
+ *
  * Extended prints deliberately do not appear in this function; they live only in
  * the `extPrice/extChg` namespace.
  */
 export function resolveRegularSessionDisplay(
   quote: QuoteDisplayInput | null | undefined,
 ): RegularSessionDisplay {
-  if (!quote) return { regularPrice: null, regularChg: null };
+  if (!quote || isTencentCnNoTrade(quote)) return { regularPrice: null, regularChg: null };
 
   const cnAuction = quote.market === "cn" && quote.marketSession === "pre";
   const auctionPrice = cnAuction && finite(quote.auctionPrice) && quote.auctionPrice > 0
@@ -66,5 +101,24 @@ export function resolveRegularSessionDisplay(
 export function withRegularSessionDisplay<T extends QuoteDisplayInput>(
   quote: T,
 ): T & RegularSessionDisplay {
+  if (isTencentCnNoTrade(quote)) {
+    // Keep provenance/prevClose, but clear every field that could be interpreted as a current
+    // tradable print. Existing clients then take their normal manifest-EOD fallback, and
+    // ChartPanel has no `last` from which to synthesize a candle for a suspended day.
+    return {
+      ...quote,
+      last: null,
+      chg: null,
+      open: null,
+      high: null,
+      low: null,
+      vol: null,
+      amount: null,
+      live: false,
+      basis: "EOD",
+      regularPrice: null,
+      regularChg: null,
+    } as T & RegularSessionDisplay;
+  }
   return { ...quote, ...resolveRegularSessionDisplay(quote) };
 }
