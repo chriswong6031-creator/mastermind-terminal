@@ -23,6 +23,15 @@ export type RegularSessionDisplay = {
   regularChg: number | null;
 };
 
+/**
+ * Exposure may deliberately normalize base quote fields (for example, clearing a Tencent
+ * no-trade placeholder). Preserve provider-specific extra fields while widening the shared quote
+ * fields to their public nullable contract rather than pretending the caller's literal values are
+ * immutable through normalization.
+ */
+export type RegularSessionQuote<T extends QuoteDisplayInput> =
+  Omit<T, keyof QuoteDisplayInput> & QuoteDisplayInput & RegularSessionDisplay;
+
 function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -102,7 +111,7 @@ export function resolveRegularSessionDisplay(
 /** Add explicit display lanes to the public quote contract without mutating the cache. */
 export function withRegularSessionDisplay<T extends QuoteDisplayInput>(
   quote: T,
-): T & RegularSessionDisplay {
+): RegularSessionQuote<T> {
   if (isTencentCnNoTrade(quote)) {
     // Keep provenance/prevClose, but clear every field that could be interpreted as a current
     // tradable print. Existing clients then take their normal manifest-EOD fallback, and
@@ -120,7 +129,7 @@ export function withRegularSessionDisplay<T extends QuoteDisplayInput>(
       basis: "EOD",
       regularPrice: null,
       regularChg: null,
-    } as T & RegularSessionDisplay;
+    } as RegularSessionQuote<T>;
   }
-  return { ...quote, ...resolveRegularSessionDisplay(quote) };
+  return { ...quote, ...resolveRegularSessionDisplay(quote) } as RegularSessionQuote<T>;
 }
