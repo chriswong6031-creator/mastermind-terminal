@@ -485,7 +485,8 @@ export async function fetchIntraday(
 // (last / prev-close / open / day high-low / cumulative volume / turnover / change%), ~3-6s
 // cadence, keyless, same trusted host family as the kline leg. A-share is genuinely live; HK
 // is typically ~15-min delayed at source. Both markets share the same field layout.
-// US + crypto + macro: served by the localhost Quote Hub (Coinbase live crypto, delayed-15m
+// US + crypto + macro: served by the localhost Quote Hub (OKX UTC-0 crypto, Coinbase rolling-24h
+// fallback, delayed-15m
 // Polygon US, near-live Sina macro with a Yahoo-spark leg of its own); a macro symbol the hub
 // misses falls back here to one batched Yahoo spark call, and a total miss → null → manifest
 // EOD fallback (see fetchQuote).
@@ -525,6 +526,19 @@ export type Quote = {
   // instead of interpreting the feed's raw last/chg during pre/post/overnight windows.
   regularPrice?: number | null;
   regularChg?: number | null;
+  /** Basis used for the displayed day-change calculation. */
+  changeBasis?: "UTC_0" | "ROLLING_24H";
+  /** OKX perpetual companion for a canonical -USD spot row. */
+  perpLast?: number | null;
+  perpPrevClose?: number | null;
+  perpChg?: number | null;
+  perpOpen?: number | null;
+  perpHigh?: number | null;
+  perpLow?: number | null;
+  perpVol?: number | null;
+  perpTs?: number | null;
+  perpChangeBasis?: "UTC_0" | "ROLLING_24H";
+  perpSource?: string;
 };
 
 function _n(s: string | undefined): number | null {
