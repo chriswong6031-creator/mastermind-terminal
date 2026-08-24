@@ -3096,6 +3096,9 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   const chgNow: number | null | undefined = activeIsComposite
     ? (compositeQ?.chg ?? null)
     : (regularQuote.regularChg ?? m?.chg);
+  const changeLabel = m?.sec === "Crypto" || active.endsWith("-USD") || isMacroSymbol(active)
+    ? t("change1d")
+    : t("change24h");
 
   // ── market-closed chip ──────────────────────────────────────────────────────
   // Recomputes every minute via setInterval (no holiday calendar — see risks).
@@ -4385,7 +4388,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         </button>
         <div className="stats">
           <div className="stat stat-last"><span className="l">{t("lastPrice")}</span><span className="v big num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</span></div>
-          <div className="stat stat-change"><span className="l">{t("change24h")}</span><span className={`v num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></div>
+          <div className="stat stat-change"><span className="l">{changeLabel}</span><span className={`v num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></div>
           {/* Live-first, exactly like DayRange below. Reading the manifest row alone put
               TODAY's price beside YESTERDAY's volume in the same strip — the manifest is a
               nightly artifact, so its vol is a full session behind whenever a live quote exists. */}

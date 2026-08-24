@@ -408,6 +408,7 @@ export const LEX: Record<string, [string, string]> = {
   // topbar stats
   lastPrice: ["Last Price", "最新价"],
   change24h: ["24h Change", "24h涨跌"],
+  change1d: ["1D Change", "1D涨跌"],
   volume: ["Volume", "成交量"],
   dayHigh: ["Day High", "当日最高"],
   dayLow: ["Day Low", "当日最低"],
