@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spliceDaily, canSpliceRegularBar } from "@/components/ChartPanel";
 import { parseTencentFields } from "@/lib/intradaySources";
+import { withRegularSessionDisplay } from "@/lib/quoteDisplay";
 
 // Regression: at the China market open, Tencent's premarket call-auction snapshot reports
 // open/high/low = 0 (the session hasn't resolved yet). The live-bar splice used to accept the 0
@@ -77,6 +78,26 @@ describe("spliceDaily — no $0 spike from a zero-open premarket quote", () => {
 
   it("a 0 (or missing) last is not spliceable at all", () => {
     expect(spliceDaily(daily, { last: 0, open: 11.9 }, "2026-07-21")).toBe(daily);
+  });
+
+  it("a suspended A-share placeholder cannot synthesize a flat candle", () => {
+    const exposed = withRegularSessionDisplay({
+      last: 11.90,
+      prevClose: 11.90,
+      chg: 0,
+      open: null,
+      high: null,
+      low: null,
+      vol: 0,
+      amount: 0,
+      live: true,
+      source: "tencent",
+      market: "cn",
+      basis: "LIVE",
+    });
+    expect(exposed.last).toBeNull();
+    expect(exposed.regularChg).toBeNull();
+    expect(spliceDaily(daily, exposed, "2026-07-21")).toBe(daily);
   });
 
   it("valid quotes still splice exactly as before", () => {
