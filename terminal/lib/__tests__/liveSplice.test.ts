@@ -80,10 +80,14 @@ describe("spliceDaily — no $0 spike from a zero-open premarket quote", () => {
     expect(spliceDaily(daily, { last: 0, open: 11.9 }, "2026-07-21")).toBe(daily);
   });
 
-  it("a suspended A-share placeholder cannot synthesize a flat candle", () => {
-    const exposed = withRegularSessionDisplay({
-      last: 11.90,
-      prevClose: 11.90,
+  it("the real Tencent no-trade shape for 002155.SZ cannot synthesize a flat candle", () => {
+    const raw = parseTencentFields("002155.SZ", "cn", tencentRecord({
+      3: "24.56", 4: "24.56", 5: "0.00", 6: "0", 30: "20260824110000",
+      32: "0.00", 33: "0.00", 34: "0.00", 37: "0",
+    }))!;
+    expect(raw).toMatchObject({
+      last: 24.56,
+      prevClose: 24.56,
       chg: 0,
       open: null,
       high: null,
@@ -95,6 +99,8 @@ describe("spliceDaily — no $0 spike from a zero-open premarket quote", () => {
       market: "cn",
       basis: "LIVE",
     });
+
+    const exposed = withRegularSessionDisplay(raw);
     expect(exposed.last).toBeNull();
     expect(exposed.regularChg).toBeNull();
     const spliceQuote = {
@@ -104,7 +110,7 @@ describe("spliceDaily — no $0 spike from a zero-open premarket quote", () => {
       low: exposed.low ?? undefined,
       vol: exposed.vol ?? undefined,
     };
-    expect(spliceDaily(daily, spliceQuote, "2026-07-21")).toBe(daily);
+    expect(spliceDaily(daily, spliceQuote, "2026-08-24")).toBe(daily);
   });
 
   it("valid quotes still splice exactly as before", () => {
