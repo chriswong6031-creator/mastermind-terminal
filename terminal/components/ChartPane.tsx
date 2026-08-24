@@ -127,16 +127,17 @@ export default function ChartPane({ idx, symbol, drawingOwnerKey, isActive, onAc
 
   const extendedEligible = classify(symbol) === "us" && !isMacroSymbol(symbol);
   const panelSettings = useMemo(() => ({ ...chartSettings }), [chartSettings]);
+  const displayLabel = displayName(row, lang) || symbol;
   const title = chartSettings.titleMode === "ticker"
     ? symbol
     : chartSettings.titleMode === "both"
-      ? `${row?.zh || row?.name || symbol} · ${symbol}`
-      : row?.zh || row?.name || symbol;
+      ? `${displayLabel} · ${symbol}`
+      : displayLabel;
 
   return (
     <div className={`pane${isActive ? " on" : ""}${swapping ? " is-swapping" : ""}`} data-swapping={swapping ? "1" : undefined} onPointerDownCapture={() => { if (!isActive) onActivate(idx); }}>
       <div className="pane-hd">
-        {chartSettings.showLogo && <AssetLogo className="pic" symbol={symbol} name={row?.zh || row?.name} market={marketLabel} color={row?.col} size={18} />}
+        {chartSettings.showLogo && <AssetLogo className="pic" symbol={symbol} name={displayLabel} market={marketLabel} color={row?.col} size={18} />}
         {chartSettings.showSymbolName && <b>{title}</b>}
         <span className="pane-tf">{tf}</span>
         <span className="px num">{f(row?.last, (row?.last ?? 99) < 10 ? 4 : 2)}</span>
@@ -155,7 +156,7 @@ export default function ChartPane({ idx, symbol, drawingOwnerKey, isActive, onAc
         compare={isActive ? compare.filter((c) => c !== symbol) : []} compareCfg={compareCfg}
         magnet={isActive ? magnet : "off"} isActive={isActive} syncId={idx}
         liveQuote={liveQuote} indParams={indParams} hidden={hidden}
-        instrumentName={row?.zh || row?.name}
+        instrumentName={displayLabel}
         instrumentMarket={marketLabel}
         instrumentColor={row?.col}
         onToggleHidden={onToggleHidden} onRemoveInd={onRemoveInd}
