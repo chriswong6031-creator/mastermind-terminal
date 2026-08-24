@@ -5,6 +5,20 @@ export const DEFAULT_CHART_RIGHT_BUFFER_PX = 80;
 export type ChartLogicalRange = { from: number; to: number };
 
 /**
+ * Extend an explicit range past its last data point. Lightweight Charts'
+ * explicit range setters do not use timeScale.rightOffset as a visual buffer,
+ * so range presets need to add that buffer to the logical end themselves.
+ */
+export function withChartFutureOffset(
+  range: ChartLogicalRange | null,
+  rightOffset = DEFAULT_CHART_RIGHT_OFFSET,
+): ChartLogicalRange | null {
+  if (!range) return null;
+  const offset = Number.isFinite(rightOffset) ? Math.max(0, rightOffset) : DEFAULT_CHART_RIGHT_OFFSET;
+  return { from: range.from, to: range.to + offset };
+}
+
+/**
  * Convert the desired visual clearance into logical bars. Narrow charts need
  * more future bars because the normalized 240-bar window compresses each bar.
  * Cap the blank region at 30% so an exceptionally narrow pane stays useful.

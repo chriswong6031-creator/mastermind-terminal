@@ -7934,7 +7934,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         rightPriceScale: { borderColor: chartSettings.scaleLineColor || tokens.line },
         timeScale: {
           borderColor: chartSettings.scaleLineColor || axisLineColor(tokens.line),
-          rightOffset: chartSettings.rightOffsetBars ?? 10,
+          rightOffset: chartSettings.rightOffsetBars ?? DEFAULT_CHART_RIGHT_OFFSET,
           ...chartTimeAxisOptions(chartSettings.hourFormat ?? "24", visibleCalendarSpanDays),
         } as any,
       });

@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { type IChartApi, PriceScaleMode } from "lightweight-charts";
-import { DEFAULT_CHART_RIGHT_OFFSET } from "@/lib/chart-engine/viewReset";
+import { DEFAULT_CHART_RIGHT_OFFSET, withChartFutureOffset } from "@/lib/chart-engine/viewReset";
 import { isIntradayTf } from "@/lib/intradaySources";
 import { useT } from "@/lib/i18n";
 
@@ -134,16 +134,29 @@ function addMonths(base: Date, n: number): Date { const d = new Date(base); d.se
 function addYears(base: Date, n: number): Date { const d = new Date(base); d.setFullYear(d.getFullYear() + n); return d; }
 
 // Navigate the chart to a given range key using the lightweight-charts time scale API.
-function applyRange(key: RangeKey, chartApi: IChartApi, isIntraday: boolean): void {
+function applyRange(
+  key: RangeKey,
+  chartApi: IChartApi,
+  isIntraday: boolean,
+  rightOffsetBars = DEFAULT_CHART_RIGHT_OFFSET,
+): void {
   const ts = chartApi.timeScale();
   try {
-    if (key === "All") { ts.fitContent(); return; }
+    if (key === "All") {
+      ts.fitContent();
+      return;
+    }
     const now = new Date();
     // For intraday charts: use logical range (bar counts approximate; intraday has hundreds of bars/day).
     // For daily charts: use the "from/to" date-string setVisibleRange API.
     if (isIntraday) {
       // approximate bar counts for intraday: 390 bars/day for 1m US equity
       const barsPerDay = 390;
+      // Re-anchor the preset at the latest available bar even when the user
+      // had previously panned away from the live edge. The configured
+      // rightOffset supplies the future-time gutter after this re-anchor.
+      ts.applyOptions({ rightOffset: rightOffsetBars });
+      ts.scrollToRealTime();
       const logRange = ts.getVisibleLogicalRange();
       const to = (logRange?.to ?? 0) as number;
       const barCount = key === "1D" ? barsPerDay : key === "5D" ? barsPerDay * 5 : barsPerDay * 20;
@@ -162,6 +175,8 @@ function applyRange(key: RangeKey, chartApi: IChartApi, isIntraday: boolean): vo
         default: ts.fitContent(); return;
       }
       ts.setVisibleRange({ from: isoDate(fromDate) as any, to: isoDate(now) as any });
+      const range = withChartFutureOffset(ts.getVisibleLogicalRange(), rightOffsetBars);
+      if (range) ts.setVisibleLogicalRange(range);
     }
   } catch {}
 }
@@ -381,7 +396,7 @@ export default function ChartFrameBar({
           <button
             key={rk}
             className="cfb-range"
-            onClick={() => chartApi && applyRange(rk, chartApi, isIntraday)}
+            onClick={() => chartApi && applyRange(rk, chartApi, isIntraday, s.rightOffsetBars)}
           >{rk}</button>
         ))}
         <div style={{ position: "relative" }}>

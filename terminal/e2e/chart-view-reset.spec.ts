@@ -54,6 +54,24 @@ test("New chart tickers reserve space between the latest candle and symbol tag",
   }, { timeout: 45_000 }).toBeGreaterThanOrEqual(12);
 });
 
+test("Calendar range presets keep future time after the latest candle", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "The range bar is desktop-only at compact breakpoints.");
+
+  await page.goto("/terminal?symbol=NVDA");
+  await expect(page.locator(".chart-wrap canvas").first()).toBeVisible({ timeout: 45_000 });
+  await expect.poll(async () => (await chartViewState(page))?.rowCount ?? 0, { timeout: 45_000 })
+    .toBeGreaterThan(DEFAULT_CHART_VIEW_BARS);
+
+  await page.getByRole("button", { name: "5Y", exact: true }).click();
+  await expect.poll(async () => {
+    const state = await chartViewState(page);
+    if (!state?.visibleRange || state.rowCount === 0) return null;
+    // The logical index immediately after the last data row is rowCount. A
+    // positive delta here is the empty future-time area requested by the user.
+    return Math.round(state.visibleRange.to - (state.rowCount - 1));
+  }, { timeout: 15_000 }).toBeGreaterThanOrEqual(DEFAULT_CHART_RIGHT_OFFSET);
+});
+
 test("Reset chart view restores the recent weekly window", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "The context-menu reset gesture is desktop-only.");
 

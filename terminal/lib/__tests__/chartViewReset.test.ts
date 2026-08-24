@@ -4,6 +4,7 @@ import {
   DEFAULT_CHART_VIEW_BARS,
   defaultChartRightOffset,
   normalizedChartLogicalRange,
+  withChartFutureOffset,
 } from "@/lib/chart-engine/viewReset";
 
 describe("normalizedChartLogicalRange", () => {
@@ -18,6 +19,12 @@ describe("normalizedChartLogicalRange", () => {
       from: 1_200 - DEFAULT_CHART_VIEW_BARS,
       to: 1_200 - 1 + DEFAULT_CHART_RIGHT_OFFSET,
     });
+  });
+
+  it("extends explicit ranges into the empty future area", () => {
+    expect(withChartFutureOffset({ from: 10, to: 50 })).toEqual({ from: 10, to: 50 + DEFAULT_CHART_RIGHT_OFFSET });
+    expect(withChartFutureOffset({ from: 10, to: 50 }, 7)).toEqual({ from: 10, to: 57 });
+    expect(withChartFutureOffset(null)).toBeNull();
   });
 
   it("fits a history that is already shorter than the default window", () => {
