@@ -97,7 +97,14 @@ describe("spliceDaily — no $0 spike from a zero-open premarket quote", () => {
     });
     expect(exposed.last).toBeNull();
     expect(exposed.regularChg).toBeNull();
-    expect(spliceDaily(daily, exposed, "2026-07-21")).toBe(daily);
+    const spliceQuote = {
+      last: exposed.last ?? undefined,
+      open: exposed.open ?? undefined,
+      high: exposed.high ?? undefined,
+      low: exposed.low ?? undefined,
+      vol: exposed.vol ?? undefined,
+    };
+    expect(spliceDaily(daily, spliceQuote, "2026-07-21")).toBe(daily);
   });
 
   it("valid quotes still splice exactly as before", () => {
