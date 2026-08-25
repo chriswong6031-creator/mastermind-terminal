@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { createAiContextProvider } from "@/lib/aiContext";
 
 // NOTE: placed under lib/__tests__/ (not lib/aiContext.test.ts) to match this repo's vitest
@@ -74,6 +74,21 @@ describe("createAiContextProvider — origin identity", () => {
     const p = createAiContextProvider();
     expect(p.getAiContext().origin_id.length).toBeLessThanOrEqual(64);
   });
+
+  it("origin_id stays <=64 chars even when the underlying minter returns something longer", () => {
+    // Mutation check: deleting the provider's own bound (e.g. its .slice(0, 64)) would let a
+    // misbehaving crypto.randomUUID — or the non-UUID fallback minter — leak an oversized
+    // origin_id past the contract's <=64 bound. Force exactly that by stubbing the minter.
+    const spy = vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("x".repeat(100) as `${string}-${string}-${string}-${string}-${string}`);
+    try {
+      const p = createAiContextProvider();
+      const originId = p.getAiContext().origin_id;
+      expect(originId.length).toBeLessThanOrEqual(64);
+      expect(originId).toBe("x".repeat(64)); // truncated, not rejected/garbled
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe("createAiContextProvider — getAiContext shape (ai_context_client.v1)", () => {
@@ -108,11 +123,31 @@ describe("createAiContextProvider — getAiContext shape (ai_context_client.v1)"
     expect(a).toEqual(b);
   });
 
-  it("captured_at advances with the wall clock across getAiContext calls", async () => {
-    const p = createAiContextProvider();
-    const t1 = p.getAiContext().captured_at;
-    await new Promise((r) => setTimeout(r, 2));
-    const t2 = p.getAiContext().captured_at;
-    expect(new Date(t2).getTime()).toBeGreaterThanOrEqual(new Date(t1).getTime());
+  it("captured_at strictly increases and tracks the (faked) system clock", () => {
+    // A frozen/hardcoded captured_at would pass a >= assertion against itself trivially — use
+    // fake timers so the test pins captured_at to real Date reads, not a constant. Mutation
+    // check: hardcoding captured_at (or computing it once at construction) fails this, because
+    // t1/t2 would no longer equal the exact faked instants below.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      const p = createAiContextProvider();
+      const t1 = p.getAiContext().captured_at;
+      expect(t1).toBe("2026-01-01T00:00:00.000Z");
+
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.002Z"));
+      const t2 = p.getAiContext().captured_at;
+      expect(t2).toBe("2026-01-01T00:00:00.002Z");
+
+      expect(new Date(t2).getTime()).toBeGreaterThan(new Date(t1).getTime());
+    } finally {
+      vi.useRealTimers();
+    }
   });
+});
+
+afterEach(() => {
+  // Defensive: if a test above throws before its own finally block restores real timers,
+  // never let fake time leak into an unrelated later suite in the same run.
+  vi.useRealTimers();
 });
