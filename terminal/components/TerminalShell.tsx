@@ -106,6 +106,9 @@ const AnalysisHubSheet = dynamic(() => import("@/components/mobile/AnalysisHubSh
 // BrainWidget mounts the production Mastermind Brain widget (mm_brain.js) — it renders null
 // and only injects a cross-origin <script>, so ssr:false / dynamic isn't needed.
 import BrainWidget from "@/components/BrainWidget";
+// DeepVue W1-C: typed ai-context provider (observe-only — derives active/ambient context from
+// the same active-pane symbol/tf the Chart Bus already owns; never writes back into chart state).
+import { createAiContextProvider } from "@/lib/aiContext";
 import StockAnalysis from "@/components/StockAnalysis";
 import SignalButton from "@/components/SignalButton";
 import TrendRow from "@/components/TrendRow";
@@ -4045,6 +4048,18 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     setRange: (from) => { try { window.dispatchEvent(new CustomEvent("mm:chart-jump", { detail: { ts: from } })); } catch {} },
   });
 
+  // ── DeepVue W1-C: typed ai-context provider ────────────────────────────────────────────────
+  // One provider instance per TerminalShell mount (mints origin_id once). Observe-only: the
+  // effect below is the ONLY writer into it, keyed on the exact same [active, tf] values fed to
+  // useChartBus above, so one symbol/timeframe transition produces exactly one
+  // noteContextChange call. Nothing from the widget (acks, receipts) may call it — that would
+  // create a context loop, which the contract forbids.
+  const aiContextProviderRef = useRef<ReturnType<typeof createAiContextProvider> | null>(null);
+  if (!aiContextProviderRef.current) aiContextProviderRef.current = createAiContextProvider();
+  useEffect(() => {
+    aiContextProviderRef.current?.noteContextChange({ symbol: active, timeframe: tf });
+  }, [active, tf]);
+
   // Brain widget → chart command executor. Mirrors the retired CopilotPanel's FLAT single-command
   // contract EXACTLY ({action, symbol|tf|indicator+on|kind} at top level): every field is
   // type-guarded, toggle_indicator adds ONLY on an explicit on===true (a missing flag never
@@ -5414,6 +5429,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         onCommand={handleBrainCommand}
         onAnnotate={(j) => annotateChart(j.symbol || active, j.annotations || [])}
         onAuthRequired={() => window.location.assign("/login")}
+        getAiContext={() => aiContextProviderRef.current!.getAiContext()}
       />
 
       {/* ── Signals dashboard overlay (Golden Oracle scorecard · research read · signal history) ── */}
