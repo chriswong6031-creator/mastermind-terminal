@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef } from "react";
 import { handoffMastermindBrainSymbol, type MastermindBrainHost } from "@/lib/mastermindBrain";
+import type { AiContextClientV1 } from "@/lib/aiContext";
 
 // Mounts the production Mastermind Brain widget (mm_brain.js) into the Terminal, replacing
 // the old CopilotPanel. The widget is a self-contained IIFE that reads window.MM_BRAIN_CFG
@@ -17,6 +18,10 @@ type Props = {
   onCommand: (j: any) => void;
   onAnnotate: (j: any) => void;
   onAuthRequired?: () => void;
+  // DeepVue W1-C: reads the Terminal's current ai_context_client.v1 block at send time.
+  // Optional — the deployed production mm_brain.js may not read this key yet (Macro's
+  // context-compiler PR lands first), so this hook must be safely ignorable both ways.
+  getAiContext?: () => AiContextClientV1;
 };
 
 export default function BrainWidget({
@@ -24,6 +29,7 @@ export default function BrainWidget({
   onCommand,
   onAnnotate,
   onAuthRequired,
+  getAiContext,
 }: Props) {
   // Keep refs current so the CFG getters/callbacks read live values and never see a stale
   // closure from mount time (the config object is captured by the widget exactly once).
@@ -31,6 +37,7 @@ export default function BrainWidget({
   const onCommandRef = useRef(onCommand);
   const onAnnotateRef = useRef(onAnnotate);
   const onAuthRequiredRef = useRef(onAuthRequired);
+  const getAiContextRef = useRef(getAiContext);
 
   useEffect(() => {
     symRef.current = active;
@@ -49,6 +56,9 @@ export default function BrainWidget({
   useEffect(() => {
     onAuthRequiredRef.current = onAuthRequired;
   }, [onAuthRequired]);
+  useEffect(() => {
+    getAiContextRef.current = getAiContext;
+  }, [getAiContext]);
 
   // Load the widget exactly once per document. StrictMode double-invokes effects in dev,
   // and the widget itself is a singleton — guard on both the mounted flag and an existing tag.
@@ -65,6 +75,11 @@ export default function BrainWidget({
       onCommand: (j: any) => onCommandRef.current?.(j),
       onAnnotate: (j: any) => onAnnotateRef.current?.(j),
       onAuthRequired: () => onAuthRequiredRef.current?.(),
+      // DeepVue W1-C: built fresh on every call — never captured once at mount — so the
+      // widget always reads the current context_revision/active/ambient at send time.
+      // Safely ignorable: production mm_brain.js that doesn't know this key simply never
+      // calls it.
+      getAiContext: () => getAiContextRef.current?.(),
     };
 
     const s = document.createElement("script");
