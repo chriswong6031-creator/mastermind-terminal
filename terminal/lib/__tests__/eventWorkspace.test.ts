@@ -534,7 +534,7 @@ describe("E3-B manifest v2 and canonical Q&A", () => {
     expect(normalizeEventWorkspace(payload, FLAGSHIP, GEN)?.qa_exchanges).toEqual([]);
   });
 
-  it("keeps a valid source clock and omits a malformed one", () => {
+  it("rejects a present malformed source clock instead of omitting it", () => {
     const payload = cloneGolden();
     const sources = payload.sources as Array<Record<string, unknown>>;
     const transcript = sources.find((row) => row.kind === "transcript")!;
@@ -551,9 +551,73 @@ describe("E3-B manifest v2 and canonical Q&A", () => {
     const kept = normalizeEventWorkspace(payload, FLAGSHIP, GEN);
     expect(kept?.sources.find((row) => row.kind === "transcript")?.source_clock?.clock_state).toBe("unknown");
     transcript.source_clock = { ...transcript.source_clock as object, extra: true };
-    const omitted = normalizeEventWorkspace(payload, FLAGSHIP, GEN);
-    expect(omitted).not.toBeNull();
-    expect(omitted?.sources.find((row) => row.kind === "transcript")?.source_clock).toBeUndefined();
+    expect(normalizeEventWorkspace(payload, FLAGSHIP, GEN)).toBeNull();
+  });
+
+  it("still accepts a clockless transcript source", () => {
+    const payload = cloneGolden();
+    const sources = payload.sources as Array<Record<string, unknown>>;
+    const transcript = sources.find((row) => row.kind === "transcript")!;
+    expect(transcript.source_clock).toBeUndefined();
+    expect(normalizeEventWorkspace(payload, FLAGSHIP, GEN)).not.toBeNull();
+  });
+
+  it("drops Q&A whose document SHA does not match the transcript revision", () => {
+    const payload = cloneGolden();
+    const exchanges = JSON.parse(JSON.stringify(QA_FIXTURE)) as Array<Record<string, unknown>>;
+    exchanges[0].document_sha256 = "cd".repeat(32);
+    exchanges[0].exchange_id = `qx_${FLAGSHIP}_${"cd".repeat(6)}_00`;
+    payload.qa_exchanges = exchanges;
+    const workspace = normalizeEventWorkspace(payload, FLAGSHIP, GEN);
+    expect(workspace).not.toBeNull();
+    expect(workspace?.qa_exchanges).toEqual([]);
+  });
+
+  it("drops Q&A when unknown provenance carries an availability timestamp", () => {
+    const payload = cloneGolden();
+    const exchanges = JSON.parse(JSON.stringify(QA_FIXTURE)) as Array<Record<string, unknown>>;
+    const provenance = exchanges[0].provenance as Record<string, unknown>;
+    provenance.source_available_at = "2026-07-30T20:30:28Z";
+    payload.qa_exchanges = exchanges;
+    expect(normalizeEventWorkspace(payload, FLAGSHIP, GEN)?.qa_exchanges).toEqual([]);
+  });
+
+  it("drops Q&A when a span receipt SHA does not match the exchange document SHA", () => {
+    const payload = cloneGolden();
+    const exchanges = JSON.parse(JSON.stringify(QA_FIXTURE)) as Array<Record<string, unknown>>;
+    const spans = exchanges[0].question_spans as Array<Record<string, unknown>>;
+    const receipt = spans[1].receipt as Record<string, unknown>;
+    receipt.source_sha256 = "cd".repeat(32);
+    payload.qa_exchanges = exchanges;
+    expect(normalizeEventWorkspace(payload, FLAGSHIP, GEN)?.qa_exchanges).toEqual([]);
+  });
+
+  it("binds accepted Q&A to a present transcript clock", () => {
+    const payload = cloneGolden();
+    const exchanges = JSON.parse(JSON.stringify(QA_FIXTURE)) as Array<Record<string, unknown>>;
+    const sources = payload.sources as Array<Record<string, unknown>>;
+    const transcript = sources.find((row) => row.kind === "transcript")!;
+    transcript.source_clock = {
+      schema: "event_source_clock.v1",
+      document_id: transcript.document_id,
+      source_sha256: transcript.source_sha256,
+      source_available_at: "2026-07-30T20:30:28Z",
+      system_recorded_at: "2026-08-16T18:00:00Z",
+      clock_state: "known",
+      rights_profile: "rp_public_primary_v1",
+      session_phase: "unknown",
+    };
+    payload.qa_exchanges = exchanges;
+    expect(normalizeEventWorkspace(payload, FLAGSHIP, GEN)?.qa_exchanges).toEqual([]);
+    for (const item of exchanges) {
+      const provenance = item.provenance as Record<string, unknown>;
+      provenance.clock_state = "known";
+      provenance.source_available_at = "2026-07-30T20:30:28Z";
+    }
+    payload.qa_exchanges = exchanges;
+    const matched = normalizeEventWorkspace(payload, FLAGSHIP, GEN);
+    expect(matched?.qa_exchanges).toHaveLength(7);
+    expect(matched?.qa_exchanges[0]?.provenance.clock_state).toBe("known");
   });
 
   it("presents seven exchanges without operator speech or unavailable topic chips", () => {

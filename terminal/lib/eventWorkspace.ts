@@ -365,6 +365,9 @@ const QA_EXCHANGE_KEYS = [
 ] as const;
 const QA_QUESTIONER_KEYS = ["name", "affiliation", "name_state", "affiliation_state"] as const;
 const QA_RESPONDENT_KEYS = ["name", "role", "identity_state", "span_indexes"] as const;
+const QA_NAME_STATE_SOURCE_SUPPORTED = "source_supported";
+const QA_AFFILIATION_STATES = new Set(["source_supported", "unresolved"]);
+const QA_IDENTITY_STATE_SOURCE_SUPPORTED = "source_supported";
 const QA_PROVENANCE_KEYS = [
   "extractor_id", "provider", "model", "prompt_version", "validator_id", "run_id",
   "validation_state", "source_available_at", "clock_state", "rights_profile",
@@ -997,7 +1000,9 @@ function normalizeQaQuestioner(raw: unknown): EventWorkspaceQaQuestioner | null 
   if (obj.affiliation != null && affiliation == null) return null;
   const nameState = requiredString(obj.name_state, 40);
   const affiliationState = requiredString(obj.affiliation_state, 40);
-  if (!nameState || !affiliationState) return null;
+  if (nameState !== QA_NAME_STATE_SOURCE_SUPPORTED || !affiliationState || !QA_AFFILIATION_STATES.has(affiliationState)) return null;
+  if (affiliationState === QA_NAME_STATE_SOURCE_SUPPORTED && !affiliation?.trim()) return null;
+  if (affiliationState === "unresolved" && affiliation?.trim()) return null;
   return { name, affiliation: affiliation ?? "", name_state: nameState, affiliation_state: affiliationState };
 }
 
@@ -1007,7 +1012,7 @@ function normalizeQaRespondent(raw: unknown, answerCount: number): EventWorkspac
   const name = requiredString(obj.name, 160);
   const role = requiredString(obj.role, 80);
   const identity = requiredString(obj.identity_state, 40);
-  if (!name || !role || !identity || !Array.isArray(obj.span_indexes) || obj.span_indexes.length === 0) return null;
+  if (!name || !role || !identity || identity !== QA_IDENTITY_STATE_SOURCE_SUPPORTED || !Array.isArray(obj.span_indexes) || obj.span_indexes.length === 0) return null;
   const indexes: number[] = [];
   for (const value of obj.span_indexes) {
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value >= answerCount) return null;
@@ -1037,14 +1042,17 @@ function normalizeQaExchange(raw: unknown, eventId: string): EventWorkspaceQaExc
   for (const span of obj.question_spans) {
     const normalized = normalizeSpan(span);
     if (!normalized || normalized.document_id !== documentId) return null;
+    if (normalized.receipt_state === "byte_replayed" && normalized.receipt?.source_sha256 !== documentSha) return null;
     questionSpans.push(normalized);
   }
   const answerSpans: EventWorkspaceSourceSpan[] = [];
   for (const span of obj.answer_spans) {
     const normalized = normalizeSpan(span);
     if (!normalized || normalized.document_id !== documentId) return null;
+    if (normalized.receipt_state === "byte_replayed" && normalized.receipt?.source_sha256 !== documentSha) return null;
     answerSpans.push(normalized);
   }
+  if (!qaSpansUniqueAndDisjoint(questionSpans, answerSpans)) return null;
   const questioner = normalizeQaQuestioner(obj.questioner);
   if (!questioner) return null;
   if (!Array.isArray(obj.respondents) || !obj.respondents.length) return null;
@@ -1068,6 +1076,8 @@ function normalizeQaExchange(raw: unknown, eventId: string): EventWorkspaceQaExc
   if (!runId || !rights) return null;
   const available = provenance.source_available_at == null ? null : requiredString(provenance.source_available_at, 64);
   if (provenance.source_available_at != null && !available) return null;
+  if (provenance.clock_state === "unknown" && available != null) return null;
+  if (provenance.clock_state === "known" && !available) return null;
   const validation = object(obj.validation);
   if (!validation || !exactKeys(validation, QA_VALIDATION_KEYS)) return null;
   if (validation.replayed !== true || validation.unique_span !== true || validation.event_match !== true || validation.revision_match !== true || validation.rights_ok !== true) return null;
@@ -1123,6 +1133,65 @@ function normalizeQaExchanges(raw: unknown, eventId: string): EventWorkspaceQaEx
   return exchanges;
 }
 
+function qaSpanIdentity(span: EventWorkspaceSourceSpan): string | null {
+  const start = span.locator.span_start_byte;
+  const end = span.locator.span_end_byte;
+  const segment = span.locator.segment_index;
+  const sha = span.receipt?.source_sha256 ?? "";
+  if (segment == null || start == null || end == null || start >= end) return null;
+  return `${span.document_id}:${sha}:${segment}:${start}:${end}`;
+}
+
+function qaSpansUniqueAndDisjoint(
+  questionSpans: EventWorkspaceSourceSpan[],
+  answerSpans: EventWorkspaceSourceSpan[],
+): boolean {
+  const all = [...questionSpans, ...answerSpans];
+  const keys = all.map(qaSpanIdentity);
+  if (keys.some((key) => !key)) return false;
+  if (new Set(keys).size !== keys.length) return false;
+  for (let i = 0; i < all.length; i += 1) {
+    const left = all[i]!;
+    for (let j = i + 1; j < all.length; j += 1) {
+      const right = all[j]!;
+      if (left.document_id !== right.document_id) continue;
+      if (left.locator.segment_index !== right.locator.segment_index) continue;
+      const leftStart = left.locator.span_start_byte ?? 0;
+      const leftEnd = left.locator.span_end_byte ?? 0;
+      const rightStart = right.locator.span_start_byte ?? 0;
+      const rightEnd = right.locator.span_end_byte ?? 0;
+      if (leftStart < rightEnd && rightStart < leftEnd) return false;
+    }
+  }
+  return true;
+}
+
+function bindQaExchangesToTranscript(
+  exchanges: EventWorkspaceQaExchange[],
+  sources: EventWorkspaceSource[],
+): EventWorkspaceQaExchange[] {
+  if (exchanges.length === 0) return [];
+  const transcript = sources.find((source) => source.kind === "transcript" && source.receipt_state === "byte_replayed");
+  if (!transcript?.document_id || !transcript.source_sha256) return [];
+  const clock = transcript.source_clock;
+  for (const exchange of exchanges) {
+    if (exchange.document_id !== transcript.document_id || exchange.document_sha256 !== transcript.source_sha256) {
+      return [];
+    }
+    for (const span of [...exchange.question_spans, ...exchange.answer_spans]) {
+      if (span.document_id !== transcript.document_id) return [];
+      if (span.receipt?.source_sha256 !== transcript.source_sha256) return [];
+    }
+    if (clock) {
+      if (exchange.provenance.clock_state !== clock.clock_state) return [];
+      if (exchange.provenance.source_available_at !== clock.source_available_at) return [];
+    } else if (exchange.provenance.clock_state !== "unknown" || exchange.provenance.source_available_at != null) {
+      return [];
+    }
+  }
+  return exchanges;
+}
+
 function normalizeSource(raw: unknown, eventId: string): EventWorkspaceSource | null {
   const obj = object(raw);
   if (!obj) return null;
@@ -1140,9 +1209,14 @@ function normalizeSource(raw: unknown, eventId: string): EventWorkspaceSource | 
   if (url === undefined) return null;
   const documentId = obj.document_id == null ? null : requiredString(obj.document_id, MAX_ID);
   const sourceSha = obj.source_sha256 == null ? null : validSha(obj.source_sha256) ? obj.source_sha256 : null;
-  const clock = obj.source_clock == null
-    ? null
-    : (obj.receipt_state === "typed_absence" ? null : normalizeSourceClock(obj.source_clock, documentId, sourceSha));
+  const clockPresent = Object.prototype.hasOwnProperty.call(obj, "source_clock") && obj.source_clock != null;
+  let clock: EventWorkspaceSourceClock | undefined;
+  if (clockPresent) {
+    if (obj.receipt_state === "typed_absence") return null;
+    const normalizedClock = normalizeSourceClock(obj.source_clock, documentId, sourceSha);
+    if (!normalizedClock) return null;
+    clock = normalizedClock;
+  }
   return {
     kind,
     receipt_state: obj.receipt_state,
@@ -1264,7 +1338,7 @@ export function normalizeEventWorkspace(
     warnings.push(warning);
   }
   if (warnings.join("\0") !== [...new Set(warnings)].sort().join("\0")) return null;
-  const qaExchanges = normalizeQaExchanges(obj.qa_exchanges, eventId);
+  const qaExchanges = bindQaExchangesToTranscript(normalizeQaExchanges(obj.qa_exchanges, eventId), sources);
   return {
     schema: EVENT_WORKSPACE_SCHEMA,
     event_id: eventId,
