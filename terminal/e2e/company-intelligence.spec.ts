@@ -1057,13 +1057,12 @@ test("AAPL v1 score overlay cannot populate current Brief, Results, or Sources",
   await expect(page.locator("#ci-panel-sources")).not.toContainText(/score overlay/i);
 });
 
-function alignTranscriptRevisionSha(payload: Record<string, unknown>, sha: string) {
+function alignTranscriptRevisionSha<T extends { workspace: Record<string, unknown> }>(payload: T, sha: string): T {
   const next = structuredClone(payload);
-  const workspace = next.workspace as Record<string, unknown>;
-  for (const source of workspace.sources as Array<Record<string, unknown>>) {
+  for (const source of next.workspace.sources as Array<Record<string, unknown>>) {
     if (source.kind === "transcript") source.source_sha256 = sha;
   }
-  for (const exchange of workspace.qa_exchanges as Array<Record<string, unknown>>) {
+  for (const exchange of next.workspace.qa_exchanges as Array<Record<string, unknown>>) {
     exchange.document_sha256 = sha;
     const questionSpans = exchange.question_spans as Array<{ receipt?: { source_sha256?: string } }>;
     const answerSpans = exchange.answer_spans as Array<{ receipt?: { source_sha256?: string } }>;
@@ -1094,7 +1093,7 @@ async function aaplQaWorkspacePayload() {
   const transcriptSha = await canonicalTranscriptBodySha256(aaplTranscriptFixture());
   if (!transcriptSha) throw new Error("AAPL e2e transcript canonical SHA was unavailable");
   return alignTranscriptRevisionSha(
-    aaplWorkspacePayload({ qa_exchanges: aaplQaExchanges }) as Record<string, unknown>,
+    aaplWorkspacePayload({ qa_exchanges: aaplQaExchanges }),
     transcriptSha,
   );
 }
