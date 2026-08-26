@@ -183,6 +183,7 @@ export type LiveQuote = {
   extSource?: string;
   extBasis?: string;
   live?: boolean;
+  suspended?: boolean;
   lagMs?: number | null;
   asOfMs?: number | null;
   // Latest one-second aggregate from the live Massive WebSocket lane. Kept distinct from

@@ -113,6 +113,7 @@ describe("regular-session quote display", () => {
       source: "tencent",
       market: "cn",
       basis: "LIVE",
+      suspended: true,
     };
 
     expect(resolveRegularSessionDisplay(quote)).toEqual({ regularPrice: null, regularChg: null });
@@ -130,6 +131,7 @@ describe("regular-session quote display", () => {
       basis: "EOD",
       regularPrice: null,
       regularChg: null,
+      suspended: true,
     });
     expect(exposed.prevClose).toBe(24.56);
     expect(exposed.source).toBe("tencent");
