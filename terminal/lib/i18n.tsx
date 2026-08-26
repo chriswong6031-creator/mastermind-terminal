@@ -427,6 +427,8 @@ export const LEX: Record<string, [string, string]> = {
   dayRange: ["Day Range", "当日区间"],
   live: ["Live", "实时"],
   historical: ["Historical", "历史"],
+  suspended: ["Suspended", "停牌"],
+  suspensionTip: ["Trading suspended — showing last traded price", "停牌中 — 显示最后成交价"],
   delayed15m: ["15-min delayed", "延迟15分钟"],
   delayed15mShort: ["15-min", "延迟15分"],
   liveTip: ["Live feed activates with a real-time Polygon key (NEXT_PUBLIC_LIVE=1)", "配置实时 Polygon 密钥后启用实时行情 (NEXT_PUBLIC_LIVE=1)"],
