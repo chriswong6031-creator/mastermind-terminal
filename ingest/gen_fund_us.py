@@ -323,16 +323,33 @@ def build_ratios(cache: dict, ann: Frame, fy_end_m: int, site: dict | None = Non
 
 
 # ───────────────────────────── earnings ─────────────────────────────
+def select_next_earnings_date(raw_dates, *, today: dt.date | None = None) -> str | None:
+    """Return the earliest parseable earnings date on or after the UTC observation day."""
+    if isinstance(raw_dates, (list, tuple)):
+        candidates = raw_dates
+    elif raw_dates is None:
+        candidates = []
+    else:
+        candidates = [raw_dates]
+
+    observation_day = today or dt.datetime.now(dt.timezone.utc).date()
+    valid_dates = []
+    for candidate in candidates:
+        try:
+            candidate_day = dt.date.fromisoformat(str(candidate)[:10])
+        except (TypeError, ValueError):
+            continue
+        if candidate_day >= observation_day:
+            valid_dates.append(candidate_day)
+
+    return min(valid_dates).isoformat() if valid_dates else None
+
+
 def build_earnings(cache: dict, fy_end_m: int, tx_ids: set[str] | None) -> dict:
     cal = cache.get("calendar") or {}
     ed = build_frame(cache, "earnings_dates")
 
-    next_date = None
-    edates = cal.get("Earnings Date")
-    if isinstance(edates, list) and edates:
-        next_date = edates[0]
-    elif isinstance(edates, str):
-        next_date = edates
+    next_date = select_next_earnings_date(cal.get("Earnings Date"))
 
     q_rows = []
     fy_rows = []
@@ -496,12 +513,7 @@ def build_estimates(cache: dict, fy_end_m: int) -> dict | None:
     rev_fy_periods = list(eps_fy_periods)
 
     # Q period labels for eps_q (0q,+1q). next_date's quarter is 0q; next is +1q.
-    next_date = None
-    edates = cal.get("Earnings Date")
-    if isinstance(edates, list) and edates:
-        next_date = edates[0]
-    elif isinstance(edates, str):
-        next_date = edates
+    next_date = select_next_earnings_date(cal.get("Earnings Date"))
     q0 = q1 = None
     if next_date:
         try:
