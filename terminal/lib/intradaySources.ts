@@ -518,6 +518,8 @@ export type Quote = {
   auctionPrice?: number | null;
   /** Opening-auction move versus the prior close, in percent. */
   auctionChg?: number | null;
+  /** Tencent's explicit A-share suspension marker (field 40 == "S"). */
+  suspended?: true;
   regularSessionDate?: string;
   regularSession?: "rth" | "closed";
   close?: number | null;
@@ -609,6 +611,7 @@ export function parseTencentFields(sym: string, market: Market, f: string[]): Qu
     live: true, source: "tencent", market,
     // A-share is genuinely real-time (LIVE); HK is ~15-min delayed at source (DELAYED_15M).
     basis: market === "cn" ? "LIVE" : "DELAYED_15M",
+    ...(f[40]?.trim().toUpperCase() === "S" ? { suspended: true as const } : {}),
     ...(marketSession ? { marketSession, auctionPrice, auctionChg } : {}),
   };
 }

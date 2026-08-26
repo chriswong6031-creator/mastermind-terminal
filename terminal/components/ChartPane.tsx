@@ -123,6 +123,7 @@ export default function ChartPane({ idx, symbol, drawingOwnerKey, isActive, onAc
     if (!sameHand) onDrawingsChange(hand);
   }, [drawings, onDrawingsChange]);
   const up = (row?.chg ?? 0) >= 0;
+  const suspended = liveQuote?.suspended === true;
   const marketLabel = row?.mkt || row?.sec || "";
 
   const extendedEligible = classify(symbol) === "us" && !isMacroSymbol(symbol);
@@ -141,7 +142,9 @@ export default function ChartPane({ idx, symbol, drawingOwnerKey, isActive, onAc
         {chartSettings.showSymbolName && <b>{title}</b>}
         <span className="pane-tf">{tf}</span>
         <span className="px num">{f(row?.last, (row?.last ?? 99) < 10 ? 4 : 2)}</span>
-        <span className={`cg num ${up ? "up" : "down"}`}>{up ? "+" : ""}{f(row?.chg)}%</span>
+        {suspended
+          ? <span className="cg pane-suspended">{lang === "zh" ? "停牌" : "Suspended"}</span>
+          : <span className={`cg num ${up ? "up" : "down"}`}>{up ? "+" : ""}{f(row?.chg)}%</span>}
       </div>
       {/* Authentication is a hard renderer boundary. Remounting tears down
           native pointer listeners, captures, pending creators, and inspector
