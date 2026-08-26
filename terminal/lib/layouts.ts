@@ -32,10 +32,19 @@ export type LayoutDbError = { code?: string; message?: string } | null;
 export type LayoutDbResult = { data?: LayoutRow[] | LayoutRow | null; error?: LayoutDbError };
 
 /** Structural view of the Supabase query builder — only the subset this service calls, so the e2e
- *  fixture transport and unit tests can supply a stand-in that satisfies the same shape. */
+ *  fixture transport and unit tests can supply a stand-in that satisfies the same shape.
+ *
+ *  `neq`/`is` were added for the W2-A workspace CAS paths (contract §4/§6): a conditional UPDATE
+ *  needs `.eq("config->>revision", String(expected))` to fence a normal save, and — because
+ *  Postgres's plain `<>` never matches a NULL column (a legacy row has no `config->>schema` key at
+ *  all) — the migrate-on-write guard is two atomic attempts, `.is("config->>schema", null)` then
+ *  `.neq("config->>schema", WORKSPACE_SCHEMA)`, together covering "not yet workspace_layout.v1"
+ *  without ever matching a row a concurrent writer already converted. */
 export type LayoutQuery = PromiseLike<LayoutDbResult> & {
   select: (fields?: string) => LayoutQuery;
   eq: (column: string, value: unknown) => LayoutQuery;
+  neq: (column: string, value: unknown) => LayoutQuery;
+  is: (column: string, value: null | boolean) => LayoutQuery;
   order: (column: string, options?: { ascending?: boolean }) => LayoutQuery;
   insert: (values: LayoutRow) => LayoutQuery;
   update: (values: LayoutRow) => LayoutQuery;
@@ -202,4 +211,222 @@ export async function deleteLayout(db: LayoutDb, userId: string, id: unknown): P
   const deleted = await db.from(LAYOUTS_TABLE).delete().eq("user_id", userId).eq("id", layoutId).select("id");
   if (errOf(deleted)) return { ok: false, reason: "unavailable" };
   return rowsOf(deleted).length ? { ok: true } : { ok: false, reason: "not_found" };
+}
+
+// ── W2-A workspace evolution ─────────────────────────────────────────────────────────────────────
+// Frozen contract: research/DEEPVUE_W2A_WORKSPACE_LAYOUT_CONTRACT_2026-08-26.md (Macro repo) §4/§5/
+// §6. `chart_layouts` stays the ONE canonical named-workspace store (archaeology §0.3) — no second
+// table, no DDL, no blind upsert of a `workspace_layout.v1` payload. Every write below is a single
+// atomic conditional statement; "0 rows changed" is always resolved by a NAMED follow-up read, never
+// guessed. `envelope`/`name` are validated by the CALLER (`workspaceLayout.validateEnvelope` — the
+// route boundary, contract §11 "the client is not trusted") before any function here is invoked;
+// these functions persist an already-validated payload and reason only about the store's response.
+
+const WORKSPACE_SCHEMA = "workspace_layout.v1";
+
+const isRecordLike = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+export type WorkspaceFailureReason = "unavailable" | "invalid_name" | "name_conflict" | "stale_revision" | "not_found";
+
+export type SaveWorkspaceResult =
+  | { ok: true; id: string; revision: number }
+  | { ok: false; reason: WorkspaceFailureReason };
+
+export type RenameWorkspaceResult =
+  | { ok: true; revision: number }
+  | { ok: false; reason: WorkspaceFailureReason };
+
+export type DuplicateWorkspaceResult =
+  | { ok: true; id: string; name: string }
+  | { ok: false; reason: Exclude<WorkspaceFailureReason, "stale_revision"> };
+
+/**
+ * Save a `workspace_layout.v1` envelope under `name` for `userId`.
+ *
+ * `expectedRevision === null` covers BOTH real cases where the caller has no revision to fence on:
+ * a brand-new name (CREATE — insert-only, fenced by the existing `(user_id, name)` unique index)
+ * and the FIRST workspace-format write over a row that still holds a legacy payload (migrate-on-
+ * write, contract §6 — fenced by the row not yet carrying `schema = "workspace_layout.v1"`, so two
+ * devices reading the same legacy row can never both convert it). Both share one code path: the
+ * migrate-on-write guard only ever matches a row that already exists and is not yet a workspace: if
+ * it touches zero rows, a follow-up read tells CREATE (no row at all) apart from a stale attempt (a
+ * concurrent writer already produced a `workspace_layout.v1` row under this name).
+ *
+ * `expectedRevision` as a number is the ordinary save-over path: one atomic conditional UPDATE
+ * gated on `config->>'revision' = expected`. Zero rows updated is resolved by a follow-up read into
+ * `not_found` vs `stale_revision` (contract §4) — never last-writer-wins.
+ */
+export async function saveWorkspace(
+  db: LayoutDb,
+  userId: string,
+  name: unknown,
+  envelope: Record<string, unknown>,
+  expectedRevision: number | null,
+): Promise<SaveWorkspaceResult> {
+  const workspaceName = normalizeLayoutName(name);
+  if (!workspaceName) return { ok: false, reason: "invalid_name" };
+
+  if (typeof expectedRevision === "number") {
+    const nextRevision = expectedRevision + 1;
+    const payload = { ...envelope, name: null, revision: nextRevision };
+    const updated = await db
+      .from(LAYOUTS_TABLE)
+      .update({ config: payload, updated_at: new Date().toISOString() })
+      .eq("user_id", userId)
+      .eq("name", workspaceName)
+      .eq("config->>revision", String(expectedRevision))
+      .select("id");
+    if (errOf(updated)) return { ok: false, reason: "unavailable" };
+    const rows = rowsOf(updated);
+    if (rows.length) {
+      const id = str(rows[0]?.id);
+      return id ? { ok: true, id, revision: nextRevision } : { ok: false, reason: "unavailable" };
+    }
+    return resolveZeroRowUpdate(db, userId, workspaceName, "stale_revision");
+  }
+
+  const payload = { ...envelope, name: null, revision: 1 };
+  const nowIso = () => new Date().toISOString();
+
+  // Migrate-on-write: two disjoint atomic attempts, together covering "row exists and is not yet
+  // workspace_layout.v1" without ever matching an already-converted row (see the `LayoutQuery`
+  // doc-comment for why a single `.neq()` cannot do this alone).
+  const attempt1 = await db
+    .from(LAYOUTS_TABLE)
+    .update({ config: payload, updated_at: nowIso() })
+    .eq("user_id", userId)
+    .eq("name", workspaceName)
+    .is("config->>schema", null)
+    .select("id");
+  if (errOf(attempt1)) return { ok: false, reason: "unavailable" };
+  if (rowsOf(attempt1).length) {
+    const id = str(rowsOf(attempt1)[0]?.id);
+    return id ? { ok: true, id, revision: 1 } : { ok: false, reason: "unavailable" };
+  }
+
+  const attempt2 = await db
+    .from(LAYOUTS_TABLE)
+    .update({ config: payload, updated_at: nowIso() })
+    .eq("user_id", userId)
+    .eq("name", workspaceName)
+    .neq("config->>schema", WORKSPACE_SCHEMA)
+    .select("id");
+  if (errOf(attempt2)) return { ok: false, reason: "unavailable" };
+  if (rowsOf(attempt2).length) {
+    const id = str(rowsOf(attempt2)[0]?.id);
+    return id ? { ok: true, id, revision: 1 } : { ok: false, reason: "unavailable" };
+  }
+
+  // Neither guarded update touched a row: either no row exists at all under this name (CREATE), or
+  // a concurrent writer already produced a workspace_layout.v1 row here (a stale attempt).
+  const existing = await db.from(LAYOUTS_TABLE).select("id").eq("user_id", userId).eq("name", workspaceName).maybeSingle();
+  if (errOf(existing)) return { ok: false, reason: "unavailable" };
+  if (rowsOf(existing).length) return { ok: false, reason: "stale_revision" };
+
+  const inserted = await db
+    .from(LAYOUTS_TABLE)
+    .insert({ user_id: userId, name: workspaceName, config: payload, updated_at: nowIso() })
+    .select("id");
+  const error = errOf(inserted);
+  if (error) return { ok: false, reason: error.code === CODE_UNIQUE_VIOLATION ? "name_conflict" : "unavailable" };
+  const id = str(rowsOf(inserted)[0]?.id);
+  return id ? { ok: true, id, revision: 1 } : { ok: false, reason: "unavailable" };
+}
+
+/** Shared "0 rows updated" resolver for the numbered-revision CAS path: a fresh read distinguishes
+ *  a vanished row from one whose revision moved out from under the caller (contract §4). */
+async function resolveZeroRowUpdate(
+  db: LayoutDb, userId: string, name: string, whenPresent: "stale_revision",
+): Promise<{ ok: false; reason: WorkspaceFailureReason }> {
+  const existing = await db.from(LAYOUTS_TABLE).select("id").eq("user_id", userId).eq("name", name).maybeSingle();
+  if (errOf(existing)) return { ok: false, reason: "unavailable" };
+  return rowsOf(existing).length ? { ok: false, reason: whenPresent } : { ok: false, reason: "not_found" };
+}
+
+/**
+ * Rename = one atomic conditional UPDATE setting `name` AND bumping `revision`, still fenced by
+ * `expectedRevision` (contract §5). The row's full config is read first so the rest of the payload
+ * (widgets, link_groups, migration) rides along unchanged — only `name`/`revision` are touched —
+ * but the ACTUAL mutation is gated by the same `config->>'revision' = expected` WHERE clause as
+ * `saveWorkspace`, so a revision that moved between the read and the write is caught, not trusted.
+ * A unique-index violation on the new name — including one that lands DURING this call, since the
+ * UPDATE statement itself is what the database checks — answers `name_conflict`.
+ */
+export async function renameWorkspace(
+  db: LayoutDb,
+  userId: string,
+  oldName: unknown,
+  newName: unknown,
+  expectedRevision: number,
+): Promise<RenameWorkspaceResult> {
+  const from = normalizeLayoutName(oldName);
+  const to = normalizeLayoutName(newName);
+  if (!from || !to) return { ok: false, reason: "invalid_name" };
+
+  const current = await db.from(LAYOUTS_TABLE).select("id,config").eq("user_id", userId).eq("name", from).maybeSingle();
+  if (errOf(current)) return { ok: false, reason: "unavailable" };
+  const row = rowsOf(current)[0];
+  if (!row) return { ok: false, reason: "not_found" };
+
+  const nextRevision = expectedRevision + 1;
+  const config: Record<string, unknown> = isRecordLike(row.config) ? { ...row.config } : {};
+  config.name = null;
+  config.revision = nextRevision;
+
+  const updated = await db
+    .from(LAYOUTS_TABLE)
+    .update({ name: to, config, updated_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("name", from)
+    .eq("config->>revision", String(expectedRevision))
+    .select("id");
+  const error = errOf(updated);
+  if (error) return { ok: false, reason: error.code === CODE_UNIQUE_VIOLATION ? "name_conflict" : "unavailable" };
+  if (rowsOf(updated).length) return { ok: true, revision: nextRevision };
+
+  return resolveZeroRowUpdate(db, userId, from, "stale_revision");
+}
+
+/**
+ * Duplicate = read source -> INSERT a new row (new uuid, new name; `revision` reset to 1, migration
+ * provenance carried over verbatim — contract §5). A name-conflict on the INSERT (an explicit
+ * caller-supplied `newName` that collides) answers `name_conflict`; when `newName` is omitted the
+ * free name comes from the existing collision-free `nextLayoutName` generator, so that path cannot
+ * conflict under normal operation. Independence is structural: the new row is a separate INSERT, so
+ * any later edit to the source cannot reach it.
+ */
+export async function duplicateWorkspace(
+  db: LayoutDb,
+  userId: string,
+  sourceName: unknown,
+  newName?: unknown,
+): Promise<DuplicateWorkspaceResult> {
+  const from = normalizeLayoutName(sourceName);
+  if (!from) return { ok: false, reason: "invalid_name" };
+
+  const current = await db.from(LAYOUTS_TABLE).select("id,name,config").eq("user_id", userId).eq("name", from).maybeSingle();
+  if (errOf(current)) return { ok: false, reason: "unavailable" };
+  const row = rowsOf(current)[0];
+  if (!row) return { ok: false, reason: "not_found" };
+
+  let target = normalizeLayoutName(newName);
+  if (!target) {
+    const listed = await listLayouts(db, userId);
+    if (!listed.ok) return { ok: false, reason: "unavailable" };
+    target = nextLayoutName(listed.layouts.map((l) => l.name));
+  }
+
+  const config: Record<string, unknown> = isRecordLike(row.config) ? { ...row.config } : {};
+  config.name = null;
+  config.revision = 1;
+
+  const inserted = await db
+    .from(LAYOUTS_TABLE)
+    .insert({ user_id: userId, name: target, config, updated_at: new Date().toISOString() })
+    .select("id");
+  const error = errOf(inserted);
+  if (error) return { ok: false, reason: error.code === CODE_UNIQUE_VIOLATION ? "name_conflict" : "unavailable" };
+  const id = str(rowsOf(inserted)[0]?.id);
+  return id ? { ok: true, id, name: target } : { ok: false, reason: "unavailable" };
 }
