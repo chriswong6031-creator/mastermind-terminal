@@ -141,3 +141,25 @@ def test_hk_collector_keeps_the_whole_candidate_set_in_play(monkeypatch):
     # scalar and malformed vendor shapes are unchanged
     assert select("2026-11-12") == "2026-11-12"
     assert select(["nan"]) is None
+
+
+# ── pandas null objects ──────────────────────────────────────────────────────
+def test_pandas_nulls_are_skipped_rather_than_crashing_the_emitter():
+    """``pandas.NaT`` is a *subclass of datetime*, so it defeats an isinstance gate.
+
+    ``NaT.date()`` returns ``NaT`` rather than raising, and comparing that to a real
+    date raises ``TypeError: Cannot compare NaT with datetime.date object``. Since the
+    CN/HK calendars come out of pandas frames, one null in a vendor calendar would abort
+    the emitter mid-run instead of being skipped — the opposite of "malformed candidates
+    are ignored". The string ``'NaT'`` does NOT exercise this; only the object does.
+    """
+    pd = pytest.importorskip("pandas")
+
+    assert select_next_earnings_date([pd.NaT], today=OBSERVATION_DAY) is None
+    # a real date alongside a null must still be recovered, not lost with it
+    assert select_next_earnings_date([pd.NaT, "2026-10-29"], today=OBSERVATION_DAY) == "2026-10-29"
+    assert select_next_earnings_date(pd.Series([pd.NaT]), today=OBSERVATION_DAY) is None
+    # genuine Timestamps keep working in both directions
+    assert select_next_earnings_date([pd.Timestamp("2026-10-29")], today=OBSERVATION_DAY) == "2026-10-29"
+    assert select_next_earnings_date([pd.Timestamp("2026-07-07")], today=OBSERVATION_DAY) is None
+    assert select_next_earnings_date(pd.Series(["2026-10-29"]), today=OBSERVATION_DAY) == "2026-10-29"

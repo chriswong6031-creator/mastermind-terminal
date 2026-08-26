@@ -41,20 +41,31 @@ def _parse_calendar_day(candidate: object) -> dt.date | None:
     Deliberately conservative. Vendor frames leak ``float('nan')``, ``pandas.NaT`` and
     ``None`` into date columns, all of which stringify into plausible-looking junk
     (``'nan'``, ``'NaT'``, ``'None'``); each must be dropped rather than guessed at.
+
+    The exact-type check on the way out is load-bearing, not defensive noise:
+    ``pandas.NaT`` is a *subclass of ``datetime``*, so it passes an ``isinstance``
+    gate, and ``NaT.date()`` returns ``NaT`` rather than raising. Comparing that to a
+    real date raises ``TypeError: Cannot compare NaT with datetime.date object`` — i.e.
+    one null in a vendor calendar would abort the emitter instead of being skipped.
+    ``pandas.Timestamp.date()`` returns a genuine ``datetime.date``, so requiring the
+    exact type separates the two without importing pandas here.
     """
     if candidate is None or isinstance(candidate, bool):
         return None
+    parsed: object
     if isinstance(candidate, dt.datetime):
-        return candidate.date()
-    if isinstance(candidate, dt.date):
-        return candidate
-    text = str(candidate).strip()
-    if not text:
-        return None
-    try:
-        return dt.date.fromisoformat(text[:10])
-    except (TypeError, ValueError):
-        return None
+        parsed = candidate.date()
+    elif isinstance(candidate, dt.date):
+        parsed = candidate
+    else:
+        text = str(candidate).strip()
+        if not text:
+            return None
+        try:
+            parsed = dt.date.fromisoformat(text[:10])
+        except (TypeError, ValueError):
+            return None
+    return parsed if type(parsed) is dt.date else None
 
 
 def select_next_earnings_date(
