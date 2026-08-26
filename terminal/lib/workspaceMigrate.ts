@@ -146,6 +146,10 @@ export function workspaceToLayout(envelope: WorkspaceEnvelope): NormalizedLayout
   const config: Record<string, unknown> = isRecord(widget?.config) ? widget.config : {};
   const claim = <T,>(field: ChartConfigField): T | null => (field in config ? (config[field] as T) : null);
 
+  // Amendment A1 (2026-08-26, Macro commit 8b4d326514f6): `lockedVLine` is `string | null` in both
+  // the frozen contract and Terminal's real runtime, so a claimed string/null value carries through
+  // as a real claim; anything else (e.g. a stray number from a pre-amendment or hostile envelope)
+  // is correctly "no claim" rather than corrupting the live value with the wrong type.
   const rawLockedVLine = config.lockedVLine;
   const lockedVLine: string | null | undefined =
     typeof rawLockedVLine === "string" ? rawLockedVLine : rawLockedVLine === null ? null : undefined;
@@ -182,9 +186,11 @@ export type CaptureWorkspaceInput = {
 /** Runtime capture -> canonical envelope. Chart widget config is exactly `captureLayoutConfig`'s
  *  output, re-validated field-by-field through the SAME frozen validators `migrateLegacy` uses (so
  *  a captured value that would fail cross-repo validation is never persisted un-claimed instead of
- *  rejected — see the lockedVLine type-mismatch note in the worker's final report: Terminal's live
- *  lockedVLine is a `string`, the frozen contract's chart-config validator accepts only
- *  `number | null`, so a live lockedVLine value is never carried into the captured config today). */
+ *  rejected). Under Amendment A1 (2026-08-26, Macro commit 8b4d326514f6) `lockedVLine` is
+ *  `string | null` on both sides, so a live string lockedVLine now survives capture as a real claim
+ *  — pre-amendment, the frozen validator only accepted `number | null` and would have silently
+ *  dropped every real Terminal lockedVLine value (this worker's own KNOWN GAP finding, ruled a real
+ *  contract defect and fixed on the Macro side rather than worked around here). */
 export function captureWorkspace(input: CaptureWorkspaceInput): WorkspaceEnvelope {
   const captured = captureLayoutConfig(input.layout) as unknown as Record<string, unknown>;
   const chartConfig: Record<string, unknown> = {};

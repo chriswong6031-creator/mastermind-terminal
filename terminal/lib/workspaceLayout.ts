@@ -64,7 +64,7 @@ export type ParamMap = Record<string, Record<string, unknown>>;
 export type ChartWidgetConfig = {
   panes?: string[]; paneTfs?: string[]; split?: number; activePane?: number; sync?: boolean;
   chartType?: string; inds?: string[]; indParams?: ParamMap; hidden?: string[];
-  compare?: string[]; compareCfg?: Record<string, unknown>; lockedVLine?: number | null;
+  compare?: string[]; compareCfg?: Record<string, unknown>; lockedVLine?: string | null;
 };
 
 export type LinkGroup = { entity_type: EntityType };
@@ -115,6 +115,9 @@ const TIMEFRAME_RE = /^[A-Za-z0-9]{1,8}$/;
 const CHART_TYPE_RE = /^[a-z][a-z0-9_]{0,31}$/;
 const INDICATOR_ID_RE = /^[a-z][a-z0-9_]{0,31}$/;
 const PARAM_KEY_RE = /^[A-Za-z0-9_]{1,32}$/;
+// Amendment A1 (2026-08-26, Macro commit 8b4d326514f6): 1..64 chars, no ASCII control characters
+// (0x00-0x1f, 0x7f) — mirrors the Macro reference's `_LOCKED_VLINE_RE` verbatim.
+const LOCKED_VLINE_RE = /^[^\x00-\x1f\x7f]{1,64}$/;
 
 /** Sentinel distinguishing "field present but wrong type/shape" (never claimed) from a
  *  legitimately-valid `null` value (e.g. `lockedVLine` explicitly cleared) — mirrors the Python
@@ -166,8 +169,14 @@ function vPaneTfs(value: unknown): FieldResult<string[]> {
   return out;
 }
 
+const VALID_SPLITS = [1, 2, 4] as const;
+
+/** Amendment A1 (2026-08-26, Macro commit 8b4d326514f6): `split` is Terminal's discrete
+ *  pane-split selector (`layoutConfig.ts` `VALID_SPLITS = [1,2,4]`), never a 0-100 percentage —
+ *  the original freeze's `0..100` bound was an authoring error that would have rejected every
+ *  real Terminal v2 layout using this field. */
 function vSplit(value: unknown): FieldResult<number> {
-  if (!isInt(value) || value < 0 || value > 100) return INVALID;
+  if (!isInt(value) || !(VALID_SPLITS as readonly number[]).includes(value)) return INVALID;
   return value;
 }
 
@@ -218,11 +227,15 @@ function vCompareCfg(value: unknown): FieldResult<ParamMap> {
   return validateParamBlock(value, SYMBOL_RE);
 }
 
-function vLockedVLine(value: unknown): FieldResult<number | null> {
+/** Amendment A1 (2026-08-26, Macro commit 8b4d326514f6): `lockedVLine` is `string | null` in the
+ *  real Terminal runtime (`TerminalShell.tsx`/`ChartPanel.tsx` own it as a string key), never a
+ *  number — the original freeze's `number | null` bound would have rejected every real Terminal v2
+ *  layout that used it (this worker's own KNOWN GAP finding, ruled a real contract defect). */
+function vLockedVLine(value: unknown): FieldResult<string | null> {
   if (value === null) return null;
-  if (typeof value === "boolean") return INVALID;
-  if (typeof value === "number") return value;
-  return INVALID;
+  if (typeof value !== "string") return INVALID;
+  if (!LOCKED_VLINE_RE.test(value)) return INVALID;
+  return value;
 }
 
 /** Per-field validators, keyed by the frozen chart-config field name (contract §2). Exported so

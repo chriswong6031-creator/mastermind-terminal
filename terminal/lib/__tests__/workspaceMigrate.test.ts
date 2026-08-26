@@ -44,48 +44,56 @@ describe("workspaceToLayout — conversion layer invents nothing", () => {
     const claimedConfig = (chartWidget as { config: Record<string, unknown> }).config;
     const normalized = workspaceToLayout(vector.expected) as unknown as Record<string, unknown>;
 
+    // No per-field CORRECTNESS exclusions anymore: Amendment A1 (2026-08-26, Macro commit
+    // 8b4d326514f6) re-typed `lockedVLine` to `string | null` and `split` to the enum `{1,2,4}` —
+    // both now match Terminal's real domain, so every field the vectors claim, including these
+    // two, is expected to survive verbatim. (Pre-amendment, `lockedVLine`/`split` needed dedicated
+    // KNOWN GAP tests — see the ALIGNED tests directly below, which now assert the corrected
+    // behavior instead.)
+    //
+    // `lockedVLine`'s ABSENT-value sentinel is still special-cased here, but that is pre-existing,
+    // unrelated `layoutConfig.ts` semantics, not an Amendment A1 artifact: `NormalizedLayout`
+    // deliberately distinguishes "no claim" (`undefined`) from "explicitly cleared" (`null`) ONLY
+    // for `lockedVLine` (see that file's `_INVALID`-sentinel-adjacent comment) — every other field
+    // collapses "no claim" to `null` outright. `workspaceToLayout` mirrors that existing contract
+    // rather than reinventing it.
     for (const field of CHART_CONFIG_FIELDS) {
-      if (field === "lockedVLine") continue; // dedicated KNOWN GAP test below
       if (field in claimedConfig) {
         expect(normalized[field], `${file}: claimed field ${field}`).toEqual(claimedConfig[field]);
+      } else if (field === "lockedVLine") {
+        expect(normalized[field], `${file}: unclaimed lockedVLine must be undefined (no claim), not invented`).toBeUndefined();
       } else {
         expect(normalized[field], `${file}: unclaimed field ${field} must be null, never invented`).toBeNull();
       }
     }
   });
 
-  it("KNOWN GAP (flagged, not silently redesigned): a numeric lockedVLine claim is not carried into NormalizedLayout", () => {
+  it("ALIGNED (Amendment A1, was a KNOWN GAP): a string lockedVLine claim now survives workspaceToLayout as a real claim", () => {
     const vector = loadVector("chart_layout_v2_full.json");
     const chartWidget = vector.expected.widgets.find((w) => w.type === "chart") as { config: Record<string, unknown> };
-    expect(chartWidget.config.lockedVLine).toBe(1700000000); // the vector DOES claim it, as a number
+    // Pre-amendment this vector claimed `lockedVLine: 1700000000` (a number) and NormalizedLayout
+    // came back `undefined` (no claim) — the exact KNOWN GAP this worker flagged. Amendment A1
+    // regenerated the vector with a realistic runtime value; the SAME `workspaceToLayout` code,
+    // unchanged, now carries it through because the value is finally the type Terminal actually uses.
+    expect(chartWidget.config.lockedVLine).toBe("2026-08-12T14:30:00Z");
     const normalized = workspaceToLayout(vector.expected);
-    // Terminal's NormalizedLayout.lockedVLine is `string | null | undefined`; a number is neither,
-    // so it is correctly treated as "no claim" rather than corrupting the live value with a value
-    // of the wrong type.
-    expect(normalized.lockedVLine).toBeUndefined();
+    expect(normalized.lockedVLine).toBe("2026-08-12T14:30:00Z");
   });
 
-  it("KNOWN GAP (flagged, not silently redesigned): the frozen contract's `split` range (0-100) does not match Terminal's real domain ({1,2,4} pane-count)", () => {
-    // chart_layout_v2_full.json claims split:50 — a value the Macro reference's `_v_split` (0-100)
-    // happily validates, and `workspaceToLayout` carries it through VERBATIM here (it is a pure read,
-    // it never re-validates). But Terminal's OWN `captureLayoutConfig` only ever re-emits 1, 2, or 4
-    // (a pane-COUNT selector, not the percentage the frozen contract's range suggests) — so a save
-    // performed through the full runtime pipeline (`applyLayoutConfig` -> `captureLayoutConfig`, the
-    // "apply-then-capture round trip" below) would silently correct this specific vector's 50 down to
-    // whatever `splitForPanes(panes.length)` computes, once the migrated `panes` claim is folded in.
-    // That correction is EXISTING, separately-tested `layoutConfig.ts` behavior, not a defect in this
-    // packet's code — flagged here because the frozen fixture embeds a value outside Terminal's real
-    // domain, not because `workspaceToLayout` mishandles it.
+  it("ALIGNED (Amendment A1, was a KNOWN GAP): a split claim within Terminal's real domain survives the full apply-then-capture pipeline unchanged", () => {
     const vector = loadVector("chart_layout_v2_full.json");
     const chartWidget = vector.expected.widgets.find((w) => w.type === "chart") as { config: Record<string, unknown> };
-    expect(chartWidget.config.split).toBe(50);
+    // Pre-amendment this vector claimed `split: 50` (outside Terminal's {1,2,4} domain) and the
+    // EXISTING `captureLayoutConfig` law silently corrected it downstream to `splitForPanes(4)`=4.
+    // Amendment A1 regenerated the vector with `split: 2` (a value VALID_SPLITS actually contains),
+    // so the full pipeline — unchanged code on both sides — now preserves it exactly.
+    expect(chartWidget.config.split).toBe(2);
     const normalized = workspaceToLayout(vector.expected);
-    expect(normalized.split).toBe(50); // carried through verbatim by workspaceToLayout itself
+    expect(normalized.split).toBe(2);
 
     const applied = applyLayoutConfig(normalized, BASELINE);
     const recaptured = captureLayoutConfig(applied);
-    expect(recaptured.split).not.toBe(50); // corrected by the EXISTING captureLayoutConfig law
-    expect(recaptured.split).toBe(4); // splitForPanes(4) — the vector's claimed 4-pane panes array
+    expect(recaptured.split).toBe(2); // no correction needed — 2 was already in Terminal's domain
   });
 });
 

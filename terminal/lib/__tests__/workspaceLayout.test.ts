@@ -61,7 +61,10 @@ describe("frozen vocabularies — shape and cardinality (contract §1-§8)", () 
 });
 
 describe("validateEnvelope — accepts the canonical shape", () => {
-  it("accepts the frozen §1 worked example verbatim", () => {
+  it("accepts the frozen §1 worked example verbatim (post-Amendment A1: split 1, not 50)", () => {
+    // Amendment A1 (2026-08-26, Macro commit 8b4d326514f6) corrected the doc's own §1 example: the
+    // original `split: 50` was an authoring error (0-100 range never matched Terminal's {1,2,4}
+    // domain), fixed to `split: 1` in the same commit that fixed the validator.
     const envelope = {
       schema: "workspace_layout.v1",
       requires: { floor: 1 },
@@ -74,7 +77,7 @@ describe("validateEnvelope — accepts the canonical shape", () => {
           grid: { x: 0, y: 0, w: 16, h: 18 },
           context_in: ["primary_security"], context_out: ["primary_security"],
           config: {
-            panes: ["NVDA"], paneTfs: ["1D"], split: 50, activePane: 0,
+            panes: ["NVDA"], paneTfs: ["1D"], split: 1, activePane: 0,
             sync: true, chartType: "candles", inds: ["ema21"],
             indParams: {}, hidden: [], compare: [], compareCfg: {},
             lockedVLine: null,
@@ -218,6 +221,75 @@ describe("validateEnvelope — rejects with the frozen codes (cross-field laws)"
     e.link_groups = groups;
     const r = validateEnvelope(e);
     expect(r.ok).toBe(false);
+  });
+});
+
+// ── Amendment A1 (2026-08-26, Macro commit 8b4d326514f6) regression ────────────────────────────
+// `lockedVLine` is `string 1..64, no ASCII control chars, | null` (was `number | null`); `split` is
+// the discrete enum `{1, 2, 4}` (was `0..100`). Both were falsified against the real Terminal
+// runtime by this worker's own KNOWN GAP tests (a numeric lockedVLine and an out-of-domain split
+// value silently failed to survive the existing, unmodified `layoutConfig.ts` pipeline downstream),
+// then ruled real contract defects and fixed on the Macro side. Mirrors
+// `tests/test_intelligence_workspace_workspace_layout.py`'s own Amendment A1 regression suite
+// (Macro repo) case-for-case.
+describe("validateEnvelope — Amendment A1 regression (lockedVLine string, split enum)", () => {
+  const widgetConfig = (config: Record<string, unknown>): Record<string, unknown> => ({
+    schema: SCHEMA, requires: { floor: 1 }, revision: 1, name: null,
+    link_groups: { primary_security: { entity_type: "security" } },
+    widgets: [{
+      id: "chart-main", type: "chart", semantic_lane: "primary",
+      context_in: ["primary_security"], context_out: ["primary_security"],
+      config: { panes: ["NVDA"], ...config },
+    }],
+    migration: { source: "none", source_revision: null },
+  });
+
+  it("a string lockedVLine validates", () => {
+    expect(validateEnvelope(widgetConfig({ lockedVLine: "2026-08-12T14:30:00Z" }))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("a numeric lockedVLine is invalid_widget_config (the pre-amendment shape)", () => {
+    const r = validateEnvelope(widgetConfig({ lockedVLine: 1700000000 }));
+    expect(r.ok).toBe(false);
+    expect(!r.ok && new Set(r.errors.map((e) => e.code))).toEqual(new Set(["invalid_widget_config"]));
+  });
+
+  it("lockedVLine: null remains a legitimate claimed value (explicit 'no lock')", () => {
+    expect(validateEnvelope(widgetConfig({ lockedVLine: null }))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("lockedVLine rejects control characters and oversize/empty strings", () => {
+    for (const bad of ["\x00", "a\nb", "x".repeat(65), ""]) {
+      const r = validateEnvelope(widgetConfig({ lockedVLine: bad }));
+      expect(r.ok, JSON.stringify(bad)).toBe(false);
+      expect(!r.ok && new Set(r.errors.map((e) => e.code))).toEqual(new Set(["invalid_widget_config"]));
+    }
+  });
+
+  it("lockedVLine accepts exactly 64 chars (the boundary) and rejects 65", () => {
+    expect(validateEnvelope(widgetConfig({ lockedVLine: "x".repeat(64) }))).toEqual({ ok: true, errors: [] });
+    expect(validateEnvelope(widgetConfig({ lockedVLine: "x".repeat(65) })).ok).toBe(false);
+  });
+
+  it("split: 2 validates", () => {
+    expect(validateEnvelope(widgetConfig({ split: 2 }))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("split: 50 is invalid_widget_config (the pre-amendment shape)", () => {
+    const r = validateEnvelope(widgetConfig({ split: 50 }));
+    expect(r.ok).toBe(false);
+    expect(!r.ok && new Set(r.errors.map((e) => e.code))).toEqual(new Set(["invalid_widget_config"]));
+  });
+
+  it("split only allows the frozen enum {1, 2, 4}", () => {
+    for (const value of [0, 3, 5, 100, -1]) {
+      const r = validateEnvelope(widgetConfig({ split: value }));
+      expect(r.ok, String(value)).toBe(false);
+      expect(!r.ok && new Set(r.errors.map((e) => e.code))).toEqual(new Set(["invalid_widget_config"]));
+    }
+    for (const value of [1, 2, 4]) {
+      expect(validateEnvelope(widgetConfig({ split: value }))).toEqual({ ok: true, errors: [] });
+    }
   });
 });
 

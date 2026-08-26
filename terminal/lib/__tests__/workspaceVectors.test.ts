@@ -21,8 +21,15 @@ type Manifest = { files: ManifestEntry[]; vectors_digest: string };
 const manifest: Manifest = JSON.parse(readFileSync(`${FIXTURES_DIR}MANIFEST.json`, "utf8"));
 
 /** Hard literal (frozen packet §SCOPE-item-1): a drift here means the fixtures no longer match the
- *  Macro-side pin, and MUST be investigated rather than updated to make the test pass. */
-const PINNED_VECTORS_DIGEST = "4111f9d28c8043facc16dda6985a86b51fd9146e50608dc76aa118b0f33fdfb8";
+ *  Macro-side pin, and MUST be investigated rather than updated to make the test pass.
+ *
+ *  Re-pinned under Amendment A1 (2026-08-26, Macro commit 8b4d326514f6): `lockedVLine` is
+ *  `string 1..64, no ASCII control chars | null` (was `number | null`) and `split` is Terminal's
+ *  discrete pane-split enum `{1, 2, 4}` (was `0..100`) — both falsified against the real Terminal
+ *  runtime by this worker's own KNOWN GAP tests, then ruled real contract defects and fixed on the
+ *  Macro side. The pre-amendment digest `4111f9d28c8043facc16dda6985a86b51fd9146e50608dc76aa118b0f33fdfb8`
+ *  is VOID. */
+const PINNED_VECTORS_DIGEST = "9eeef5b4b055e3ffa407f76d8e3a6ee70c2ab064194983391062d29ec4b701ab";
 
 type ValidVector = { input: unknown; expected: WorkspaceEnvelope };
 type InvalidVector = { input: unknown; expected_code: FailureCode };
