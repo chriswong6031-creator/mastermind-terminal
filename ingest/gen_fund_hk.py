@@ -973,6 +973,16 @@ def _merge_fund(fresh: dict, existing: dict) -> dict:
                 m[k] = v
         merged[blk] = m or (fresh.get(blk) if fresh.get(blk) is not None else existing.get(blk))
 
+    # earnings.next_date / next_period are TEMPORAL CLAIMS, not merely "data we might be
+    # missing". The field-level rule above starts from `existing` and only lets a NON-EMPTY
+    # fresh value overwrite, so a correct fresh `None` - meaning "the vendor knows of no
+    # future report" - loses to whatever stale date the previous artifact carried, and a past
+    # date is republished forever. For these two fields the fresh emitter is authoritative in
+    # both directions (mastermind-terminal#474).
+    if isinstance(fresh.get("earnings"), dict) and isinstance(merged.get("earnings"), dict):
+        for _tk in ("next_date", "next_period"):
+            merged["earnings"][_tk] = fresh["earnings"].get(_tk)
+
     # ratios: preserve period series when fresh has none; merge the current snapshot per-field
     fr = fresh.get("ratios") or {}
     er = existing.get("ratios") or {}

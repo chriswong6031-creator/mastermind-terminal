@@ -163,3 +163,35 @@ def test_pandas_nulls_are_skipped_rather_than_crashing_the_emitter():
     assert select_next_earnings_date([pd.Timestamp("2026-10-29")], today=OBSERVATION_DAY) == "2026-10-29"
     assert select_next_earnings_date([pd.Timestamp("2026-07-07")], today=OBSERVATION_DAY) is None
     assert select_next_earnings_date(pd.Series(["2026-10-29"]), today=OBSERVATION_DAY) == "2026-10-29"
+
+
+# ── HK merge-mode ────────────────────────────────────────────────────────────
+def test_hk_merge_mode_cannot_resurrect_a_past_next_date():
+    """A correct fresh ``None`` must clear a stale date, not lose to it.
+
+    gen_fund_hk's merge-mode is field-level: it starts from the EXISTING artifact and only
+    lets a non-empty fresh value overwrite. That is right for "data we might be missing" and
+    wrong for a temporal claim — a fresh ``next_date=None`` means "the vendor knows of no
+    future report", so preserving the previous artifact's date republishes a past date
+    forever and silently defeats the emitter fix. Observed live: 9988.HK regenerated through
+    the canonical emitter still served next_date '2026-05-13'.
+    """
+    existing = {"earnings": {"next_date": "2026-05-13", "next_period": "Q1 2026", "fy": [{"period": "2025"}]}}
+    fresh = {"earnings": {"next_date": None, "next_period": None, "fy": [{"period": "2026"}]}}
+
+    merged = gen_fund_hk._merge_fund(fresh, existing)
+
+    assert merged["earnings"]["next_date"] is None
+    assert merged["earnings"]["next_period"] is None
+    # the non-temporal fields keep their normal merge semantics
+    assert merged["earnings"]["fy"] == [{"period": "2026"}]
+
+
+def test_hk_merge_mode_still_lets_a_real_future_date_through():
+    existing = {"earnings": {"next_date": "2026-05-13", "next_period": "Q1 2026"}}
+    fresh = {"earnings": {"next_date": "2026-11-12", "next_period": None}}
+
+    merged = gen_fund_hk._merge_fund(fresh, existing)
+
+    assert merged["earnings"]["next_date"] == "2026-11-12"
+    assert merged["earnings"]["next_period"] is None
