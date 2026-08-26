@@ -39,6 +39,8 @@ from numbers import Integral, Real
 from pathlib import Path
 
 CA_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CA_ROOT))
+from ingest.earnings_calendar import select_next_earnings_date  # noqa: E402
 MACRO = Path(os.environ.get("MACRO_REPO") or "/Users/chriswong/Documents/Cluade/Macro Dashboard")
 HK_FUND = MACRO / "data" / "hk_fund"
 DEFAULT_OUT = CA_ROOT / "terminal" / "public" / "data"
@@ -883,7 +885,9 @@ def build_earnings(yf: dict, annual: dict | None = None) -> dict:
                        "eps_a": round(eps_v, 4) if eps_v is not None else None,
                        "rev_a": round(rev_v) if rev_v is not None else None,
                        "eps_e": None, "rev_e": None, "surp_pct": None})
-    return {"next_date": yf.get("next_earnings"), "next_period": None,
+    # collect_cn_hk_fund stores the vendor calendar's first entry verbatim, so it is only a
+    # *candidate* until proven present-or-future (mastermind-terminal#474).
+    return {"next_date": select_next_earnings_date(yf.get("next_earnings")), "next_period": None,
             "next_eps_est": yf.get("eps_next_avg"), "next_rev_est": yf.get("rev_next_avg"),
             "q": [], "fy": fy}
 
