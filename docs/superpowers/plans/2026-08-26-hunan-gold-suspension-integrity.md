@@ -125,4 +125,3 @@ Terminal:
 - Use the real browser at 1440x900, 820x1180, and 390x844 to prove the last genuine
   price is visible with `Suspended`, the fake `+0.00%` is absent, and the layout is
   intact.
-

@@ -28,4 +28,3 @@ def test_build_ohlc_json_drops_only_zero_volume_flat_non_trading_rows():
     ]
     assert doc["bars"][1][-1] == 10_000.0
     assert doc["bars"][2][-1] is None
-

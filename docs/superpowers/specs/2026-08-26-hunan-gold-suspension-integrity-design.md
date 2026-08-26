@@ -79,4 +79,3 @@ state without changing the last genuine price.
 - Terminal responsive E2E passes at 1440x900, 820x1180, and 390x844.
 - Production `/api/quote?` returns `suspended:true` for `002155.SZ`, and a real
   browser shows `24.56` with `Suspended`, never `+0.00%`, at all three viewports.
-
