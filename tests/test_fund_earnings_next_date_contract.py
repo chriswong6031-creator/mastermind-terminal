@@ -13,7 +13,7 @@ import datetime as dt
 
 import pytest
 
-from ingest import earnings_calendar, gen_fund_cn, gen_fund_hk
+from ingest import collect_cn_hk_fund, earnings_calendar, gen_fund_cn, gen_fund_hk
 from ingest.earnings_calendar import select_next_earnings_date
 
 OBSERVATION_DAY = dt.date(2026, 8, 26)
@@ -122,3 +122,22 @@ def test_cn_does_not_inherit_a_stale_next_date_from_the_previous_artifact():
     """The carry-forward path re-proves the preserved date instead of recycling it forever."""
     assert select_next_earnings_date("2026-07-07", today=OBSERVATION_DAY) is None
     assert select_next_earnings_date("2026-10-25", today=OBSERVATION_DAY) == "2026-10-25"
+
+
+# ── HK collector ─────────────────────────────────────────────────────────────
+def test_hk_collector_keeps_the_whole_candidate_set_in_play(monkeypatch):
+    """Truncating the vendor list to eds[0] at collect time hid real later dates.
+
+    The emitter can only ever null a bad value it is handed; it cannot recover a
+    future date the collector already threw away.
+    """
+    monkeypatch.setattr(earnings_calendar, "utc_today", lambda: OBSERVATION_DAY)
+    select = collect_cn_hk_fund.select_next_earnings_date
+
+    # stale first entry, real second entry: the future date must survive collection
+    assert select(["2026-08-20", "2026-11-12"]) == "2026-11-12"
+    # past-only still collapses to nothing
+    assert select(["2026-08-20"]) is None
+    # scalar and malformed vendor shapes are unchanged
+    assert select("2026-11-12") == "2026-11-12"
+    assert select(["nan"]) is None
