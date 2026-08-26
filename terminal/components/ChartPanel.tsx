@@ -468,8 +468,12 @@ const SPLICE_BASES = new Set(["REALTIME", "LIVE", "DELAYED_15M"]);
 
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, toolActivation = 0, drawingSticky = false, drawingCreationDisabled = false, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = "off", compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
-  instrumentName, instrumentMarket, instrumentColor, onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "", userTier = "free" }:
+  instrumentName, instrumentMarket, instrumentColor, onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "", userTier = "free", dataReady = true, initialTimeframe = null }:
   { symbol: string; companyName?: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
+    /** False until the shell has COMMITTED its persisted prefs. See `effectiveTimeframe`. */
+    dataReady?: boolean;
+    /** The shell's already-resolved startup timeframe, handed over before it can be rendered. */
+    initialTimeframe?: string | null;
     tool?: DrawKind | null; toolActivation?: number; drawingSticky?: boolean; drawingCreationDisabled?: boolean; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: "off" | "weak" | "strong" | boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
     chartSettings?: Partial<ChartSettings>;
@@ -924,7 +928,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   if (!drawingTransactionRef.current) drawRef.current = drawings;
   toolRef.current = tool; toolActivationRef.current = toolActivation; drawingStickyRef.current = drawingSticky; drawingCreationDisabledRef.current = drawingCreationDisabled; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
-  chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; extHoursRef.current = extHours; symbolRef.current = symbol; companyNameRef.current = companyName;
+  // ── Which timeframe this pane's DATA belongs to ────────────────────────────────────────────
+  // The shell resolves the user's persisted startup timeframe synchronously on the client, but
+  // cannot render it until its mount effect commits — measured at ~1.05s after mount, while this
+  // component's data effect runs at ~130ms. Reading only the `timeframe` PROP therefore loads the
+  // server-rendered default and throws the entire result away (fetch + setData + indicator build
+  // + paint) for every user whose startup timeframe is not the SSR one: p50 1.14s of the cold path
+  // to the first live candle, 2.7-3.1s under CI-shaped CPU load.
+  //
+  // So until the shell says its prefs are COMMITTED, prefer the value it handed over out-of-band.
+  // Once `dataReady` flips, the prop is authoritative and equals it, so the dep below does not
+  // change and no second load is issued. Standalone callers (embed, dev theater, ChartConductor)
+  // pass neither prop and are unaffected.
+  const effectiveTimeframe = dataReady ? timeframe : (initialTimeframe ?? timeframe);
+  chartTypeRef.current = chartType; timeframeRef.current = effectiveTimeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; extHoursRef.current = extHours; symbolRef.current = symbol; companyNameRef.current = companyName;
   lastValueVisibleRef.current = chartSettings?.lastValueVisible !== false;
   countdownVisibleRef.current = chartSettings?.countdownVisible !== false;
   chartSettingsRef.current = chartSettings ?? {};
@@ -7058,11 +7075,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   }, []); // eslint-disable-line
 
   // ────────────────────────────────────────────────────────────────────────────
-  // EFFECT 2 — data [symbol, timeframe, chartType]. Fetch + full series + indicators + sync.
+  // EFFECT 2 — data [symbol, effectiveTimeframe, chartType]. Fetch + full series + indicators + sync.
   // ────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const chart = chartRef.current; if (!chart) return;
-    cpMark(`chart-effect2-start[${symbol}]`);
+    cpMark(`chart-effect2-start[${symbol}@${effectiveTimeframe}]`);
     liveTickKeyRef.current = "";
     const liveWrap = wrapElRef.current;
     if (liveWrap) {
@@ -7081,7 +7098,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     }
     const epoch = ++epochRef.current;
     let cancelled = false;
-    const intraday = isIntradayTf(timeframe);
+    const intraday = isIntradayTf(effectiveTimeframe);
     // crossing the intraday↔daily boundary changes the TIME TYPE of every series (numeric epoch vs
     // 'YYYY-MM-DD') — in-place setData updates across it are unsound (LWC one-time-type law) and the
     // DT intraday-only indicators + legend notes need a full rebuild. Force the rebuild path then.
@@ -7097,7 +7114,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         let bars: any[] = [];
         let feedErr: string | null = null;       // the route's j.error (route returns {bars:[],error} on an upstream/config failure)
         try {
-          const r = await fetch(`/api/intraday?sym=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(timeframe)}&ext=${extHours ? "1" : "0"}`, { cache: "no-store" });
+          const r = await fetch(`/api/intraday?sym=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(effectiveTimeframe)}&ext=${extHours ? "1" : "0"}`, { cache: "no-store" });
           const j = await r.json().catch(() => null);
           bars = Array.isArray(j?.bars) ? j.bars : [];
           if (!r.ok || j?.error) feedErr = String(j?.error || `HTTP ${r.status}`);
@@ -7115,13 +7132,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           const unavailable = feedErr != null;
           if (statusRef.current) statusRef.current.textContent = unavailable ? "Intraday feed unavailable." : "No intraday data for this symbol.";
           showEmptyRef.current(unavailable
-            ? `Intraday feed unavailable for ${symbol} on ${timeframe}. Switch back to the daily timeframe to keep charting.`
-            : `No intraday data for ${symbol} on ${timeframe}. Switch back to the daily timeframe to keep charting.`);
+            ? `Intraday feed unavailable for ${symbol} on ${effectiveTimeframe}. Switch back to the daily timeframe to keep charting.`
+            : `No intraday data for ${symbol} on ${effectiveTimeframe}. Switch back to the daily timeframe to keep charting.`);
           announceTerminalVisualReady(symbol, "empty");
           return;
         }
         hideEmptyRef.current();                   // data arrived → clear any prior dead-end overlay
-        chart.applyOptions({ timeScale: { timeVisible: true, secondsVisible: isSecondTf(timeframe) } });
+        chart.applyOptions({ timeScale: { timeVisible: true, secondsVisible: isSecondTf(effectiveTimeframe) } });
         // epoch-second Bar6 [t,o,h,l,c,v] → Bar with a NUMERIC time (lightweight-charts accepts UTCTimestamp)
         const rows: Bar[] = bars.map((b: any[]) => ({ time: b[0] as any, o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
         if (onMeta) onMeta({ total: rows.length });
@@ -7167,7 +7184,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         } else { priceS.applyOptions({ priceFormat: priceFmt() }); }
         if (chartType === "baseline" && onChart.length) priceS!.applyOptions({ baseValue: { type: "price", price: onChart[0].c } });
         priceS!.setData(priceData(onChart) as any);
-        cpMark(`chart-painted[${symbol}]`);
+        cpMark(`chart-painted[${symbol}@${effectiveTimeframe}:intraday]`);
         chartDataSymRef.current = symbol;
         announceTerminalVisualReady(symbol);
         clearAllIndicators();
@@ -7236,7 +7253,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       dailyBarsRef.current = daily;         // raw daily source — the R11 splice operates on THIS
       // ── PERF-FIX (b): use cached resample; same-symbol TF switches skip the O(N) bucketing pass ──
-      let rows: Bar[] = resampleTfCached(daily, timeframe, symbol);
+      let rows: Bar[] = resampleTfCached(daily, effectiveTimeframe, symbol);
       if (onMeta) onMeta({ total: rows.length });
       fullBarsRef.current = rows;
       // Read the LIVE replayIdx (not the effect's closure): if the user started replay while this
@@ -7296,7 +7313,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       if (chartType === "baseline" && onChart.length) priceS!.applyOptions({ baseValue: { type: "price", price: onChart[0].c } });
       priceS!.setData(priceData(onChart) as any);
-      cpMark(`chart-painted[${symbol}]`);   // first candle on canvas
+      cpMark(`chart-painted[${symbol}@${effectiveTimeframe}:daily]`);   // first candle on canvas
       chartDataSymRef.current = symbol;
       announceTerminalVisualReady(symbol);
 
@@ -7346,7 +7363,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line
-  }, [symbol, timeframe, chartType, extHours]);
+  }, [symbol, effectiveTimeframe, chartType, extHours]);
 
   // Register (or re-register) this pane with paneSync. Cleans up any prior registration first.
   const reRegisterSync = () => {
