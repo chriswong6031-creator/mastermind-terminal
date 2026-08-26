@@ -181,7 +181,7 @@ import {
   watchlistVisualOrder,
 } from "@/lib/watchlistSections";
 
-type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
+type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null; suspended?: boolean };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
 // /api/ext-quote entry. extSession mirrors the Quote Hub's own window classification.
 type ExtSession = "pre" | "post" | "overnight";
@@ -227,6 +227,7 @@ function mergeLive(r: Row | undefined, q: any): Row | undefined {
   const regular = resolveRegularSessionDisplay(q);
   if (regular.regularPrice != null) base.last = regular.regularPrice;
   if (regular.regularChg != null) base.chg = regular.regularChg;
+  if (q.suspended === true) base.suspended = true;
   return base;
 }
 
@@ -3088,6 +3089,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // Regular and extended prices are independent lanes. `last`/`close` stay
   // regular-session values; the hub's ext* namespace drives the secondary line.
   const regularQuote = resolveRegularSessionDisplay(liveQuote);
+  const isSuspended = liveQuote?.suspended === true;
   const hubExtPrice = liveQuote?.extPrice as number | undefined;
   const hubExtChg = liveQuote?.extChg as number | undefined;
   const hubExtTs = liveQuote?.extTs as number | undefined;
@@ -4235,6 +4237,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // item-26: ext column reads from extQuotes (separate poll); dash when closed or no ext print.
   const colVal = (sym: string, r: Row | undefined, key: string) => {
     if (!r) return "—";
+    if (r.suspended && (key === "change" || key === "changePct")) return t("suspended");
     const u = r.chg >= 0;
     if (key === "last") return fmt(r.last, r.last < 10 ? 4 : 2);
     // $ change = last − prevClose. prevClose = last / (1 + chg%). The old
@@ -4403,7 +4406,9 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         </button>
         <div className="stats">
           <div className="stat stat-last"><span className="l">{t("lastPrice")}</span><span className="v big num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</span></div>
-          <div className="stat stat-change"><span className="l">{changeLabel}</span><span className={`v num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></div>
+          <div className="stat stat-change"><span className="l">{changeLabel}</span>{isSuspended
+            ? <span className="v quote-suspended">{t("suspended")}</span>
+            : <span className={`v num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>}</div>
           {/* Live-first, exactly like DayRange below. Reading the manifest row alone put
               TODAY's price beside YESTERDAY's volume in the same strip — the manifest is a
               nightly artifact, so its vol is a full session behind whenever a live quote exists. */}
@@ -4413,6 +4418,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         {(() => {
           // The verdict lives in lib/feedFreshness so the rule is unit-testable and so a
           // "real-time" label can only ever come from the hub's MEASURED lag (see that file).
+          if (isSuspended) return <span className="livebadge suspended topbar-livebadge" title={t("suspensionTip")}><i />{t("suspended")}</span>;
           const basis = liveQuote?.basis ?? (liveStatus === "live" ? "LIVE" : "EOD");
           const { cls, label, tip } = freshnessLabel(
             { basis, lagMs: liveQuote?.lagMs, asOfMs: liveQuote?.asOfMs, marketSession: liveQuote?.marketSession }, t);
@@ -4443,7 +4449,9 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
       <div className={`m-symbar${activeExtData ? " has-ext" : ""}`} onClick={() => { setSeed(""); setSearchOpen(true); }}>
         <span className="m-sym"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span><b>{active}</b><svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></span>
         <span className="m-quote-stack">
-          <span className="m-px" data-quote-lane="regular"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></span>
+          <span className="m-px" data-quote-lane="regular"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b>{isSuspended
+            ? <span className="cg quote-suspended">{t("suspended")}</span>
+            : <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>}</span>
           {activeExtData && (
             <span className="m-ext" data-quote-lane="extended">
               <span className="m-ext-label">{extSessionLabel(activeExtData.session)}</span>
@@ -5142,7 +5150,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
                             const isExt = k === "ext" || k === "extPct";
                             const eq = isExt ? extQuotes[sym] : null;
                             const extUp = eq && eq.extChg != null ? eq.extChg >= 0 : null;
-                            const cls = isChg ? (u ? "up" : "down") : isExt && extUp != null ? (extUp ? "up" : "down") : "";
+                            const cls = r?.suspended && isChg ? "quote-suspended" : isChg ? (u ? "up" : "down") : isExt && extUp != null ? (extUp ? "up" : "down") : "";
                             return <span key={k} data-watchlist-column={k} className={`c num ${cls}`} title={isExt ? extTitle(sym) : undefined}>{colVal(sym, r, k)}</span>;
                           })}
                           <span className="rm" title={t("remove")} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); removeSymbol(sym); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span>
@@ -5240,8 +5248,10 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
               {/* price row: order:2 → wraps below name row (width:100% in CSS) */}
               <div className="px">
                 <b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b>
-                <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>
-                {mktClosed && <span className="mkt-closed">{t("marketClosed")}</span>}
+                {isSuspended
+                  ? <span className="cg quote-suspended">{t("suspended")}</span>
+                  : <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>}
+                {mktClosed && !isSuspended && <span className="mkt-closed">{t("marketClosed")}</span>}
               </div>
               {/* Overnight / extended-hours secondary price block.
                   Shown only while the backend exposes an out-of-session ext print.
@@ -5326,7 +5336,9 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
             {[0, 1].map((dup) => (
               <div className="tk-run" key={dup} aria-hidden={dup === 1 || undefined}>
                 {Object.entries(man?.symbols || {}).slice(0, 16).map(([s, r0]) => { const r = mergeLive(r0, quotes[s])!; const u = r.chg >= 0; return (
-                  <span key={s} className="tk" style={{ cursor: "pointer" }} onClick={() => pick(s)}><span className="s">{s.replace("-USD", "")}</span><span className="p num">{fmt(r.last, r.last < 10 ? 3 : 2)}</span><span className={`c num ${u ? "up" : "down"}`}>{u ? "+" : ""}{fmt(r.chg)}%</span></span>
+                  <span key={s} className="tk" style={{ cursor: "pointer" }} onClick={() => pick(s)}><span className="s">{s.replace("-USD", "")}</span><span className="p num">{fmt(r.last, r.last < 10 ? 3 : 2)}</span>{r.suspended
+                    ? <span className="c quote-suspended">{t("suspended")}</span>
+                    : <span className={`c num ${u ? "up" : "down"}`}>{u ? "+" : ""}{fmt(r.chg)}%</span>}</span>
                 ); })}
               </div>
             ))}
