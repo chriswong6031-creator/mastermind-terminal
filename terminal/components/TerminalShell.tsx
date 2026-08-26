@@ -143,9 +143,13 @@ import { type CmpCfg, type CmpMode, defaultCmpCfg, cmpKey, isCmpKey, cmpSymOf } 
 import { isComposite, parseComposite, compositeQuote as calcCompositeQuote } from "@/lib/composite";
 import { pushRecentlyViewed } from "@/lib/recentlyViewed";
 import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
-import LayoutMenu, { type LayoutFeedback, type LayoutStatus } from "@/components/LayoutMenu";
+import LayoutMenu, { type LayoutFeedback, type LayoutStatus, type SavedWorkspace } from "@/components/LayoutMenu";
+import WorkspaceTile from "@/components/WorkspaceTile";
 import { nextLayoutName, type SavedLayout } from "@/lib/layouts";
-import { applyLayoutConfig, captureLayoutConfig, normalizeLayoutConfig, type LayoutWorkspace } from "@/lib/layoutConfig";
+import { applyLayoutConfig, captureLayoutConfig, type LayoutWorkspace } from "@/lib/layoutConfig";
+import { migrateLegacy, workspaceToLayout, captureWorkspace } from "@/lib/workspaceMigrate";
+import { SCHEMA as WORKSPACE_SCHEMA, validateEnvelope, type WorkspaceEnvelope, type Widget as WorkspaceWidget } from "@/lib/workspaceLayout";
+import { workspaceRowState, parseWorkspaceOutcome, absoluteLocalTime, safeWorkspaceFilename, importFailureKey, brainIncludedFromEnvelope, type WorkspaceOpOutcome } from "@/lib/workspaceMenuOps";
 import { type PineScript } from "@/components/ChartPanel";
 
 type ShellDrawingStyle = { color: string; width: number; dash: Dash };
@@ -1230,11 +1234,34 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // ── saved layouts (S6) ──
   // `layouts` is the last AUTHORITATIVE answer and is never replaced by [] on a failure; the store
   // state lives beside it in `layoutStatus` so "unavailable" and "you have none" stay distinct.
-  const [layouts, setLayouts] = useState<SavedLayout[]>([]); const [layoutOpen, setLayoutOpen] = useState(false); const [layoutName, setLayoutName] = useState("");
+  const [layouts, setLayouts] = useState<SavedWorkspace[]>([]); const [layoutOpen, setLayoutOpen] = useState(false); const [layoutName, setLayoutName] = useState("");
   const [layoutStatus, setLayoutStatus] = useState<LayoutStatus>("loading");
   const [layoutSaving, setLayoutSaving] = useState(false);
   const [layoutFeedback, setLayoutFeedback] = useState<LayoutFeedback>({ kind: "idle" });
   const [layoutDeleteError, setLayoutDeleteError] = useState<string | null>(null);
+  // ── W2-A workspace identity + graph (freeze §4/§5/§7) ──
+  // `workspaceName`/`workspaceRevision` track the CURRENTLY OPEN named workspace, not the Zone-1
+  // name box (that box is "save as", independent of what is loaded). `workspaceRevision === null`
+  // means either nothing is loaded yet, or a legacy row is loaded but has never been saved in
+  // workspace_layout.v1 format (migrate-on-write, freeze §6) — its first save fences on "not yet
+  // workspace format" rather than on a revision number.
+  const [workspaceName, setWorkspaceName] = useState<string | null>(null);
+  const [workspaceRevision, setWorkspaceRevision] = useState<number | null>(null);
+  const [loadedEnvelope, setLoadedEnvelope] = useState<WorkspaceEnvelope | null>(null);
+  // Whether the assistant dock is part of the workspace about to be saved. Default TRUE: byte-for-
+  // byte today's product (freeze §7) — every guest/no-saved-workspace session already mounts Brain.
+  const [brainIncluded, setBrainIncluded] = useState(true);
+  // The row currently carrying the `stale_revision` rail (spec §3.5), if any.
+  const [staleWorkspaceName, setStaleWorkspaceName] = useState<string | null>(null);
+  // What a `{kind:"conflict"}` feedback should retry with the suggested name — the conflict UI only
+  // carries a name string, so the op that produced it is tracked here for "Use <suggested>".
+  const [pendingConflict, setPendingConflict] = useState<
+    | { op: "save"; envelope: WorkspaceEnvelope }
+    | { op: "rename"; oldName: string; revision: number }
+    | { op: "duplicate"; sourceName: string }
+    | { op: "import"; envelope: WorkspaceEnvelope }
+    | null
+  >(null);
   const [livePx, setLivePx] = useState<number | null>(null);
   // symbol-keyed live top-of-book — ONE source for the header AND every watchlist row (via a single
   // batched /api/quote?syms= poll), so the detail pane and the watchlist can't disagree on a price.
@@ -1397,6 +1424,17 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [toolbarMoreOpen]);
+  // The desktop Workspaces `.pop` had no Escape-to-close at all before W2-A (only an outside click
+  // closed it). Spec §4's two-stage Escape needs a SECOND stage here: `LayoutMenu`'s own row/rename
+  // handlers consume the FIRST Escape (stopPropagation), so this window listener — which only ever
+  // sees an Escape nothing inside the menu already handled — is exactly the "closes the popover"
+  // stage. Scoped to `layoutOpen` only; the other toolbar `.pop`s are unchanged (out of scope).
+  useEffect(() => {
+    if (!layoutOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setLayoutOpen(false); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [layoutOpen]);
   const isMobile = useIsMobile();
   // Narrower than isMobile on purpose — the tablet contract viewport keeps the desktop-era chrome.
   const isPhone = useIsPhone();
@@ -2493,24 +2531,33 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     return () => clearTimeout(id);
   }, [extSymsKey, pollExtQuotes]);
 
-  // Read the saved-layout library. Returns whether the read was authoritative, so a save can decide
-  // whether the list it just refreshed is trustworthy. A failure keeps the last-good list on screen
-  // (replacing it with [] is the "outage looks like an empty library" bug) and only moves the state.
-  const refreshLayouts = useCallback(async (): Promise<boolean> => {
+  // Read the saved-workspace library. Returns the rows on an authoritative read (so a caller that
+  // needs the FRESH list right away — e.g. resolving a stale_revision fork — never has to wait on a
+  // state update it just triggered) and also updates `layouts`/`layoutStatus` as a side effect. A
+  // failure keeps the last-good list on screen (replacing it with [] is the "outage looks like an
+  // empty library" bug) and only moves the state.
+  //
+  // `rowState` is computed HERE via `workspaceRowState` (→ `migrateLegacy`), never trusted from the
+  // server's own `rowStateFor` field: that field answers "is this row valid AS workspace_layout.v1
+  // right now", which would mark every pre-W2-A legacy layout unopenable. The reader (this shell)
+  // is what decides real openability, per the migrate-on-write law (freeze §6).
+  const fetchWorkspaceRows = useCallback(async (): Promise<{ ok: true; rows: SavedWorkspace[] } | { ok: false }> => {
     try {
       const r = await fetch("/api/layouts", { headers: { Accept: "application/json" } });
-      if (r.status === 401) { setLayouts([]); setLayoutStatus("auth"); return false; }
-      if (!r.ok) { setLayoutStatus("unavailable"); return false; }
+      if (r.status === 401) { setLayouts([]); setLayoutStatus("auth"); return { ok: false }; }
+      if (!r.ok) { setLayoutStatus("unavailable"); return { ok: false }; }
       const d = await r.json();
       // A 200 whose body is not a list is a BROKEN read, not an empty library — the same rule the
       // status codes above encode, applied one level down. Coercing it to [] here would reintroduce
       // the exact confusion this wave removes, just past the point where the status looked fine.
-      if (!Array.isArray(d?.layouts)) { setLayoutStatus("unavailable"); return false; }
-      setLayouts(d.layouts);
+      if (!Array.isArray(d?.layouts)) { setLayoutStatus("unavailable"); return { ok: false }; }
+      const rows: SavedWorkspace[] = (d.layouts as SavedLayout[]).map((l) => ({ ...l, rowState: workspaceRowState(l.config) }));
+      setLayouts(rows);
       setLayoutStatus("ready");
-      return true;
-    } catch { setLayoutStatus("unavailable"); return false; }
+      return { ok: true, rows };
+    } catch { setLayoutStatus("unavailable"); return { ok: false }; }
   }, []);
+  const refreshLayouts = useCallback(async (): Promise<boolean> => (await fetchWorkspaceRows()).ok, [fetchWorkspaceRows]);
   useEffect(() => { void refreshLayouts(); }, [refreshLayouts]);
   useEffect(() => {
     // Open the Brain widget. The script is deferred + cross-origin, so on early ?ai=1 deep-links
@@ -2739,7 +2786,15 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     return () => clearInterval(playRef.current);
   }, [replayOn, playing, total, speed]);
 
-  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setWlMenuOpen(false); setSnapOpen(false); setToolbarMoreOpen(false); setToolbarMoreView("main"); setWlContext(null); setWlSectionContext(null); };
+  const closeAll = () => {
+    setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setWlMenuOpen(false); setSnapOpen(false); setToolbarMoreOpen(false); setToolbarMoreView("main"); setWlContext(null); setWlSectionContext(null);
+    // spec §4: "menu closes | ... a stale/conflict block does not persist across a close" — the
+    // fork/suggestion blocks are unresolved DECISIONS, not toasts, so closing the popover drops
+    // them (an ordinary saved/renamed/error toast is left alone, same as before this wave).
+    setStaleWorkspaceName(null);
+    setPendingConflict(null);
+    setLayoutFeedback((f) => (f.kind === "stale" || f.kind === "conflict" ? { kind: "idle" } : f));
+  };
   useEffect(() => {
     const h = (event: MouseEvent) => { if (event.button !== 2) closeAll(); };
     window.addEventListener("click", h);
@@ -4092,9 +4147,6 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   //   3. Success is only claimed when the authoritative write said so. The old path resolved on any
   //      response — 401, 400, 503 — cleared the name box and refetched, so a failed save was
   //      indistinguishable from a good one.
-  const postLayout = (name: string, config: unknown, mode: "create" | "overwrite") =>
-    fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config, mode }) });
-
   // The single place that says what "the current workspace" IS, for both save and load. Keeping one
   // definition is what makes the round trip provable: the same shape is captured and re-applied.
   const currentWorkspace = (): LayoutWorkspace => ({
@@ -4103,48 +4155,99 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     compare, compareCfg, lockedVLine,
   });
 
+  const isRecordLike = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+  /** A row's own revision, IF it is already stored as `workspace_layout.v1` — `null` for a legacy
+   *  row that has never been saved in that format (migrate-on-write, freeze §6). */
+  const rowWorkspaceRevision = (config: unknown): number | null =>
+    isRecordLike(config) && config.schema === WORKSPACE_SCHEMA && typeof config.revision === "number" ? config.revision : null;
+
+  async function postWorkspaceOp(body: Record<string, unknown>): Promise<{ status: number; json: unknown }> {
+    const r = await fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let json: unknown = null;
+    try { json = await r.json(); } catch { /* a 204/empty body is not malformed — status alone still decides */ }
+    return { status: r.status, json };
+  }
+  const saveWorkspaceEnvelope = async (name: string, envelope: WorkspaceEnvelope, expectedRevision: number | null): Promise<WorkspaceOpOutcome> => {
+    const { status, json } = await postWorkspaceOp({ op: "save_workspace", name, envelope, expectedRevision });
+    return parseWorkspaceOutcome(status, json);
+  };
+  const renameWorkspaceRow = async (oldName: string, newName: string, expectedRevision: number): Promise<WorkspaceOpOutcome> => {
+    const { status, json } = await postWorkspaceOp({ op: "rename", oldName, newName, expectedRevision });
+    return parseWorkspaceOutcome(status, json);
+  };
+
+  // ── saved-workspace writes (W2A_WORKSPACE_UX_SPEC.md; freeze §4/§5/§6/§7) ───────────────────────
+  // Rules carried forward, now over the workspace-aware `save_workspace` op:
+  //   1. A guest never fires a POST that is guaranteed to 401 — Save is disabled and the sign-up
+  //      path is offered instead.
+  //   2. A blank name is auto-generated as the first FREE `Layout N`, retried on a genuine 409 race.
+  //   3. Success is only claimed when the authoritative write said so.
+  // NEW: typing the currently-open workspace's own name fences on ITS revision (an ordinary
+  // save-over); any other name (new, or someone else's existing workspace) fences on nothing
+  // (`expectedRevision: null`) — which the server resolves as CREATE, migrate-on-write, or
+  // `stale_revision` (never last-writer-wins over a workspace it never read — freeze §4).
   async function saveLayout() {
     if (layoutSaving) return;                       // busy guard: a double-click is one save
     if (!loggedIn) { promptLayoutSignup(); return; }
     const typed = layoutName.trim();
-    const config = captureLayoutConfig(currentWorkspace());
-    setLayoutSaving(true); setLayoutFeedback({ kind: "saving" }); setLayoutDeleteError(null);
+    setLayoutSaving(true); setLayoutFeedback({ kind: "saving" }); setLayoutDeleteError(null); setStaleWorkspaceName(null);
     try {
-      let saved: string | null = null;
-      let failure = t("layoutSaveFailed");
-      if (typed) {
-        const r = await postLayout(typed, config, "overwrite");
-        if (r.ok) saved = typed;
-        else if (r.status === 401) { setLayoutStatus("auth"); failure = t("layoutSignInToSave"); }
-      } else {
-        // Collision-free auto-naming. The local list can be stale, so create-mode 409s are expected:
-        // treat the rejected candidate as taken and step to the next free one.
-        const taken = layouts.map((l) => l.name);
-        for (let attempt = 0; attempt < 5 && saved === null; attempt++) {
-          const candidate = nextLayoutName(taken);
-          const r = await postLayout(candidate, config, "create");
-          if (r.ok) { saved = candidate; break; }
-          if (r.status === 409) { taken.push(candidate); continue; }
-          if (r.status === 401) { setLayoutStatus("auth"); failure = t("layoutSignInToSave"); }
-          break;
-        }
+      const envelope = captureWorkspace({ layout: captureLayoutConfig(currentWorkspace()), brainIncluded, prior: loadedEnvelope ?? undefined });
+      let targetName = typed;
+      let expectedRevision: number | null = null;
+      let autoNaming = false;
+      if (!typed) {
+        autoNaming = true;
+        targetName = nextLayoutName(layouts.map((l) => l.name));
+      } else if (typed === workspaceName) {
+        expectedRevision = workspaceRevision;
       }
-      if (saved === null) { setLayoutFeedback({ kind: "error", message: failure }); return; }
-      setLayoutFeedback({ kind: "saved", name: saved });
-      setLayoutName("");                            // only cleared once the name is really stored
-      await refreshLayouts();
+      const taken = layouts.map((l) => l.name);
+      let outcome: WorkspaceOpOutcome = { kind: "error" };
+      for (let attempt = 0; attempt < 5; attempt++) {
+        outcome = await saveWorkspaceEnvelope(targetName, envelope, expectedRevision);
+        if (autoNaming && outcome.kind === "name_conflict") { taken.push(targetName); targetName = nextLayoutName(taken); continue; }
+        break;
+      }
+      if (outcome.kind === "ok") {
+        setWorkspaceName(targetName);
+        setWorkspaceRevision(outcome.revision);
+        setLoadedEnvelope({ ...envelope, name: null, revision: outcome.revision });
+        setLayoutFeedback({ kind: "saved", name: targetName });
+        setLayoutName("");                          // only cleared once the name is really stored
+        await refreshLayouts();
+        return;
+      }
+      if (outcome.kind === "stale_revision") {
+        const fresh = await fetchWorkspaceRows();
+        const row = fresh.ok ? fresh.rows.find((l) => l.name === targetName) : undefined;
+        setStaleWorkspaceName(targetName);
+        setLayoutFeedback({ kind: "stale", name: targetName, savedAgo: absoluteLocalTime(row?.updated_at) });
+        return;
+      }
+      if (outcome.kind === "name_conflict") {
+        setPendingConflict({ op: "save", envelope });
+        setLayoutFeedback({ kind: "conflict", name: targetName, suggested: nextLayoutName(taken), op: "save" });
+        return;
+      }
+      if (outcome.kind === "unauthenticated") { setLayoutStatus("auth"); setLayoutFeedback({ kind: "error", message: t("layoutSignInToSave") }); return; }
+      setLayoutFeedback({ kind: "error", message: t("layoutSaveFailed") });
     } catch {
       setLayoutFeedback({ kind: "error", message: t("layoutSaveFailed") });
     } finally { setLayoutSaving(false); }
   }
-  // Load = normalize at the read boundary, fold onto the live workspace, then apply. The old loader
-  // reconstructed `split` from pane count, never restored Sync, indicator PARAMETERS or eye state,
-  // and re-applied the layout's timeframe favourites over the user's own — so a loaded layout was
-  // partly the saved workspace and partly whatever was already on screen. `lib/layoutConfig.ts`
-  // owns which fields a layout claims and how a legacy config is read; this function only wires the
-  // result into React state.
-  function loadLayout(l: SavedLayout) {
-    const next = applyLayoutConfig(normalizeLayoutConfig(l.config), currentWorkspace());
+
+  // Load = migrate (legacy) or validate (native), then fold the resulting claims onto the live
+  // workspace and apply. `migrateLegacy` covers BOTH branches mission §1 describes: for an already
+  // `workspace_layout.v1` row it IS `validateEnvelope`; for a legacy row it is the deterministic
+  // migration (freeze §6) — in memory only, the ROW is never rewritten here (migrate-on-write is a
+  // SAVE-time act). A blocked row (`rowState !== "ok"`) is never clickable in the menu, so `!ok` here
+  // is defensive, not a real path.
+  function loadLayout(l: SavedWorkspace) {
+    const migrated = migrateLegacy(l.config);
+    if (!migrated.ok) return;
+    const envelope = migrated.envelope;
+    const next = applyLayoutConfig(workspaceToLayout(envelope), currentWorkspace());
     setPanes(next.panes);
     setPaneTfs(next.paneTfs);
     setSplit(next.split);
@@ -4158,7 +4261,215 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     setCompareCfg(next.compareCfg as Record<string, CmpCfg>);
     setLockedVLine(next.lockedVLine);
     setLayoutOpen(false);
+    setWorkspaceName(l.name);
+    setWorkspaceRevision(rowWorkspaceRevision(l.config));
+    setLoadedEnvelope(envelope);
+    setBrainIncluded(brainIncludedFromEnvelope(envelope));
+    setLayoutName("");
+    setLayoutFeedback({ kind: "idle" });
+    setStaleWorkspaceName(null);
+    setPendingConflict(null);
   }
+
+  // stale_revision fork (spec §3.5): two peers, no primary.
+  async function reloadLatestWorkspace() {
+    const target = staleWorkspaceName;
+    if (!target) return;
+    const fresh = await fetchWorkspaceRows();
+    const row = fresh.ok ? fresh.rows.find((l) => l.name === target) : undefined;
+    setStaleWorkspaceName(null);
+    setLayoutFeedback({ kind: "idle" });
+    if (row) loadLayout(row);
+  }
+  async function saveWorkspaceAsCopy() {
+    const target = staleWorkspaceName;
+    setLayoutSaving(true);
+    try {
+      const envelope = captureWorkspace({ layout: captureLayoutConfig(currentWorkspace()), brainIncluded });
+      const candidate = nextLayoutName(layouts.map((l) => l.name));
+      const outcome = await saveWorkspaceEnvelope(candidate, envelope, null);
+      if (outcome.kind === "ok") {
+        setWorkspaceName(candidate);
+        setWorkspaceRevision(outcome.revision);
+        setLoadedEnvelope({ ...envelope, name: null, revision: outcome.revision });
+        setLayoutFeedback({ kind: "saved", name: candidate });
+        setStaleWorkspaceName(null);
+        await refreshLayouts();
+      } else {
+        setLayoutFeedback({ kind: "error", message: t("layoutSaveFailed") });
+      }
+    } finally { setLayoutSaving(false); }
+    void target; // the fork's rail belonged to the OLD name; a fresh save clears it above regardless
+  }
+
+  // Rename (spec §3.1). A legacy row (no numeric revision yet) is migrated-on-write IN PLACE under
+  // its OLD name first — the only lever the already-shipped `renameWorkspace` op exposes for
+  // fencing a rename is a numeric revision, and a legacy row has none — then the rename proper runs
+  // against the revision that migration produced. Both steps are individually atomic and safe; a
+  // crash between them leaves the row migrated-but-not-renamed, which is simply the pre-rename state
+  // with a real revision, retryable exactly like any other rename.
+  async function renameWorkspaceAction(l: SavedWorkspace, newName: string) {
+    setLayoutFeedback({ kind: "saving" });
+    let revision = rowWorkspaceRevision(l.config);
+    if (revision === null) {
+      const migrated = migrateLegacy(l.config);
+      if (!migrated.ok) { setLayoutFeedback({ kind: "error", message: t("wsRenameFailed") }); return; }
+      const migrateOutcome = await saveWorkspaceEnvelope(l.name, migrated.envelope, null);
+      if (migrateOutcome.kind === "ok") revision = migrateOutcome.revision;
+      else if (migrateOutcome.kind === "stale_revision") {
+        const fresh = await fetchWorkspaceRows();
+        const row = fresh.ok ? fresh.rows.find((x) => x.name === l.name) : undefined;
+        revision = row ? rowWorkspaceRevision(row.config) : null;
+      }
+      if (revision === null) { setLayoutFeedback({ kind: "error", message: t("wsRenameFailed") }); return; }
+    }
+    const outcome = await renameWorkspaceRow(l.name, newName, revision);
+    if (outcome.kind === "ok") {
+      if (workspaceName === l.name) {
+        setWorkspaceName(newName);
+        setWorkspaceRevision(outcome.revision);
+        setLoadedEnvelope((prev) => (prev ? { ...prev, revision: outcome.revision } : prev));
+      }
+      setLayoutFeedback({ kind: "renamed" });
+      await refreshLayouts();
+      return;
+    }
+    if (outcome.kind === "name_conflict") {
+      setPendingConflict({ op: "rename", oldName: l.name, revision });
+      setLayoutFeedback({ kind: "conflict", name: newName, suggested: nextLayoutName(layouts.map((x) => x.name)), op: "rename" });
+      return;
+    }
+    if (outcome.kind === "stale_revision") {
+      const fresh = await fetchWorkspaceRows();
+      const row = fresh.ok ? fresh.rows.find((x) => x.name === l.name) : undefined;
+      setStaleWorkspaceName(l.name);
+      setLayoutFeedback({ kind: "stale", name: l.name, savedAgo: absoluteLocalTime(row?.updated_at) });
+      return;
+    }
+    if (outcome.kind === "unauthenticated") { setLayoutStatus("auth"); setLayoutFeedback({ kind: "error", message: t("layoutSignInToSave") }); return; }
+    setLayoutFeedback({ kind: "error", message: t("wsRenameFailed") });
+  }
+
+  // Duplicate (spec §3.2). One click, no naming step — the store mints the free name.
+  async function duplicateWorkspaceAction(l: SavedWorkspace) {
+    setLayoutFeedback({ kind: "saving" });
+    const { status, json } = await postWorkspaceOp({ op: "duplicate", sourceName: l.name });
+    const outcome = parseWorkspaceOutcome(status, json);
+    if (status === 200 && isRecordLike(json) && json.ok) {
+      setLayoutFeedback({ kind: "duplicated" });
+      await refreshLayouts();
+      return;
+    }
+    if (outcome.kind === "name_conflict") {
+      setPendingConflict({ op: "duplicate", sourceName: l.name });
+      setLayoutFeedback({ kind: "conflict", name: l.name, suggested: nextLayoutName(layouts.map((x) => x.name)), op: "duplicate" });
+      return;
+    }
+    if (outcome.kind === "unauthenticated") { setLayoutStatus("auth"); setLayoutFeedback({ kind: "error", message: t("layoutSignInToSave") }); return; }
+    setLayoutFeedback({ kind: "error", message: t("wsDuplicateFailed") });
+  }
+
+  // Export (spec §3.3): the canonical envelope, name filled from the row — for a BLOCKED row the
+  // untouched stored bytes instead, so an unreadable payload can still be rescued (freeze §6: "left
+  // exactly as it was saved").
+  function exportWorkspaceAction(l: SavedWorkspace) {
+    try {
+      let body: unknown;
+      if (l.rowState === "ok") {
+        const migrated = migrateLegacy(l.config);
+        body = migrated.ok ? { ...migrated.envelope, name: l.name } : l.config;
+      } else {
+        body = l.config;
+      }
+      const blob = new Blob([JSON.stringify(body, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = safeWorkspaceFilename(l.name);
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setLayoutFeedback({ kind: "error", message: t("wsExportFailed") });
+    }
+  }
+
+  // Import (spec §3.4): file pick → validate client-side (freeze §11 — the client is not trusted
+  // either, but a client-side reject means one less round trip for an obviously bad file) → POST as
+  // a NEW workspace (revision 1, `migration.source = "import"`) → server re-validates regardless.
+  function importWorkspaceAction() {
+    if (isGuest) return;
+    const trigger = document.activeElement as HTMLElement | null;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    const refocus = () => { window.removeEventListener("focus", refocus); trigger?.focus(); };
+    window.addEventListener("focus", refocus);
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;                              // picker cancelled — no note, no state change
+      try {
+        const text = await file.text();
+        let parsed: unknown;
+        try { parsed = JSON.parse(text); } catch { setLayoutFeedback({ kind: "error", message: t(importFailureKey(undefined)) }); return; }
+        const validation = validateEnvelope(parsed);
+        if (!validation.ok) { setLayoutFeedback({ kind: "error", message: t(importFailureKey(validation.errors[0]?.code)) }); return; }
+        const envelope: WorkspaceEnvelope = { ...(parsed as WorkspaceEnvelope), name: null, revision: 1, migration: { source: "import", source_revision: null } };
+        const candidate = nextLayoutName(layouts.map((l) => l.name));
+        const outcome = await saveWorkspaceEnvelope(candidate, envelope, null);
+        if (outcome.kind === "ok") {
+          setLayoutFeedback({ kind: "imported" });
+          await refreshLayouts();
+        } else if (outcome.kind === "name_conflict") {
+          setPendingConflict({ op: "import", envelope });
+          setLayoutFeedback({ kind: "conflict", name: candidate, suggested: nextLayoutName(layouts.map((l) => l.name).concat(candidate)), op: "import" });
+        } else {
+          setLayoutFeedback({ kind: "error", message: t(importFailureKey(undefined)) });
+        }
+      } catch {
+        setLayoutFeedback({ kind: "error", message: t(importFailureKey(undefined)) });
+      }
+    };
+    input.click();
+  }
+
+  // "Use <suggested>" (spec §1.1 `.ws-suggest`) retries whichever op produced the name_conflict.
+  async function useSuggestedWorkspaceName(suggested: string) {
+    const pending = pendingConflict;
+    if (!pending) return;
+    setPendingConflict(null);
+    if (pending.op === "save") {
+      setLayoutName(suggested);
+      const outcome = await saveWorkspaceEnvelope(suggested, pending.envelope, null);
+      if (outcome.kind === "ok") {
+        setWorkspaceName(suggested);
+        setWorkspaceRevision(outcome.revision);
+        setLoadedEnvelope({ ...pending.envelope, name: null, revision: outcome.revision });
+        setLayoutFeedback({ kind: "saved", name: suggested });
+        setLayoutName("");
+        await refreshLayouts();
+      } else {
+        setLayoutFeedback({ kind: "error", message: t("layoutSaveFailed") });
+      }
+    } else if (pending.op === "rename") {
+      const outcome = await renameWorkspaceRow(pending.oldName, suggested, pending.revision);
+      if (outcome.kind === "ok") {
+        if (workspaceName === pending.oldName) { setWorkspaceName(suggested); setWorkspaceRevision(outcome.revision); }
+        setLayoutFeedback({ kind: "renamed" });
+        await refreshLayouts();
+      } else {
+        setLayoutFeedback({ kind: "error", message: t("wsRenameFailed") });
+      }
+    } else if (pending.op === "duplicate") {
+      const { status, json } = await postWorkspaceOp({ op: "duplicate", sourceName: pending.sourceName, newName: suggested });
+      if (status === 200 && isRecordLike(json) && json.ok) { setLayoutFeedback({ kind: "duplicated" }); await refreshLayouts(); }
+      else setLayoutFeedback({ kind: "error", message: t("wsDuplicateFailed") });
+    } else if (pending.op === "import") {
+      const outcome = await saveWorkspaceEnvelope(suggested, pending.envelope, null);
+      if (outcome.kind === "ok") { setLayoutFeedback({ kind: "imported" }); await refreshLayouts(); }
+      else setLayoutFeedback({ kind: "error", message: t("wsImportBad") });
+    }
+  }
+
   // Optimistic removal WITH rollback. The old version dropped the row when the request merely
   // resolved — a 401/503 delete vanished from the menu and came back on the next load, which is the
   // worst of both worlds: the user believes it is gone and the account still holds it.
@@ -4166,12 +4477,16 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // with the store. It is still not reported as a successful delete.
   async function delLayout(id: string) {
     const snapshot = layouts;
+    const deleted = layouts.find((x) => x.id === id);
     setLayoutDeleteError(null);
     setLayouts((ls) => ls.filter((x) => x.id !== id));
     const restore = () => { setLayouts(snapshot); setLayoutDeleteError(t("layoutDeleteFailed")); };
     try {
       const r = await fetch(`/api/layouts?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (r.ok || r.status === 404) return;
+      if (r.ok || r.status === 404) {
+        if (deleted && deleted.name === workspaceName) { setWorkspaceName(null); setWorkspaceRevision(null); setLoadedEnvelope(null); }
+        return;
+      }
       if (r.status === 401) { setLayouts([]); setLayoutStatus("auth"); return; }
       restore();
     } catch { restore(); }
@@ -4185,6 +4500,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // One props object for both render sites (toolbar popover + responsive overflow menu) so the two
   // menus cannot drift. `loggedIn` short-circuits the status: a guest must see the honest gate from
   // the first paint, not for however long the mount GET takes to come back 401.
+  const isGuest = !loggedIn;
   const layoutMenuProps = {
     status: (loggedIn ? layoutStatus : "auth") as LayoutStatus,
     layouts,
@@ -4198,7 +4514,32 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     onDelete: delLayout,
     onRetry: () => { setLayoutStatus("loading"); void refreshLayouts(); },
     onSignUp: promptLayoutSignup,
+    brainInWorkspace: brainIncluded,
+    onToggleBrainDock: () => setBrainIncluded((b) => !b),
+    onRename: renameWorkspaceAction,
+    onDuplicate: duplicateWorkspaceAction,
+    onExport: exportWorkspaceAction,
+    onImport: importWorkspaceAction,
+    staleName: staleWorkspaceName,
+    onUseSuggested: useSuggestedWorkspaceName,
+    onReloadLatest: reloadLatestWorkspace,
+    onSaveAsCopy: saveWorkspaceAsCopy,
   };
+
+  // Generic-widget-graph fallback data (see the `.ws-extra-widgets` render site below): every
+  // widget in the loaded envelope beyond the one primary chart + one dock Brain this build
+  // specifically renders. Structurally near-always empty today — `captureWorkspace` only ever
+  // produces exactly those two widgets, and a write/import of a truly unknown `type` is rejected
+  // outright (freeze §2) — but a legitimately-imported extra widget in an unconsumed lane
+  // (`secondary`/`rail`, freeze §9) reaches this, and it is real, reachable code, not dead code.
+  const extraWorkspaceWidgets: WorkspaceWidget[] = loadedEnvelope
+    ? (() => {
+        const chartWidget = loadedEnvelope.widgets.find((w) => w.type === "chart" && w.semantic_lane === "primary")
+          ?? loadedEnvelope.widgets.find((w) => w.type === "chart");
+        const brainWidget = brainIncluded ? loadedEnvelope.widgets.find((w) => w.type === "brain") : undefined;
+        return loadedEnvelope.widgets.filter((w) => w !== chartWidget && w !== brainWidget);
+      })()
+    : [];
 
   const colList = (): [string, string][] => { const a: [string, string][] = [["last", t("colLast")]]; if (set.cols.change) a.push(["change", t("colChgShort")]); if (set.cols.changePct) a.push(["changePct", t("colChgPctShort")]); if (set.cols.volume) a.push(["volume", t("colVolShort")]); if (set.cols.ext) a.push(["ext", t("colExtShort")]); if (set.cols.extPct) a.push(["extPct", t("colExtPctShort")]); return a; };
   // Plain-word label for an ext window. The hub's classification when it has one; "Overnight"
@@ -4563,7 +4904,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
             </div>
             <div className="pophost tool-adv toolbar-overflow-item" data-toolbar-item data-toolbar-action="layouts">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !layoutOpen; closeAll(); setLayoutOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M9 9v10" /></svg>{t("layouts")}<span style={{ color: "var(--muted)" }}>▾</span></button>
-              <div className={`pop${layoutOpen ? " show" : ""}`} style={{ top: 32, right: 0, minWidth: 230 }} onClick={(e) => e.stopPropagation()}>
+              <div className={`pop${layoutOpen ? " show" : ""}`} style={{ top: 32, right: 0, minWidth: 300 }} onClick={(e) => e.stopPropagation()}>
                 <LayoutMenu {...layoutMenuProps} />
               </div>
             </div>
@@ -4850,6 +5191,15 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
                 onClose={() => setObjectTreeOpen(false)}
               />
             )}
+          </div>
+        )}
+        {/* Generic-widget-graph fallback (spec §6; freeze §2/§9) — every widget in the loaded
+            workspace beyond the one primary chart + one dock Brain this build specifically
+            renders. Placed in the primary flow AFTER the chart body: the claim being proved is
+            "the workspace still opened", so it sits beside a working chart, never instead of one. */}
+        {!paneOpen && !tableViewOpen && extraWorkspaceWidgets.length > 0 && (
+          <div className="ws-extra-widgets" data-ws-extra-widgets>
+            {extraWorkspaceWidgets.map((w) => <WorkspaceTile key={w.id} type={w.type} />)}
           </div>
         )}
         {/* The strip is the foot of the chart column, directly under the canvas and in place of
@@ -5424,13 +5774,19 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
           onClose={() => setGuide(null)}
         />
       )}
-      <BrainWidget
-        active={active}
-        onCommand={handleBrainCommand}
-        onAnnotate={(j) => annotateChart(j.symbol || active, j.annotations || [])}
-        onAuthRequired={() => window.location.assign("/login")}
-        getAiContext={() => aiContextProviderRef.current!.getAiContext()}
-      />
+      {/* W2-A: the assistant dock is now workspace membership (freeze §7), not a hardcoded mount —
+          `brainIncluded` defaults true (byte-for-byte today's product for guests / no saved
+          workspace) and is set from a loaded workspace's own widget list. Every prop below is
+          UNCHANGED from before this wave — W1-C's context flow (`getAiContext`) is not touched. */}
+      {brainIncluded && (
+        <BrainWidget
+          active={active}
+          onCommand={handleBrainCommand}
+          onAnnotate={(j) => annotateChart(j.symbol || active, j.annotations || [])}
+          onAuthRequired={() => window.location.assign("/login")}
+          getAiContext={() => aiContextProviderRef.current!.getAiContext()}
+        />
+      )}
 
       {/* ── Signals dashboard overlay (Golden Oracle scorecard · research read · signal history) ── */}
       {signalsOpen && (
