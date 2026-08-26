@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Bar, Fund } from "@/lib/fund";
 import { buildKeyStatRows } from "@/lib/keyStats";
 
@@ -52,5 +52,46 @@ describe("HK-compatible Key Stats", () => {
   it("keeps unavailable fundamentals hidden instead of rendering fake dashes", () => {
     const rows = buildKeyStatRows(null, [{ v: 2_500_000 }] as Bar[], pick);
     expect(rows.map((row) => row.id)).toEqual(["volume", "average-volume"]);
+  });
+});
+
+describe("next earnings temporal invariant", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("hides a KRUS-shaped past next earnings report instead of calling it next", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-26T12:00:00.000Z"));
+    const fund = fundFixture();
+    fund.earnings!.next_date = "2026-08-25";
+
+    const rows = buildKeyStatRows(fund, [], pick);
+
+    expect(rows.find((row) => row.id === "next-earnings")).toBeUndefined();
+  });
+
+  it("keeps a future next earnings report and its positive countdown", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-26T12:00:00.000Z"));
+    const fund = fundFixture();
+    fund.earnings!.next_date = "2026-09-15";
+
+    const rows = buildKeyStatRows(fund, [], pick);
+
+    expect(rows.find((row) => row.id === "next-earnings")).toEqual({
+      id: "next-earnings",
+      label: "Next earnings report",
+      value: "In 20 days",
+    });
+  });
+
+  it("hides an impossible ISO-shaped legacy next earnings date", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-26T12:00:00.000Z"));
+    const fund = fundFixture();
+    fund.earnings!.next_date = "2026-09-31";
+
+    const rows = buildKeyStatRows(fund, [], pick);
+
+    expect(rows.find((row) => row.id === "next-earnings")).toBeUndefined();
   });
 });
