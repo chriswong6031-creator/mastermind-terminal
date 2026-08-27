@@ -149,6 +149,82 @@ export async function seedUnreadableWorkspace(page: Page, name: string): Promise
 }
 
 /**
+ * Seed a real legacy (`chart_layout_v2`) row carrying ONE genuinely invalid field (`split`) among
+ * otherwise-valid ones — reviewer ruling B1/B2's "tolerant-defect" row: `migrateLegacy(config,
+ * false)` (the READ direction) no-claims just that field and opens the row `ok` with a non-empty
+ * `unclaimed` list, rather than blocking the whole row as `unsupported_schema` (the pre-B1 behavior,
+ * reserved for a genuinely unrecognized shape like `seedUnreadableWorkspace`'s). Saving over this
+ * row (the WRITE direction) still refuses strictly — this helper only proves the READ side opens.
+ */
+export async function seedTolerantDefectWorkspace(page: Page, name: string): Promise<void> {
+  const outcome = await page.evaluate(async (name) => {
+    const r = await fetch("/api/layouts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        config: {
+          schemaVersion: 2,
+          panes: ["AAPL"], paneTfs: ["1D"],
+          split: "not-a-valid-split", // genuinely invalid — vSplit only accepts {1,2,3,4}
+          activePane: 0, sync: true, chartType: "candles",
+          inds: [], indParams: {}, hidden: [], compare: [], compareCfg: {}, lockedVLine: null,
+        },
+        mode: "create",
+      }),
+    });
+    return { status: r.status, body: await r.json().catch(() => null) };
+  }, name);
+  if (outcome.status !== 200) {
+    throw new Error(`seedTolerantDefectWorkspace: seeding "${name}" failed (${outcome.status}: ${JSON.stringify(outcome.body)})`);
+  }
+}
+
+/**
+ * Seed a real `workspace_layout.v1` row whose widget graph carries a genuinely UNKNOWN widget
+ * `type` (e.g. `"screener"`, not in `WIDGET_TYPES`) alongside an ordinary working chart — reviewer
+ * ruling M5: the row must still open (`workspaceRowState` "ok", never `unsupported_schema`), the
+ * chart renders normally, and the unknown-type widget falls to the generic `WorkspaceTile` fallback
+ * showing its own type name. `save_workspace` (the fenced, validated op) refuses an unknown widget
+ * type outright by design — write/import rejection is UNCHANGED by M5 — so there is no real API
+ * path that can construct this row; it is seeded verbatim via the same legacy-endpoint backdoor
+ * `seedFutureFloorWorkspace` uses, for the same reason (a shape this build can only ever ENCOUNTER,
+ * never create itself).
+ */
+export async function seedUnknownWidgetTypeWorkspace(page: Page, name: string): Promise<void> {
+  const envelope = {
+    schema: "workspace_layout.v1",
+    requires: { floor: 1 },
+    revision: 1,
+    name: null,
+    link_groups: { primary_security: { entity_type: "security" } },
+    widgets: [
+      {
+        id: "chart-main", type: "chart", semantic_lane: "primary",
+        context_in: ["primary_security"], context_out: ["primary_security"],
+        config: { panes: ["AAPL"], paneTfs: ["1D"], split: 1, activePane: 0, sync: true, chartType: "candles", inds: [], indParams: {}, hidden: [], compare: [], compareCfg: {}, lockedVLine: null },
+      },
+      {
+        id: "widget-screener", type: "screener", semantic_lane: "rail",
+        context_in: [], context_out: [], config: {},
+      },
+    ],
+    migration: { source: "none", source_revision: null },
+  };
+  const outcome = await page.evaluate(async ({ name, envelope }) => {
+    const r = await fetch("/api/layouts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, config: envelope, mode: "create" }),
+    });
+    return { status: r.status, body: await r.json().catch(() => null) };
+  }, { name, envelope });
+  if (outcome.status !== 200) {
+    throw new Error(`seedUnknownWidgetTypeWorkspace: seeding "${name}" failed (${outcome.status}: ${JSON.stringify(outcome.body)})`);
+  }
+}
+
+/**
  * Seed a real `workspace_layout.v1` row whose `requires.floor` exceeds this build's supported
  * floor (freeze §1 — a reader whose supported floor is lower refuses with `unsupported_floor`).
  * Also via the legacy endpoint (which stores `config` verbatim): the row is otherwise a

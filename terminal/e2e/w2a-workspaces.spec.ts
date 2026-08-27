@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   injectLayoutFault, isolateLayoutStore, renderAsGuest, useLang,
   forceStaleRevision, seedNameConflict, seedUnreadableWorkspace, seedFutureFloorWorkspace,
+  seedUnknownWidgetTypeWorkspace, seedTolerantDefectWorkspace,
 } from "./layoutStore";
 import { openLayoutMenu } from "./terminalToolbar";
 import { expectTapTarget } from "./tapTarget";
@@ -237,6 +238,66 @@ test.describe("W2-A workspace menu — 1440×900 EN", () => {
     await expect(page.locator("[data-ws-missing-widget]")).toBeVisible();
     await expect(page.locator(".chart-wrap, .chart-host, canvas").first()).toBeVisible(); // the chart still opened
     await shot(page, "1440-en-tile");
+  });
+
+  test("reviewer ruling M5 — a genuinely unknown widget type opens the workspace, never bricks the row", async ({ page, baseURL }, testInfo) => {
+    // Before M5, `migrateLegacy`'s already-canonical (row 3) branch treated ANY validation error —
+    // including `unknown_widget_type` — as a hard refusal, so a row carrying a widget type this
+    // build does not recognize (e.g. a NEWER client's "screener" panel) never opened at all: not
+    // the tile fallback, not even the chart. The fix tolerates `unknown_widget_type` ALONE on READ.
+    await isolateLayoutStore(page, testInfo, baseURL);
+    await gotoTerminal(page);
+    await seedUnknownWidgetTypeWorkspace(page, "UnknownWidget");
+    const menu = await openLayoutMenu(page);
+    // The row itself must be "ok" — never the unsupported_schema/blocked treatment M5 forbids for a
+    // per-widget-type defect.
+    await expect(menu.locator('[data-layout-row="UnknownWidget"]')).toHaveAttribute("data-ws-state", "ok");
+    await menu.locator('[data-layout-row="UnknownWidget"]').click();
+    await expect(page.locator(".chart-wrap, .chart-host, canvas").first()).toBeVisible(); // the chart still opened
+    const tile = page.locator("[data-ws-missing-widget]");
+    await expect(tile).toBeVisible();
+    await expect(tile).toHaveAttribute("data-ws-missing-widget", "screener"); // the tile names the actual unknown type
+    await expect(tile).toContainText("screener");
+    await shot(page, "1440-en-tile-unknown-type");
+  });
+
+  test("reviewer ruling B1/B2 — a tolerant-defect row opens 'ok' and surfaces the unreadable-settings disclosure", async ({ page, baseURL }, testInfo) => {
+    // Before B1, ANY per-field migration defect (a legacy row with one invalid field among
+    // otherwise-valid ones) made `workspaceRowState` report `unsupported_schema` — the tolerant
+    // read path existed in `migrateLegacy` but nothing in the product actually called it in `false`
+    // (READ) mode, so the row was blocked exactly as if it were genuinely unrecognized. B1 wires the
+    // real read path through tolerant migration; B2 requires the resulting `unclaimed` list surface
+    // as a persistent, plain-word note (never a raw field name or failure code) while that workspace
+    // stays loaded.
+    await isolateLayoutStore(page, testInfo, baseURL);
+    await gotoTerminal(page);
+    await seedTolerantDefectWorkspace(page, "TolerantDefect");
+    await saveWorkspace(page, "Other"); // a second, clean workspace to load afterward
+    await gotoTerminal(page);
+
+    const menu = await openLayoutMenu(page);
+    // The row itself opens "ok" — a per-field defect is no longer treated as unsupported_schema.
+    await expect(menu.locator('[data-layout-row="TolerantDefect"]')).toHaveAttribute("data-ws-state", "ok");
+    await menu.locator('[data-layout-row="TolerantDefect"]').click();
+    await expect(page.locator(".chart-wrap, .chart-host, canvas").first()).toBeVisible();
+
+    // Loading a row closes the popover (CSS `.show` toggle — `LayoutMenu` itself stays mounted, so
+    // the note is a real persisted state, not a transient toast tied to this one open/close cycle);
+    // reopen to observe it, exactly like every other "does this state survive?" case in this file.
+    const menuReopened = await openLayoutMenu(page);
+    const note = menuReopened.locator("[data-ws-unclaimed]");
+    await expect(note).toBeVisible();
+    await expect(note).toHaveText("Some settings in this workspace couldn't be read. They'll be left out if you save it.");
+    // No raw code or field name (e.g. "split", "invalid_widget_config") ever reaches the DOM.
+    const noteText = await note.innerText();
+    expect(noteText).not.toMatch(RAW_CODE_RE);
+    expect(noteText).not.toContain("split");
+    await shot(page, "1440-en-unclaimed-note");
+
+    // Lifecycle: loading a DIFFERENT (clean) workspace clears the note.
+    const menuAfterLoad = await openLayoutMenu(page);
+    await menuAfterLoad.locator('[data-layout-row="Other"]').click();
+    await expect(page.locator("[data-ws-unclaimed]")).toHaveCount(0);
   });
 });
 

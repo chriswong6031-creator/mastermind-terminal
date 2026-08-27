@@ -197,8 +197,15 @@ test.describe("saved layouts", () => {
     expect(chartA).toHaveProperty("indParams");
     const indParams = chartA.indParams as Record<string, Record<string, unknown>>;
     expect(Object.keys(indParams).length).toBeGreaterThan(0);
+    // Reviewer ruling N12: every indicator's param bag carries `_vis` (lib/indicators.ts
+    // `defaultVis()` seeds it unconditionally for every enabled indicator — see the comment
+    // above), so this is a guaranteed property of the seed, never a maybe. The old
+    // `if ("_vis" in params) { ...; break; }` shape would pass silently even if `_vis` were
+    // dropped from every entry but one — an unconditional assertion over every entry is what
+    // actually proves the round trip.
     for (const params of Object.values(indParams)) {
-      if ("_vis" in params) { expect(typeof params._vis).toBe("object"); break; }
+      expect(params).toHaveProperty("_vis");
+      expect(typeof params._vis).toBe("object");
     }
     // …and the device preference it used to overwrite is still never part of the contract, at
     // either level (the anti-duplication law is unaffected by the nesting-depth fix).
