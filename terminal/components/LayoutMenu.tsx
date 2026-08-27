@@ -60,16 +60,32 @@ export type LayoutMenuProps = {
   onUseSuggested: (suggested: string) => void;
   onReloadLatest: () => void;
   onSaveAsCopy: () => void;
+  /** Whether THIS mount is currently the visible one (spec §4: "menu opens | focus → `.menu-save
+   *  input`... Guest → focus the `.layout-gate` row"). Both mount sites (desktop popover + overflow
+   *  drill-down) pass their own open/visible condition — the menu itself never guesses. */
+  isOpen: boolean;
 };
 
 export default function LayoutMenu({
   status, layouts, name, onNameChange, onSave, saving, feedback, deleteError,
   onLoad, onDelete, onRetry, onSignUp, rowAs = "div", onPicked,
   brainInWorkspace, onToggleBrainDock, onRename, onDuplicate, onExport, onImport,
-  staleName, onUseSuggested, onReloadLatest, onSaveAsCopy,
+  staleName, onUseSuggested, onReloadLatest, onSaveAsCopy, isOpen,
 }: LayoutMenuProps) {
   const t = useT();
   const isGuest = status === "auth";
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
+  const gateRowRef = useRef<HTMLButtonElement | null>(null);
+
+  // spec §4: "menu opens | focus → `.menu-save input` (the primary action). Guest → focus the
+  // `.layout-gate` row, since the input is disabled." A disabled element can never receive focus,
+  // so a guest session unconditionally lands on the sign-up row instead of silently focusing
+  // nothing. Re-fires every time `isOpen` flips false->true (a re-open is a fresh "menu opens").
+  useEffect(() => {
+    if (!isOpen) return;
+    if (isGuest) gateRowRef.current?.focus();
+    else nameInputRef.current?.focus();
+  }, [isOpen, isGuest]);
   // `rowAs` now controls ONLY `role="menuitem"` (the overflow menu's rows are real menuitems inside
   // a `role="menu"` container; the toolbar popover's are not). The element itself is ALWAYS a real
   // `<button>` — deliberately different from the pre-W2-A menu, where `rowAs="div"` rendered a
@@ -119,6 +135,7 @@ export default function LayoutMenu({
       {/* ── ZONE 1 · CREATE ─────────────────────────────────────────────── */}
       <div className="menu-save" data-layout-save>
         <input
+          ref={nameInputRef}
           placeholder={isGuest ? t("layoutSignInToSave") : t("saveCurrentAs")}
           value={name}
           disabled={isGuest || saving}
@@ -148,7 +165,7 @@ export default function LayoutMenu({
       </button>
 
       {isGuest && (
-        <button type="button" role="menuitem" className="menu-row layout-gate" data-layout-gate onClick={onSignUp}>
+        <button ref={gateRowRef} type="button" role="menuitem" className="menu-row layout-gate" data-layout-gate onClick={onSignUp}>
           <span>{t("gateLayouts")}</span>
           <span className="layout-gate-cta">{t("gateSignupCta")}</span>
         </button>

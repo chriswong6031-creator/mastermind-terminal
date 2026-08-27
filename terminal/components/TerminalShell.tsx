@@ -1247,6 +1247,11 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // workspace format" rather than on a revision number.
   const [workspaceName, setWorkspaceName] = useState<string | null>(null);
   const [workspaceRevision, setWorkspaceRevision] = useState<number | null>(null);
+  // The loaded row's stable uuid (Amendment A3 ruling 5 / M10 ABA fence): threaded through the
+  // save/rename/duplicate-source op bodies so a delete-recreate of the same name under a NEW row
+  // can never be silently matched by a write this session believes still targets the OLD one. A
+  // brand-new name (nothing loaded) has none — `undefined` there is not a bug, it is the CREATE case.
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [loadedEnvelope, setLoadedEnvelope] = useState<WorkspaceEnvelope | null>(null);
   // Whether the assistant dock is part of the workspace about to be saved. Default TRUE: byte-for-
   // byte today's product (freeze §7) — every guest/no-saved-workspace session already mounts Brain.
@@ -1257,8 +1262,8 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // carries a name string, so the op that produced it is tracked here for "Use <suggested>".
   const [pendingConflict, setPendingConflict] = useState<
     | { op: "save"; envelope: WorkspaceEnvelope }
-    | { op: "rename"; oldName: string; revision: number }
-    | { op: "duplicate"; sourceName: string }
+    | { op: "rename"; oldName: string; revision: number; id?: string }
+    | { op: "duplicate"; sourceName: string; sourceId?: string }
     | { op: "import"; envelope: WorkspaceEnvelope }
     | null
   >(null);
@@ -4167,12 +4172,12 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     try { json = await r.json(); } catch { /* a 204/empty body is not malformed — status alone still decides */ }
     return { status: r.status, json };
   }
-  const saveWorkspaceEnvelope = async (name: string, envelope: WorkspaceEnvelope, expectedRevision: number | null): Promise<WorkspaceOpOutcome> => {
-    const { status, json } = await postWorkspaceOp({ op: "save_workspace", name, envelope, expectedRevision });
+  const saveWorkspaceEnvelope = async (name: string, envelope: WorkspaceEnvelope, expectedRevision: number | null, expectedId?: string): Promise<WorkspaceOpOutcome> => {
+    const { status, json } = await postWorkspaceOp({ op: "save_workspace", name, envelope, expectedRevision, id: expectedId });
     return parseWorkspaceOutcome(status, json);
   };
-  const renameWorkspaceRow = async (oldName: string, newName: string, expectedRevision: number): Promise<WorkspaceOpOutcome> => {
-    const { status, json } = await postWorkspaceOp({ op: "rename", oldName, newName, expectedRevision });
+  const renameWorkspaceRow = async (oldName: string, newName: string, expectedRevision: number, expectedId?: string): Promise<WorkspaceOpOutcome> => {
+    const { status, json } = await postWorkspaceOp({ op: "rename", oldName, newName, expectedRevision, id: expectedId });
     return parseWorkspaceOutcome(status, json);
   };
 
@@ -4195,23 +4200,26 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
       const envelope = captureWorkspace({ layout: captureLayoutConfig(currentWorkspace()), brainIncluded, prior: loadedEnvelope ?? undefined });
       let targetName = typed;
       let expectedRevision: number | null = null;
+      let expectedId: string | undefined;
       let autoNaming = false;
       if (!typed) {
         autoNaming = true;
         targetName = nextLayoutName(layouts.map((l) => l.name));
       } else if (typed === workspaceName) {
         expectedRevision = workspaceRevision;
+        expectedId = workspaceId ?? undefined;
       }
       const taken = layouts.map((l) => l.name);
       let outcome: WorkspaceOpOutcome = { kind: "error" };
       for (let attempt = 0; attempt < 5; attempt++) {
-        outcome = await saveWorkspaceEnvelope(targetName, envelope, expectedRevision);
+        outcome = await saveWorkspaceEnvelope(targetName, envelope, expectedRevision, expectedId);
         if (autoNaming && outcome.kind === "name_conflict") { taken.push(targetName); targetName = nextLayoutName(taken); continue; }
         break;
       }
       if (outcome.kind === "ok") {
         setWorkspaceName(targetName);
         setWorkspaceRevision(outcome.revision);
+        setWorkspaceId(outcome.id ?? workspaceId);
         setLoadedEnvelope({ ...envelope, name: null, revision: outcome.revision });
         setLayoutFeedback({ kind: "saved", name: targetName });
         setLayoutName("");                          // only cleared once the name is really stored
@@ -4263,6 +4271,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     setLayoutOpen(false);
     setWorkspaceName(l.name);
     setWorkspaceRevision(rowWorkspaceRevision(l.config));
+    setWorkspaceId(l.id);
     setLoadedEnvelope(envelope);
     setBrainIncluded(brainIncludedFromEnvelope(envelope));
     setLayoutName("");
@@ -4291,6 +4300,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
       if (outcome.kind === "ok") {
         setWorkspaceName(candidate);
         setWorkspaceRevision(outcome.revision);
+        setWorkspaceId(outcome.id ?? null);
         setLoadedEnvelope({ ...envelope, name: null, revision: outcome.revision });
         setLayoutFeedback({ kind: "saved", name: candidate });
         setStaleWorkspaceName(null);
@@ -4311,10 +4321,13 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   async function renameWorkspaceAction(l: SavedWorkspace, newName: string) {
     setLayoutFeedback({ kind: "saving" });
     let revision = rowWorkspaceRevision(l.config);
+    // The row's own uuid never changes across a migrate-on-write conversion (same row, updated in
+    // place) — carried through so the ACTUAL rename call below is id-fenced too (A3 ruling 5).
+    const rowId = l.id;
     if (revision === null) {
       const migrated = migrateLegacy(l.config);
       if (!migrated.ok) { setLayoutFeedback({ kind: "error", message: t("wsRenameFailed") }); return; }
-      const migrateOutcome = await saveWorkspaceEnvelope(l.name, migrated.envelope, null);
+      const migrateOutcome = await saveWorkspaceEnvelope(l.name, migrated.envelope, null, rowId);
       if (migrateOutcome.kind === "ok") revision = migrateOutcome.revision;
       else if (migrateOutcome.kind === "stale_revision") {
         const fresh = await fetchWorkspaceRows();
@@ -4323,11 +4336,12 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
       }
       if (revision === null) { setLayoutFeedback({ kind: "error", message: t("wsRenameFailed") }); return; }
     }
-    const outcome = await renameWorkspaceRow(l.name, newName, revision);
+    const outcome = await renameWorkspaceRow(l.name, newName, revision, rowId);
     if (outcome.kind === "ok") {
       if (workspaceName === l.name) {
         setWorkspaceName(newName);
         setWorkspaceRevision(outcome.revision);
+        setWorkspaceId(rowId);
         setLoadedEnvelope((prev) => (prev ? { ...prev, revision: outcome.revision } : prev));
       }
       setLayoutFeedback({ kind: "renamed" });
@@ -4335,7 +4349,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
       return;
     }
     if (outcome.kind === "name_conflict") {
-      setPendingConflict({ op: "rename", oldName: l.name, revision });
+      setPendingConflict({ op: "rename", oldName: l.name, revision, id: rowId });
       setLayoutFeedback({ kind: "conflict", name: newName, suggested: nextLayoutName(layouts.map((x) => x.name)), op: "rename" });
       return;
     }
@@ -4353,7 +4367,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // Duplicate (spec §3.2). One click, no naming step — the store mints the free name.
   async function duplicateWorkspaceAction(l: SavedWorkspace) {
     setLayoutFeedback({ kind: "saving" });
-    const { status, json } = await postWorkspaceOp({ op: "duplicate", sourceName: l.name });
+    const { status, json } = await postWorkspaceOp({ op: "duplicate", sourceName: l.name, sourceId: l.id });
     const outcome = parseWorkspaceOutcome(status, json);
     if (status === 200 && isRecordLike(json) && json.ok) {
       setLayoutFeedback({ kind: "duplicated" });
@@ -4361,8 +4375,12 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
       return;
     }
     if (outcome.kind === "name_conflict") {
-      setPendingConflict({ op: "duplicate", sourceName: l.name });
+      setPendingConflict({ op: "duplicate", sourceName: l.name, sourceId: l.id });
       setLayoutFeedback({ kind: "conflict", name: l.name, suggested: nextLayoutName(layouts.map((x) => x.name)), op: "duplicate" });
+      return;
+    }
+    if (outcome.kind === "stale_revision") {
+      setLayoutFeedback({ kind: "error", message: t("wsDuplicateFailed") });
       return;
     }
     if (outcome.kind === "unauthenticated") { setLayoutStatus("auth"); setLayoutFeedback({ kind: "error", message: t("layoutSignInToSave") }); return; }
@@ -4411,7 +4429,9 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         const text = await file.text();
         let parsed: unknown;
         try { parsed = JSON.parse(text); } catch { setLayoutFeedback({ kind: "error", message: t(importFailureKey(undefined)) }); return; }
-        const validation = validateEnvelope(parsed);
+        // Wire mode (Amendment A2 ruling 5): an exported file's `name` is FILLED (contract §11), so
+        // stored-mode validation (which requires `name === null`) would reject every genuine export.
+        const validation = validateEnvelope(parsed, true);
         if (!validation.ok) { setLayoutFeedback({ kind: "error", message: t(importFailureKey(validation.errors[0]?.code)) }); return; }
         const envelope: WorkspaceEnvelope = { ...(parsed as WorkspaceEnvelope), name: null, revision: 1, migration: { source: "import", source_revision: null } };
         const candidate = nextLayoutName(layouts.map((l) => l.name));
@@ -4443,6 +4463,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
       if (outcome.kind === "ok") {
         setWorkspaceName(suggested);
         setWorkspaceRevision(outcome.revision);
+        setWorkspaceId(outcome.id ?? null);
         setLoadedEnvelope({ ...pending.envelope, name: null, revision: outcome.revision });
         setLayoutFeedback({ kind: "saved", name: suggested });
         setLayoutName("");
@@ -4451,16 +4472,20 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         setLayoutFeedback({ kind: "error", message: t("layoutSaveFailed") });
       }
     } else if (pending.op === "rename") {
-      const outcome = await renameWorkspaceRow(pending.oldName, suggested, pending.revision);
+      const outcome = await renameWorkspaceRow(pending.oldName, suggested, pending.revision, pending.id);
       if (outcome.kind === "ok") {
-        if (workspaceName === pending.oldName) { setWorkspaceName(suggested); setWorkspaceRevision(outcome.revision); }
+        if (workspaceName === pending.oldName) {
+          setWorkspaceName(suggested);
+          setWorkspaceRevision(outcome.revision);
+          if (pending.id) setWorkspaceId(pending.id);
+        }
         setLayoutFeedback({ kind: "renamed" });
         await refreshLayouts();
       } else {
         setLayoutFeedback({ kind: "error", message: t("wsRenameFailed") });
       }
     } else if (pending.op === "duplicate") {
-      const { status, json } = await postWorkspaceOp({ op: "duplicate", sourceName: pending.sourceName, newName: suggested });
+      const { status, json } = await postWorkspaceOp({ op: "duplicate", sourceName: pending.sourceName, sourceId: pending.sourceId, newName: suggested });
       if (status === 200 && isRecordLike(json) && json.ok) { setLayoutFeedback({ kind: "duplicated" }); await refreshLayouts(); }
       else setLayoutFeedback({ kind: "error", message: t("wsDuplicateFailed") });
     } else if (pending.op === "import") {
@@ -4484,7 +4509,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     try {
       const r = await fetch(`/api/layouts?id=${encodeURIComponent(id)}`, { method: "DELETE" });
       if (r.ok || r.status === 404) {
-        if (deleted && deleted.name === workspaceName) { setWorkspaceName(null); setWorkspaceRevision(null); setLoadedEnvelope(null); }
+        if (deleted && deleted.name === workspaceName) { setWorkspaceName(null); setWorkspaceRevision(null); setWorkspaceId(null); setLoadedEnvelope(null); }
         return;
       }
       if (r.status === 401) { setLayouts([]); setLayoutStatus("auth"); return; }
@@ -4905,7 +4930,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
             <div className="pophost tool-adv toolbar-overflow-item" data-toolbar-item data-toolbar-action="layouts">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !layoutOpen; closeAll(); setLayoutOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M9 9v10" /></svg>{t("layouts")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${layoutOpen ? " show" : ""}`} style={{ top: 32, right: 0, minWidth: 300 }} onClick={(e) => e.stopPropagation()}>
-                <LayoutMenu {...layoutMenuProps} />
+                <LayoutMenu {...layoutMenuProps} isOpen={layoutOpen} />
               </div>
             </div>
             <div className="pophost tool-adv toolbar-overflow-item" data-toolbar-item>
@@ -5010,7 +5035,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
                 ))}
 
                 {toolbarMoreView === "layouts" && (<>
-                  <LayoutMenu {...layoutMenuProps} rowAs="button" onPicked={() => setToolbarMoreOpen(false)} />
+                  <LayoutMenu {...layoutMenuProps} rowAs="button" onPicked={() => setToolbarMoreOpen(false)} isOpen={toolbarMoreOpen && toolbarMoreView === "layouts"} />
                 </>)}
 
                 {toolbarMoreView === "snapshot" && (<>
