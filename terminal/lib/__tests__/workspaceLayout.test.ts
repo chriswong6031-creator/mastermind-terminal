@@ -31,6 +31,21 @@ function validEnvelope(): Record<string, unknown> {
   };
 }
 
+/** A single-chart-widget envelope with the given chart-config overrides — used across the
+ *  Amendment A1/A2/A3 regression suites below to probe one field at a time. */
+function widgetConfig(config: Record<string, unknown>): Record<string, unknown> {
+  return {
+    schema: SCHEMA, requires: { floor: 1 }, revision: 1, name: null,
+    link_groups: { primary_security: { entity_type: "security" } },
+    widgets: [{
+      id: "chart-main", type: "chart", semantic_lane: "primary",
+      context_in: ["primary_security"], context_out: ["primary_security"],
+      config: { panes: ["NVDA"], ...config },
+    }],
+    migration: { source: "none", source_revision: null },
+  };
+}
+
 describe("frozen vocabularies — shape and cardinality (contract §1-§8)", () => {
   it("widget/lane/entity/migration vocabularies match the frozen list", () => {
     expect(WIDGET_TYPES).toEqual(["chart", "brain"]);
@@ -233,17 +248,6 @@ describe("validateEnvelope — rejects with the frozen codes (cross-field laws)"
 // `tests/test_intelligence_workspace_workspace_layout.py`'s own Amendment A1 regression suite
 // (Macro repo) case-for-case.
 describe("validateEnvelope — Amendment A1 regression (lockedVLine string, split enum)", () => {
-  const widgetConfig = (config: Record<string, unknown>): Record<string, unknown> => ({
-    schema: SCHEMA, requires: { floor: 1 }, revision: 1, name: null,
-    link_groups: { primary_security: { entity_type: "security" } },
-    widgets: [{
-      id: "chart-main", type: "chart", semantic_lane: "primary",
-      context_in: ["primary_security"], context_out: ["primary_security"],
-      config: { panes: ["NVDA"], ...config },
-    }],
-    migration: { source: "none", source_revision: null },
-  });
-
   it("a string lockedVLine validates", () => {
     expect(validateEnvelope(widgetConfig({ lockedVLine: "2026-08-12T14:30:00Z" }))).toEqual({ ok: true, errors: [] });
   });
@@ -290,6 +294,275 @@ describe("validateEnvelope — Amendment A1 regression (lockedVLine string, spli
     for (const value of [1, 2, 4]) {
       expect(validateEnvelope(widgetConfig({ split: value }))).toEqual({ ok: true, errors: [] });
     }
+  });
+});
+
+// ── Amendment A2/A3 regression (Phase 6 adversarial review + follow-up) ─────────────────────────
+describe("validateEnvelope — amended real-runtime grammar (Amendment A2 ruling 1)", () => {
+  it("composite ('NVDA+AMD'), caret ('^NDX'), and venue-qualified ('BINANCE:BTCUSDT') symbols validate", () => {
+    for (const symbol of ["NVDA+AMD", "^NDX", "BINANCE:BTCUSDT"]) {
+      expect(validateEnvelope(widgetConfig({ panes: [symbol] })), symbol).toEqual({ ok: true, errors: [] });
+    }
+  });
+
+  it("a hyphenated chart type ('line-markers') validates", () => {
+    expect(validateEnvelope(widgetConfig({ chartType: "line-markers" }))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("an underscore-prefixed indicator id ('_lab') validates in inds and hidden", () => {
+    expect(validateEnvelope(widgetConfig({ inds: ["_lab"] }))).toEqual({ ok: true, errors: [] });
+    expect(validateEnvelope(widgetConfig({ hidden: ["_lab"] }))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("a dotted premium-suite param key ('ob.showLast') validates inside indParams", () => {
+    const r = validateEnvelope(widgetConfig({ indParams: { structure: { "ob.showLast": 6, "ob.on": true } } }));
+    expect(r).toEqual({ ok: true, errors: [] });
+  });
+
+  it("a nested _vis shape at depth 2 (well within the depth-3 budget) validates", () => {
+    const r = validateEnvelope(widgetConfig({
+      indParams: { ema: { _vis: { days: { max: 366, min: 1, on: true } } } },
+    }));
+    expect(r).toEqual({ ok: true, errors: [] });
+  });
+
+  it("param nesting at exactly the depth-3 boundary validates; one level deeper is invalid", () => {
+    // depth budget: indicator -> paramName -> L1 -> L2 -> L3(leaf). One more dict level exhausts it.
+    const atBoundary = validateEnvelope(widgetConfig({
+      indParams: { ema: { p: { l1: { l2: { l3: 1 } } } } },
+    }));
+    expect(atBoundary).toEqual({ ok: true, errors: [] });
+    const beyond = validateEnvelope(widgetConfig({
+      indParams: { ema: { p: { l1: { l2: { l3: { l4: 1 } } } } } },
+    }));
+    expect(beyond.ok).toBe(false);
+  });
+
+  it("too many keys at a single param-object level is invalid", () => {
+    const tooMany: Record<string, number> = {};
+    for (let i = 0; i < 65; i++) tooMany[`k${i}`] = i;
+    const r = validateEnvelope(widgetConfig({ indParams: { ema: tooMany } }));
+    expect(r.ok).toBe(false);
+  });
+
+  it("64 keys at a param-object level is exactly the boundary and still valid", () => {
+    const exactly64: Record<string, number> = {};
+    for (let i = 0; i < 64; i++) exactly64[`k${i}`] = i;
+    const r = validateEnvelope(widgetConfig({ indParams: { ema: exactly64 } }));
+    expect(r).toEqual({ ok: true, errors: [] });
+  });
+});
+
+describe("validateEnvelope — key deny-list (Amendment A2 ruling 10)", () => {
+  it("__proto__/constructor/prototype are invalid widget ids", () => {
+    for (const bad of ["__proto__", "constructor", "prototype"]) {
+      const e = validEnvelope();
+      (e.widgets as Record<string, unknown>[])[0].id = bad;
+      const r = validateEnvelope(e);
+      expect(r.ok, bad).toBe(false);
+    }
+  });
+
+  it("__proto__/constructor/prototype are invalid link-group names", () => {
+    for (const bad of ["__proto__", "constructor", "prototype"]) {
+      const e = widgetConfig({});
+      // link_groups names must also match [a-z][a-z0-9_]{0,31} — these three all happen to,
+      // so the deny-list is the ONLY thing that can reject them here.
+      (e as Record<string, unknown>).link_groups = { [bad]: { entity_type: "security" } };
+      const widgets = (e as Record<string, unknown>).widgets as Record<string, unknown>[];
+      widgets[0].context_in = [];
+      widgets[0].context_out = [];
+      const r = validateEnvelope(e);
+      expect(r.ok, bad).toBe(false);
+    }
+  });
+
+  it("__proto__/constructor/prototype are invalid indParams indicator keys", () => {
+    for (const bad of ["__proto__", "constructor", "prototype"]) {
+      const r = validateEnvelope(widgetConfig({ indParams: { [bad]: { period: 1 } } }));
+      expect(r.ok, bad).toBe(false);
+    }
+  });
+
+  it("__proto__/constructor/prototype are invalid nested param keys (any depth)", () => {
+    for (const bad of ["__proto__", "constructor", "prototype"]) {
+      const r = validateEnvelope(widgetConfig({ indParams: { ema: { [bad]: 1 } } }));
+      expect(r.ok, bad).toBe(false);
+      const nested = validateEnvelope(widgetConfig({ indParams: { ema: { p: { [bad]: 1 } } } }));
+      expect(nested.ok, `nested ${bad}`).toBe(false);
+    }
+  });
+
+  it("__proto__/constructor/prototype are invalid compareCfg nested param keys", () => {
+    for (const bad of ["__proto__", "constructor", "prototype"]) {
+      const r = validateEnvelope(widgetConfig({ compare: ["SPY"], compareCfg: { SPY: { [bad]: 1 } } }));
+      expect(r.ok, bad).toBe(false);
+    }
+  });
+});
+
+describe("validateEnvelope — `requires` optional (Amendment A2 ruling 11)", () => {
+  it("a missing requires key entirely defaults to floor 1", () => {
+    const e = validEnvelope();
+    delete (e as Record<string, unknown>).requires;
+    expect(validateEnvelope(e)).toEqual({ ok: true, errors: [] });
+  });
+
+  it("an empty requires object ({}) defaults to floor 1", () => {
+    const e = validEnvelope();
+    e.requires = {};
+    expect(validateEnvelope(e)).toEqual({ ok: true, errors: [] });
+  });
+
+  it("requires with an unknown key is still malformed", () => {
+    const e = validEnvelope();
+    e.requires = { floor: 1, ceiling: 9 };
+    const r = validateEnvelope(e);
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("validateEnvelope — source_revision law (Amendment A2 ruling 12/13)", () => {
+  it("source_revision: 0 is malformed", () => {
+    const e = validEnvelope();
+    e.migration = { source: "chart_layout_v2", source_revision: 0 };
+    expect(validateEnvelope(e).ok).toBe(false);
+  });
+
+  it("source_revision: negative is malformed", () => {
+    const e = validEnvelope();
+    e.migration = { source: "chart_layout_v2", source_revision: -1 };
+    expect(validateEnvelope(e).ok).toBe(false);
+  });
+
+  it("source_revision: null remains valid (honest provenance for a natively-created workspace)", () => {
+    const e = validEnvelope();
+    e.migration = { source: "none", source_revision: null };
+    expect(validateEnvelope(e)).toEqual({ ok: true, errors: [] });
+  });
+});
+
+describe("validateEnvelope — wire mode (Amendment A2 ruling 5/14)", () => {
+  it("stored mode (default) still refuses a non-null name", () => {
+    const e = validEnvelope();
+    e.name = "My Workspace";
+    expect(validateEnvelope(e).ok).toBe(false);
+    expect(validateEnvelope(e, false).ok).toBe(false);
+  });
+
+  it("wire mode accepts a normalized non-null name", () => {
+    const e = validEnvelope();
+    e.name = "My Workspace";
+    expect(validateEnvelope(e, true)).toEqual({ ok: true, errors: [] });
+  });
+
+  it("wire mode still refuses an un-normalized name (leading/trailing space, doubled internal space)", () => {
+    for (const bad of ["  My Workspace", "My Workspace  ", "My  Workspace"]) {
+      const e = validEnvelope();
+      e.name = bad;
+      expect(validateEnvelope(e, true).ok, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("wire mode still accepts null (export of an unnamed-in-payload envelope is not a real case, but null must not regress)", () => {
+    const e = validEnvelope();
+    expect(validateEnvelope(e, true)).toEqual({ ok: true, errors: [] });
+  });
+});
+
+describe("validateEnvelope — number law (Amendment A3 ruling 2, IEEE-754 safe range + float window)", () => {
+  const MAX_SAFE = 9007199254740991;
+
+  it("an integer beyond the safe range is invalid_widget_config", () => {
+    const r = validateEnvelope(widgetConfig({ indParams: { ema21: { period: MAX_SAFE + 2 } } }));
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.errors.some((e) => e.code === "invalid_widget_config")).toBe(true);
+  });
+
+  it("an integer at the safe-range boundary is valid", () => {
+    expect(validateEnvelope(widgetConfig({ indParams: { ema21: { period: MAX_SAFE } } }))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("revision beyond the safe range is malformed", () => {
+    const e = validEnvelope();
+    e.revision = 2 ** 60;
+    expect(validateEnvelope(e).ok).toBe(false);
+  });
+
+  it("source_revision beyond the safe range is malformed", () => {
+    const e = validEnvelope();
+    e.migration = { source: "chart_layout_v2", source_revision: 2 ** 60 };
+    expect(validateEnvelope(e).ok).toBe(false);
+  });
+
+  it("requires.floor beyond the safe range is malformed_workspace, not unsupported_floor", () => {
+    const e = validEnvelope();
+    e.requires = { floor: 2 ** 60 };
+    const r = validateEnvelope(e);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && new Set(r.errors.map((x) => x.code))).toEqual(new Set(["malformed_workspace"]));
+  });
+
+  it("a non-integral float just below the floor (1e-4) is invalid", () => {
+    expect(validateEnvelope(widgetConfig({ indParams: { ema21: { mult: 1e-5 } } })).ok).toBe(false);
+  });
+
+  it("a non-integral float at the floor boundary (1e-4) is valid", () => {
+    expect(validateEnvelope(widgetConfig({ indParams: { ema21: { mult: 1e-4 } } }))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("a non-integral float at the ceiling (>=1e12) is invalid", () => {
+    expect(validateEnvelope(widgetConfig({ indParams: { ema21: { mult: 1_000_000_000_000.5 } } })).ok).toBe(false);
+  });
+
+  it("an integral-valued float AT 1e12 is valid (it normalizes to the plain integer)", () => {
+    expect(validateEnvelope(widgetConfig({ indParams: { ema21: { mult: 1e12 } } }))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("a non-integral float just below the ceiling is valid", () => {
+    expect(validateEnvelope(widgetConfig({ indParams: { ema21: { mult: 999999999999.9 } } }))).toEqual({ ok: true, errors: [] });
+  });
+
+  it.each([1.5, 0.0001, 123456.789])("representative non-integral float %f is accepted", (value) => {
+    expect(validateEnvelope(widgetConfig({ indParams: { ema21: { mult: value } } }))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("an integral-valued number digests identically to the equivalent integer (JS has one number type)", () => {
+    expect(envelopeDigest({ a: 20.0 })).toBe(envelopeDigest({ a: 20 }));
+  });
+});
+
+describe("validateEnvelope — error precedence (Amendment A3 ruling 3)", () => {
+  it("a future/unknown schema with an unknown top-level key reports unsupported_schema ALONE", () => {
+    const envelope = {
+      schema: "workspace_layout.v2", requires: { floor: 1 }, revision: 1, name: null,
+      link_groups: {}, widgets: [], migration: { source: "none", source_revision: null },
+      v2_new_field: 1,
+    };
+    expect(validateEnvelope(envelope)).toEqual({ ok: false, errors: [{ code: "unsupported_schema", path: "$.schema" }] });
+  });
+
+  it("an unsupported floor with an unknown top-level key reports unsupported_floor ALONE", () => {
+    const e = validEnvelope();
+    e.requires = { floor: 2 };
+    (e as Record<string, unknown>).some_future_top_level_field = 1;
+    expect(validateEnvelope(e)).toEqual({ ok: false, errors: [{ code: "unsupported_floor", path: "$.requires.floor" }] });
+  });
+
+  it("a structurally malformed requires (not merely unsupported) folds into the general sweep", () => {
+    const e = validEnvelope();
+    e.requires = { floor: 1, ceiling: 9 };
+    const r = validateEnvelope(e);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.errors.some((x) => x.code === "malformed_workspace")).toBe(true);
+  });
+
+  it("a supported floor (1) never short-circuits other genuine errors", () => {
+    const e = validEnvelope();
+    e.revision = -1; // a genuine, unrelated defect
+    const r = validateEnvelope(e);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.errors.some((x) => x.code === "malformed_workspace" && x.path === "$.revision")).toBe(true);
   });
 });
 

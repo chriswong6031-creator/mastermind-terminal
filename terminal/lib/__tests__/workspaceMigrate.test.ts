@@ -10,6 +10,14 @@ const FIXTURES_DIR = fileURLToPath(new URL("./fixtures/workspace/", import.meta.
 type ValidVector = { input: unknown; expected: WorkspaceEnvelope };
 const loadVector = (name: string): ValidVector => JSON.parse(readFileSync(`${FIXTURES_DIR}${name}`, "utf8"));
 
+/** `migrateLegacy`'s tolerant (`strict=false`) success shape carries `unclaimed`; the strict
+ *  shape does not. This narrows a `{ok:true}` result to the tolerant shape for tests that only
+ *  ever call the tolerant mode — asserting `"unclaimed" in result` rather than trusting `strict`. */
+function tolerantUnclaimed(result: { ok: true; envelope: WorkspaceEnvelope; unclaimed?: string[] } | { ok: false; code: string }): string[] {
+  if (!result.ok || !("unclaimed" in result) || !result.unclaimed) throw new Error("expected a tolerant-mode success result");
+  return result.unclaimed;
+}
+
 const VALID_VECTOR_FILES = [
   "legacy_v0_bare.json",
   "legacy_v0_minimal.json",
@@ -200,6 +208,30 @@ describe("captureWorkspace", () => {
     expect(chart.config.compare).toEqual(["QQQ"]);
     expect(validateEnvelope(envelope)).toEqual({ ok: true, errors: [] });
   });
+
+  it("carries indParams with a real _vis object intact (Amendment A2 ruling 1 closes the silent-drop defect)", () => {
+    // Every indicator's live/default param bag carries a `_vis` key (lib/indicators.ts defaultVis(),
+    // a nested {on,min,max}-per-range object). The ORIGINAL frozen validator's shallow-primitives-
+    // only `indParams` law rejected this outright, so `captureWorkspace` silently dropped `indParams`
+    // WHOLESALE on every real save with any indicator enabled — found by this worker AND the
+    // reviewer independently, ruled a real contract defect, and fixed via the depth-3 nesting law.
+    const layoutWithVis = {
+      ...BASELINE,
+      inds: ["ema21"],
+      indParams: {
+        ema21: {
+          length: 21,
+          _vis: { days: { on: true, min: 1, max: 366 }, weeks: { on: true, min: 1, max: 52 } },
+        },
+      },
+    };
+    const envelope = captureWorkspace({ layout: layoutWithVis, brainIncluded: false });
+    const chart = envelope.widgets.find((w) => w.type === "chart") as { config: Record<string, unknown> };
+    expect(chart.config).toHaveProperty("indParams"); // no longer dropped wholesale
+    const indParams = chart.config.indParams as Record<string, Record<string, unknown>>;
+    expect(indParams.ema21._vis).toEqual({ days: { on: true, min: 1, max: 366 }, weeks: { on: true, min: 1, max: 52 } });
+    expect(validateEnvelope(envelope)).toEqual({ ok: true, errors: [] });
+  });
 });
 
 describe("migrateLegacy — direct sanity checks beyond the golden vectors", () => {
@@ -219,5 +251,74 @@ describe("migrateLegacy — direct sanity checks beyond the golden vectors", () 
     };
     const result = migrateLegacy(envelope);
     expect(result).toEqual({ ok: true, envelope });
+  });
+});
+
+// ── Amendment A3 ruling 1: direction-scoped lossless law (WRITE/IMPORT strict, READ/RENDER
+// tolerant) applied to the LEGACY active/tf scalar mappings specifically — these are owned fields
+// under the same law even though they are not literal CHART_CONFIG_FIELDS keys on the wire.
+describe("migrateLegacy — direction-scoped lossless law for the legacy active/tf mapping", () => {
+  it("strict=true (default): a present-but-wrong-typed legacy `active` refuses rather than drops", () => {
+    const result = migrateLegacy({ active: 12345, tf: "1D" });
+    expect(result).toEqual({ ok: false, code: "invalid_widget_config" });
+  });
+
+  it("strict=true (default): a present-but-wrong-typed legacy `tf` refuses rather than drops", () => {
+    const result = migrateLegacy({ active: "AAPL", tf: 999 });
+    expect(result).toEqual({ ok: false, code: "invalid_widget_config" });
+  });
+
+  it("strict=false: a present-but-wrong-typed legacy `active` is unclaimed, not refused", () => {
+    const result = migrateLegacy({ active: 12345, tf: "1D" }, false);
+    expect(result.ok).toBe(true);
+    expect(tolerantUnclaimed(result)).toEqual(["panes"]);
+    expect(result.ok && result.envelope.widgets[0].config).not.toHaveProperty("panes");
+    expect(result.ok && (result.envelope.widgets[0].config as Record<string, unknown>).paneTfs).toEqual(["1D"]);
+  });
+
+  it("strict=false: a present-but-wrong-typed legacy `tf` is unclaimed, not refused", () => {
+    const result = migrateLegacy({ active: "AAPL", tf: 999 }, false);
+    expect(result.ok).toBe(true);
+    expect(tolerantUnclaimed(result)).toEqual(["paneTfs"]);
+    expect(result.ok && result.envelope.widgets[0].config).not.toHaveProperty("paneTfs");
+    expect(result.ok && (result.envelope.widgets[0].config as Record<string, unknown>).panes).toEqual(["AAPL"]);
+  });
+
+  it("strict is the default and matches the pre-A3 call shape (no `unclaimed` key leaks in)", () => {
+    const refused = migrateLegacy({ panes: ["AAPL"], split: 3 });
+    expect(refused).toEqual({ ok: false, code: "invalid_widget_config" });
+    const ok = migrateLegacy({ panes: ["AAPL"] });
+    expect(Object.keys(ok)).toEqual(["ok", "envelope"]);
+  });
+
+  it("tolerant mode on a fully clean input returns an empty unclaimed list", () => {
+    const result = migrateLegacy({ panes: ["AAPL"], tf: "1D" }, false);
+    expect(result.ok).toBe(true);
+    expect(tolerantUnclaimed(result)).toEqual([]);
+  });
+
+  it("tolerant mode never raises and strict mode never raises either, on hostile shapes", () => {
+    const hostileConfigs = [
+      { panes: [1, 2, 3] },
+      { schemaVersion: 2, panes: { nested: true } },
+      { active: ["a", "b"] },
+    ];
+    for (const cfg of hostileConfigs) {
+      expect(() => migrateLegacy(cfg, true)).not.toThrow();
+      expect(() => migrateLegacy(cfg, false)).not.toThrow();
+    }
+  });
+
+  it("the already-canonical passthrough (row 3) is unaffected by strict — never carries an unclaimed key either way", () => {
+    const envelope: WorkspaceEnvelope = {
+      schema: SCHEMA, requires: { floor: 1 }, revision: 1, name: null,
+      link_groups: { primary_security: { entity_type: "security" } },
+      widgets: [{ id: "chart-main", type: "chart", semantic_lane: "primary", context_in: ["primary_security"], context_out: ["primary_security"], config: { panes: ["AAPL"] } }],
+      migration: { source: "none", source_revision: null },
+    };
+    const strict = migrateLegacy(envelope, true);
+    const tolerant = migrateLegacy(envelope, false);
+    expect(strict).toEqual({ ok: true, envelope });
+    expect(tolerant).toEqual({ ok: true, envelope });
   });
 });
