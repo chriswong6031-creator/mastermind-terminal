@@ -6,7 +6,7 @@ import {
   type LayoutDb, type SaveMode,
 } from "@/lib/layouts";
 import { createLayoutFixtureDb, fixtureLayoutUserId, GUEST_COOKIE, LAYOUT_FAULT_COOKIE, LAYOUT_STORE_COOKIE, type LayoutFault } from "@/lib/layoutsFixtureDb";
-import { rowStateFor, validateEnvelope } from "@/lib/workspaceLayout";
+import { rowStateFor, validateEnvelope, SCHEMA as WORKSPACE_SCHEMA } from "@/lib/workspaceLayout";
 
 // Saved chart layouts (S6) — per-user persisted workspaces. Thin HTTP shell; every rule lives in
 // `lib/layouts.ts`, which is where the reasoning about names, atomicity and failure states is
@@ -135,7 +135,21 @@ export async function POST(req: Request) {
   if (op === "rename") return handleRename(ctx, body);
   if (op === "duplicate") return handleDuplicate(ctx, body);
 
-  // Default/legacy save semantics — UNCHANGED for callers that never send `op`.
+  // Default/legacy save semantics — UNCHANGED for callers that never send `op`. Reviewer ruling B3:
+  // this path's `saveLayout` is a blind upsert (contract §4 forbids blind-upserting a
+  // `workspace_layout.v1` payload) — a legacy/naive client (or the reviewer's own P3 probe) sending
+  // `{name, config}` where `config` is ALREADY a stored workspace envelope must never silently
+  // clobber it outside the revision-fenced `save_workspace` op. Refused outright rather than routed
+  // through the unfenced legacy path. NEVER bypassed in production (`isE2eFixture()` is hardcoded
+  // false outside the Playwright dev server, same as every other `TERMINAL_E2E_FIXTURE` branch in
+  // this file) — bypassed ONLY under the e2e fixture, because `validateEnvelope` itself always
+  // refuses `requires.floor > FLOOR_SUPPORTED` even through the fenced `save_workspace` op, so
+  // `e2e/layoutStore.ts`'s `seedFutureFloorWorkspace`/`seedUnreadableWorkspace` have no OTHER way to
+  // construct a row this build can only ever ENCOUNTER (e.g. synced from a newer client), never
+  // create itself — the same "store config verbatim" test backdoor those helpers already document.
+  if (!isE2eFixture() && isRecord(body.config) && body.config.schema === WORKSPACE_SCHEMA) {
+    return NextResponse.json({ error: "malformed_workspace" }, { status: 400 });
+  }
   const mode: SaveMode = body.mode === "create" ? "create" : "overwrite";
   const result = await saveLayout(ctx.db, ctx.userId, { name: body.name, config: body.config, mode });
   if (result.ok) return NextResponse.json({ ok: true, id: result.id });

@@ -113,6 +113,32 @@ describe("POST /api/layouts", () => {
     expect(r.status).toBe(200);
     await expect(r.json()).resolves.toEqual({ ok: true, id: "L1" });
   });
+
+  it("reviewer ruling B3 (hostile review's P3): refuses a legacy save whose config is ALREADY a workspace envelope, rather than blind-upserting over it", async () => {
+    // Contract §4 forbids a blind upsert of a `workspace_layout.v1` payload — only the revision-
+    // fenced `save_workspace` op may write one. A legacy/naive client (or the reviewer's own P3
+    // probe) sending `{name, config}` where `config.schema` is ALREADY the workspace schema must be
+    // refused BEFORE `saveLayout` ever runs. Queuing `OUTAGE` as the only scripted DB response is
+    // the tripwire: if the guard did NOT short-circuit, `saveLayout` would consume it and this test
+    // would observe a 503, not the 400 asserted below — so a 400 here proves zero DB calls were
+    // made, and therefore whatever is actually stored (e.g. a real revision-7 row) cannot have been
+    // touched.
+    H.results = [OUTAGE];
+    const r = await post({
+      name: "Swing",
+      config: {
+        schema: "workspace_layout.v1",
+        requires: { floor: 1 },
+        revision: 7,
+        name: "Swing",
+        link_groups: {},
+        widgets: [],
+        migration: { source: "none", source_revision: null },
+      },
+    });
+    expect(r.status).toBe(400);
+    await expect(r.json()).resolves.toEqual({ error: "malformed_workspace" });
+  });
 });
 
 describe("DELETE /api/layouts", () => {
