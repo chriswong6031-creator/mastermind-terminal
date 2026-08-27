@@ -1359,15 +1359,24 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   const [drawStyleOverrides, setDrawStyleOverrides] = useState<
     Partial<Record<DrawKind, Partial<ShellDrawingStyle>>>
   >({});
+  // The colour the user last chose anywhere. Width and dash stay strictly
+  // per-tool (Highlighter is 8px, Fib is dashed), but a colour is a global
+  // intent: picking one and then reaching for another tool used to silently
+  // fall back to blue, so a custom colour could never actually be kept.
+  const [lastDrawingColor, setLastDrawingColor] = useState<string | null>(null);
   const drawStyle = useMemo<ShellDrawingStyle>(() => {
     const defaults = tool ? getDrawingTool(tool)?.defaults : undefined;
     const override = tool ? drawStyleOverrides[tool] : undefined;
+    // Tools whose default encodes MEANING rather than taste (Long Position is
+    // var(--up), Short Position var(--down)) keep their own colour.
+    const semanticDefault = typeof defaults?.color === "string" && defaults.color.startsWith("var(");
+    const inherited = semanticDefault ? undefined : lastDrawingColor ?? undefined;
     return {
-      color: override?.color ?? defaults?.color ?? "#4d82ff",
+      color: override?.color ?? inherited ?? defaults?.color ?? "#4d82ff",
       width: override?.width ?? defaults?.width ?? 1.5,
       dash: override?.dash ?? defaults?.dash ?? "solid",
     };
-  }, [drawStyleOverrides, tool]);
+  }, [drawStyleOverrides, lastDrawingColor, tool]);
   const patchDrawStyle = useCallback((patch: Partial<ShellDrawingStyle>, explicitKind?: DrawKind) => {
     const targetKind = explicitKind ?? tool;
     if (!targetKind) return;
@@ -1376,6 +1385,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
       ...(typeof patch.width === "number" && Number.isFinite(patch.width) ? { width: patch.width } : {}),
       ...(patch.dash === "solid" || patch.dash === "dashed" || patch.dash === "dotted" ? { dash: patch.dash } : {}),
     };
+    if (safePatch.color) setLastDrawingColor(safePatch.color);
     setDrawStyleOverrides((current) => ({
       ...current,
       [targetKind]: { ...current[targetKind], ...safePatch },
@@ -2137,6 +2147,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         if (value.magnet === "off" || value.magnet === "weak" || value.magnet === "strong") setMagnet(value.magnet);
         if (typeof value.sticky === "boolean") setDrawingSticky(value.sticky);
         if (typeof value.visible === "boolean") setDrawingsVisible(value.visible);
+        if (typeof value.lastColor === "string" && value.lastColor.trim()) setLastDrawingColor(value.lastColor.trim());
         if (value.styles && typeof value.styles === "object" && !Array.isArray(value.styles)) {
           const styles: Partial<Record<DrawKind, Partial<ShellDrawingStyle>>> = {};
           for (const [id, candidate] of Object.entries(value.styles as Record<string, unknown>)) {
@@ -2158,8 +2169,8 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   }, []);
   useEffect(() => {
     if (!drawingPrefsHydrated) return;
-    try { localStorage.setItem("mm.drawing.preferences", JSON.stringify({ magnet, sticky: drawingSticky, visible: drawingsVisible, styles: drawStyleOverrides })); } catch {}
-  }, [drawStyleOverrides, drawingPrefsHydrated, drawingSticky, drawingsVisible, magnet]);
+    try { localStorage.setItem("mm.drawing.preferences", JSON.stringify({ magnet, sticky: drawingSticky, visible: drawingsVisible, styles: drawStyleOverrides, ...(lastDrawingColor ? { lastColor: lastDrawingColor } : {}) })); } catch {}
+  }, [drawStyleOverrides, drawingPrefsHydrated, drawingSticky, drawingsVisible, lastDrawingColor, magnet]);
   // Drawing ownership is a hard cache boundary. Guest drawings remain in the
   // guest collection; an account always reloads its authoritative server copy.
   // This also handles sign-out and direct account-to-account session changes.
