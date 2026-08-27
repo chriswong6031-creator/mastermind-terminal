@@ -70,10 +70,21 @@ async function currentRows(page: Page): Promise<{ id: string; name: string; conf
 
 /**
  * Make the NEXT save of `name` from `page` land on a stale revision — as if another device had
- * already saved over it. Reads the row's current envelope, then performs one more `save_workspace`
- * write "from elsewhere" (same store, same cookies, a fetch the page itself issues) so the
- * revision the UI is still holding is now one behind. Requires `name` to already be a saved
- * `workspace_layout.v1` row (own a numeric `config.revision`).
+ * already saved over it. Reads the row's current envelope, mutates its chart widget content (a
+ * flipped `sync`), then performs one more `save_workspace` write "from elsewhere" (same store, same
+ * cookies, a fetch the page itself issues) so the revision the UI is still holding is now one
+ * behind. Requires `name` to already be a saved `workspace_layout.v1` row (own a numeric
+ * `config.revision`).
+ *
+ * The content mutation is LOAD-BEARING, not decorative: Amendment A3 ruling 4 (M9 retry
+ * idempotency) recognizes a 0-rows-updated write as an already-applied SUCCESS, not a conflict,
+ * when the row's current content is byte-identical to what THIS caller attempted to write. If the
+ * "elsewhere" write here echoed the SAME content back (as it did before this fix), the real page's
+ * own subsequent save — capturing the SAME unchanged live workspace — would independently compute
+ * IDENTICAL bytes, and the two would be indistinguishable from "my own retried write": the CAS path
+ * would (correctly, per the frozen law) report success instead of the `stale_revision` this helper
+ * exists to reproduce. A genuinely divergent "elsewhere" write is what makes the two writes
+ * distinguishable, which is what a real second device would produce anyway.
  */
 export async function forceStaleRevision(page: Page, name: string): Promise<void> {
   const rows = await currentRows(page);
@@ -83,10 +94,14 @@ export async function forceStaleRevision(page: Page, name: string): Promise<void
   }
   const revision = (row.config as { revision: number }).revision;
   const outcome = await page.evaluate(async ({ name, config, revision }) => {
+    type Widget = { type: string; config: Record<string, unknown> };
+    const envelope = JSON.parse(JSON.stringify(config)) as { widgets: Widget[] };
+    const chart = envelope.widgets.find((w) => w.type === "chart");
+    if (chart) chart.config.sync = chart.config.sync !== true; // genuinely different content
     const r = await fetch("/api/layouts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ op: "save_workspace", name, envelope: config, expectedRevision: revision }),
+      body: JSON.stringify({ op: "save_workspace", name, envelope, expectedRevision: revision }),
     });
     return { status: r.status, body: await r.json().catch(() => null) };
   }, { name, config: row.config, revision });

@@ -181,23 +181,27 @@ test.describe("saved layouts", () => {
     const chartA = configA.widgets.find((w: any) => w.type === "chart").config;
     expect(chartA.split).toBe(4);
     expect(chartA.panes).toHaveLength(4);
-    // Three of the four fields the shipped v1 config silently dropped are now part of the
-    // contract…
+    // All four fields the shipped v1 config silently dropped are now part of the contract…
     for (const owned of ["sync", "split", "hidden"]) expect(chartA).toHaveProperty(owned);
-    // …`indParams` is NOT (KNOWN GAP, discovered during this build, evidence in the worker's final
-    // report): every indicator's default/live param bag carries a `_vis` key
-    // (lib/indicators.ts defaultVis(), a NESTED OBJECT of {on,min,max} ranges), and the frozen
-    // `workspaceLayout.ts` validator's `indParams` field law (`validateParamBlock` ->
-    // `isBoundedPrimitive`) accepts only primitive sub-values — so `_vis` fails validation and
-    // `captureWorkspace` silently drops `indParams` WHOLESALE for every real save with any
-    // indicator enabled, i.e. effectively always. This defeats one of the four round-trip fixes
-    // `lib/layoutConfig.ts`'s own header names as the reason this contract exists ("indParams —
-    // NOT saved... an EMA(20) layout loaded as EMA(50)"). Out of this packet's scope to fix
-    // (`workspaceLayout.ts`/`workspaceMigrate.ts` are frozen, Macro-owned, not in OWNED FILES) —
-    // needs a contract amendment analogous to Amendment A1 (lockedVLine/split). Asserting the
-    // TRUE current behavior here rather than a false claim.
-    expect(chartA).not.toHaveProperty("indParams");
-    // …and the device preference it used to overwrite is not, at either level.
+    // …INCLUDING `indParams`, restored to a TRUE lossless round trip by Amendment A2 ruling 1 (the
+    // depth-3 nested-object law): every indicator's default/live param bag carries a `_vis` key
+    // (lib/indicators.ts defaultVis(), a nested object of {on,min,max} ranges) which the ORIGINAL
+    // frozen validator's shallow-primitives-only `indParams` law rejected outright, silently
+    // dropping `indParams` WHOLESALE for every real save with any indicator enabled — the exact
+    // regression `lib/layoutConfig.ts`'s own header names as the reason this contract exists
+    // ("indParams — NOT saved... an EMA(20) layout loaded as EMA(50)"). This worker found the defect
+    // and the reviewer independently confirmed it; the commissioning session ruled it a real
+    // contract defect (not a Terminal bug) and fixed the Macro-owned validator to allow bounded
+    // nesting up to depth 3 below the per-indicator object — `workspaceLayout.ts`'s TS mirror now
+    // matches. `indParams` therefore survives here whenever any indicator is enabled.
+    expect(chartA).toHaveProperty("indParams");
+    const indParams = chartA.indParams as Record<string, Record<string, unknown>>;
+    expect(Object.keys(indParams).length).toBeGreaterThan(0);
+    for (const params of Object.values(indParams)) {
+      if ("_vis" in params) { expect(typeof params._vis).toBe("object"); break; }
+    }
+    // …and the device preference it used to overwrite is still never part of the contract, at
+    // either level (the anti-duplication law is unaffected by the nesting-depth fix).
     expect(configA).not.toHaveProperty("favTF");
     expect(chartA).not.toHaveProperty("favTF");
 
