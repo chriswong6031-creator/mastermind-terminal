@@ -64,13 +64,18 @@ export type LayoutMenuProps = {
    *  input`... Guest → focus the `.layout-gate` row"). Both mount sites (desktop popover + overflow
    *  drill-down) pass their own open/visible condition — the menu itself never guesses. */
   isOpen: boolean;
+  /** Field names the tolerant READ migration of the CURRENTLY LOADED workspace could not claim
+   *  (spec §3.7, reviewer ruling B2) — empty when the load was clean or nothing is loaded. A
+   *  DURABLE disclosure (not a `feedback`-kind transient), so it renders independently of whatever
+   *  `feedback` is currently showing. */
+  unclaimedFields: string[];
 };
 
 export default function LayoutMenu({
   status, layouts, name, onNameChange, onSave, saving, feedback, deleteError,
   onLoad, onDelete, onRetry, onSignUp, rowAs = "div", onPicked,
   brainInWorkspace, onToggleBrainDock, onRename, onDuplicate, onExport, onImport,
-  staleName, onUseSuggested, onReloadLatest, onSaveAsCopy, isOpen,
+  staleName, onUseSuggested, onReloadLatest, onSaveAsCopy, isOpen, unclaimedFields,
 }: LayoutMenuProps) {
   const t = useT();
   const isGuest = status === "auth";
@@ -172,6 +177,12 @@ export default function LayoutMenu({
       )}
 
       {/* ── FEEDBACK SLOT ── */}
+      {/* Unreadable-settings disclosure (spec §3.7, reviewer ruling B2): a DURABLE note, not a
+          transient `feedback` kind — it persists for as long as this workspace stays loaded and is
+          independent of whatever `feedback.kind` is currently showing. */}
+      {unclaimedFields.length > 0 && (
+        <div className="menu-note" role="status" data-ws-unclaimed>{t("wsUnclaimedNote")}</div>
+      )}
       {feedback.kind === "saved" && <div className="menu-note ok" role="status" data-layout-feedback="saved">{t("layoutSaved")}</div>}
       {feedback.kind === "renamed" && <div className="menu-note ok" role="status" data-layout-feedback="renamed">{t("wsRenamed")}</div>}
       {feedback.kind === "duplicated" && <div className="menu-note ok" role="status" data-layout-feedback="duplicated">{t("wsDuplicated")}</div>}

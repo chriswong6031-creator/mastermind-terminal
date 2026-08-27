@@ -149,7 +149,7 @@ import { nextLayoutName, type SavedLayout } from "@/lib/layouts";
 import { applyLayoutConfig, captureLayoutConfig, type LayoutWorkspace } from "@/lib/layoutConfig";
 import { migrateLegacy, workspaceToLayout, captureWorkspace } from "@/lib/workspaceMigrate";
 import { SCHEMA as WORKSPACE_SCHEMA, validateEnvelope, type WorkspaceEnvelope, type Widget as WorkspaceWidget } from "@/lib/workspaceLayout";
-import { workspaceRowState, parseWorkspaceOutcome, absoluteLocalTime, safeWorkspaceFilename, importFailureKey, brainIncludedFromEnvelope, type WorkspaceOpOutcome } from "@/lib/workspaceMenuOps";
+import { workspaceRowState, migrationUnclaimed, parseWorkspaceOutcome, absoluteLocalTime, safeWorkspaceFilename, importFailureKey, brainIncludedFromEnvelope, openBrainReincluding, type WorkspaceOpOutcome } from "@/lib/workspaceMenuOps";
 import { type PineScript } from "@/components/ChartPanel";
 
 type ShellDrawingStyle = { color: string; width: number; dash: Dash };
@@ -1252,6 +1252,11 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // can never be silently matched by a write this session believes still targets the OLD one. A
   // brand-new name (nothing loaded) has none — `undefined` there is not a bug, it is the CREATE case.
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  // Reviewer ruling B2: field names the tolerant READ migration could not claim from the loaded
+  // row (empty when the load was clean). Persists while THIS workspace stays loaded — a durable
+  // disclosure, not a transient toast — and clears the moment a different workspace is loaded (or
+  // nothing is loaded at all).
+  const [unclaimedFields, setUnclaimedFields] = useState<string[]>([]);
   const [loadedEnvelope, setLoadedEnvelope] = useState<WorkspaceEnvelope | null>(null);
   // Whether the assistant dock is part of the workspace about to be saved. Default TRUE: byte-for-
   // byte today's product (freeze §7) — every guest/no-saved-workspace session already mounts Brain.
@@ -2567,10 +2572,16 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   useEffect(() => {
     // Open the Brain widget. The script is deferred + cross-origin, so on early ?ai=1 deep-links
     // window.MMBrain may not exist yet — retry once after 800ms before giving up.
+    // Reviewer ruling M6(b): opening the assistant is itself the user asking for it — every entry
+    // point RE-INCLUDES the dock in the live workspace graph when it was toggled off, rather than
+    // opening a widget the workspace no longer declares (freeze §7's own membership rule flows both
+    // ways: a workspace can drop the dock, and asking for the assistant brings it back).
     const openBrain = () => {
-      const b = (window as any).MMBrain;
-      if (b?.open) { b.open(); return; }
-      window.setTimeout(() => (window as any).MMBrain?.open?.(), 800);
+      openBrainReincluding(setBrainIncluded, () => {
+        const b = (window as any).MMBrain;
+        if (b?.open) { b.open(); return; }
+        window.setTimeout(() => (window as any).MMBrain?.open?.(), 800);
+      });
     };
     window.addEventListener("mm:copilot", openBrain);
     try { if (new URLSearchParams(window.location.search).get("ai") === "1") openBrain(); } catch {}
@@ -4197,18 +4208,33 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     const typed = layoutName.trim();
     setLayoutSaving(true); setLayoutFeedback({ kind: "saving" }); setLayoutDeleteError(null); setStaleWorkspaceName(null);
     try {
-      const envelope = captureWorkspace({ layout: captureLayoutConfig(currentWorkspace()), brainIncluded, prior: loadedEnvelope ?? undefined });
       let targetName = typed;
       let expectedRevision: number | null = null;
       let expectedId: string | undefined;
       let autoNaming = false;
+      // Reviewer ruling N14: provenance (widget ids, migration.source) is carried over ONLY when
+      // this save targets the SAME loaded workspace identity — an ordinary save-over. A brand-new
+      // name from the current live state (blank auto-name, or typing a name that is not the one
+      // loaded) mints a genuinely NEW identity (`migration = {source:"none", source_revision:null}`,
+      // never the OLD workspace's provenance smuggled onto an object that never earned it).
+      let priorForCapture: WorkspaceEnvelope | undefined;
       if (!typed) {
         autoNaming = true;
         targetName = nextLayoutName(layouts.map((l) => l.name));
       } else if (typed === workspaceName) {
         expectedRevision = workspaceRevision;
         expectedId = workspaceId ?? undefined;
+        priorForCapture = loadedEnvelope ?? undefined;
       }
+      const captured = captureWorkspace({ layout: captureLayoutConfig(currentWorkspace()), brainIncluded, prior: priorForCapture });
+      // Reviewer ruling M4: capture never silently narrows the workspace. A field the live state
+      // held but that failed its own frozen validator (hostile/corrupted in-memory state) refuses
+      // the WRITE outright rather than persisting a quietly-smaller envelope.
+      if (captured.dropped.length > 0) {
+        setLayoutFeedback({ kind: "error", message: t("wsSaveUnreadable") });
+        return;
+      }
+      const envelope = captured.envelope;
       const taken = layouts.map((l) => l.name);
       let outcome: WorkspaceOpOutcome = { kind: "error" };
       for (let attempt = 0; attempt < 5; attempt++) {
@@ -4220,6 +4246,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         setWorkspaceName(targetName);
         setWorkspaceRevision(outcome.revision);
         setWorkspaceId(outcome.id ?? workspaceId);
+        setUnclaimedFields([]);                     // a fresh capture-then-save is clean by construction
         setLoadedEnvelope({ ...envelope, name: null, revision: outcome.revision });
         setLayoutFeedback({ kind: "saved", name: targetName });
         setLayoutName("");                          // only cleared once the name is really stored
@@ -4246,13 +4273,15 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   }
 
   // Load = migrate (legacy) or validate (native), then fold the resulting claims onto the live
-  // workspace and apply. `migrateLegacy` covers BOTH branches mission §1 describes: for an already
-  // `workspace_layout.v1` row it IS `validateEnvelope`; for a legacy row it is the deterministic
-  // migration (freeze §6) — in memory only, the ROW is never rewritten here (migrate-on-write is a
-  // SAVE-time act). A blocked row (`rowState !== "ok"`) is never clickable in the menu, so `!ok` here
-  // is defensive, not a real path.
+  // workspace and apply. `migrateLegacy(config, false)` (Amendment A3 READ/RENDER form, reviewer
+  // ruling B1) covers BOTH branches mission §1 describes: for an already `workspace_layout.v1` row
+  // it IS `validateEnvelope` (tolerant only of an unrecognized widget TYPE, contract §2's own
+  // documented fallback); for a legacy row it is the deterministic migration (freeze §6), per-field
+  // tolerant — in memory only, the ROW is never rewritten here (migrate-on-write is a SAVE-time act,
+  // and stays STRICT there). A row this build genuinely cannot open (`rowState !== "ok"`) is never
+  // clickable in the menu, so `!ok` here is defensive, not a real path.
   function loadLayout(l: SavedWorkspace) {
-    const migrated = migrateLegacy(l.config);
+    const migrated = migrateLegacy(l.config, false);
     if (!migrated.ok) return;
     const envelope = migrated.envelope;
     const next = applyLayoutConfig(workspaceToLayout(envelope), currentWorkspace());
@@ -4272,6 +4301,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     setWorkspaceName(l.name);
     setWorkspaceRevision(rowWorkspaceRevision(l.config));
     setWorkspaceId(l.id);
+    setUnclaimedFields(migrationUnclaimed(migrated));
     setLoadedEnvelope(envelope);
     setBrainIncluded(brainIncludedFromEnvelope(envelope));
     setLayoutName("");
@@ -4294,13 +4324,21 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     const target = staleWorkspaceName;
     setLayoutSaving(true);
     try {
-      const envelope = captureWorkspace({ layout: captureLayoutConfig(currentWorkspace()), brainIncluded });
+      // N14: a copy of the workspace the user was just looking at preserves ITS provenance
+      // (widget ids, migration.source) — this is a fork of an existing identity, not a new one.
+      const captured = captureWorkspace({ layout: captureLayoutConfig(currentWorkspace()), brainIncluded, prior: loadedEnvelope ?? undefined });
+      if (captured.dropped.length > 0) {
+        setLayoutFeedback({ kind: "error", message: t("wsSaveUnreadable") });
+        return;
+      }
+      const envelope = captured.envelope;
       const candidate = nextLayoutName(layouts.map((l) => l.name));
       const outcome = await saveWorkspaceEnvelope(candidate, envelope, null);
       if (outcome.kind === "ok") {
         setWorkspaceName(candidate);
         setWorkspaceRevision(outcome.revision);
         setWorkspaceId(outcome.id ?? null);
+        setUnclaimedFields([]);
         setLoadedEnvelope({ ...envelope, name: null, revision: outcome.revision });
         setLayoutFeedback({ kind: "saved", name: candidate });
         setStaleWorkspaceName(null);
@@ -4387,15 +4425,17 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     setLayoutFeedback({ kind: "error", message: t("wsDuplicateFailed") });
   }
 
-  // Export (spec §3.3): the canonical envelope, name filled from the row — for a BLOCKED row the
-  // untouched stored bytes instead, so an unreadable payload can still be rescued (freeze §6: "left
-  // exactly as it was saved").
+  // Export (spec §3.3): the canonical (tolerant-migrated) envelope, name filled from the row — for
+  // a BLOCKED row, or an "ok" row the tolerant READ still had to drop a field from (reviewer ruling
+  // B1: "clean when clean, raw bytes when not"), the untouched stored bytes instead, so an
+  // unreadable/degraded payload can still be rescued (freeze §6: "left exactly as it was saved").
   function exportWorkspaceAction(l: SavedWorkspace) {
     try {
       let body: unknown;
       if (l.rowState === "ok") {
-        const migrated = migrateLegacy(l.config);
-        body = migrated.ok ? { ...migrated.envelope, name: l.name } : l.config;
+        const migrated = migrateLegacy(l.config, false);
+        const clean = migrated.ok && migrationUnclaimed(migrated).length === 0;
+        body = clean && migrated.ok ? { ...migrated.envelope, name: l.name } : l.config;
       } else {
         body = l.config;
       }
@@ -4464,6 +4504,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         setWorkspaceName(suggested);
         setWorkspaceRevision(outcome.revision);
         setWorkspaceId(outcome.id ?? null);
+        setUnclaimedFields([]);
         setLoadedEnvelope({ ...pending.envelope, name: null, revision: outcome.revision });
         setLayoutFeedback({ kind: "saved", name: suggested });
         setLayoutName("");
@@ -4509,7 +4550,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     try {
       const r = await fetch(`/api/layouts?id=${encodeURIComponent(id)}`, { method: "DELETE" });
       if (r.ok || r.status === 404) {
-        if (deleted && deleted.name === workspaceName) { setWorkspaceName(null); setWorkspaceRevision(null); setWorkspaceId(null); setLoadedEnvelope(null); }
+        if (deleted && deleted.name === workspaceName) { setWorkspaceName(null); setWorkspaceRevision(null); setWorkspaceId(null); setUnclaimedFields([]); setLoadedEnvelope(null); }
         return;
       }
       if (r.status === 401) { setLayouts([]); setLayoutStatus("auth"); return; }
@@ -4549,6 +4590,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     onUseSuggested: useSuggestedWorkspaceName,
     onReloadLatest: reloadLatestWorkspace,
     onSaveAsCopy: saveWorkspaceAsCopy,
+    unclaimedFields,
   };
 
   // Generic-widget-graph fallback data (see the `.ws-extra-widgets` render site below): every
@@ -4787,7 +4829,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
           return <span className={`${cls} topbar-livebadge`} title={tip}><i />{label}</span>;
         })()}
         <div className="spacer" />
-        <button className="ai" onClick={() => (window as any).MMBrain?.toggle()}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
+        <button className="ai" onClick={() => openBrainReincluding(setBrainIncluded, () => (window as any).MMBrain?.toggle())}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
         <SettingsButton email={email} />
       </header>
       )}
@@ -4798,7 +4840,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         email={email}
         fromMacro={fromMacro}
         onBack={onBack}
-        onOpenCopilot={() => (window as any).MMBrain?.open()}
+        onOpenCopilot={() => openBrainReincluding(setBrainIncluded, () => (window as any).MMBrain?.open())}
         isTerminal
         activeKey={(() => {
           const pane = new URLSearchParams(urlSearch).get("pane");
@@ -5664,7 +5706,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
               {/* ── bottom button group (after Seasonality): full analysis + Ask AI ── */}
               <div className="sa-btn-group">
                 <button className="btn btn-primary" style={{ width: "100%", height: 38 }} onClick={() => setPaneOpen("overview")}>{t("openFullAnalysis")}</button>
-                <button className="btn btn-ghost" style={{ width: "100%", height: 36 }} onClick={() => (window as any).MMBrain?.open()}>{t("askAIabout")} {active} →</button>
+                <button className="btn btn-ghost" style={{ width: "100%", height: 36 }} onClick={() => openBrainReincluding(setBrainIncluded, () => (window as any).MMBrain?.open())}>{t("askAIabout")} {active} →</button>
               </div>
             </div>
           </div>

@@ -445,6 +445,16 @@ Lives in Zone 1, directly under the name+Save row — a property of the workspac
 - Toggling it adds/removes the `brain-dock` widget from the live workspace immediately (the Brain dock appears/disappears), so the switch is never a promise about a future save.
 - Disabled for guests, like Save.
 
+### 3.7 Unreadable-settings disclosure
+
+Added post-launch (reviewer ruling B1/B2, Amendment A3's direction-scoped lossless law): reading a workspace is now TOLERANT (`migrateLegacy(config, false)`) rather than strict — a legacy or otherwise-degraded row that has exactly one bad chart-config field opens anyway, with that ONE field silently no-claimed (never invented, never blocking the row). The freeze forbids a silent drop from ever going unmentioned to the user (§11's "never silently drops... and reports success" law extends here even though this is a load, not an import), so the drop surfaces as a durable disclosure rather than nothing at all.
+
+- **Surface**: the existing feedback slot, `<div className="menu-note" role="status" data-ws-unclaimed>` — the SAME visual family as `layoutSaved`/`wsRenamed`/etc. (`.menu-note`), but independent of the `feedback` transient-state machine: it does not compete with, replace, or get replaced by whatever `feedback.kind` is currently showing.
+- **Copy**: `wsUnclaimedNote` — "Some settings in this workspace couldn't be read. They'll be left out if you save it." / "此工作区的部分设置无法读取。保存时这些设置将不会保留。" States the fact (some settings unreadable) and the consequence (a save would drop them) — never a field name, never a raw §8 code.
+- **Lifecycle**: appears the moment a workspace whose tolerant migration returned a non-empty `unclaimed` list finishes loading; persists for as long as THAT workspace stays the loaded one (surviving renames, rename-conflict retries, the stale-revision fork — anything that does not load a DIFFERENT workspace); clears the instant a different workspace is loaded, the current one is deleted, or a fresh capture is successfully saved (a save always captures the LIVE in-memory state through the strict/lossless path, so post-save the workspace is clean by construction — see §M4 below). Never a toast, never auto-dismissing.
+- **Interaction with export** (§3.3): an "ok" row whose tolerant migration still has a non-empty `unclaimed` exports the RAW stored bytes, not the migrated envelope — the migrated envelope is deliberately missing the field(s) tolerant mode dropped, so it is the WORSE of the two artifacts to hand the user for a rescue. A genuinely clean "ok" row still exports the (byte-identical) migrated envelope as before.
+- **Interaction with save (M4)**: `captureWorkspace` (the capture of the LIVE, currently-rendered workspace — not the stored row) is a completely separate operation from the disclosure above; a corrupted/hostile LIVE state that captureWorkspace itself cannot cleanly capture is refused outright (`wsSaveUnreadable`, never a silent narrower save) rather than surfaced as this note. The two failure modes look similar in one sentence each but are checked at different moments: load-time tolerance (this section) vs. save-time refusal (M4).
+
 ---
 
 ## 4. Keyboard and focus
