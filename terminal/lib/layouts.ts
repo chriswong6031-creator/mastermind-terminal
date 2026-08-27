@@ -27,6 +27,8 @@
 // Exactness is deliberate: lookups have always been exact-name, so the constraint is exact-name
 // too. Case-folding would be a separate product ruling and would silently merge existing names.
 
+import { canonicalJson } from "./workspaceLayout";
+
 export type LayoutRow = Record<string, unknown>;
 export type LayoutDbError = { code?: string; message?: string } | null;
 export type LayoutDbResult = { data?: LayoutRow[] | LayoutRow | null; error?: LayoutDbError };
@@ -239,7 +241,7 @@ export type RenameWorkspaceResult =
 
 export type DuplicateWorkspaceResult =
   | { ok: true; id: string; name: string }
-  | { ok: false; reason: Exclude<WorkspaceFailureReason, "stale_revision"> };
+  | { ok: false; reason: WorkspaceFailureReason };
 
 /**
  * Save a `workspace_layout.v1` envelope under `name` for `userId`.
@@ -254,8 +256,14 @@ export type DuplicateWorkspaceResult =
  * concurrent writer already produced a `workspace_layout.v1` row under this name).
  *
  * `expectedRevision` as a number is the ordinary save-over path: one atomic conditional UPDATE
- * gated on `config->>'revision' = expected`. Zero rows updated is resolved by a follow-up read into
- * `not_found` vs `stale_revision` (contract §4) — never last-writer-wins.
+ * gated on `config->>'revision' = expected`. Zero rows updated is resolved by a follow-up read
+ * (contract §4, amended by A3 rulings 4/5 below).
+ *
+ * `expectedId`, when supplied, is the uuid of the row the caller believes it is targeting (loaded
+ * via an earlier read) — Amendment A3 ruling 5 (completing A2 ruling 9's ABA fence): the id
+ * predicate is added to BOTH conversion attempts (and the numbered-revision update), so a
+ * delete-recreate of the same name under a NEW row can never be silently matched by a stale
+ * caller's write. A pure CREATE (brand-new name, nothing loaded) has no id to supply.
  */
 export async function saveWorkspace(
   db: LayoutDb,
@@ -263,85 +271,134 @@ export async function saveWorkspace(
   name: unknown,
   envelope: Record<string, unknown>,
   expectedRevision: number | null,
+  expectedId?: string,
 ): Promise<SaveWorkspaceResult> {
   const workspaceName = normalizeLayoutName(name);
   if (!workspaceName) return { ok: false, reason: "invalid_name" };
+  const nowIso = () => new Date().toISOString();
 
   if (typeof expectedRevision === "number") {
     const nextRevision = expectedRevision + 1;
     const payload = { ...envelope, name: null, revision: nextRevision };
-    const updated = await db
+    let query = db
       .from(LAYOUTS_TABLE)
-      .update({ config: payload, updated_at: new Date().toISOString() })
+      .update({ config: payload, updated_at: nowIso() })
       .eq("user_id", userId)
       .eq("name", workspaceName)
-      .eq("config->>revision", String(expectedRevision))
-      .select("id");
+      .eq("config->>revision", String(expectedRevision));
+    if (expectedId) query = query.eq("id", expectedId);
+    const updated = await query.select("id");
     if (errOf(updated)) return { ok: false, reason: "unavailable" };
     const rows = rowsOf(updated);
     if (rows.length) {
       const id = str(rows[0]?.id);
       return id ? { ok: true, id, revision: nextRevision } : { ok: false, reason: "unavailable" };
     }
-    return resolveZeroRowUpdate(db, userId, workspaceName, "stale_revision");
+    return resolveZeroRowUpdate(db, userId, workspaceName, payload, nextRevision, expectedId);
   }
 
   const payload = { ...envelope, name: null, revision: 1 };
-  const nowIso = () => new Date().toISOString();
 
   // Migrate-on-write: two disjoint atomic attempts, together covering "row exists and is not yet
   // workspace_layout.v1" without ever matching an already-converted row (see the `LayoutQuery`
-  // doc-comment for why a single `.neq()` cannot do this alone).
-  const attempt1 = await db
+  // doc-comment for why a single `.neq()` cannot do this alone). A3 ruling 5: the id fence applies
+  // to BOTH attempts, not just one.
+  let attempt1Query = db
     .from(LAYOUTS_TABLE)
     .update({ config: payload, updated_at: nowIso() })
     .eq("user_id", userId)
     .eq("name", workspaceName)
-    .is("config->>schema", null)
-    .select("id");
+    .is("config->>schema", null);
+  if (expectedId) attempt1Query = attempt1Query.eq("id", expectedId);
+  const attempt1 = await attempt1Query.select("id");
   if (errOf(attempt1)) return { ok: false, reason: "unavailable" };
   if (rowsOf(attempt1).length) {
     const id = str(rowsOf(attempt1)[0]?.id);
     return id ? { ok: true, id, revision: 1 } : { ok: false, reason: "unavailable" };
   }
 
-  const attempt2 = await db
+  let attempt2Query = db
     .from(LAYOUTS_TABLE)
     .update({ config: payload, updated_at: nowIso() })
     .eq("user_id", userId)
     .eq("name", workspaceName)
-    .neq("config->>schema", WORKSPACE_SCHEMA)
-    .select("id");
+    .neq("config->>schema", WORKSPACE_SCHEMA);
+  if (expectedId) attempt2Query = attempt2Query.eq("id", expectedId);
+  const attempt2 = await attempt2Query.select("id");
   if (errOf(attempt2)) return { ok: false, reason: "unavailable" };
   if (rowsOf(attempt2).length) {
     const id = str(rowsOf(attempt2)[0]?.id);
     return id ? { ok: true, id, revision: 1 } : { ok: false, reason: "unavailable" };
   }
 
-  // Neither guarded update touched a row: either no row exists at all under this name (CREATE), or
-  // a concurrent writer already produced a workspace_layout.v1 row here (a stale attempt).
-  const existing = await db.from(LAYOUTS_TABLE).select("id").eq("user_id", userId).eq("name", workspaceName).maybeSingle();
-  if (errOf(existing)) return { ok: false, reason: "unavailable" };
-  if (rowsOf(existing).length) return { ok: false, reason: "stale_revision" };
-
-  const inserted = await db
-    .from(LAYOUTS_TABLE)
-    .insert({ user_id: userId, name: workspaceName, config: payload, updated_at: nowIso() })
-    .select("id");
-  const error = errOf(inserted);
-  if (error) return { ok: false, reason: error.code === CODE_UNIQUE_VIOLATION ? "name_conflict" : "unavailable" };
-  const id = str(rowsOf(inserted)[0]?.id);
-  return id ? { ok: true, id, revision: 1 } : { ok: false, reason: "unavailable" };
+  // Neither guarded update touched a row. Resolve via the shared retry/ABA-aware read; a genuine
+  // CREATE (no expectedId, nothing there at all) falls through to a plain INSERT.
+  const resolved = await resolveZeroRowUpdate(db, userId, workspaceName, payload, 1, expectedId);
+  if (resolved.ok) return resolved;
+  if (resolved.reason === "not_found" && !expectedId) {
+    const inserted = await db
+      .from(LAYOUTS_TABLE)
+      .insert({ user_id: userId, name: workspaceName, config: payload, updated_at: nowIso() })
+      .select("id");
+    const error = errOf(inserted);
+    if (error) return { ok: false, reason: error.code === CODE_UNIQUE_VIOLATION ? "name_conflict" : "unavailable" };
+    const id = str(rowsOf(inserted)[0]?.id);
+    return id ? { ok: true, id, revision: 1 } : { ok: false, reason: "unavailable" };
+  }
+  return resolved;
 }
 
-/** Shared "0 rows updated" resolver for the numbered-revision CAS path: a fresh read distinguishes
- *  a vanished row from one whose revision moved out from under the caller (contract §4). */
+/**
+ * Shared "0 rows updated" resolver for a conditional-UPDATE CAS path (contract §4, Amendment A3
+ * rulings 4/5 — M9 retry idempotency + the ABA fence's follow-up-read half):
+ *
+ * - **M9 (retry idempotency):** a retried HTTP call whose FIRST attempt actually landed server-side
+ *   sees 0 rows on the retry (the WHERE clause consumed the prior revision) — read the row and, if
+ *   its revision already equals `targetRevision` AND its canonical content equals exactly what THIS
+ *   call attempted to write, the write already succeeded: report success, never `stale_revision`.
+ * - **A3 ruling 4:** the follow-up read is by the loaded row's stable `id` when one was supplied,
+ *   NEVER by `(user_id, name)` alone — a concurrent RENAME of the same physical row would make a
+ *   name-keyed read miss it entirely and misreport `not_found` instead of the true `stale_revision`.
+ * - **ABA (ruling 5, ruling 9 completed):** if the id-keyed read finds nothing, a SEPARATE name-only
+ *   read distinguishes "genuinely gone" (`not_found`) from "a delete-recreate put a DIFFERENT row
+ *   under this name" (`stale_revision`, never silently treated as if nothing were there).
+ */
 async function resolveZeroRowUpdate(
-  db: LayoutDb, userId: string, name: string, whenPresent: "stale_revision",
-): Promise<{ ok: false; reason: WorkspaceFailureReason }> {
-  const existing = await db.from(LAYOUTS_TABLE).select("id").eq("user_id", userId).eq("name", name).maybeSingle();
+  db: LayoutDb, userId: string, name: string,
+  attemptedPayload: Record<string, unknown>, targetRevision: number,
+  expectedId: string | undefined,
+): Promise<{ ok: true; id: string; revision: number } | { ok: false; reason: WorkspaceFailureReason }> {
+  const retryEchoOrConflict = (row: LayoutRow): { ok: true; id: string; revision: number } | { ok: false; reason: WorkspaceFailureReason } => {
+    const id = str(row.id);
+    const config = row.config;
+    if (
+      row.name === name &&
+      isRecordLike(config) &&
+      config.revision === targetRevision &&
+      canonicalJson(config) === canonicalJson(attemptedPayload)
+    ) {
+      return id ? { ok: true, id, revision: targetRevision } : { ok: false, reason: "unavailable" };
+    }
+    return { ok: false, reason: "stale_revision" };
+  };
+
+  if (expectedId) {
+    const byId = await db.from(LAYOUTS_TABLE).select("id,name,config").eq("user_id", userId).eq("id", expectedId).maybeSingle();
+    if (errOf(byId)) return { ok: false, reason: "unavailable" };
+    const row = rowsOf(byId)[0];
+    if (row) return retryEchoOrConflict(row);
+    // The loaded row is gone by id — distinguish "nothing there" from "something else has this
+    // name now" (delete-recreate ABA) via a name-only read.
+    const byName = await db.from(LAYOUTS_TABLE).select("id").eq("user_id", userId).eq("name", name).maybeSingle();
+    if (errOf(byName)) return { ok: false, reason: "unavailable" };
+    return { ok: false, reason: rowsOf(byName).length ? "stale_revision" : "not_found" };
+  }
+
+  const existing = await db.from(LAYOUTS_TABLE).select("id,name,config").eq("user_id", userId).eq("name", name).maybeSingle();
   if (errOf(existing)) return { ok: false, reason: "unavailable" };
-  return rowsOf(existing).length ? { ok: false, reason: whenPresent } : { ok: false, reason: "not_found" };
+  const row = rowsOf(existing)[0];
+  if (!row) return { ok: false, reason: "not_found" };
+  return retryEchoOrConflict(row);
 }
 
 /**
@@ -352,6 +409,9 @@ async function resolveZeroRowUpdate(
  * `saveWorkspace`, so a revision that moved between the read and the write is caught, not trusted.
  * A unique-index violation on the new name — including one that lands DURING this call, since the
  * UPDATE statement itself is what the database checks — answers `name_conflict`.
+ *
+ * `expectedId` (A3 ruling 5 / M10): both the initial read and the UPDATE are scoped by the loaded
+ * row's id when supplied, so a delete-recreate under the old name is never silently renamed.
  */
 export async function renameWorkspace(
   db: LayoutDb,
@@ -359,15 +419,27 @@ export async function renameWorkspace(
   oldName: unknown,
   newName: unknown,
   expectedRevision: number,
+  expectedId?: string,
 ): Promise<RenameWorkspaceResult> {
   const from = normalizeLayoutName(oldName);
   const to = normalizeLayoutName(newName);
   if (!from || !to) return { ok: false, reason: "invalid_name" };
 
-  const current = await db.from(LAYOUTS_TABLE).select("id,config").eq("user_id", userId).eq("name", from).maybeSingle();
+  let initialQuery = db.from(LAYOUTS_TABLE).select("id,config").eq("user_id", userId);
+  initialQuery = expectedId ? initialQuery.eq("id", expectedId) : initialQuery.eq("name", from);
+  const current = await initialQuery.maybeSingle();
   if (errOf(current)) return { ok: false, reason: "unavailable" };
   const row = rowsOf(current)[0];
-  if (!row) return { ok: false, reason: "not_found" };
+  if (!row) {
+    if (!expectedId) return { ok: false, reason: "not_found" };
+    // ABA: the loaded row is gone by id — does the OLD name now resolve to a DIFFERENT row
+    // (delete-recreate) rather than genuinely nothing?
+    const byName = await db.from(LAYOUTS_TABLE).select("id").eq("user_id", userId).eq("name", from).maybeSingle();
+    if (errOf(byName)) return { ok: false, reason: "unavailable" };
+    return { ok: false, reason: rowsOf(byName).length ? "stale_revision" : "not_found" };
+  }
+  const rowId = str(row.id);
+  if (!rowId) return { ok: false, reason: "unavailable" };
 
   const nextRevision = expectedRevision + 1;
   const config: Record<string, unknown> = isRecordLike(row.config) ? { ...row.config } : {};
@@ -378,6 +450,7 @@ export async function renameWorkspace(
     .from(LAYOUTS_TABLE)
     .update({ name: to, config, updated_at: new Date().toISOString() })
     .eq("user_id", userId)
+    .eq("id", rowId)
     .eq("name", from)
     .eq("config->>revision", String(expectedRevision))
     .select("id");
@@ -385,7 +458,16 @@ export async function renameWorkspace(
   if (error) return { ok: false, reason: error.code === CODE_UNIQUE_VIOLATION ? "name_conflict" : "unavailable" };
   if (rowsOf(updated).length) return { ok: true, revision: nextRevision };
 
-  return resolveZeroRowUpdate(db, userId, from, "stale_revision");
+  // 0 rows: retry-echo (our own earlier attempt already renamed it) vs a genuine conflict,
+  // resolved by the STABLE row id (A3 ruling 4) rather than either name.
+  const diag = await db.from(LAYOUTS_TABLE).select("id,name,config").eq("user_id", userId).eq("id", rowId).maybeSingle();
+  if (errOf(diag)) return { ok: false, reason: "unavailable" };
+  const diagRow = rowsOf(diag)[0];
+  if (!diagRow) return { ok: false, reason: "not_found" }; // deleted entirely between read and write
+  if (diagRow.name === to && isRecordLike(diagRow.config) && diagRow.config.revision === nextRevision) {
+    return { ok: true, revision: nextRevision };
+  }
+  return { ok: false, reason: "stale_revision" };
 }
 
 /**
@@ -395,20 +477,33 @@ export async function renameWorkspace(
  * free name comes from the existing collision-free `nextLayoutName` generator, so that path cannot
  * conflict under normal operation. Independence is structural: the new row is a separate INSERT, so
  * any later edit to the source cannot reach it.
+ *
+ * `sourceId` (A3 ruling 5 / M10 "duplicate-source reads"): when supplied, the source read is scoped
+ * by the loaded row's id — a delete-recreate under the same name between listing and the duplicate
+ * click answers `stale_revision` (the object moved), never a silent duplicate of the WRONG row.
  */
 export async function duplicateWorkspace(
   db: LayoutDb,
   userId: string,
   sourceName: unknown,
   newName?: unknown,
+  sourceId?: string,
 ): Promise<DuplicateWorkspaceResult> {
   const from = normalizeLayoutName(sourceName);
   if (!from) return { ok: false, reason: "invalid_name" };
 
-  const current = await db.from(LAYOUTS_TABLE).select("id,name,config").eq("user_id", userId).eq("name", from).maybeSingle();
+  let sourceQuery = db.from(LAYOUTS_TABLE).select("id,name,config").eq("user_id", userId);
+  sourceQuery = sourceId ? sourceQuery.eq("id", sourceId) : sourceQuery.eq("name", from);
+  const current = await sourceQuery.maybeSingle();
   if (errOf(current)) return { ok: false, reason: "unavailable" };
   const row = rowsOf(current)[0];
-  if (!row) return { ok: false, reason: "not_found" };
+  if (!row) {
+    if (!sourceId) return { ok: false, reason: "not_found" };
+    const byName = await db.from(LAYOUTS_TABLE).select("id").eq("user_id", userId).eq("name", from).maybeSingle();
+    if (errOf(byName)) return { ok: false, reason: "unavailable" };
+    return { ok: false, reason: rowsOf(byName).length ? "stale_revision" : "not_found" };
+  }
+  if (row.name !== from) return { ok: false, reason: "stale_revision" }; // moved out from under the id we loaded
 
   let target = normalizeLayoutName(newName);
   if (!target) {

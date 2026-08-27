@@ -74,6 +74,12 @@ function readExpectedRevision(body: Record<string, unknown>): number | null {
   return typeof raw === "number" && Number.isInteger(raw) ? raw : NaN;
 }
 
+/** An `id`/`sourceId` field is OPTIONAL on every workspace op body — a pure CREATE (a brand-new
+ *  name with no loaded row) has none to supply (Amendment A3 ruling 5 / M10 ABA fence). */
+function readOptionalId(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value : undefined;
+}
+
 async function handleSaveWorkspace(ctx: { db: LayoutDb; userId: string }, body: Record<string, unknown>) {
   const envelope = body.envelope;
   if (!isRecord(envelope)) return NextResponse.json({ error: "malformed_workspace" }, { status: 400 });
@@ -85,7 +91,7 @@ async function handleSaveWorkspace(ctx: { db: LayoutDb; userId: string }, body: 
   const expectedRevision = readExpectedRevision(body);
   if (Number.isNaN(expectedRevision)) return NextResponse.json({ error: "malformed_workspace" }, { status: 400 });
 
-  const result = await saveWorkspace(ctx.db, ctx.userId, body.name, envelope, expectedRevision);
+  const result = await saveWorkspace(ctx.db, ctx.userId, body.name, envelope, expectedRevision, readOptionalId(body.id));
   if (result.ok) return NextResponse.json({ ok: true, id: result.id, revision: result.revision });
   if (result.reason === "invalid_name") return NextResponse.json({ error: "invalid_name" }, { status: 400 });
   if (result.reason === "name_conflict") return NextResponse.json({ error: "name_conflict" }, { status: 409 });
@@ -98,7 +104,7 @@ async function handleRename(ctx: { db: LayoutDb; userId: string }, body: Record<
   const expectedRevision = typeof body.expectedRevision === "number" && Number.isInteger(body.expectedRevision) ? body.expectedRevision : NaN;
   if (Number.isNaN(expectedRevision)) return NextResponse.json({ error: "malformed_workspace" }, { status: 400 });
 
-  const result = await renameWorkspace(ctx.db, ctx.userId, body.oldName, body.newName, expectedRevision);
+  const result = await renameWorkspace(ctx.db, ctx.userId, body.oldName, body.newName, expectedRevision, readOptionalId(body.id));
   if (result.ok) return NextResponse.json({ ok: true, revision: result.revision });
   if (result.reason === "invalid_name") return NextResponse.json({ error: "invalid_name" }, { status: 400 });
   if (result.reason === "name_conflict") return NextResponse.json({ error: "name_conflict" }, { status: 409 });
@@ -108,10 +114,11 @@ async function handleRename(ctx: { db: LayoutDb; userId: string }, body: Record<
 }
 
 async function handleDuplicate(ctx: { db: LayoutDb; userId: string }, body: Record<string, unknown>) {
-  const result = await duplicateWorkspace(ctx.db, ctx.userId, body.sourceName, body.newName);
+  const result = await duplicateWorkspace(ctx.db, ctx.userId, body.sourceName, body.newName, readOptionalId(body.sourceId));
   if (result.ok) return NextResponse.json({ ok: true, id: result.id, name: result.name });
   if (result.reason === "invalid_name") return NextResponse.json({ error: "invalid_name" }, { status: 400 });
   if (result.reason === "name_conflict") return NextResponse.json({ error: "name_conflict" }, { status: 409 });
+  if (result.reason === "stale_revision") return NextResponse.json({ error: "stale_revision" }, { status: 409 });
   if (result.reason === "not_found") return NextResponse.json({ error: "not_found" }, { status: 404 });
   return workspaceUnavailable();
 }

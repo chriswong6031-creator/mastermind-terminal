@@ -33,7 +33,7 @@ export function brainIncludedFromEnvelope(envelope: Pick<WorkspaceEnvelope, "wid
 }
 
 export type WorkspaceOpOutcome =
-  | { kind: "ok"; revision: number }
+  | { kind: "ok"; revision: number; id?: string }
   | { kind: "name_conflict" }
   | { kind: "stale_revision" }
   | { kind: "unauthenticated" }
@@ -43,10 +43,14 @@ export type WorkspaceOpOutcome =
 
 /** Maps an `/api/layouts` workspace-op response to a discriminated outcome — one place that knows
  *  the HTTP status/error-string vocabulary, so every caller (save/rename/duplicate/import) reasons
- *  about the same six shapes instead of re-deriving them. */
+ *  about the same six shapes instead of re-deriving them. `id` (present on `save_workspace`'s
+ *  response) lets the caller re-thread the ABA-fence identity (Amendment A3 ruling 5) after a
+ *  create or a migrate-on-write conversion, when the row's uuid was not already known. */
 export function parseWorkspaceOutcome(status: number, json: unknown): WorkspaceOpOutcome {
-  const body = (json && typeof json === "object" ? json : {}) as { ok?: boolean; revision?: number; error?: string };
-  if (status === 200 && body.ok && typeof body.revision === "number") return { kind: "ok", revision: body.revision };
+  const body = (json && typeof json === "object" ? json : {}) as { ok?: boolean; revision?: number; id?: string; error?: string };
+  if (status === 200 && body.ok && typeof body.revision === "number") {
+    return typeof body.id === "string" ? { kind: "ok", revision: body.revision, id: body.id } : { kind: "ok", revision: body.revision };
+  }
   if (status === 401) return { kind: "unauthenticated" };
   if (status === 409 && body.error === "name_conflict") return { kind: "name_conflict" };
   if (status === 409 && body.error === "stale_revision") return { kind: "stale_revision" };
