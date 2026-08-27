@@ -7,22 +7,34 @@
 // Frozen contract: research/DEEPVUE_W2A_WORKSPACE_LAYOUT_CONTRACT_2026-08-26.md (Macro repo).
 // Design spec: terminal/docs/W2A_WORKSPACE_UX_SPEC.md.
 
-import { migrateLegacy } from "./workspaceMigrate";
+import { migrateLegacy, type MigrateResult } from "./workspaceMigrate";
 import type { WorkspaceEnvelope } from "./workspaceLayout";
 import type { RowState } from "@/components/LayoutMenu";
 
 /**
  * Per-row read state (spec §1.1's `RowState`), derived the same way the actual LOAD path decides
- * openability — via `migrateLegacy`, not the server's `rowStateFor` (which answers a narrower
- * question: "is this row valid AS `workspace_layout.v1` right now"). A legacy `chart_layout_v1/v2`
- * row is fully loadable via migrate-on-write (freeze §6) and must never be marked blocked just
- * because it has not been saved in the new format yet — that would regress every layout saved
- * before this wave shipped. Genuinely unrecognized/future/over-floor payloads still block.
+ * openability — via `migrateLegacy` in its READ/RENDER form (`strict=false`, Amendment A3 ruling
+ * 1), not the server's `rowStateFor` (which answers a narrower question: "is this row valid AS
+ * `workspace_layout.v1` right now"). A legacy `chart_layout_v1/v2` row is fully loadable via
+ * migrate-on-write (freeze §6) and must never be marked blocked just because it has not been saved
+ * in the new format yet — that would regress every layout saved before this wave shipped. A row
+ * with one per-field defect (reviewer ruling B1) is STILL "ok" — tolerant read no-claims the bad
+ * field instead of refusing the whole row; the caller surfaces the resulting `unclaimed` list
+ * separately (see `migrationUnclaimed`), never as a blocked row. Genuinely unrecognized/future/
+ * over-floor payloads (a structural defect tolerant mode does NOT paper over) still block.
  */
 export function workspaceRowState(config: unknown): RowState {
-  const result = migrateLegacy(config);
+  const result = migrateLegacy(config, false);
   if (result.ok) return "ok";
   return result.code === "unsupported_floor" ? "unsupported_floor" : "unsupported_schema";
+}
+
+/** Extracts the `unclaimed` field-name list from a (possibly tolerant) `migrateLegacy` result —
+ *  `[]` when the result carries no such list at all (the already-canonical row-3 clean pass-through
+ *  has none) or the migration failed outright. Reviewer ruling B2: the caller surfaces a non-empty
+ *  list to the user before any subsequent save. */
+export function migrationUnclaimed(result: MigrateResult): string[] {
+  return result.ok && "unclaimed" in result && result.unclaimed ? result.unclaimed : [];
 }
 
 /** W1-C regression surface (freeze §7/§12): whether a loaded envelope's widget graph includes the
@@ -30,6 +42,21 @@ export function workspaceRowState(config: unknown): RowState {
  *  other Brain prop are untouched by this wave; only membership is new. */
 export function brainIncludedFromEnvelope(envelope: Pick<WorkspaceEnvelope, "widgets">): boolean {
   return envelope.widgets.some((w) => w.type === "brain");
+}
+
+/**
+ * Reviewer ruling M6(b): every Brain-opening entry point (the toolbar "Mastermind AI" button, the
+ * MegaPane's `onOpenCopilot`, the "Ask AI about `<symbol>`" button, and the `?ai=1`/`mm:copilot`
+ * deep-link effect) re-includes the dock in the live workspace graph — `setBrainIncluded(true)` —
+ * BEFORE actually opening it. Asking for the assistant is itself opting back in, even when a
+ * workspace load or an explicit toggle had dropped it (freeze §7's membership rule flows both
+ * ways: a workspace can drop the dock, and asking for the assistant brings it back). Pulled out of
+ * TerminalShell's four call sites into one function so the re-inclusion order is unit-testable
+ * without rendering the shell.
+ */
+export function openBrainReincluding(setBrainIncluded: (included: boolean) => void, open: () => void): void {
+  setBrainIncluded(true);
+  open();
 }
 
 export type WorkspaceOpOutcome =

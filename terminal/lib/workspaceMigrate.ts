@@ -85,9 +85,18 @@ function recognizeLegacy(config: Record<string, unknown>): { source: MigrationSo
  *   to the user in plain words before any subsequent save (a save is the WRITE direction and
  *   reverts to `strict = true`).
  *
- * The already-canonical passthrough (row 3 of the recognizer table) is unaffected by `strict` — an
- * already-`workspace_layout.v1` payload either validates whole or refuses; there is no per-field
- * claim concept for an object already in the target shape (no `unclaimed` key either way).
+ * The already-canonical passthrough (row 3 of the recognizer table) is unaffected by `strict` for
+ * every OTHER defect — an already-`workspace_layout.v1` payload with a genuine structural problem
+ * either validates whole or refuses in both directions; there is no per-field claim concept for an
+ * object already in the target shape (no `unclaimed` key either way). The ONE read-only exception
+ * (reviewer ruling M5): a widget whose `type` this build does not recognize is tolerated on READ —
+ * it is the freeze's own documented fallback (contract §2: "the workspace still opens; only that
+ * slot degrades... renders as an explicit 'unsupported widget' tile"), never a reason to make the
+ * whole row unopenable. This is a Terminal-side post-validate partition, NOT a change to
+ * `validateEnvelope` itself (the shared, digest-pinned Macro-mirror validator is untouched — every
+ * golden vector still runs the unchanged strict path) — tolerable ONLY when EVERY reported defect
+ * is `unknown_widget_type` (any other structural problem alongside it still refuses, in both
+ * directions, exactly as before).
  */
 export function migrateLegacy(config: unknown, strict = true): MigrateResult {
   if (!isRecord(config)) return { ok: false, code: "malformed_workspace" };
@@ -96,6 +105,9 @@ export function migrateLegacy(config: unknown, strict = true): MigrateResult {
     // Row 3: already-canonical — passes through validation unchanged.
     const result = validateEnvelope(config);
     if (result.ok) return { ok: true, envelope: { ...config } as WorkspaceEnvelope };
+    if (!strict && result.errors.length > 0 && result.errors.every((e) => e.code === "unknown_widget_type")) {
+      return { ok: true, envelope: config as unknown as WorkspaceEnvelope, unclaimed: [] };
+    }
     return { ok: false, code: result.errors[0].code };
   }
 
@@ -227,6 +239,8 @@ export type CaptureWorkspaceInput = {
   prior?: WorkspaceEnvelope;
 };
 
+export type CaptureWorkspaceResult = { ok: true; envelope: WorkspaceEnvelope; dropped: string[] };
+
 /** Runtime capture -> canonical envelope. Chart widget config is exactly `captureLayoutConfig`'s
  *  output, re-validated field-by-field through the SAME frozen validators `migrateLegacy` uses (so
  *  a captured value that would fail cross-repo validation is never persisted un-claimed instead of
@@ -234,14 +248,23 @@ export type CaptureWorkspaceInput = {
  *  `string | null` on both sides, so a live string lockedVLine now survives capture as a real claim
  *  — pre-amendment, the frozen validator only accepted `number | null` and would have silently
  *  dropped every real Terminal lockedVLine value (this worker's own KNOWN GAP finding, ruled a real
- *  contract defect and fixed on the Macro side rather than worked around here). */
-export function captureWorkspace(input: CaptureWorkspaceInput): WorkspaceEnvelope {
+ *  contract defect and fixed on the Macro side rather than worked around here).
+ *
+ *  Reviewer ruling M4: capture is a pure transform of the live in-memory state and always succeeds
+ *  (`ok: true`), but it NAMES every chart field that was present in the live capture yet failed its
+ *  own frozen validator in `dropped` (empty when nothing was dropped) — capture itself never
+ *  silently narrows the workspace. The caller (the save flow) is the one that refuses to actually
+ *  PERSIST an envelope with a non-empty `dropped`; see the `saveLayout`/`saveWorkspaceAsCopy`
+ *  call sites in TerminalShell.tsx and `wsSaveUnreadable`. */
+export function captureWorkspace(input: CaptureWorkspaceInput): CaptureWorkspaceResult {
   const captured = captureLayoutConfig(input.layout) as unknown as Record<string, unknown>;
   const chartConfig: Record<string, unknown> = {};
+  const dropped: string[] = [];
   for (const field of CHART_CONFIG_FIELDS) {
     if (!(field in captured)) continue;
     const normalized = CHART_FIELD_VALIDATORS[field](captured[field]);
     if (normalized !== INVALID) chartConfig[field] = normalized;
+    else dropped.push(field);
   }
 
   const priorChart = input.prior ? findChartWidget(input.prior) : undefined;
@@ -273,7 +296,7 @@ export function captureWorkspace(input: CaptureWorkspaceInput): WorkspaceEnvelop
   const linkGroups = input.prior?.link_groups ?? { primary_security: { entity_type: "security" } };
   const revision = input.prior?.revision ?? 1;
 
-  return {
+  const envelope: WorkspaceEnvelope = {
     schema: SCHEMA,
     requires: { floor: FLOOR_SUPPORTED },
     revision,
@@ -282,4 +305,5 @@ export function captureWorkspace(input: CaptureWorkspaceInput): WorkspaceEnvelop
     widgets,
     migration,
   };
+  return { ok: true, envelope, dropped };
 }

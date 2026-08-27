@@ -58,7 +58,10 @@ export type LayoutQuery = PromiseLike<LayoutDbResult> & {
 export type LayoutDb = { from: (table: string) => LayoutQuery };
 
 export const LAYOUTS_TABLE = "chart_layouts";
-export const LAYOUT_NAME_MAX = 80;
+// Amendment A2 ruling 14 (reviewer ruling M8): unified with the frozen contract's own name law
+// (§5 normalizeLayoutName: trim, collapse whitespace, <=60) — one name law for both the legacy and
+// workspace save paths, since both route through this same function.
+export const LAYOUT_NAME_MAX = 60;
 /** The prefix auto-generated names use. Exported so the client and its tests agree on one string. */
 export const AUTO_LAYOUT_PREFIX = "Layout";
 
@@ -89,11 +92,15 @@ const rowsOf = (result: LayoutDbResult): LayoutRow[] =>
   Array.isArray(result?.data) ? result.data : result?.data ? [result.data as LayoutRow] : [];
 const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 
-/** Trim + length-cap a user-supplied layout name; `null` when it is not a usable name at all. */
+/** Trim + collapse internal whitespace runs to a single space + length-cap a user-supplied layout
+ *  name; `null` when it is not a usable name at all. Reviewer ruling M8: unified with the frozen
+ *  contract's own §5 name law (the same normalization `workspaceLayout.ts`'s wire-mode validator
+ *  expects on export/import) — a name with doubled internal whitespace previously round-tripped
+ *  through export/import as two DIFFERENT strings depending on which law inspected it. */
 export function normalizeLayoutName(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
-  const trimmed = raw.trim().slice(0, LAYOUT_NAME_MAX);
-  return trimmed ? trimmed : null;
+  const collapsed = raw.trim().replace(/\s+/g, " ").slice(0, LAYOUT_NAME_MAX);
+  return collapsed ? collapsed : null;
 }
 
 /**
@@ -391,6 +398,12 @@ async function resolveZeroRowUpdate(
     // name now" (delete-recreate ABA) via a name-only read.
     const byName = await db.from(LAYOUTS_TABLE).select("id").eq("user_id", userId).eq("name", name).maybeSingle();
     if (errOf(byName)) return { ok: false, reason: "unavailable" };
+    // Reviewer ruling N10 (hostile review of head 37251687): flagged this `not_found`, adjudicated
+    // ACCEPTED-AS-IS — the name-only read found nothing either, so the row is not merely stale (a
+    // rename/ABA case) but genuinely gone. This matches the blessed A3 ruling 5 replay exactly:
+    // an id-scoped follow-up read that misses AND whose name-only fallback also misses reports
+    // `not_found`, never `stale_revision` (there is nothing to be stale relative to). No behavior
+    // change was made for N10 — comment only.
     return { ok: false, reason: rowsOf(byName).length ? "stale_revision" : "not_found" };
   }
 
@@ -436,6 +449,8 @@ export async function renameWorkspace(
     // (delete-recreate) rather than genuinely nothing?
     const byName = await db.from(LAYOUTS_TABLE).select("id").eq("user_id", userId).eq("name", from).maybeSingle();
     if (errOf(byName)) return { ok: false, reason: "unavailable" };
+    // Reviewer ruling N10: this `not_found` (both the id read and the name-only fallback miss) is
+    // the correct A3 ruling 5 outcome, not a bug — see `resolveZeroRowUpdate`'s fuller comment above.
     return { ok: false, reason: rowsOf(byName).length ? "stale_revision" : "not_found" };
   }
   const rowId = str(row.id);
@@ -459,12 +474,21 @@ export async function renameWorkspace(
   if (rowsOf(updated).length) return { ok: true, revision: nextRevision };
 
   // 0 rows: retry-echo (our own earlier attempt already renamed it) vs a genuine conflict,
-  // resolved by the STABLE row id (A3 ruling 4) rather than either name.
+  // resolved by the STABLE row id (A3 ruling 4) rather than either name. Reviewer ruling N11:
+  // tightened to a full canonical CONTENT match (like saveWorkspace's resolveZeroRowUpdate), not
+  // just name+revision — two different renames landing on the same target name and revision number
+  // (e.g. two devices racing DIFFERENT new names that happen to collide, or unrelated config drift)
+  // must not be conflated into a false "success" echo.
   const diag = await db.from(LAYOUTS_TABLE).select("id,name,config").eq("user_id", userId).eq("id", rowId).maybeSingle();
   if (errOf(diag)) return { ok: false, reason: "unavailable" };
   const diagRow = rowsOf(diag)[0];
   if (!diagRow) return { ok: false, reason: "not_found" }; // deleted entirely between read and write
-  if (diagRow.name === to && isRecordLike(diagRow.config) && diagRow.config.revision === nextRevision) {
+  if (
+    diagRow.name === to &&
+    isRecordLike(diagRow.config) &&
+    diagRow.config.revision === nextRevision &&
+    canonicalJson(diagRow.config) === canonicalJson(config)
+  ) {
     return { ok: true, revision: nextRevision };
   }
   return { ok: false, reason: "stale_revision" };
@@ -501,6 +525,9 @@ export async function duplicateWorkspace(
     if (!sourceId) return { ok: false, reason: "not_found" };
     const byName = await db.from(LAYOUTS_TABLE).select("id").eq("user_id", userId).eq("name", from).maybeSingle();
     if (errOf(byName)) return { ok: false, reason: "unavailable" };
+    // Reviewer ruling N10: this `not_found` (both the id read and the name-only fallback miss) is
+    // the correct A3 ruling 5 outcome, not a bug — see `resolveZeroRowUpdate`'s fuller comment
+    // (this file, saveWorkspace's shared CAS resolver).
     return { ok: false, reason: rowsOf(byName).length ? "stale_revision" : "not_found" };
   }
   if (row.name !== from) return { ok: false, reason: "stale_revision" }; // moved out from under the id we loaded
@@ -512,9 +539,15 @@ export async function duplicateWorkspace(
     target = nextLayoutName(listed.layouts.map((l) => l.name));
   }
 
+  // Reviewer ruling N9: the name/revision stamp is a WORKSPACE-envelope concept (contract §5) — a
+  // legacy (non-`workspace_layout.v1`) source row has neither field in its own contract, and
+  // stamping them in unconditionally would inject foreign keys into otherwise-pristine legacy
+  // bytes. Only a genuine workspace envelope gets its identity reset for the new row.
   const config: Record<string, unknown> = isRecordLike(row.config) ? { ...row.config } : {};
-  config.name = null;
-  config.revision = 1;
+  if (config.schema === WORKSPACE_SCHEMA) {
+    config.name = null;
+    config.revision = 1;
+  }
 
   const inserted = await db
     .from(LAYOUTS_TABLE)

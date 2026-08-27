@@ -20,10 +20,18 @@ const NEW_KEYS = [
   "wsExport", "wsImport", "wsRenameSave", "wsCancel", "wsRenamed", "wsDuplicated", "wsImported",
   "wsNameTaken", "wsUseSuggested", "wsChangedElsewhere", "wsChangedElsewhereSub", "wsReloadLatest",
   "wsSaveAsCopy", "wsBadgeNewer", "wsNeedsNewer", "wsBadgeUnreadable", "wsCantOpen",
-  "wsImportBad", "wsImportTooBig", "wsImportTooManyPanels", "wsImportUnknownPanel", "wsGone",
+  "wsImportBad", "wsImportTooBig", "wsImportTooManyPanels", "wsImportUnknownPanel",
   "wsRenameFailed", "wsDuplicateFailed", "wsExportFailed",
   "wsPanelUnavailable", "wsPanelUnavailableSub", "wsPanelType",
+  // Reviewer repair wave (B2/M4): the unreadable-settings disclosure + the capture-refuses-to-save copy.
+  "wsUnclaimedNote", "wsSaveUnreadable",
 ] as const;
+
+// Reviewer ruling N15: `wsGone` was dead (minted, never wired to any real 404 surface) and was
+// removed rather than kept as an untested, unreachable string. `layoutNameTaken` was ALSO dead but
+// is kept, revalued to the "workspace" copy family (matches `wsNameTaken` verbatim) — the legacy
+// POST path's own `name_taken` 409 has no dedicated UI branch today, but the string should already
+// speak the current vocabulary if a caller ever surfaces it.
 
 describe("W2-A workspace-menu lexicon", () => {
   it.each([...REVALUED_KEYS, ...NEW_KEYS])("%s has a real, distinct EN and ZH value", (key) => {

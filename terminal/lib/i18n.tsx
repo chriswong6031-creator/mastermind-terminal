@@ -138,7 +138,9 @@ export const LEX: Record<string, [string, string]> = {
   layoutSaving: ["Saving…", "保存中…"],
   layoutSaved: ["Workspace saved", "工作区已保存"],
   layoutSaveFailed: ["Couldn't save — nothing was stored.", "保存失败 —— 未写入任何内容。"],
-  layoutNameTaken: ["A layout with that name already exists.", "已存在同名布局。"],
+  // Reviewer ruling N15: revalued to the "workspace" copy family (matches wsNameTaken verbatim) —
+  // "layout" undersells the object post-W2-A, same reasoning as the wsSectionSaved/etc. rename.
+  layoutNameTaken: ["That name is already used.", "该名称已被使用。"],
   layoutDeleteFailed: ["Couldn't delete — it's still in your account.", "删除失败 —— 仍保留在您的账户中。"],
   layoutSignInToSave: ["Sign in to save workspaces", "登录后可保存工作区"],
   // W2-A new keys (spec §2.2)
@@ -170,10 +172,21 @@ export const LEX: Record<string, [string, string]> = {
   wsImportTooBig: ["That workspace file is too large to open. Nothing was imported.", "该工作区文件过大，无法打开。未导入任何内容。"],
   wsImportTooManyPanels: ["That workspace holds more panels than one workspace can. Nothing was imported.", "该工作区包含的面板数量超出上限。未导入任何内容。"],
   wsImportUnknownPanel: ["That workspace uses a panel this Terminal doesn't have. Nothing was imported.", "该工作区使用了此终端没有的面板。未导入任何内容。"],
-  wsGone: ["That workspace is no longer in your account.", "该工作区已不在您的账户中。"],
   wsRenameFailed: ["Couldn't rename — the old name is still in use.", "重命名失败 —— 仍在使用原名称。"],
   wsDuplicateFailed: ["Couldn't make a copy — nothing was added.", "创建副本失败 —— 未添加任何内容。"],
   wsExportFailed: ["Couldn't export this workspace.", "导出此工作区失败。"],
+  // Reviewer ruling B2: a durable (not transient) disclosure for a workspace the tolerant READ
+  // migration could not fully claim — persists while that workspace stays loaded, spec §3.7.
+  wsUnclaimedNote: [
+    "Some settings in this workspace couldn't be read. They'll be left out if you save it.",
+    "此工作区的部分设置无法读取。保存时这些设置将不会保留。",
+  ],
+  // Reviewer ruling M4: capture refuses to persist a workspace with a dropped field rather than
+  // silently narrowing it.
+  wsSaveUnreadable: [
+    "Part of the current workspace couldn't be saved. Nothing was stored.",
+    "当前工作区的部分内容无法保存。未写入任何内容。",
+  ],
   // Unsupported-widget tile (spec §6)
   wsPanelUnavailable: ["This panel isn't available in this version", "此面板在当前版本中不可用"],
   wsPanelUnavailableSub: ["The rest of this workspace opened normally.", "此工作区的其余部分已正常打开。"],

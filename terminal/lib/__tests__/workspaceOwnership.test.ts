@@ -35,7 +35,7 @@ function assertNoForbiddenLeak(value: unknown): void {
 
 describe("captureWorkspace — never persists an anti-duplication-forbidden key", () => {
   it("a hostile runtime layout produces a chart config containing ONLY the 12 frozen fields", () => {
-    const envelope = captureWorkspace({ layout: hostileLayout(), brainIncluded: true });
+    const { envelope } = captureWorkspace({ layout: hostileLayout(), brainIncluded: true });
     const chart = envelope.widgets.find((w) => w.type === "chart") as { config: Record<string, unknown> };
     for (const key of Object.keys(chart.config)) {
       expect((CHART_CONFIG_FIELDS as readonly string[])).toContain(key);
@@ -44,7 +44,7 @@ describe("captureWorkspace — never persists an anti-duplication-forbidden key"
   });
 
   it("a hostile layout leaves no forbidden value anywhere in the serialized envelope, brain widget included", () => {
-    const envelope = captureWorkspace({ layout: hostileLayout(), brainIncluded: true });
+    const { envelope } = captureWorkspace({ layout: hostileLayout(), brainIncluded: true });
     assertNoForbiddenLeak(envelope);
     const brain = envelope.widgets.find((w) => w.type === "brain") as { config: Record<string, unknown> };
     expect(brain.config).toEqual({});

@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   workspaceRowState, parseWorkspaceOutcome, absoluteLocalTime, safeWorkspaceFilename,
-  importFailureKey, brainIncludedFromEnvelope,
+  importFailureKey, brainIncludedFromEnvelope, openBrainReincluding,
 } from "@/lib/workspaceMenuOps";
 import { FAILURE_CODES } from "@/lib/workspaceLayout";
 import { LEX } from "@/lib/i18n";
@@ -26,9 +26,21 @@ describe("workspaceRowState — the reader decides openability, not the server's
     expect(workspaceRowState(fixture("invalid_floor_unsupported").input)).toBe("unsupported_floor");
   });
 
-  it("a future/unknown schema, or a workspace_layout.v1 row with a genuinely unknown widget type, is unsupported_schema", () => {
+  it("a future/unknown schema is unsupported_schema", () => {
     expect(workspaceRowState(fixture("invalid_unknown_schema").input)).toBe("unsupported_schema");
-    expect(workspaceRowState(fixture("invalid_unknown_widget_type").input)).toBe("unsupported_schema");
+  });
+
+  it("a workspace_layout.v1 row whose ONLY defect is an unknown widget type is 'ok', not unsupported_schema (reviewer ruling M5)", () => {
+    // Before M5, `migrateLegacy`'s already-canonical branch treated ANY validation error —
+    // including `unknown_widget_type` — as a hard refusal, bricking the whole row for a widget
+    // type this build simply does not recognize yet (freeze §2's own documented fallback: "the
+    // workspace still opens; only that slot degrades"). `invalid_unknown_widget_type.json` is a
+    // golden vector shared with the Macro reference implementation (workspaceVectors.test.ts) —
+    // its own `expected_code` there is proved ONLY against `migrateLegacy`'s STRICT (default)
+    // mode, which M5 leaves completely unchanged (write/import rejection is unchanged). This is
+    // the READ direction (`workspaceRowState` calls `migrateLegacy(config, false)`, reviewer
+    // ruling B1), where the fixture's sole error is now tolerated.
+    expect(workspaceRowState(fixture("invalid_unknown_widget_type").input)).toBe("ok");
   });
 
   it("garbage never throws and is unsupported_schema, never 'ok'", () => {
@@ -136,5 +148,24 @@ describe("brainIncludedFromEnvelope — the one fact that decides whether <Brain
   it("false for a chart-only workspace (no brain widget invented)", () => {
     expect(brainIncludedFromEnvelope({ widgets: [{ type: "chart" } as any] })).toBe(false);
     expect(brainIncludedFromEnvelope({ widgets: [] })).toBe(false);
+  });
+});
+
+describe("openBrainReincluding — every Brain entry point re-includes the dock before opening (reviewer ruling M6b)", () => {
+  it("calls setBrainIncluded(true) before calling open()", () => {
+    const calls: string[] = [];
+    const setBrainIncluded = (v: boolean) => calls.push(`setBrainIncluded(${v})`);
+    const open = () => calls.push("open()");
+    openBrainReincluding(setBrainIncluded, open);
+    expect(calls).toEqual(["setBrainIncluded(true)", "open()"]);
+  });
+
+  it("re-includes even when the dock had been toggled off (idempotent — always sets true, never toggles)", () => {
+    let included = false;
+    const setBrainIncluded = (v: boolean) => { included = v; };
+    let opened = false;
+    openBrainReincluding(setBrainIncluded, () => { opened = true; });
+    expect(included).toBe(true);
+    expect(opened).toBe(true);
   });
 });

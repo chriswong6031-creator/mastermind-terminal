@@ -151,14 +151,14 @@ describe("workspaceToLayout / applyLayoutConfig / captureLayoutConfig — apply-
 
 describe("captureWorkspace", () => {
   it("includes the brain widget iff brainIncluded is true", () => {
-    const withBrain = captureWorkspace({ layout: BASELINE, brainIncluded: true });
-    const withoutBrain = captureWorkspace({ layout: BASELINE, brainIncluded: false });
+    const { envelope: withBrain } = captureWorkspace({ layout: BASELINE, brainIncluded: true });
+    const { envelope: withoutBrain } = captureWorkspace({ layout: BASELINE, brainIncluded: false });
     expect(withBrain.widgets.some((w) => w.type === "brain")).toBe(true);
     expect(withoutBrain.widgets.some((w) => w.type === "brain")).toBe(false);
   });
 
   it("a brand-new capture (no prior) uses the conventional ids, floor/schema, and migration.source=none", () => {
-    const envelope = captureWorkspace({ layout: BASELINE, brainIncluded: true });
+    const { envelope } = captureWorkspace({ layout: BASELINE, brainIncluded: true });
     expect(envelope.schema).toBe(SCHEMA);
     expect(envelope.requires).toEqual({ floor: 1 });
     expect(envelope.name).toBeNull();
@@ -179,7 +179,7 @@ describe("captureWorkspace", () => {
       ],
       migration: { source: "chart_layout_v2", source_revision: 2 },
     };
-    const envelope = captureWorkspace({ layout: BASELINE, brainIncluded: true, prior });
+    const { envelope } = captureWorkspace({ layout: BASELINE, brainIncluded: true, prior });
     expect(envelope.widgets.find((w) => w.type === "chart")?.id).toBe("custom-chart-id");
     expect(envelope.widgets.find((w) => w.type === "brain")?.id).toBe("custom-brain-id");
     expect(envelope.migration).toEqual({ source: "chart_layout_v2", source_revision: 2 });
@@ -196,13 +196,13 @@ describe("captureWorkspace", () => {
       ],
       migration: { source: "none", source_revision: null },
     };
-    const envelope = captureWorkspace({ layout: BASELINE, brainIncluded: false, prior });
+    const { envelope } = captureWorkspace({ layout: BASELINE, brainIncluded: false, prior });
     expect(envelope.widgets.some((w) => w.type === "brain")).toBe(false);
     expect(envelope.widgets).toHaveLength(1);
   });
 
   it("captures a fully-populated baseline into a valid, correctly-typed chart config", () => {
-    const envelope = captureWorkspace({ layout: BASELINE, brainIncluded: false });
+    const { envelope } = captureWorkspace({ layout: BASELINE, brainIncluded: false });
     const chart = envelope.widgets.find((w) => w.type === "chart") as { config: Record<string, unknown> };
     expect(chart.config.panes).toEqual(["SPY"]);
     expect(chart.config.compare).toEqual(["QQQ"]);
@@ -225,7 +225,7 @@ describe("captureWorkspace", () => {
         },
       },
     };
-    const envelope = captureWorkspace({ layout: layoutWithVis, brainIncluded: false });
+    const { envelope } = captureWorkspace({ layout: layoutWithVis, brainIncluded: false });
     const chart = envelope.widgets.find((w) => w.type === "chart") as { config: Record<string, unknown> };
     expect(chart.config).toHaveProperty("indParams"); // no longer dropped wholesale
     const indParams = chart.config.indParams as Record<string, Record<string, unknown>>;
