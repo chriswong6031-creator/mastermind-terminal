@@ -1,6 +1,9 @@
 // ── The versioned workspace layout contract (`workspace_layout.v1`) — TS mirror ────────────────
 //
-// Frozen contract: research/DEEPVUE_W2A_WORKSPACE_LAYOUT_CONTRACT_2026-08-26.md (Macro repo).
+// Frozen contract: research/DEEPVUE_W2A_WORKSPACE_LAYOUT_CONTRACT_2026-08-26.md (Macro repo), as
+// amended by A1 (lockedVLine/split real-runtime types), A2 (Phase 6 review: real-runtime grammar,
+// lossless-or-refuse, canonicalization, wire mode, key deny-list, optional `requires`, honest
+// provenance) and A3 (direction-scoped lossless law, IEEE-754-safe number bounds, error precedence).
 // Reference implementation Terminal proves against, field-for-field:
 // engine/intelligence_workspace/workspace_layout.py (Macro repo). Golden vectors are digest-pinned
 // in BOTH repos (`lib/__tests__/fixtures/workspace/`, see `workspaceVectors.test.ts`) — this is the
@@ -8,12 +11,12 @@
 //
 // This module is a pure transform of its arguments: no I/O, no network, no mutable module state.
 // Every exported function is safe to call on hostile input without throwing (fail-closed).
-
-import { createHash } from "node:crypto";
 //
 // A workspace HOSTS widgets whose own state lives elsewhere (drawings, watchlist, favTF, Day Trade
 // Mode, alerts — contract §2 anti-duplication law, carried forward verbatim from `layoutConfig.ts`).
 // It never becomes their canonical data owner.
+
+import { createHash } from "node:crypto";
 
 export const SCHEMA = "workspace_layout.v1" as const;
 
@@ -48,6 +51,19 @@ export const MAX_ENVELOPE_BYTES = 65536;
 export const MAX_LINK_GROUPS = 8;
 export const MAX_PORTS = 8;
 export const FLOOR_SUPPORTED = 1;
+// Amendment A2 ruling 1: bounded map nesting — 64 keys per level, depth <=3 below the
+// per-indicator/per-symbol object inside indParams/compareCfg.
+export const MAX_PARAM_KEYS_PER_LEVEL = 64;
+export const MAX_PARAM_NEST_DEPTH = 3;
+// Amendment A3 ruling 2 (number law, completes A2 ruling 4): integers bounded to the IEEE-754 safe
+// range everywhere numbers occur (params, revision, source_revision, grid); a non-integral number
+// is valid only within 1e-4 <= |x| < 1e12 — both languages' shortest-repr is exponent-free and
+// digit-identical in that window, which is exactly why it was chosen. JS has no separate int/float
+// type, so "integral-valued float normalizes to int" is automatic here — the bound is a pure range
+// check on `Number.isInteger(x)` vs not.
+export const MAX_SAFE_INT = 9007199254740991; // 2**53 - 1
+export const MIN_NONZERO_FLOAT_MAGNITUDE = 1e-4;
+export const MAX_FLOAT_MAGNITUDE = 1e12; // exclusive upper bound
 
 /** The 12 chart-config fields owned verbatim by the existing Terminal chart-layout contract
  *  (contract §2). Order carries no schema meaning; it matches the Macro reference for readability. */
@@ -102,21 +118,38 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 
 const isInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
 
+/** Amendment A3 ruling 2: an integer within the IEEE-754 safe range (|n| <= 2**53 - 1) — the bound
+ *  applied everywhere a plain integer is accepted (params, revision, source_revision, grid). */
+const isSafeInt = (v: unknown): v is number => isInt(v) && Math.abs(v) <= MAX_SAFE_INT;
+
 const TOP_LEVEL_KEYS = new Set(["schema", "requires", "revision", "name", "link_groups", "widgets", "migration"]);
+// Amendment A2 ruling 11: `requires` is optional (absent -> floor 1).
+const REQUIRED_TOP_LEVEL_KEYS = new Set([...TOP_LEVEL_KEYS].filter((k) => k !== "requires"));
 const WIDGET_KEYS = new Set(["id", "type", "semantic_lane", "grid", "context_in", "context_out", "config"]);
 const GRID_KEYS = new Set(["x", "y", "w", "h"]);
 const MIGRATION_KEYS = new Set(["source", "source_revision"]);
 const LINK_GROUP_KEYS = new Set(["entity_type"]);
 
+// Amendment A2 ruling 10: prototype-pollution-shaped keys are never valid identifiers anywhere a
+// key/id is accepted (widget ids, link-group names, indParams/compareCfg identifiers and nested
+// param keys).
+const DENIED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const isDeniedKey = (key: unknown): boolean => typeof key === "string" && DENIED_KEYS.has(key);
+
 const WIDGET_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const LINK_GROUP_NAME_RE = /^[a-z][a-z0-9_]{0,31}$/;
-const SYMBOL_RE = /^[A-Z0-9._:-]{1,12}$/;
 const TIMEFRAME_RE = /^[A-Za-z0-9]{1,8}$/;
-const CHART_TYPE_RE = /^[a-z][a-z0-9_]{0,31}$/;
-const INDICATOR_ID_RE = /^[a-z][a-z0-9_]{0,31}$/;
-const PARAM_KEY_RE = /^[A-Za-z0-9_]{1,32}$/;
-// Amendment A1 (2026-08-26, Macro commit 8b4d326514f6): 1..64 chars, no ASCII control characters
-// (0x00-0x1f, 0x7f) — mirrors the Macro reference's `_LOCKED_VLINE_RE` verbatim.
+// Amendment A2 ruling 1 (real-runtime grammar, Phase 6 review):
+//   symbol       — covers composite panes ("NVDA+AMD"), caret index panes ("^NDX"), and colon
+//                  venue-qualified tickers ("BINANCE:BTCUSDT").
+//   chart_type   — covers hyphenated chart types ("line-markers").
+//   indicator_id — covers underscore-prefixed ids ("_lab").
+//   param_key    — covers dotted premium-suite keys ("ob.showLast").
+const SYMBOL_RE = /^[\^A-Z0-9.+:_-]{1,24}$/;
+const CHART_TYPE_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+const INDICATOR_ID_RE = /^[A-Za-z_][A-Za-z0-9_]{0,31}$/;
+const PARAM_KEY_RE = /^[A-Za-z0-9_][A-Za-z0-9_.]{0,63}$/;
+// Amendment A1: 1..64 chars, no ASCII control characters (0x00-0x1f, 0x7f).
 const LOCKED_VLINE_RE = /^[^\x00-\x1f\x7f]{1,64}$/;
 
 /** Sentinel distinguishing "field present but wrong type/shape" (never claimed) from a
@@ -125,24 +158,63 @@ const LOCKED_VLINE_RE = /^[^\x00-\x1f\x7f]{1,64}$/;
 export const INVALID: unique symbol = Symbol("workspace-field-invalid");
 type FieldResult<T> = T | typeof INVALID;
 
+/** A data-typed leaf value: bool/safe-int/bounded-float/null, or a string <=64 chars. NaN/Infinity
+ *  are never valid (A2 ruling 4). Amendment A3 ruling 2: a plain integer must be IEEE-754-safe; an
+ *  integral-valued number normalizes to that same bound (JS has no separate float type, so this is
+ *  a single range check); a non-integral number is valid only within
+ *  `1e-4 <= |x| < 1e12` (both languages' shortest-repr is exponent-free and digit-identical there).
+ *  No executable payloads, no non-finite or unbounded numerics, anywhere (contract §3). */
 const isBoundedPrimitive = (value: unknown): boolean => {
   if (value === null || typeof value === "boolean") return true;
-  if (typeof value === "number") return true;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return false;
+    if (Number.isInteger(value)) return Math.abs(value) <= MAX_SAFE_INT;
+    const magnitude = Math.abs(value);
+    return magnitude >= MIN_NONZERO_FLOAT_MAGNITUDE && magnitude < MAX_FLOAT_MAGNITUDE;
+  }
   if (typeof value === "string") return value.length <= 64;
   return false;
 };
 
+/** A value inside a per-indicator/per-symbol params object: either a bounded primitive leaf, or —
+ *  while `remainingDepth` budget remains — a further bounded nested object whose own keys/values
+ *  recurse the same rule (Amendment A2 ruling 1: nesting depth <=3 below the per-indicator object,
+ *  e.g. the real `_vis` visibility-range shape). Deny-listed keys are rejected at every level
+ *  (Amendment A2 ruling 10). */
+function validateParamLeafOrNested(value: unknown, remainingDepth: number): FieldResult<unknown> {
+  if (isRecord(value)) {
+    if (remainingDepth <= 0) return INVALID;
+    const entries = Object.entries(value);
+    if (entries.length > MAX_PARAM_KEYS_PER_LEVEL) return INVALID;
+    const out: Record<string, unknown> = {};
+    for (const [key, sub] of entries) {
+      if (!PARAM_KEY_RE.test(key) || isDeniedKey(key)) return INVALID;
+      const normalized = validateParamLeafOrNested(sub, remainingDepth - 1);
+      if (normalized === INVALID) return INVALID;
+      out[key] = normalized;
+    }
+    return out;
+  }
+  if (!isBoundedPrimitive(value)) return INVALID;
+  return value;
+}
+
+/** Shared shape for `indParams`/`compareCfg`: a bounded map of identifier -> bounded map of
+ *  param-name -> (bounded primitive | nested object up to depth 3, Amendment A2 ruling 1). No
+ *  executable payloads anywhere (contract §3); prototype-pollution-shaped keys denied at every
+ *  level (Amendment A2 ruling 10). */
 function validateParamBlock(value: unknown, keyPattern: RegExp): FieldResult<ParamMap> {
-  if (!isRecord(value) || Object.keys(value).length > 32) return INVALID;
+  if (!isRecord(value) || Object.keys(value).length > MAX_PARAM_KEYS_PER_LEVEL) return INVALID;
   const out: ParamMap = {};
   for (const [key, sub] of Object.entries(value)) {
-    if (!keyPattern.test(key)) return INVALID;
-    if (!isRecord(sub) || Object.keys(sub).length > 16) return INVALID;
+    if (!keyPattern.test(key) || isDeniedKey(key)) return INVALID;
+    if (!isRecord(sub) || Object.keys(sub).length > MAX_PARAM_KEYS_PER_LEVEL) return INVALID;
     const subOut: Record<string, unknown> = {};
     for (const [subKey, subVal] of Object.entries(sub)) {
-      if (!PARAM_KEY_RE.test(subKey)) return INVALID;
-      if (!isBoundedPrimitive(subVal)) return INVALID;
-      subOut[subKey] = subVal;
+      if (!PARAM_KEY_RE.test(subKey) || isDeniedKey(subKey)) return INVALID;
+      const normalized = validateParamLeafOrNested(subVal, MAX_PARAM_NEST_DEPTH);
+      if (normalized === INVALID) return INVALID;
+      subOut[subKey] = normalized;
     }
     out[key] = subOut;
   }
@@ -199,7 +271,7 @@ function vInds(value: unknown): FieldResult<string[]> {
   if (!Array.isArray(value) || value.length > 32) return INVALID;
   const out: string[] = [];
   for (const item of value) {
-    if (typeof item !== "string" || !INDICATOR_ID_RE.test(item)) return INVALID;
+    if (typeof item !== "string" || !INDICATOR_ID_RE.test(item) || isDeniedKey(item)) return INVALID;
     out.push(item);
   }
   return out;
@@ -265,7 +337,7 @@ function validateGrid(value: unknown): boolean {
   if (keys.length !== GRID_KEYS.size || !keys.every((k) => GRID_KEYS.has(k))) return false;
   return ["x", "y", "w", "h"].every((k) => {
     const v = (value as Record<string, unknown>)[k];
-    return isInt(v) && v >= 0 && v <= 64;
+    return isSafeInt(v) && v >= 0 && v <= 64;
   });
 }
 
@@ -299,48 +371,89 @@ function validateWidgetConfig(widgetType: unknown, config: unknown, path: string
   return errors;
 }
 
-/** Validate a `workspace_layout.v1` envelope: schema shape AND the cross-field laws the JSON
- *  Schema alone cannot express (contract §1-§8). Never throws — every branch is a type/membership
- *  check on already-untrusted input, fail-closed on anything unexpected. */
-export function validateEnvelope(obj: unknown): ValidationResult {
-  const errors: ValidationError[] = [];
+/** Wire-mode name law (Amendment A2 ruling 5/14): already trimmed, no internal whitespace runs
+ *  collapsed away, 1..60 chars. */
+function isNormalizedName(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value.length < 1 || value.length > 60) return false;
+  if (value !== value.trim()) return false;
+  if (/\s{2,}/.test(value)) return false;
+  return true;
+}
 
+/** Trim + collapse internal whitespace runs + bound to 1..60 chars. Returns `null` when the input
+ *  is not a usable name at all (not a string, or empty/oversized after normalization) — the caller
+ *  refuses rather than store/echo an unusable name (Amendment A2 ruling 14). */
+function normalizeName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const collapsed = value.trim().replace(/\s+/g, " ");
+  if (collapsed.length < 1 || collapsed.length > 60) return null;
+  return collapsed;
+}
+
+/**
+ * Validate a `workspace_layout.v1` envelope: schema shape AND the cross-field laws the JSON Schema
+ * alone cannot express (contract §1-§8, amended by A1/A2/A3). Never throws — every branch is a
+ * type/membership check on already-untrusted input, fail-closed on anything unexpected.
+ *
+ * `wire=false` (default) is the STORED-row law: `name` must be `null`. `wire=true` (Amendment A2
+ * ruling 5) is the wire/export law: `name` may additionally be a normalized non-null string
+ * (trim/collapse/1..60, ruling 14) — used to validate the read/export projection and IMPORT
+ * payloads, never the stored row itself.
+ *
+ * Amendment A3 ruling 3 (error precedence): the `schema` literal is checked FIRST — a mismatch
+ * returns `unsupported_schema` ALONE, before any other issue in the object is even inspected.
+ * `requires.floor` is checked SECOND — a well-formed but unsupported floor returns
+ * `unsupported_floor` ALONE. Only once both gates pass does the general structural sweep run.
+ */
+export function validateEnvelope(obj: unknown, wire = false): ValidationResult {
   if (!isRecord(obj)) {
     return { ok: false, errors: [err("malformed_workspace", "$")] };
   }
 
-  for (const key of Object.keys(obj)) {
-    if (!TOP_LEVEL_KEYS.has(key)) errors.push(err("malformed_workspace", `$.${key}`));
-  }
-  for (const key of TOP_LEVEL_KEYS) {
-    if (!(key in obj)) errors.push(err("malformed_workspace", `$.${key}`));
-  }
-
+  // --- Ruling 3, gate 1: schema literal, alone. -----------------------------------------------
   const schema = obj.schema;
   if (schema !== SCHEMA) {
-    errors.push(err("unsupported_schema", "$.schema"));
-    // Nothing else here is safe to interpret as a workspace_layout.v1 object once the schema tag
-    // itself disagrees.
-    return { ok: false, errors };
+    return { ok: false, errors: [err("unsupported_schema", "$.schema")] };
   }
 
-  const requires = obj.requires;
-  if (!isRecord(requires) || Object.keys(requires).length !== 1 || !("floor" in requires)) {
-    errors.push(err("malformed_workspace", "$.requires"));
+  // --- Ruling 3, gate 2: requires.floor, alone (A2 ruling 11: `requires`/`requires.floor` are
+  // optional — absent defaults to floor 1). A STRUCTURALLY malformed `requires` is not
+  // "unsupported", so it is remembered here and folded into the general sweep below instead of
+  // short-circuiting — only a well-formed-but-too-high floor gets the alone-and-immediate treatment.
+  const requires: unknown = "requires" in obj ? obj.requires : {};
+  let requiresError: ValidationError | null = null;
+  if (!isRecord(requires) || Object.keys(requires).some((k) => k !== "floor")) {
+    requiresError = err("malformed_workspace", "$.requires");
   } else {
-    const floor = requires.floor;
-    if (!isInt(floor) || floor < 1) {
-      errors.push(err("malformed_workspace", "$.requires.floor"));
+    const floor = "floor" in requires ? requires.floor : FLOOR_SUPPORTED;
+    if (!isSafeInt(floor) || floor < 1) {
+      requiresError = err("malformed_workspace", "$.requires.floor");
     } else if (floor > FLOOR_SUPPORTED) {
-      errors.push(err("unsupported_floor", "$.requires.floor"));
+      return { ok: false, errors: [err("unsupported_floor", "$.requires.floor")] };
     }
   }
 
+  // --- Gate passed: the general structural sweep. ---------------------------------------------
+  const errors: ValidationError[] = [];
+  if (requiresError) errors.push(requiresError);
+
+  for (const key of Object.keys(obj)) {
+    if (!TOP_LEVEL_KEYS.has(key)) errors.push(err("malformed_workspace", `$.${key}`));
+  }
+  for (const key of REQUIRED_TOP_LEVEL_KEYS) {
+    if (!(key in obj)) errors.push(err("malformed_workspace", `$.${key}`));
+  }
+
   const revision = obj.revision;
-  if (!isInt(revision) || revision < 1) errors.push(err("malformed_workspace", "$.revision"));
+  if (!isSafeInt(revision) || revision < 1) errors.push(err("malformed_workspace", "$.revision"));
 
   const name = obj.name;
-  if (name !== null) errors.push(err("malformed_workspace", "$.name"));
+  if (wire) {
+    if (name !== null && !isNormalizedName(name)) errors.push(err("malformed_workspace", "$.name"));
+  } else {
+    if (name !== null) errors.push(err("malformed_workspace", "$.name"));
+  }
 
   const linkGroups = obj.link_groups;
   const declaredGroups = new Set<string>();
@@ -350,7 +463,7 @@ export function validateEnvelope(obj: unknown): ValidationResult {
     const entries = Object.entries(linkGroups);
     if (entries.length > MAX_LINK_GROUPS) errors.push(err("malformed_workspace", "$.link_groups"));
     for (const [groupName, group] of entries) {
-      if (!LINK_GROUP_NAME_RE.test(groupName)) {
+      if (!LINK_GROUP_NAME_RE.test(groupName) || isDeniedKey(groupName)) {
         errors.push(err("malformed_workspace", `$.link_groups.${groupName}`));
         continue;
       }
@@ -395,7 +508,7 @@ export function validateEnvelope(obj: unknown): ValidationResult {
     }
 
     const widgetId = widget.id;
-    if (typeof widgetId !== "string" || !WIDGET_ID_RE.test(widgetId)) {
+    if (typeof widgetId !== "string" || !WIDGET_ID_RE.test(widgetId) || isDeniedKey(widgetId)) {
       errors.push(err("invalid_widget_config", `${path}.id`));
     } else {
       if (seenIds.has(widgetId)) errors.push(err("duplicate_widget_id", `${path}.id`));
@@ -447,8 +560,9 @@ export function validateEnvelope(obj: unknown): ValidationResult {
       if (!(MIGRATION_SOURCES as readonly unknown[]).includes(migration.source)) {
         errors.push(err("malformed_workspace", "$.migration.source"));
       }
+      // Amendment A2 ruling 12 + A3 ruling 2: 1 <= source_revision <= safe int.
       const sourceRevision = migration.source_revision;
-      if (sourceRevision !== null && !isInt(sourceRevision)) {
+      if (sourceRevision !== null && (!isSafeInt(sourceRevision) || sourceRevision < 1)) {
         errors.push(err("malformed_workspace", "$.migration.source_revision"));
       }
     }
@@ -460,6 +574,8 @@ export function validateEnvelope(obj: unknown): ValidationResult {
       errors.push(err("oversized_workspace", "$"));
     }
   } catch {
+    // Amendment A2 ruling 4: NaN/Infinity anywhere in the structure, or a lone UTF-16 surrogate in
+    // any string, both land here as malformed, never a crash.
     errors.push(err("malformed_workspace", "$"));
   }
 
@@ -481,25 +597,53 @@ export function rowStateFor(config: unknown): "ok" | "unsupported_floor" | "unsu
   return "unsupported_schema";
 }
 
-/** Canonical (sorted-key, compact) JSON serialization — used for the size check above and for
- *  `envelopeDigest` below. Mirrors Python's `json.dumps(obj, sort_keys=True, separators=(",", ":"))`. */
-export function canonicalJson(value: unknown): string {
-  return stringifySorted(value);
+/** Amendment A2 ruling 4 + A3 ruling 2: canonicalization-time BACKSTOP for the number law (field-
+ *  level checks are the first line of defense) — recurses the structure and throws on a non-finite
+ *  number, an integer/integral-valued number outside the IEEE-754 safe range, or a non-integral
+ *  number outside `1e-4 <= |x| < 1e12`. Callers treat any thrown error as `malformed_workspace`,
+ *  never let it escape as an uncaught crash. JS has no separate int/float type, so — unlike the
+ *  Python reference, which converts `20.0` to `20` — there is nothing to "normalize"; the checks
+ *  below are pure range validation over `number`. */
+function checkNumericBounds(value: unknown): void {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("non-finite number is not a valid canonical value");
+    if (Number.isInteger(value)) {
+      if (Math.abs(value) > MAX_SAFE_INT) throw new RangeError("integer exceeds the IEEE-754 safe range");
+      return;
+    }
+    const magnitude = Math.abs(value);
+    if (!(magnitude >= MIN_NONZERO_FLOAT_MAGNITUDE && magnitude < MAX_FLOAT_MAGNITUDE)) {
+      throw new RangeError("non-integral number outside the canonical magnitude window");
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) checkNumericBounds(item);
+    return;
+  }
+  if (isRecord(value)) {
+    for (const sub of Object.values(value)) checkNumericBounds(sub);
+  }
 }
 
-/** `JSON.stringify` leaves non-ASCII characters as raw UTF-8; Python's canonical form uses
- *  `ensure_ascii=True` (every char outside `0x20..0x7e` becomes `\uXXXX`, astral characters as a
- *  UTF-16 surrogate pair — the same representation Python's encoder falls back to). Re-escaping
- *  post-hoc keeps the standard-JSON escaping `JSON.stringify` already got right (quotes, backslash,
- *  `\n`/`\t`/etc.) and only touches the bytes Python would additionally escape. */
-function asciiSafeString(s: string): string {
-  const quoted = JSON.stringify(s);
-  let out = "";
-  for (let i = 0; i < quoted.length; i++) {
-    const code = quoted.charCodeAt(i);
-    out += code > 0x7e ? `\\u${code.toString(16).padStart(4, "0")}` : quoted[i];
+/** Re-escapes a `JSON.stringify`-quoted string so a LONE UTF-16 surrogate (never valid UTF-8 on its
+ *  own — Python's `str.encode("utf-8")` raises `UnicodeEncodeError` on exactly this) throws instead
+ *  of silently round-tripping through `U+FFFD`-substitution the way `Buffer.from(str, "utf8")`
+ *  otherwise would. `ensure_ascii=False` (Amendment A2 ruling 4) means every OTHER character passes
+ *  through untouched — this function's only job is the lone-surrogate check. */
+function assertNoLoneSurrogates(s: string): void {
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    const isHighSurrogate = code >= 0xd800 && code <= 0xdbff;
+    const isLowSurrogate = code >= 0xdc00 && code <= 0xdfff;
+    if (isHighSurrogate) {
+      const next = s.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) throw new TypeError("lone UTF-16 surrogate is not valid UTF-8");
+      i++; // consumed as a valid pair
+    } else if (isLowSurrogate) {
+      throw new TypeError("lone UTF-16 surrogate is not valid UTF-8");
+    }
   }
-  return out;
 }
 
 function stringifySorted(value: unknown): string {
@@ -509,18 +653,40 @@ function stringifySorted(value: unknown): string {
     return JSON.stringify(value);
   }
   if (typeof value === "boolean") return JSON.stringify(value);
-  if (typeof value === "string") return asciiSafeString(value);
+  if (typeof value === "string") {
+    assertNoLoneSurrogates(value);
+    return JSON.stringify(value); // ensure_ascii=False (A2 ruling 4): non-ASCII passes through raw.
+  }
   if (Array.isArray(value)) return `[${value.map((v) => stringifySorted(v)).join(",")}]`;
   if (isRecord(value)) {
     const keys = Object.keys(value).sort();
-    return `{${keys.map((k) => `${asciiSafeString(k)}:${stringifySorted(value[k])}`).join(",")}}`;
+    return `{${keys.map((k) => `${stringifySorted(k)}:${stringifySorted(value[k])}`).join(",")}}`;
   }
   throw new TypeError(`value of type ${typeof value} is not JSON-serializable`);
 }
 
+/** Canonical (sorted-key, compact, `ensure_ascii=False`, numeric-bounds-checked) JSON serialization
+ *  — used for the size check above and for `envelopeDigest` below. Mirrors Python's
+ *  `json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)`
+ *  over the same numeric-normalized structure (Amendment A2 ruling 4 / A3 ruling 2). Throws on a
+ *  non-finite/out-of-range number or a lone surrogate — callers convert that into
+ *  `malformed_workspace` rather than letting it escape. */
+export function canonicalJson(value: unknown): string {
+  checkNumericBounds(value);
+  return stringifySorted(value);
+}
+
 /** SHA-256 over the canonical serialization — the digest used to pin golden vectors and to prove
- *  this module byte-identical to the Macro reference (contract §10). Node-only (uses `node:crypto`);
- *  callers in this repo only ever run server-side or under vitest. */
+ *  this module byte-identical to the Macro reference (contract §10). Never throws: an undigestable
+ *  structure (non-finite/out-of-range number, lone surrogate) still returns a stable 64-char hex
+ *  string rather than crashing — callers are expected to validate with `validateEnvelope` first.
+ *  Node-only (uses `node:crypto`); callers in this repo only ever run server-side or under vitest. */
 export function envelopeDigest(envelope: unknown): string {
-  return createHash("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
+  let encoded: Buffer;
+  try {
+    encoded = Buffer.from(canonicalJson(envelope), "utf8");
+  } catch {
+    encoded = Buffer.from("\x00invalid-envelope", "utf8");
+  }
+  return createHash("sha256").update(encoded).digest("hex");
 }
