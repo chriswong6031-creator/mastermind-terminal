@@ -185,7 +185,7 @@ import {
   watchlistVisualOrder,
 } from "@/lib/watchlistSections";
 
-type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
+type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null; suspended?: boolean };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
 // /api/ext-quote entry. extSession mirrors the Quote Hub's own window classification.
 type ExtSession = "pre" | "post" | "overnight";
@@ -231,6 +231,7 @@ function mergeLive(r: Row | undefined, q: any): Row | undefined {
   const regular = resolveRegularSessionDisplay(q);
   if (regular.regularPrice != null) base.last = regular.regularPrice;
   if (regular.regularChg != null) base.chg = regular.regularChg;
+  if (q.suspended === true) base.suspended = true;
   return base;
 }
 
@@ -1098,6 +1099,23 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // workspace later in the mount pass, so wait for that restore before counting the chart view;
   // otherwise the brief fallback seed would pollute Recent ahead of the actual restored ticker.
   const [workspaceRestored, setWorkspaceRestored] = useState(!!initialSymbol);
+  // Whether the mount effect below has applied this browser's PERSISTED prefs — specifically the
+  // startup timeframe. Distinct from `workspaceRestored`, which starts TRUE on any deep link and
+  // therefore cannot answer "is paneTfs the user's timeframe yet?".
+  const [prefsHydrated, setPrefsHydrated] = useState(false);
+  // THE startup timeframe, resolved once, synchronously, on the client's first render.
+  //
+  // It cannot be RENDERED before the mount effect commits (the server always emits the default,
+  // so seeding `paneTfs` with it would be a hydration mismatch), but the chart does not need it
+  // rendered — it needs it for an imperative data fetch. Measured: that commit lands ~1.05s after
+  // mount, and ChartPanel's data effect runs at ~130ms, so without this the chart loads the
+  // SSR-default timeframe and throws the whole result away. Handing the value over out-of-band
+  // costs no markup and keeps ONE resolution: the mount effect below seeds `paneTfs` from this
+  // same ref, so the prop and the state can never disagree.
+  const startTfRef = useRef<string | null>(null);
+  if (startTfRef.current === null && typeof window !== "undefined") {
+    startTfRef.current = resolveStartTf(readStartTf(), functionalSet(seed0, secondBarsEnabled));
+  }
   // The active chart is the source of truth for Recently viewed. Recording here (instead of only
   // inside the search picker) includes direct Macro Dashboard links, the warm iframe bridge,
   // watchlists, movers, and search results. Composite expressions are not standalone ticker rows.
@@ -1384,15 +1402,24 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   const [drawStyleOverrides, setDrawStyleOverrides] = useState<
     Partial<Record<DrawKind, Partial<ShellDrawingStyle>>>
   >({});
+  // The colour the user last chose anywhere. Width and dash stay strictly
+  // per-tool (Highlighter is 8px, Fib is dashed), but a colour is a global
+  // intent: picking one and then reaching for another tool used to silently
+  // fall back to blue, so a custom colour could never actually be kept.
+  const [lastDrawingColor, setLastDrawingColor] = useState<string | null>(null);
   const drawStyle = useMemo<ShellDrawingStyle>(() => {
     const defaults = tool ? getDrawingTool(tool)?.defaults : undefined;
     const override = tool ? drawStyleOverrides[tool] : undefined;
+    // Tools whose default encodes MEANING rather than taste (Long Position is
+    // var(--up), Short Position var(--down)) keep their own colour.
+    const semanticDefault = typeof defaults?.color === "string" && defaults.color.startsWith("var(");
+    const inherited = semanticDefault ? undefined : lastDrawingColor ?? undefined;
     return {
-      color: override?.color ?? defaults?.color ?? "#4d82ff",
+      color: override?.color ?? inherited ?? defaults?.color ?? "#4d82ff",
       width: override?.width ?? defaults?.width ?? 1.5,
       dash: override?.dash ?? defaults?.dash ?? "solid",
     };
-  }, [drawStyleOverrides, tool]);
+  }, [drawStyleOverrides, lastDrawingColor, tool]);
   const patchDrawStyle = useCallback((patch: Partial<ShellDrawingStyle>, explicitKind?: DrawKind) => {
     const targetKind = explicitKind ?? tool;
     if (!targetKind) return;
@@ -1401,6 +1428,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
       ...(typeof patch.width === "number" && Number.isFinite(patch.width) ? { width: patch.width } : {}),
       ...(patch.dash === "solid" || patch.dash === "dashed" || patch.dash === "dotted" ? { dash: patch.dash } : {}),
     };
+    if (safePatch.color) setLastDrawingColor(safePatch.color);
     setDrawStyleOverrides((current) => ({
       ...current,
       [targetKind]: { ...current[targetKind], ...safePatch },
@@ -1678,8 +1706,15 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     // Settings → Terminal → Default timeframe (3D unless changed). Resolved against the landing
     // symbol's functional set, since the workspace restore below can land on a symbol other than seed0.
     const savedStartTf = readStartTf();
-    const startTf = resolveStartTf(savedStartTf, functionalSet(seed0, secondBarsEnabled));
-    { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); for (const k of Object.keys(savedP)) if (isSuiteKey(k)) base[k] = { ...suiteDefaults(k), ...savedP[k] }; setIndParams(base); } setPaneTfs([startTf]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); {
+    const startTf = startTfRef.current ?? resolveStartTf(savedStartTf, functionalSet(seed0, secondBarsEnabled));
+    btMark(`startup-tf=${startTf}`);
+    // Publish the resolved timeframe and release the chart BEFORE the rest of this effect: every
+    // read below is a persisted-state read, and one throwing on corrupt localStorage must never
+    // strand the chart unloaded. A multi-pane workspace restore further down may still overwrite
+    // paneTfs — same effect, same React batch, so the chart sees one commit either way.
+    setPaneTfs([startTf]);
+    setPrefsHydrated(true);
+    { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); for (const k of Object.keys(savedP)) if (isSuiteKey(k)) base[k] = { ...suiteDefaults(k), ...savedP[k] }; setIndParams(base); } setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); {
       const savedSet = load(WATCHLIST_SETTINGS_KEY, {});
       const savedVersion = Number(localStorage.getItem(WATCHLIST_SETTINGS_VERSION_KEY) || 0);
       const resolvedSet = resolveWatchlistSettings(savedSet, savedVersion);
@@ -2166,6 +2201,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         if (value.magnet === "off" || value.magnet === "weak" || value.magnet === "strong") setMagnet(value.magnet);
         if (typeof value.sticky === "boolean") setDrawingSticky(value.sticky);
         if (typeof value.visible === "boolean") setDrawingsVisible(value.visible);
+        if (typeof value.lastColor === "string" && value.lastColor.trim()) setLastDrawingColor(value.lastColor.trim());
         if (value.styles && typeof value.styles === "object" && !Array.isArray(value.styles)) {
           const styles: Partial<Record<DrawKind, Partial<ShellDrawingStyle>>> = {};
           for (const [id, candidate] of Object.entries(value.styles as Record<string, unknown>)) {
@@ -2187,8 +2223,8 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   }, []);
   useEffect(() => {
     if (!drawingPrefsHydrated) return;
-    try { localStorage.setItem("mm.drawing.preferences", JSON.stringify({ magnet, sticky: drawingSticky, visible: drawingsVisible, styles: drawStyleOverrides })); } catch {}
-  }, [drawStyleOverrides, drawingPrefsHydrated, drawingSticky, drawingsVisible, magnet]);
+    try { localStorage.setItem("mm.drawing.preferences", JSON.stringify({ magnet, sticky: drawingSticky, visible: drawingsVisible, styles: drawStyleOverrides, ...(lastDrawingColor ? { lastColor: lastDrawingColor } : {}) })); } catch {}
+  }, [drawStyleOverrides, drawingPrefsHydrated, drawingSticky, drawingsVisible, lastDrawingColor, magnet]);
   // Drawing ownership is a hard cache boundary. Guest drawings remain in the
   // guest collection; an account always reloads its authoritative server copy.
   // This also handles sign-out and direct account-to-account session changes.
@@ -3165,6 +3201,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // Regular and extended prices are independent lanes. `last`/`close` stay
   // regular-session values; the hub's ext* namespace drives the secondary line.
   const regularQuote = resolveRegularSessionDisplay(liveQuote);
+  const isSuspended = liveQuote?.suspended === true;
   const hubExtPrice = liveQuote?.extPrice as number | undefined;
   const hubExtChg = liveQuote?.extChg as number | undefined;
   const hubExtTs = liveQuote?.extTs as number | undefined;
@@ -4654,6 +4691,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // item-26: ext column reads from extQuotes (separate poll); dash when closed or no ext print.
   const colVal = (sym: string, r: Row | undefined, key: string) => {
     if (!r) return "—";
+    if (r.suspended && (key === "change" || key === "changePct")) return t("suspended");
     const u = r.chg >= 0;
     if (key === "last") return fmt(r.last, r.last < 10 ? 4 : 2);
     // $ change = last − prevClose. prevClose = last / (1 + chg%). The old
@@ -4822,7 +4860,9 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         </button>
         <div className="stats">
           <div className="stat stat-last"><span className="l">{t("lastPrice")}</span><span className="v big num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</span></div>
-          <div className="stat stat-change"><span className="l">{changeLabel}</span><span className={`v num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></div>
+          <div className="stat stat-change"><span className="l">{changeLabel}</span>{isSuspended
+            ? <span className="v quote-suspended">{t("suspended")}</span>
+            : <span className={`v num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>}</div>
           {/* Live-first, exactly like DayRange below. Reading the manifest row alone put
               TODAY's price beside YESTERDAY's volume in the same strip — the manifest is a
               nightly artifact, so its vol is a full session behind whenever a live quote exists. */}
@@ -4832,6 +4872,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         {(() => {
           // The verdict lives in lib/feedFreshness so the rule is unit-testable and so a
           // "real-time" label can only ever come from the hub's MEASURED lag (see that file).
+          if (isSuspended) return <span className="livebadge suspended topbar-livebadge" title={t("suspensionTip")}><i />{t("suspended")}</span>;
           const basis = liveQuote?.basis ?? (liveStatus === "live" ? "LIVE" : "EOD");
           const { cls, label, tip } = freshnessLabel(
             { basis, lagMs: liveQuote?.lagMs, asOfMs: liveQuote?.asOfMs, marketSession: liveQuote?.marketSession }, t);
@@ -4862,7 +4903,9 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
       <div className={`m-symbar${activeExtData ? " has-ext" : ""}`} onClick={() => { setSeed(""); setSearchOpen(true); }}>
         <span className="m-sym"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span><b>{active}</b><svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></span>
         <span className="m-quote-stack">
-          <span className="m-px" data-quote-lane="regular"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></span>
+          <span className="m-px" data-quote-lane="regular"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b>{isSuspended
+            ? <span className="cg quote-suspended">{t("suspended")}</span>
+            : <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>}</span>
           {activeExtData && (
             <span className="m-ext" data-quote-lane="extended">
               <span className="m-ext-label">{extSessionLabel(activeExtData.session)}</span>
@@ -5197,7 +5240,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
             />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} drawingOwnerKey={currentDrawingOwnerKey} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={drawingsReadyFor(sym) ? activeDrawingTool : null} toolActivation={toolState.activation} drawingSticky={drawingCreationDisabledReason ? false : drawingKeepsActive} drawingCreationDisabled={drawingCreationDisabledReason !== null} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawingOwnerMatches ? (drawStore[sym] ?? []) : []), ...chartBus.aiDrawingsFor(sym)]} drawingsVisible={drawingsVisible} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} onDetectedDrawingCount={i === activePane ? setActivePaneDetectedDrawingCount : undefined} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
+                <ChartPane key={i} idx={i} symbol={sym} drawingOwnerKey={currentDrawingOwnerKey} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={drawingsReadyFor(sym) ? activeDrawingTool : null} toolActivation={toolState.activation} drawingSticky={drawingCreationDisabledReason ? false : drawingKeepsActive} drawingCreationDisabled={drawingCreationDisabledReason !== null} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawingOwnerMatches ? (drawStore[sym] ?? []) : []), ...chartBus.aiDrawingsFor(sym)]} drawingsVisible={drawingsVisible} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} onDetectedDrawingCount={i === activePane ? setActivePaneDetectedDrawingCount : undefined} liveQuote={quotes[sym] ?? null} dataReady={prefsHydrated} initialTimeframe={startTfRef.current} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
                   onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
                   onTableView={() => setTableViewOpen(true)}
                   onObjectTree={() => setObjectTreeOpen((o) => !o)}
@@ -5570,7 +5613,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
                             const isExt = k === "ext" || k === "extPct";
                             const eq = isExt ? extQuotes[sym] : null;
                             const extUp = eq && eq.extChg != null ? eq.extChg >= 0 : null;
-                            const cls = isChg ? (u ? "up" : "down") : isExt && extUp != null ? (extUp ? "up" : "down") : "";
+                            const cls = r?.suspended && isChg ? "quote-suspended" : isChg ? (u ? "up" : "down") : isExt && extUp != null ? (extUp ? "up" : "down") : "";
                             return <span key={k} data-watchlist-column={k} className={`c num ${cls}`} title={isExt ? extTitle(sym) : undefined}>{colVal(sym, r, k)}</span>;
                           })}
                           <span className="rm" title={t("remove")} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); removeSymbol(sym); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span>
@@ -5668,8 +5711,10 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
               {/* price row: order:2 → wraps below name row (width:100% in CSS) */}
               <div className="px">
                 <b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b>
-                <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>
-                {mktClosed && <span className="mkt-closed">{t("marketClosed")}</span>}
+                {isSuspended
+                  ? <span className="cg quote-suspended">{t("suspended")}</span>
+                  : <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>}
+                {mktClosed && !isSuspended && <span className="mkt-closed">{t("marketClosed")}</span>}
               </div>
               {/* Overnight / extended-hours secondary price block.
                   Shown only while the backend exposes an out-of-session ext print.
@@ -5754,7 +5799,9 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
             {[0, 1].map((dup) => (
               <div className="tk-run" key={dup} aria-hidden={dup === 1 || undefined}>
                 {Object.entries(man?.symbols || {}).slice(0, 16).map(([s, r0]) => { const r = mergeLive(r0, quotes[s])!; const u = r.chg >= 0; return (
-                  <span key={s} className="tk" style={{ cursor: "pointer" }} onClick={() => pick(s)}><span className="s">{s.replace("-USD", "")}</span><span className="p num">{fmt(r.last, r.last < 10 ? 3 : 2)}</span><span className={`c num ${u ? "up" : "down"}`}>{u ? "+" : ""}{fmt(r.chg)}%</span></span>
+                  <span key={s} className="tk" style={{ cursor: "pointer" }} onClick={() => pick(s)}><span className="s">{s.replace("-USD", "")}</span><span className="p num">{fmt(r.last, r.last < 10 ? 3 : 2)}</span>{r.suspended
+                    ? <span className="c quote-suspended">{t("suspended")}</span>
+                    : <span className={`c num ${u ? "up" : "down"}`}>{u ? "+" : ""}{fmt(r.chg)}%</span>}</span>
                 ); })}
               </div>
             ))}

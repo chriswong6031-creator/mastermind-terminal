@@ -16,6 +16,7 @@ export type QuoteDisplayInput = {
   marketSession?: string | null;
   auctionPrice?: number | null;
   auctionChg?: number | null;
+  suspended?: boolean | null;
 };
 
 export type RegularSessionDisplay = {
