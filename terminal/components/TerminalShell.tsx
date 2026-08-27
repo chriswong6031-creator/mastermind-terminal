@@ -149,7 +149,7 @@ import { nextLayoutName, type SavedLayout } from "@/lib/layouts";
 import { applyLayoutConfig, captureLayoutConfig, type LayoutWorkspace } from "@/lib/layoutConfig";
 import { migrateLegacy, workspaceToLayout, captureWorkspace } from "@/lib/workspaceMigrate";
 import { SCHEMA as WORKSPACE_SCHEMA, validateEnvelope, type WorkspaceEnvelope, type Widget as WorkspaceWidget } from "@/lib/workspaceLayout";
-import { workspaceRowState, migrationUnclaimed, parseWorkspaceOutcome, absoluteLocalTime, safeWorkspaceFilename, importFailureKey, brainIncludedFromEnvelope, openBrainReincluding, type WorkspaceOpOutcome } from "@/lib/workspaceMenuOps";
+import { workspaceRowState, migrationUnclaimed, migrationUnsupportedWidgets, parseWorkspaceOutcome, absoluteLocalTime, safeWorkspaceFilename, importFailureKey, brainIncludedFromEnvelope, openBrainReincluding, type WorkspaceOpOutcome } from "@/lib/workspaceMenuOps";
 import { type PineScript } from "@/components/ChartPanel";
 
 type ShellDrawingStyle = { color: string; width: number; dash: Dash };
@@ -1257,6 +1257,12 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // disclosure, not a transient toast — and clears the moment a different workspace is loaded (or
   // nothing is loaded at all).
   const [unclaimedFields, setUnclaimedFields] = useState<string[]>([]);
+  // Reviewer ruling M5b: ids of widgets the tolerant READ opened this row around because their
+  // `type` this build does not recognize (empty when nothing was dropped). Same lifecycle as
+  // `unclaimedFields` — a save re-captures only widgets this build knows how to render, so a
+  // non-empty list here means that save would silently remove the named panel (contract §11: the
+  // drop must be disclosed, never silent).
+  const [unsupportedWidgets, setUnsupportedWidgets] = useState<string[]>([]);
   const [loadedEnvelope, setLoadedEnvelope] = useState<WorkspaceEnvelope | null>(null);
   // Whether the assistant dock is part of the workspace about to be saved. Default TRUE: byte-for-
   // byte today's product (freeze §7) — every guest/no-saved-workspace session already mounts Brain.
@@ -4247,6 +4253,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         setWorkspaceRevision(outcome.revision);
         setWorkspaceId(outcome.id ?? workspaceId);
         setUnclaimedFields([]);                     // a fresh capture-then-save is clean by construction
+        setUnsupportedWidgets([]);                  // a fresh capture only ever includes widgets this build renders
         setLoadedEnvelope({ ...envelope, name: null, revision: outcome.revision });
         setLayoutFeedback({ kind: "saved", name: targetName });
         setLayoutName("");                          // only cleared once the name is really stored
@@ -4302,6 +4309,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     setWorkspaceRevision(rowWorkspaceRevision(l.config));
     setWorkspaceId(l.id);
     setUnclaimedFields(migrationUnclaimed(migrated));
+    setUnsupportedWidgets(migrationUnsupportedWidgets(migrated));
     setLoadedEnvelope(envelope);
     setBrainIncluded(brainIncludedFromEnvelope(envelope));
     setLayoutName("");
@@ -4339,6 +4347,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         setWorkspaceRevision(outcome.revision);
         setWorkspaceId(outcome.id ?? null);
         setUnclaimedFields([]);
+        setUnsupportedWidgets([]);
         setLoadedEnvelope({ ...envelope, name: null, revision: outcome.revision });
         setLayoutFeedback({ kind: "saved", name: candidate });
         setStaleWorkspaceName(null);
@@ -4505,6 +4514,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
         setWorkspaceRevision(outcome.revision);
         setWorkspaceId(outcome.id ?? null);
         setUnclaimedFields([]);
+        setUnsupportedWidgets([]);
         setLoadedEnvelope({ ...pending.envelope, name: null, revision: outcome.revision });
         setLayoutFeedback({ kind: "saved", name: suggested });
         setLayoutName("");
@@ -4550,7 +4560,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     try {
       const r = await fetch(`/api/layouts?id=${encodeURIComponent(id)}`, { method: "DELETE" });
       if (r.ok || r.status === 404) {
-        if (deleted && deleted.name === workspaceName) { setWorkspaceName(null); setWorkspaceRevision(null); setWorkspaceId(null); setUnclaimedFields([]); setLoadedEnvelope(null); }
+        if (deleted && deleted.name === workspaceName) { setWorkspaceName(null); setWorkspaceRevision(null); setWorkspaceId(null); setUnclaimedFields([]); setUnsupportedWidgets([]); setLoadedEnvelope(null); }
         return;
       }
       if (r.status === 401) { setLayouts([]); setLayoutStatus("auth"); return; }
@@ -4591,6 +4601,7 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
     onReloadLatest: reloadLatestWorkspace,
     onSaveAsCopy: saveWorkspaceAsCopy,
     unclaimedFields,
+    unsupportedWidgets,
   };
 
   // Generic-widget-graph fallback data (see the `.ws-extra-widgets` render site below): every

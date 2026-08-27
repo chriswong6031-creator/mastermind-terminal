@@ -259,6 +259,26 @@ test.describe("W2-A workspace menu — 1440×900 EN", () => {
     await expect(tile).toHaveAttribute("data-ws-missing-widget", "screener"); // the tile names the actual unknown type
     await expect(tile).toContainText("screener");
     await shot(page, "1440-en-tile-unknown-type");
+
+    // Reviewer ruling M5b: the tile alone is a per-widget RENDER affordance — it does not warn that
+    // a save would REMOVE that panel. Reopening the menu must show a SEPARATE, honest disclosure.
+    const menuReopened = await openLayoutMenu(page);
+    const panelNote = menuReopened.locator("[data-ws-unsupported-panels]");
+    await expect(panelNote).toBeVisible();
+    await expect(panelNote).toHaveText("This workspace holds a panel this version can't open. Saving will remove that panel.");
+    const panelNoteText = await panelNote.innerText();
+    expect(panelNoteText).not.toMatch(RAW_CODE_RE);
+    expect(panelNoteText).not.toContain("screener"); // never names the widget id/type in the warning itself
+
+    // Saving over this row (§11: the drop is disclosed, never silent) actually removes the panel —
+    // a save re-captures only widgets this build renders. Post-save, both the tile and the note
+    // must reflect the new, honest state: the panel is genuinely gone, so nothing warns about it.
+    await menuReopened.locator("[data-layout-save] input").fill("UnknownWidget");
+    await menuReopened.locator("[data-layout-save-btn]").click();
+    await expect(menuReopened.locator('[data-layout-feedback="saved"]')).toBeVisible();
+    await expect(page.locator("[data-ws-missing-widget]")).toHaveCount(0); // the tile is gone — the panel was actually dropped
+    const menuAfterSave = await openLayoutMenu(page);
+    await expect(menuAfterSave.locator("[data-ws-unsupported-panels]")).toHaveCount(0); // and the warning correctly stops firing
   });
 
   test("reviewer ruling B1/B2 — a tolerant-defect row opens 'ok' and surfaces the unreadable-settings disclosure", async ({ page, baseURL }, testInfo) => {

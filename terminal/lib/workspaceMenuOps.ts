@@ -37,6 +37,16 @@ export function migrationUnclaimed(result: MigrateResult): string[] {
   return result.ok && "unclaimed" in result && result.unclaimed ? result.unclaimed : [];
 }
 
+/** Extracts the `unsupportedWidgets` id list (reviewer ruling M5b) — widgets a tolerant READ opened
+ *  the row around because their `type` this build does not recognize. `[]` when the result carries
+ *  no such list (every other path: a clean row, a per-field-tolerant legacy migration, or an
+ *  outright failure). The caller surfaces a non-empty list before any subsequent save, since saving
+ *  re-captures only the widgets this build knows how to render — the drop must be disclosed, never
+ *  silent (contract §11). */
+export function migrationUnsupportedWidgets(result: MigrateResult): string[] {
+  return result.ok && "unsupportedWidgets" in result && result.unsupportedWidgets ? result.unsupportedWidgets : [];
+}
+
 /** W1-C regression surface (freeze §7/§12): whether a loaded envelope's widget graph includes the
  *  Brain dock — the ONE fact that decides whether `<BrainWidget>` mounts. `getAiContext` and every
  *  other Brain prop are untouched by this wave; only membership is new. */

@@ -187,6 +187,13 @@ export const LEX: Record<string, [string, string]> = {
     "Part of the current workspace couldn't be saved. Nothing was stored.",
     "当前工作区的部分内容无法保存。未写入任何内容。",
   ],
+  // Reviewer ruling M5b: a durable disclosure for a workspace holding a panel (widget) this build
+  // does not recognize — a save re-captures only widgets it can render, so it must warn the drop
+  // BEFORE it happens, spec §3.7.
+  wsUnclaimedPanels: [
+    "This workspace holds a panel this version can't open. Saving will remove that panel.",
+    "此工作区包含当前版本无法打开的面板。保存将移除该面板。",
+  ],
   // Unsupported-widget tile (spec §6)
   wsPanelUnavailable: ["This panel isn't available in this version", "此面板在当前版本中不可用"],
   wsPanelUnavailableSub: ["The rest of this workspace opened normally.", "此工作区的其余部分已正常打开。"],

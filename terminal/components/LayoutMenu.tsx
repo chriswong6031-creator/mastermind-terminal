@@ -69,13 +69,18 @@ export type LayoutMenuProps = {
    *  DURABLE disclosure (not a `feedback`-kind transient), so it renders independently of whatever
    *  `feedback` is currently showing. */
   unclaimedFields: string[];
+  /** Ids of widgets in the CURRENTLY LOADED workspace whose `type` this build does not recognize
+   *  (spec §3.7, reviewer ruling M5b) — empty when nothing was dropped or nothing is loaded. Same
+   *  durable-disclosure treatment as `unclaimedFields`: a save re-captures only widgets this build
+   *  knows how to render, so this list warns that saving will remove those panels. */
+  unsupportedWidgets: string[];
 };
 
 export default function LayoutMenu({
   status, layouts, name, onNameChange, onSave, saving, feedback, deleteError,
   onLoad, onDelete, onRetry, onSignUp, rowAs = "div", onPicked,
   brainInWorkspace, onToggleBrainDock, onRename, onDuplicate, onExport, onImport,
-  staleName, onUseSuggested, onReloadLatest, onSaveAsCopy, isOpen, unclaimedFields,
+  staleName, onUseSuggested, onReloadLatest, onSaveAsCopy, isOpen, unclaimedFields, unsupportedWidgets,
 }: LayoutMenuProps) {
   const t = useT();
   const isGuest = status === "auth";
@@ -182,6 +187,12 @@ export default function LayoutMenu({
           independent of whatever `feedback.kind` is currently showing. */}
       {unclaimedFields.length > 0 && (
         <div className="menu-note" role="status" data-ws-unclaimed>{t("wsUnclaimedNote")}</div>
+      )}
+      {/* Unsupported-panel disclosure (spec §3.7, reviewer ruling M5b): a SECOND durable note,
+          independent of the one above — a workspace can have unclaimed FIELDS, unopenable WIDGETS,
+          both, or neither, and each needs its own plain-word warning before the user saves over it. */}
+      {unsupportedWidgets.length > 0 && (
+        <div className="menu-note" role="status" data-ws-unsupported-panels>{t("wsUnclaimedPanels")}</div>
       )}
       {feedback.kind === "saved" && <div className="menu-note ok" role="status" data-layout-feedback="saved">{t("layoutSaved")}</div>}
       {feedback.kind === "renamed" && <div className="menu-note ok" role="status" data-layout-feedback="renamed">{t("wsRenamed")}</div>}

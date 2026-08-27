@@ -26,6 +26,7 @@ import {
   INVALID,
   SCHEMA,
   validateEnvelope,
+  WIDGET_TYPES,
   type ChartConfigField,
   type FailureCode,
   type MigrationProvenance,
@@ -40,7 +41,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 const isPlainInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
 
 export type MigrateResult =
-  | { ok: true; envelope: WorkspaceEnvelope; unclaimed: string[] }
+  | { ok: true; envelope: WorkspaceEnvelope; unclaimed: string[]; unsupportedWidgets?: string[] }
   | { ok: true; envelope: WorkspaceEnvelope }
   | { ok: false; code: FailureCode };
 
@@ -97,6 +98,16 @@ function recognizeLegacy(config: Record<string, unknown>): { source: MigrationSo
  * golden vector still runs the unchanged strict path) — tolerable ONLY when EVERY reported defect
  * is `unknown_widget_type` (any other structural problem alongside it still refuses, in both
  * directions, exactly as before).
+ *
+ * Reviewer ruling M5b (a Save silently destroys an unknown panel): the tolerated-unknown-type
+ * result also names every dropped widget's id in `unsupportedWidgets` — §11 requires the drop be
+ * DISCLOSED, never silent, and a save over this row (which re-captures only the widgets this build
+ * knows how to render) would otherwise remove that panel with no warning. The caller (B2's
+ * unclaimed-settings note, extended for the panel case) surfaces this before any subsequent save,
+ * exactly like `unclaimed`. N16: the envelope is a shallow copy (`{...config}`), never the same
+ * object reference the caller's stored row holds — the prior `config as unknown as
+ * WorkspaceEnvelope` aliased the row's own object, so a caller mutating the returned envelope (e.g.
+ * stamping `name`/`revision` before a save) silently corrupted the un-migrated source too.
  */
 export function migrateLegacy(config: unknown, strict = true): MigrateResult {
   if (!isRecord(config)) return { ok: false, code: "malformed_workspace" };
@@ -106,7 +117,11 @@ export function migrateLegacy(config: unknown, strict = true): MigrateResult {
     const result = validateEnvelope(config);
     if (result.ok) return { ok: true, envelope: { ...config } as WorkspaceEnvelope };
     if (!strict && result.errors.length > 0 && result.errors.every((e) => e.code === "unknown_widget_type")) {
-      return { ok: true, envelope: config as unknown as WorkspaceEnvelope, unclaimed: [] };
+      const rawWidgets = Array.isArray(config.widgets) ? config.widgets : [];
+      const unsupportedWidgets = rawWidgets
+        .filter((w): w is Record<string, unknown> => isRecord(w) && !(WIDGET_TYPES as readonly unknown[]).includes(w.type))
+        .map((w) => String(w.id));
+      return { ok: true, envelope: { ...config } as WorkspaceEnvelope, unclaimed: [], unsupportedWidgets };
     }
     return { ok: false, code: result.errors[0].code };
   }

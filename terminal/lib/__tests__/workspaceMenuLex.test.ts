@@ -25,6 +25,8 @@ const NEW_KEYS = [
   "wsPanelUnavailable", "wsPanelUnavailableSub", "wsPanelType",
   // Reviewer repair wave (B2/M4): the unreadable-settings disclosure + the capture-refuses-to-save copy.
   "wsUnclaimedNote", "wsSaveUnreadable",
+  // Reviewer re-verification wave (M5b): the unsupported-panel disclosure.
+  "wsUnclaimedPanels",
 ] as const;
 
 // Reviewer ruling N15: `wsGone` was dead (minted, never wired to any real 404 surface) and was
