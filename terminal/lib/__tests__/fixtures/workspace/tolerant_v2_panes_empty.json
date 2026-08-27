@@ -6,8 +6,8 @@
       }
     },
     "migration": {
-      "source": "chart_layout_v1",
-      "source_revision": null
+      "source": "chart_layout_v2",
+      "source_revision": 2
     },
     "name": null,
     "requires": {
@@ -18,17 +18,18 @@
     "widgets": [
       {
         "config": {
+          "activePane": 0,
+          "chartType": "candles",
           "compare": [
-            "SPY"
+            "MSFT"
+          ],
+          "inds": [
+            "ema21"
           ],
           "paneTfs": [
-            "1D",
             "1D"
           ],
-          "panes": [
-            "NVDA",
-            "AMD"
-          ],
+          "split": 2,
           "sync": true
         },
         "context_in": [
@@ -43,17 +44,25 @@
       }
     ]
   },
+  "expected_strict_code": "invalid_widget_config",
+  "expected_unclaimed": [
+    "panes"
+  ],
   "input": {
+    "activePane": 0,
+    "chartType": "candles",
     "compare": [
-      "SPY"
+      "MSFT"
+    ],
+    "inds": [
+      "ema21"
     ],
     "paneTfs": [
-      "1D",
       "1D"
     ],
-    "panes": [
-      "NVDA",
-      "AMD"
-    ]
+    "panes": [],
+    "schemaVersion": 2,
+    "split": 2,
+    "sync": true
   }
 }

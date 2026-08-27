@@ -6,8 +6,8 @@
       }
     },
     "migration": {
-      "source": "chart_layout_v1",
-      "source_revision": null
+      "source": "chart_layout_v2",
+      "source_revision": 2
     },
     "name": null,
     "requires": {
@@ -18,8 +18,19 @@
     "widgets": [
       {
         "config": {
+          "activePane": 0,
+          "chartType": "candles",
+          "compare": [
+            "MSFT"
+          ],
+          "inds": [
+            "ema21"
+          ],
+          "paneTfs": [
+            "1D"
+          ],
           "panes": [
-            "TSLA"
+            "AAPL"
           ],
           "sync": true
         },
@@ -35,9 +46,27 @@
       }
     ]
   },
+  "expected_strict_code": "invalid_widget_config",
+  "expected_unclaimed": [
+    "split"
+  ],
   "input": {
+    "activePane": 0,
+    "chartType": "candles",
+    "compare": [
+      "MSFT"
+    ],
+    "inds": [
+      "ema21"
+    ],
+    "paneTfs": [
+      "1D"
+    ],
     "panes": [
-      "TSLA"
-    ]
+      "AAPL"
+    ],
+    "schemaVersion": 2,
+    "split": 3,
+    "sync": true
   }
 }
