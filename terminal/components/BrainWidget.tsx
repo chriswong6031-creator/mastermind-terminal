@@ -44,17 +44,49 @@ export default function BrainWidget({
     // The script is a document-level singleton and can outlive this component
     // during a client-side /terminal -> /analysis navigation.  Rebind the
     // shared getter on every active-symbol change so a subsequent handoff
-    // cannot keep querying an unmounted component's stale ref.
+    // cannot keep querying an unmounted component's stale ref. This ALREADY
+    // reassigns `MM_BRAIN_CFG.symbol` fresh on every mount (not just the first) via
+    // `handoffMastermindBrainSymbol`, so — unlike the three callbacks below — `symbol` needed no
+    // further change for the mount->unmount->remount bug (reviewer ruling M6).
     handoffMastermindBrainSymbol(active);
   }, [active]);
+  // Reviewer ruling M6(a): `onCommand`/`onAnnotate`/`onAuthRequired` used to be bound ONLY inside
+  // the mount-once install effect below, closing over THIS instance's refs. On a
+  // mount -> unmount -> remount cycle (e.g. toggling the Brain dock off then on — freeze §7's own
+  // new capability) the install effect's guard (`w.MMBrain?.mounted` / the existing `<script>` tag)
+  // makes it a no-op on the second mount, so the document-level singleton kept calling BACK INTO
+  // THE FIRST, NOW-UNMOUNTED INSTANCE's refs forever — a silent W1-C regression once the dock could
+  // actually be toggled. Each callback now gets its own write-through effect, shaped exactly like
+  // the existing `getAiContext` one below: it re-seeds the singleton's key on EVERY mount/prop
+  // change (once `MM_BRAIN_CFG` exists — the install effect seeds the very first value), and
+  // relinquishes on cleanup ONLY if the singleton still holds THIS instance's own closure (so an
+  // already-superseded cleanup from an earlier remount can never clobber a newer instance's binding).
   useEffect(() => {
     onCommandRef.current = onCommand;
+    if (typeof window === "undefined") return;
+    const w = window as unknown as MastermindBrainHost;
+    if (!w.MM_BRAIN_CFG) return; // first mount: the install effect (below) seeds the key
+    const fn = (j: any) => onCommandRef.current?.(j);
+    w.MM_BRAIN_CFG.onCommand = fn;
+    return () => { if (w.MM_BRAIN_CFG?.onCommand === fn) w.MM_BRAIN_CFG.onCommand = undefined; };
   }, [onCommand]);
   useEffect(() => {
     onAnnotateRef.current = onAnnotate;
+    if (typeof window === "undefined") return;
+    const w = window as unknown as MastermindBrainHost;
+    if (!w.MM_BRAIN_CFG) return;
+    const fn = (j: any) => onAnnotateRef.current?.(j);
+    w.MM_BRAIN_CFG.onAnnotate = fn;
+    return () => { if (w.MM_BRAIN_CFG?.onAnnotate === fn) w.MM_BRAIN_CFG.onAnnotate = undefined; };
   }, [onAnnotate]);
   useEffect(() => {
     onAuthRequiredRef.current = onAuthRequired;
+    if (typeof window === "undefined") return;
+    const w = window as unknown as MastermindBrainHost;
+    if (!w.MM_BRAIN_CFG) return;
+    const fn = () => onAuthRequiredRef.current?.();
+    w.MM_BRAIN_CFG.onAuthRequired = fn;
+    return () => { if (w.MM_BRAIN_CFG?.onAuthRequired === fn) w.MM_BRAIN_CFG.onAuthRequired = undefined; };
   }, [onAuthRequired]);
   // DeepVue W1-C write-through: mm_brain.js is a document-level singleton that intentionally
   // survives a client-side route change (e.g. /terminal -> /analysis), the same way `symbol`
