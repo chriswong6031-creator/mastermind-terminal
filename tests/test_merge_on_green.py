@@ -6,13 +6,11 @@ from pathlib import Path
 from scripts.merge_on_green import (
     ARM_LABEL,
     BLOCK_LABEL,
+    REQUIRED_CHECK_APP_ID,
     REQUIRED_CHECKS,
     check_verdict,
     sweep,
 )
-
-
-EXPECTED_CHECK_APP_ID = 15368
 
 
 def checks(
@@ -20,7 +18,7 @@ def checks(
     conclusion: str = "success",
     status: str = "completed",
     start_id: int = 10,
-    app_id: int | str | None = EXPECTED_CHECK_APP_ID,
+    app_id: int | str | None = REQUIRED_CHECK_APP_ID,
     include_app: bool = True,
 ):
     result = []
@@ -116,7 +114,7 @@ def test_latest_rerun_wins_over_an_older_green_check():
             "name": REQUIRED_CHECKS[0],
             "status": "queued",
             "conclusion": None,
-            "app": {"id": EXPECTED_CHECK_APP_ID},
+            "app": {"id": REQUIRED_CHECK_APP_ID},
         }
     )
     verdict = check_verdict(runs)
@@ -133,7 +131,7 @@ def test_missing_check_is_pending_not_a_pass():
 def test_wrong_app_cannot_satisfy_required_checks():
     verdict = check_verdict(checks(app_id=999999))
     assert verdict.state == "pending"
-    assert "trusted App 15368" in verdict.detail
+    assert f"trusted App {REQUIRED_CHECK_APP_ID}" in verdict.detail
     assert all(name in verdict.detail for name in REQUIRED_CHECKS)
 
 
@@ -145,7 +143,7 @@ def test_missing_or_malformed_app_metadata_cannot_satisfy_required_checks():
     verdict = check_verdict(runs)
 
     assert verdict.state == "pending"
-    assert "trusted App 15368" in verdict.detail
+    assert f"trusted App {REQUIRED_CHECK_APP_ID}" in verdict.detail
     assert REQUIRED_CHECKS[0] in verdict.detail
     assert REQUIRED_CHECKS[1] in verdict.detail
 
@@ -176,7 +174,7 @@ def test_newer_trusted_pending_supersedes_green_even_when_wrong_app_is_newest():
                 "name": REQUIRED_CHECKS[0],
                 "status": "queued",
                 "conclusion": None,
-                "app": {"id": EXPECTED_CHECK_APP_ID},
+                "app": {"id": REQUIRED_CHECK_APP_ID},
             },
             {
                 "id": 999,
@@ -219,7 +217,8 @@ def test_wrong_app_green_never_reaches_merge():
     result = sweep(api)
 
     assert result == [
-        "#7: missing trusted App 15368 checks: " + ", ".join(REQUIRED_CHECKS)
+        f"#7: missing trusted App {REQUIRED_CHECK_APP_ID} checks: "
+        + ", ".join(REQUIRED_CHECKS)
     ]
     assert not any(action[0] == "merge" for action in api.actions)
     assert not any(action[0] == "add_labels" for action in api.actions)
