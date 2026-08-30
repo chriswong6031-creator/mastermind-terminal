@@ -18,7 +18,7 @@ def checks(
     conclusion: str = "success",
     status: str = "completed",
     start_id: int = 10,
-    app_id: int | str | None = REQUIRED_CHECK_APP_ID,
+    app_id: int | str | bool | None = REQUIRED_CHECK_APP_ID,
     include_app: bool = True,
 ):
     result = []
@@ -139,13 +139,13 @@ def test_missing_or_malformed_app_metadata_cannot_satisfy_required_checks():
     runs = checks()
     runs[0].pop("app")
     runs[1]["app"] = {"id": "not-an-integer"}
+    runs[2]["app"] = {"id": True}
 
     verdict = check_verdict(runs)
 
     assert verdict.state == "pending"
     assert f"trusted App {REQUIRED_CHECK_APP_ID}" in verdict.detail
-    assert REQUIRED_CHECKS[0] in verdict.detail
-    assert REQUIRED_CHECKS[1] in verdict.detail
+    assert all(name in verdict.detail for name in REQUIRED_CHECKS)
 
 
 def test_later_wrong_app_duplicate_does_not_erase_trusted_green():
