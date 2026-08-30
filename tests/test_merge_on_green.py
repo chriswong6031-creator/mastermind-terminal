@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -211,15 +212,37 @@ def test_newer_trusted_pending_supersedes_green_even_when_wrong_app_is_newest():
     assert REQUIRED_CHECKS[0] in verdict.detail
 
 
-def test_candidate_ci_explicitly_pins_read_only_contents_permission():
-    workflow = (
+JOB_LEVEL_PERMISSIONS = re.compile(r"(?m)^[ \t]+permissions:")
+
+
+def ci_workflow_text() -> str:
+    return (
         Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
     ).read_text(encoding="utf-8")
+
+
+def test_candidate_ci_explicitly_pins_read_only_contents_permission():
+    workflow = ci_workflow_text()
     pre_jobs, separator, _ = workflow.partition("\njobs:\n")
 
     assert separator, "ci.yml must retain one top-level jobs mapping"
     assert "\npermissions:\n  contents: read\n" in pre_jobs
     assert workflow.count("\npermissions:\n") == 1
+    # That count only matches a column-0 key, so an indented job-level block is
+    # invisible to it. No candidate job may widen the top-level read-only grant.
+    assert JOB_LEVEL_PERMISSIONS.search(workflow) is None
+
+
+def test_job_level_permission_elevation_is_rejected_by_the_candidate_ci_guard():
+    # The guard must kill the forbidden mutation, not merely pass on today's file.
+    head, separator, jobs = ci_workflow_text().partition("\njobs:\n")
+    assert separator, "ci.yml must retain one top-level jobs mapping"
+    elevated = f"{head}{separator}  probe:\n    permissions:\n      contents: write\n{jobs}"
+
+    # The pre-existing column-0 count is blind to the elevation ...
+    assert elevated.count("\npermissions:\n") == 1
+    # ... the indent-aware guard is not.
+    assert JOB_LEVEL_PERMISSIONS.search(elevated) is not None
 
 
 def test_green_current_head_is_sha_pinned_merged_and_deleted():
