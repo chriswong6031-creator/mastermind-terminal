@@ -165,6 +165,25 @@ def test_later_wrong_app_duplicate_does_not_erase_trusted_green():
     assert verdict.state == "green"
 
 
+def test_newer_wrong_app_duplicate_does_not_erase_trusted_red():
+    runs = checks()
+    runs[0]["conclusion"] = "failure"
+    runs.append(
+        {
+            "id": 999,
+            "name": REQUIRED_CHECKS[0],
+            "status": "completed",
+            "conclusion": "success",
+            "app": {"id": 999999},
+        }
+    )
+
+    verdict = check_verdict(runs)
+
+    assert verdict.state == "red"
+    assert f"{REQUIRED_CHECKS[0]}=failure" in verdict.detail
+
+
 def test_newer_trusted_pending_supersedes_green_even_when_wrong_app_is_newest():
     runs = checks()
     runs.extend(
