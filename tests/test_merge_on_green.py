@@ -230,7 +230,7 @@ def test_green_current_head_is_sha_pinned_merged_and_deleted():
     assert result[0] == "#7: merged and deleted claude/pr-7"
 
 
-def test_wrong_app_green_never_reaches_merge():
+def test_wrong_app_green_never_reaches_merge_or_quarantine():
     api = FakeApi([pull()], runs={"head-7": checks(app_id=999999)})
 
     result = sweep(api)
@@ -240,7 +240,9 @@ def test_wrong_app_green_never_reaches_merge():
         + ", ".join(REQUIRED_CHECKS)
     ]
     assert not any(action[0] == "merge" for action in api.actions)
+    assert not any(action[0] == "delete" for action in api.actions)
     assert not any(action[0] == "add_labels" for action in api.actions)
+    assert not any(action[0] == "comment" for action in api.actions)
 
 
 def test_green_stale_head_is_updated_then_waits_for_fresh_ci():
