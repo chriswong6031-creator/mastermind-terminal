@@ -88,7 +88,11 @@ import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/Cha
 import DayStatsStrip from "@/components/DayStatsStrip";
 import { tPlain } from "@/lib/i18n";
 import { listTemplates } from "@/lib/chartTemplates";
-import { announceTerminalVisualReady } from "@/lib/terminalBoot";
+import {
+  announceTerminalVisualReady,
+  isTerminalIndicatorSetBuilt,
+  type TerminalVisualReadyAnnouncement,
+} from "@/lib/terminalBoot";
 import { assetInitial, assetLogoPath } from "@/lib/assetLogos";
 import { DEFAULT_CHART_SETTINGS, type ChartSettings } from "@/components/ChartFrameBar";
 import { chartTimeAxisOptions, chartTimeSpanDays } from "@/lib/chartTimeAxis";
@@ -679,6 +683,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const epochRef = useRef(0);               // race guard: latest data-effect run wins
   const dataReadyRef = useRef(dataReady);    // shell preference hydration for the current render
   const builtIndicatorRef = useRef<{ generation: number; key: string } | null>(null);
+  const visualReadyRef = useRef<TerminalVisualReadyAnnouncement | null>(null);
   const cmpGenRef = useRef(0);              // compare-specific generation token (epoch doesn't bump on compare change)
   const sliceRef = useRef<any>(null);       // latest slice, so replay re-resolves sig marks without a refetch
   const viewSavedRef = useRef<{ from: number; to: number } | null>(null);
@@ -7402,37 +7407,45 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       liveWrap.style.removeProperty("--mm-live-color");
     }
     const epoch = ++epochRef.current;
+    visualReadyRef.current?.cancel();
+    visualReadyRef.current = null;
     builtIndicatorRef.current = null;
     let cancelled = false;
-    const announceVisualReady = (state: "data" | "empty") => announceTerminalVisualReady(symbol, state, {
-      timeframe: effectiveTimeframe,
-      generation: epoch,
-      isCurrent: () => !cancelled && epochRef.current === epoch,
-      ...(state === "data" ? {
-        // LWC's setData/build calls update its model synchronously, but the first coordinate map is
-        // established by its next canvas frame. Re-project the dependent SVG/DOM layers in that
-        // frame, then terminalBoot releases consumers only on the following frame.
-        renderVisuals: () => {
-          const built = builtIndicatorRef.current;
-          if (!dataReadyRef.current
-            || !built
-            || built.generation !== epoch
-            || built.key !== indicatorSetKey(indicatorsRef.current)) return false;
-          renderSignalsRef.current();
-          renderRef.current();
-          measureRef.current();
-          const last = barsRef.current[barsRef.current.length - 1];
-          const series = priceSeriesRef.current;
-          if (!last || !series || !chartRef.current) return false;
-          try {
-            return series.priceToCoordinate(last.c) != null
-              && chartRef.current.timeScale().timeToCoordinate(last.time) != null;
-          } catch {
-            return false;
-          }
-        },
-      } : {}),
-    });
+    let generationReady: TerminalVisualReadyAnnouncement | null = null;
+    const announceVisualReady = (state: "data" | "empty") => {
+      generationReady?.cancel();
+      generationReady = announceTerminalVisualReady(symbol, state, {
+        timeframe: effectiveTimeframe,
+        generation: epoch,
+        isCurrent: () => !cancelled && epochRef.current === epoch,
+        ...(state === "data" ? {
+          // LWC's setData/build calls update its model synchronously, but the first coordinate map is
+          // established by its next canvas frame. Re-project the dependent SVG/DOM layers in that
+          // frame, then terminalBoot releases consumers only on the following frame.
+          renderVisuals: () => {
+            if (!isTerminalIndicatorSetBuilt(
+              dataReadyRef.current,
+              epoch,
+              indicatorSetKey(indicatorsRef.current),
+              builtIndicatorRef.current,
+            )) return false;
+            renderSignalsRef.current();
+            renderRef.current();
+            measureRef.current();
+            const last = barsRef.current[barsRef.current.length - 1];
+            const series = priceSeriesRef.current;
+            if (!last || !series || !chartRef.current) return false;
+            try {
+              return series.priceToCoordinate(last.c) != null
+                && chartRef.current.timeScale().timeToCoordinate(last.time) != null;
+            } catch {
+              return false;
+            }
+          },
+        } : {}),
+      });
+      visualReadyRef.current = generationReady;
+    };
     const intraday = isIntradayTf(effectiveTimeframe);
     // crossing the intraday↔daily boundary changes the TIME TYPE of every series (numeric epoch vs
     // 'YYYY-MM-DD') — in-place setData updates across it are unsound (LWC one-time-type law) and the
@@ -7698,7 +7711,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       applyExtendedPriceLine();
       announceVisualReady("data");
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      generationReady?.cancel();
+      if (visualReadyRef.current === generationReady) visualReadyRef.current = null;
+    };
     // eslint-disable-next-line
   }, [symbol, effectiveTimeframe, chartType, extHours]);
 
@@ -7875,9 +7892,18 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     normalizeStretch();
     renderSignalsRef.current(); renderRef.current();
     builtIndicatorRef.current = { generation: epochRef.current, key: indKey };
+    visualReadyRef.current?.reevaluate();
     if (PRESERVE_VIEW_ON_INDICATOR_TOGGLE && viewSavedRef.current) { try { chart.timeScale().setVisibleLogicalRange(viewSavedRef.current); } catch {} }
     // eslint-disable-next-line
   }, [indKey]);
+
+  // Preference hydration and requested-indicator identity are owned by React. A pending ready
+  // generation waits for these semantic transitions instead of polling animation frames forever.
+  // This effect is intentionally after Effect 3 so an indKey transition publishes its build receipt
+  // before readiness is re-evaluated; an authoritative empty key ("") follows the same path.
+  useEffect(() => {
+    visualReadyRef.current?.reevaluate();
+  }, [dataReady, indKey]);
 
   // The next pane index for a tail-appended sub-pane = 1 + max assigned sub-pane index across BOTH the
   // built-in and pine sub-pane maps (or 1 when none exist), so a new built-in pane can't land on a pane

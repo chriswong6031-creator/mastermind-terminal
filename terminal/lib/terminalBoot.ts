@@ -84,6 +84,29 @@ export type TerminalVisualReadyIdentity = {
   renderVisuals?: () => boolean;
 };
 
+export type TerminalIndicatorBuildReceipt = {
+  generation: number;
+  key: string;
+};
+
+export function isTerminalIndicatorSetBuilt(
+  authorityReady: boolean,
+  generation: number,
+  requestedKey: string,
+  built: TerminalIndicatorBuildReceipt | null,
+): boolean {
+  return authorityReady
+    && built?.generation === generation
+    && built.key === requestedKey;
+}
+
+export type TerminalVisualReadyAnnouncement = {
+  /** Re-attempt after a semantic owner commits a readiness dependency. */
+  reevaluate: () => void;
+  /** Permanently suppress this generation and any already-scheduled frame. */
+  cancel: () => void;
+};
+
 /**
  * `setData()` updates the chart model synchronously, but the canvas is painted
  * later. Two animation frames make the dashboard reveal follow a real visual
@@ -93,37 +116,62 @@ export function announceTerminalVisualReady(
   symbol: string,
   state: TerminalVisualReadyDetail["state"] = "data",
   identity: TerminalVisualReadyIdentity,
-): void {
-  if (typeof window === "undefined") return;
+): TerminalVisualReadyAnnouncement {
+  let cancelled = false;
+  let emitted = false;
+  let scheduled = false;
+  const cancel = () => { cancelled = true; };
+  const unavailable: TerminalVisualReadyAnnouncement = { reevaluate: () => {}, cancel };
+  if (typeof window === "undefined") return unavailable;
   const detail: TerminalVisualReadyDetail = {
     symbol,
     timeframe: identity.timeframe,
     generation: identity.generation,
     state,
   };
+  const isCurrent = () => {
+    if (cancelled || emitted) return false;
+    if (identity.isCurrent()) return true;
+    cancelled = true;
+    return false;
+  };
   const emit = () => {
-    if (!identity.isCurrent()) return;
+    scheduled = false;
+    if (!isCurrent()) return;
+    emitted = true;
     window.dispatchEvent(new CustomEvent<TerminalVisualReadyDetail>(
       TERMINAL_VISUAL_READY_EVENT,
       { detail },
     ));
   };
   const renderThenEmit = () => {
-    if (!identity.isCurrent()) return;
+    if (!isCurrent()) { scheduled = false; return; }
     if (identity.renderVisuals && !identity.renderVisuals()) {
-      window.requestAnimationFrame(renderThenEmit);
+      // A false predicate depends on React/data/indicator ownership, not elapsed
+      // frames. Stop here; that owner calls reevaluate() when its state commits.
+      scheduled = false;
       return;
     }
     window.requestAnimationFrame(emit);
   };
-
-  if (typeof window.requestAnimationFrame !== "function") {
+  const reevaluate = () => {
+    if (scheduled || !isCurrent()) return;
+    scheduled = true;
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(renderThenEmit);
+      return;
+    }
     window.setTimeout(() => {
-      if (!identity.isCurrent()) return;
-      identity.renderVisuals?.();
+      if (!isCurrent()) { scheduled = false; return; }
+      if (identity.renderVisuals && !identity.renderVisuals()) {
+        scheduled = false;
+        return;
+      }
       emit();
     }, 0);
-    return;
-  }
-  window.requestAnimationFrame(renderThenEmit);
+  };
+
+  const announcement = { reevaluate, cancel };
+  reevaluate();
+  return announcement;
 }
