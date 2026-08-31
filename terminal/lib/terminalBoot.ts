@@ -70,7 +70,18 @@ export function criticalTerminalDataUrls(value: unknown): string[] {
 
 export type TerminalVisualReadyDetail = {
   symbol: string;
+  timeframe: string;
+  generation: number;
   state: "data" | "empty";
+};
+
+export type TerminalVisualReadyIdentity = {
+  timeframe: string;
+  generation: number;
+  /** Rechecked at emit time so a delayed frame from a superseded load cannot announce. */
+  isCurrent: () => boolean;
+  /** Re-projects SVG/DOM visuals after the chart canvas has painted its new generation. */
+  renderVisuals?: () => boolean;
 };
 
 /**
@@ -81,19 +92,38 @@ export type TerminalVisualReadyDetail = {
 export function announceTerminalVisualReady(
   symbol: string,
   state: TerminalVisualReadyDetail["state"] = "data",
+  identity: TerminalVisualReadyIdentity,
 ): void {
   if (typeof window === "undefined") return;
-  const detail: TerminalVisualReadyDetail = { symbol, state };
+  const detail: TerminalVisualReadyDetail = {
+    symbol,
+    timeframe: identity.timeframe,
+    generation: identity.generation,
+    state,
+  };
   const emit = () => {
+    if (!identity.isCurrent()) return;
     window.dispatchEvent(new CustomEvent<TerminalVisualReadyDetail>(
       TERMINAL_VISUAL_READY_EVENT,
       { detail },
     ));
   };
+  const renderThenEmit = () => {
+    if (!identity.isCurrent()) return;
+    if (identity.renderVisuals && !identity.renderVisuals()) {
+      window.requestAnimationFrame(renderThenEmit);
+      return;
+    }
+    window.requestAnimationFrame(emit);
+  };
 
   if (typeof window.requestAnimationFrame !== "function") {
-    window.setTimeout(emit, 0);
+    window.setTimeout(() => {
+      if (!identity.isCurrent()) return;
+      identity.renderVisuals?.();
+      emit();
+    }, 0);
     return;
   }
-  window.requestAnimationFrame(() => window.requestAnimationFrame(emit));
+  window.requestAnimationFrame(renderThenEmit);
 }
