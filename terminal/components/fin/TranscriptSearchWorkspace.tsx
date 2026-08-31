@@ -344,7 +344,15 @@ export default function TranscriptSearchWorkspace({
 
   useEffect(() => {
     attachedSourceRef.current = attachedSource;
-    return bindMastermindBrainCompanySource(() => attachedSourceRef.current) ?? undefined;
+    return bindMastermindBrainCompanySource(
+      () => attachedSourceRef.current,
+      undefined,
+      () => {
+        attachedSourceRef.current = null;
+        setAttachedSource(null);
+        setBrainError(null);
+      },
+    ) ?? undefined;
   }, [attachedSource]);
 
   const invalidateSearch = useCallback(() => {

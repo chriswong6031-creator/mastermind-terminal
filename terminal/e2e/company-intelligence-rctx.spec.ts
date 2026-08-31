@@ -94,7 +94,7 @@ const sourceSpan = {
   },
 };
 
-test("an exact source span reaches in-document Mastermind as a closed volatile reference and is removable", async ({ page }) => {
+test("an exact source span is consumed by only the next Brain turn until explicitly re-attached", async ({ page }) => {
   await page.addInitScript(() => {
     const host = window as Window & {
       MMBrain?: { open: () => void };
@@ -103,7 +103,7 @@ test("an exact source span reaches in-document Mastermind as a closed volatile r
     host.MM_BRAIN_CFG = { symbol: () => "AAPL" };
     host.MMBrain = {
       open: () => {
-        document.documentElement.dataset.rctxReference = JSON.stringify(host.MM_BRAIN_CFG?.getCompanySourceSpan?.() ?? null);
+        document.documentElement.dataset.rctxOpened = "true";
       },
     };
   });
@@ -146,7 +146,13 @@ test("an exact source span reaches in-document Mastermind as a closed volatile r
   const attachment = page.getByTestId("company-source-context-attachment");
   await expect(attachment).toContainText("Exact source attached");
   await attachment.getByRole("button", { name: "Ask Mastermind with source" }).click();
-  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.rctxReference)).toBe(JSON.stringify({
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.rctxOpened)).toBe("true");
+
+  const firstTurnSource = await page.evaluate(() => {
+    const host = window as Window & { MM_BRAIN_CFG?: { getCompanySourceSpan?: () => unknown } };
+    return host.MM_BRAIN_CFG?.getCompanySourceSpan?.() ?? null;
+  });
+  expect(firstTurnSource).toEqual({
     schema: "mastermind.research-context-ref/v1",
     kind: "company_source_span",
     authority: "context_only",
@@ -160,11 +166,19 @@ test("an exact source span reaches in-document Mastermind as a closed volatile r
     end_byte: 173,
     segment_text_sha256: "3".repeat(64),
     span_id: `txs1_${"1".repeat(64)}`,
-  }));
-  await attachment.getByRole("button", { name: "Remove" }).click();
+  });
   await expect(attachment).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => {
+  expect(await page.evaluate(() => {
     const host = window as Window & { MM_BRAIN_CFG?: { getCompanySourceSpan?: () => unknown } };
     return host.MM_BRAIN_CFG?.getCompanySourceSpan?.() ?? null;
   })).toBeNull();
+
+  await page.getByRole("button", { name: "Attach to Mastermind" }).click();
+  await expect(attachment).toContainText("Exact source attached");
+  await attachment.getByRole("button", { name: "Ask Mastermind with source" }).click();
+  expect(await page.evaluate(() => {
+    const host = window as Window & { MM_BRAIN_CFG?: { getCompanySourceSpan?: () => unknown } };
+    return host.MM_BRAIN_CFG?.getCompanySourceSpan?.() ?? null;
+  })).toEqual(firstTurnSource);
+  await expect(attachment).toHaveCount(0);
 });

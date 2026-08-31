@@ -60,9 +60,18 @@ export function openMastermindBrainForSymbol(symbol: string, host: MastermindBra
 export function bindMastermindBrainCompanySource(
   getCompanySourceSpan: () => CompanySourceContextRef | null,
   host: MastermindBrainHost | null = currentHost(),
+  onConsume?: () => void,
 ): (() => void) | null {
   if (!host?.MM_BRAIN_CFG) return null;
-  const owner = () => getCompanySourceSpan() ?? undefined;
+  let consumed = false;
+  const owner = () => {
+    if (consumed) return undefined;
+    const source = getCompanySourceSpan();
+    if (!source) return undefined;
+    consumed = true;
+    onConsume?.();
+    return source;
+  };
   host.MM_BRAIN_CFG.getCompanySourceSpan = owner;
   return () => {
     if (host.MM_BRAIN_CFG?.getCompanySourceSpan === owner) {
