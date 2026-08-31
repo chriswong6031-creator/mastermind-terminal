@@ -80,8 +80,12 @@ export type TerminalVisualReadyIdentity = {
   generation: number;
   /** Rechecked at emit time so a delayed frame from a superseded load cannot announce. */
   isCurrent: () => boolean;
+  /** React/data ownership gate. A false value waits for an explicit owner reevaluation. */
+  isReady?: () => boolean;
   /** Re-projects SVG/DOM visuals after the chart canvas has painted its new generation. */
-  renderVisuals?: () => boolean;
+  renderVisuals?: () => void;
+  /** Validates chart coordinates on the frame after visual projection had a chance to paint. */
+  isRendered?: () => boolean;
 };
 
 export type TerminalIndicatorBuildReceipt = {
@@ -138,6 +142,8 @@ export function announceTerminalVisualReady(
   const emit = () => {
     scheduled = false;
     if (!isCurrent()) return;
+    if (identity.isReady && !identity.isReady()) return;
+    if (identity.isRendered && !identity.isRendered()) return;
     emitted = true;
     window.dispatchEvent(new CustomEvent<TerminalVisualReadyDetail>(
       TERMINAL_VISUAL_READY_EVENT,
@@ -146,16 +152,18 @@ export function announceTerminalVisualReady(
   };
   const renderThenEmit = () => {
     if (!isCurrent()) { scheduled = false; return; }
-    if (identity.renderVisuals && !identity.renderVisuals()) {
-      // A false predicate depends on React/data/indicator ownership, not elapsed
-      // frames. Stop here; that owner calls reevaluate() when its state commits.
+    if (identity.isReady && !identity.isReady()) {
+      // React/data/indicator ownership, not elapsed frames, makes this true.
+      // Stop here; that owner calls reevaluate() when its state commits.
       scheduled = false;
       return;
     }
+    identity.renderVisuals?.();
     window.requestAnimationFrame(emit);
   };
   const reevaluate = () => {
     if (scheduled || !isCurrent()) return;
+    if (identity.isReady && !identity.isReady()) return;
     scheduled = true;
     if (typeof window.requestAnimationFrame === "function") {
       window.requestAnimationFrame(renderThenEmit);
@@ -163,10 +171,11 @@ export function announceTerminalVisualReady(
     }
     window.setTimeout(() => {
       if (!isCurrent()) { scheduled = false; return; }
-      if (identity.renderVisuals && !identity.renderVisuals()) {
+      if (identity.isReady && !identity.isReady()) {
         scheduled = false;
         return;
       }
+      identity.renderVisuals?.();
       emit();
     }, 0);
   };
