@@ -199,6 +199,10 @@ describe("adaptive toolbar committed-settled contract", () => {
     const element = toolbar();
     expect(element.dataset.toolbarMode).toBe("full");
     expect(element.dataset.toolbarSettled).toBeUndefined();
+    // The measurement-only CSS override must never survive a synchronous measurement pass.
+    // Leaving it active while fonts are pending forces every overflow item visible and makes the
+    // product route disagree with the committed mode even though the settled receipt is absent.
+    expect(element.dataset.toolbarMeasuring).toBeUndefined();
 
     // The authoritative font measurement chooses a different route. Settled may not be published
     // against the old, already-rendered route in the same closure that calculates this mode.
