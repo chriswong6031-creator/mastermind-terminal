@@ -151,8 +151,8 @@ beforeEach(() => {
       return (this as HTMLElement).classList?.contains("chart-tabs") ? rootWidth : 0;
     },
   });
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function () {
-    const width = Number.parseFloat((this as HTMLElement).dataset.testWidth || "0");
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const width = Number.parseFloat(this.dataset.testWidth || "0");
     return {
       x: 0,
       y: 0,
