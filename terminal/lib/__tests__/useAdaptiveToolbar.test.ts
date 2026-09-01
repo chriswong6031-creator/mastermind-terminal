@@ -301,17 +301,9 @@ describe("adaptive toolbar committed-settled contract", () => {
     expect(element.dataset.toolbarMeasuring).toBeUndefined();
   });
 
-  it("removes blind action polling and binds helper deadlines to owning tests", () => {
+  it("removes blind action polling and binds one aggregate deadline to the owning test", () => {
     const helperSource = readFileSync(
       path.resolve(process.cwd(), "e2e", "terminalToolbar.ts"),
-      "utf8",
-    );
-    const layoutSource = readFileSync(
-      path.resolve(process.cwd(), "e2e", "layout-integrity.spec.ts"),
-      "utf8",
-    );
-    const workspaceSource = readFileSync(
-      path.resolve(process.cwd(), "e2e", "w2a-workspaces.spec.ts"),
       "utf8",
     );
 
@@ -319,12 +311,13 @@ describe("adaptive toolbar committed-settled contract", () => {
     expect(helperSource).toContain("data-toolbar-revision");
     expect(helperSource).toContain("armToolbarJourneyDeadline");
     expect(helperSource).toContain("TOOLBAR_SETTLE_WAIT_MS");
+    expect(helperSource).toContain("test.info().timeout");
+    expect(helperSource).toContain("_startWallTime");
+    expect(helperSource).toContain("TOOLBAR_DEFAULT_UNARMED_BUDGET_MS = 8_000");
     expect(helperSource).not.toContain("TOOLBAR_JOURNEY_BUDGET_MS = 26_000");
     expect(helperSource).not.toContain("timeout: 25_000");
     expect(helperSource).not.toContain("could not reach ${opts.what}");
     expect(helperSource).not.toContain("the control moved mid-attempt");
-    expect(layoutSource).toContain("armToolbarJourneyDeadline(page, testInfo.timeout)");
-    expect(workspaceSource).toContain("armToolbarJourneyDeadline(page, testInfo.timeout)");
     for (const field of [
       "what",
       "mode",
