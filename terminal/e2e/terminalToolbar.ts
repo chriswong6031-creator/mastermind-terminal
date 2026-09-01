@@ -1,7 +1,9 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
-const TOOLBAR_JOURNEY_BUDGET_MS = 26_000;
-const TOOLBAR_TEST_RESERVE_MS = 2_000;
+const TOOLBAR_DEFAULT_UNARMED_BUDGET_MS = 8_000;
+const TOOLBAR_TEST_RESERVE_MS = 3_000;
+const TOOLBAR_SETTLE_WAIT_MS = 4_000;
+const TOOLBAR_ACTION_WAIT_MS = 2_000;
 const TOOLBAR_EFFECT_SETTLE_MS = 1_500;
 const toolbarDeadlines = new WeakMap<Page, number>();
 
@@ -11,6 +13,11 @@ type ToolbarSnapshot = {
   mode: ToolbarMode | null;
   revision: number | null;
   settled: boolean;
+};
+
+type DeadlineAwareTestInfo = ReturnType<typeof test.info> & {
+  /** Pinned Playwright runner wall-clock start; guarded because it is not public API. */
+  _startWallTime?: number;
 };
 
 export type ToolbarFailureReceipt = {
@@ -34,20 +41,60 @@ export function formatToolbarFailure(
   return `${code} ${JSON.stringify(receipt)}`;
 }
 
+/**
+ * Bind every toolbar action on this page to one absolute deadline. The preferred path uses the
+ * current test's actual wall-clock start and configured timeout, leaving a fixed reserve for
+ * Playwright to report and tear down cleanly. A guarded short fallback is used if a future runner
+ * stops exposing its start time; it never recreates the former 25-second per-action allowance.
+ */
+export function armToolbarJourneyDeadline(
+  page: Page,
+  testTimeoutMs: number,
+  testStartedAtMs?: number,
+): number {
+  const now = Date.now();
+  const validTimeout = Number.isFinite(testTimeoutMs) && testTimeoutMs > 0;
+  const validStart = Number.isFinite(testStartedAtMs)
+    && Number(testStartedAtMs) > 0
+    && Number(testStartedAtMs) <= now;
+
+  const fallbackBudget = validTimeout
+    ? Math.min(TOOLBAR_DEFAULT_UNARMED_BUDGET_MS, Math.max(0, testTimeoutMs - TOOLBAR_TEST_RESERVE_MS))
+    : TOOLBAR_DEFAULT_UNARMED_BUDGET_MS;
+  const deadline = validTimeout && validStart
+    ? Number(testStartedAtMs) + testTimeoutMs - TOOLBAR_TEST_RESERVE_MS
+    : now + fallbackBudget;
+  const bounded = Math.max(now, deadline);
+  toolbarDeadlines.set(page, bounded);
+  return bounded;
+}
+
 function toolbarDeadline(page: Page): number {
   const existing = toolbarDeadlines.get(page);
   if (existing != null) return existing;
-  const created = Date.now() + TOOLBAR_JOURNEY_BUDGET_MS;
-  toolbarDeadlines.set(page, created);
-  return created;
+
+  try {
+    const timeout = test.info().timeout;
+    const info = test.info() as DeadlineAwareTestInfo;
+    return armToolbarJourneyDeadline(page, timeout, info._startWallTime);
+  } catch {
+    return armToolbarJourneyDeadline(
+      page,
+      TOOLBAR_DEFAULT_UNARMED_BUDGET_MS + TOOLBAR_TEST_RESERVE_MS,
+    );
+  }
 }
 
 function budgetRemaining(deadline: number): number {
   return Math.max(0, deadline - Date.now());
 }
 
+function boundedTimeout(deadline: number, ceiling: number): number {
+  return Math.max(0, Math.min(ceiling, budgetRemaining(deadline)));
+}
+
 function actionTimeout(deadline: number): number {
-  return Math.max(0, Math.min(2_000, budgetRemaining(deadline) - TOOLBAR_TEST_RESERVE_MS));
+  return boundedTimeout(deadline, TOOLBAR_ACTION_WAIT_MS);
 }
 
 async function readToolbarSnapshot(page: Page): Promise<ToolbarSnapshot> {
@@ -133,7 +180,7 @@ async function waitForSettledToolbar(
   deadline: number,
 ): Promise<ToolbarSnapshot> {
   if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
-  const timeout = budgetRemaining(deadline) - TOOLBAR_TEST_RESERVE_MS;
+  const timeout = boundedTimeout(deadline, TOOLBAR_SETTLE_WAIT_MS);
   if (timeout <= 0) return failToolbar(page, opts, deadline, "TOOLBAR_NOT_SETTLED");
 
   try {
@@ -223,10 +270,7 @@ async function viaToolbar(page: Page, opts: ToolbarAction) {
         await opts.overflow(await openOverflow(page, deadline, opts), timeout);
       }
 
-      const effectTimeout = Math.max(
-        0,
-        Math.min(TOOLBAR_EFFECT_SETTLE_MS, budgetRemaining(deadline) - TOOLBAR_TEST_RESERVE_MS),
-      );
+      const effectTimeout = boundedTimeout(deadline, TOOLBAR_EFFECT_SETTLE_MS);
       if (effectTimeout > 0) {
         await expect.poll(opts.done, {
           timeout: effectTimeout,
@@ -252,21 +296,25 @@ async function viaToolbar(page: Page, opts: ToolbarAction) {
   return failToolbar(page, opts, deadline, "TOOLBAR_ACTION_FAILED");
 }
 
-export async function toggleToolbarReplay(page: Page) {
-  const direct = page.locator('[data-toolbar-action="replay"]');
-  if (await direct.isVisible()) {
-    await direct.click();
-    return;
-  }
-  const deadline = toolbarDeadline(page);
-  const placeholder: ToolbarAction = {
-    what: "the Replay toggle",
+function routeOnlyAction(page: Page, what: string, control: Locator): ToolbarAction {
+  return {
+    what,
     done: async () => false,
-    control: direct,
+    control,
     direct: async () => {},
     overflow: async () => {},
   };
-  const menu = await openOverflow(page, deadline, placeholder);
+}
+
+export async function toggleToolbarReplay(page: Page) {
+  const direct = page.locator('[data-toolbar-action="replay"]');
+  const deadline = toolbarDeadline(page);
+  await waitForSettledToolbar(page, routeOnlyAction(page, "the Replay toggle", direct), deadline);
+  if (await direct.isVisible()) {
+    await direct.click({ timeout: actionTimeout(deadline) });
+    return;
+  }
+  const menu = await openOverflow(page, deadline, routeOnlyAction(page, "the Replay toggle", direct));
   await menu.locator('[data-toolbar-menu-action="replay"]').click({ timeout: actionTimeout(deadline) });
 }
 
@@ -315,20 +363,15 @@ export async function toggleToolbarSync(page: Page) {
 
 export async function runToolbarDetector(page: Page, label: string) {
   const direct = page.locator('[data-toolbar-action="detect"]');
+  const deadline = toolbarDeadline(page);
+  await waitForSettledToolbar(page, routeOnlyAction(page, `the ${label} detector`, direct), deadline);
   if (await direct.isVisible()) {
-    await direct.locator(":scope > button").click();
-    await page.locator(".pop.show .menu-row").filter({ hasText: label }).click();
+    await direct.locator(":scope > button").click({ timeout: actionTimeout(deadline) });
+    await page.locator(".pop.show .menu-row").filter({ hasText: label })
+      .click({ timeout: actionTimeout(deadline) });
     return;
   }
-  const deadline = toolbarDeadline(page);
-  const placeholder: ToolbarAction = {
-    what: `the ${label} detector`,
-    done: async () => false,
-    control: direct,
-    direct: async () => {},
-    overflow: async () => {},
-  };
-  const menu = await openOverflow(page, deadline, placeholder);
+  const menu = await openOverflow(page, deadline, routeOnlyAction(page, `the ${label} detector`, direct));
   await menu.locator('[data-toolbar-menu-action="detect"]').click({ timeout: actionTimeout(deadline) });
   await menu.locator('[data-toolbar-menu-action^="detect-"]').filter({ hasText: label })
     .click({ timeout: actionTimeout(deadline) });
