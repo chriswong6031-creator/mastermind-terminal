@@ -118,6 +118,18 @@ async function readToolbarSnapshot(page: Page): Promise<ToolbarSnapshot> {
   }).catch((): ToolbarSnapshot => ({ mode: null, revision: null, settled: false }));
 }
 
+type ToolbarAction = {
+  /** True iff the action has landed / the requested surface is open. */
+  done: () => Promise<boolean>;
+  /** The toolbar control whose committed visibility selects direct versus overflow. */
+  control: Locator;
+  /** Act on the committed direct control. */
+  direct: (timeout: number) => Promise<void>;
+  /** Act via the committed More menu. */
+  overflow: (menu: Locator, timeout: number) => Promise<void>;
+  what: string;
+};
+
 async function captureToolbarFailure(
   page: Page,
   opts: ToolbarAction,
@@ -174,6 +186,17 @@ async function failToolbar(
   throw new Error(formatToolbarFailure(code, await captureToolbarFailure(page, opts, deadline)));
 }
 
+async function failToolbarActionUnlessDone(
+  page: Page,
+  opts: ToolbarAction,
+  deadline: number,
+): Promise<void> {
+  const receipt = await captureToolbarFailure(page, opts, deadline);
+  if (receipt.done) return;
+  const code = receipt.page_closed ? "TOOLBAR_PAGE_CLOSED" : "TOOLBAR_ACTION_FAILED";
+  throw new Error(formatToolbarFailure(code, receipt));
+}
+
 async function waitForSettledToolbar(
   page: Page,
   opts: ToolbarAction,
@@ -184,56 +207,103 @@ async function waitForSettledToolbar(
   if (timeout <= 0) return failToolbar(page, opts, deadline, "TOOLBAR_NOT_SETTLED");
 
   try {
-    await page.waitForFunction(() => {
+    const handle = await page.waitForFunction(() => {
       const root = document.querySelector<HTMLElement>(".chart-tabs");
       if (!root || root.dataset.toolbarSettled !== "true") return false;
       const revision = root.dataset.toolbarRevision;
       const mode = root.dataset.toolbarMode;
-      return revision != null
-        && /^\d+$/.test(revision)
-        && Number(revision) > 0
-        && (mode === "full" || mode === "overflow" || mode === "compact");
+      if (
+        revision == null
+        || !/^\d+$/.test(revision)
+        || Number(revision) <= 0
+        || (mode !== "full" && mode !== "overflow" && mode !== "compact")
+      ) return false;
+      return { mode, revision: Number(revision), settled: true };
     }, undefined, { timeout });
+    const snapshot = await handle.jsonValue() as ToolbarSnapshot;
+    await handle.dispose();
+    return snapshot;
   } catch {
     if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
     return failToolbar(page, opts, deadline, "TOOLBAR_NOT_SETTLED");
   }
+}
 
-  const snapshot = await readToolbarSnapshot(page);
-  if (!snapshot.settled || snapshot.mode == null || snapshot.revision == null) {
-    return failToolbar(page, opts, deadline, "TOOLBAR_NOT_SETTLED");
+/** Observe one already-issued action. This polls state only; it never repeats the product action. */
+async function observeToolbarEffect(
+  observed: () => Promise<boolean>,
+  deadline: number,
+): Promise<boolean> {
+  if (await observed().catch(() => false)) return true;
+  const timeout = boundedTimeout(deadline, TOOLBAR_EFFECT_SETTLE_MS);
+  if (timeout <= 0) return observed().catch(() => false);
+
+  try {
+    await expect.poll(
+      () => observed().catch(() => false),
+      { timeout, intervals: [50, 100, 200, 300] },
+    ).toBe(true);
+    return true;
+  } catch {
+    return observed().catch(() => false);
   }
-  return snapshot;
+}
+
+/**
+ * Issue one real click, then trust the semantic state rather than the click promise alone. Under a
+ * saturated browser, Playwright can time out while the event handler has already committed its
+ * effect. Continuing from that observed effect is not a retry and never repeats the click.
+ */
+async function clickOnceAndObserve(
+  page: Page,
+  target: Locator,
+  observed: () => Promise<boolean>,
+  deadline: number,
+): Promise<boolean> {
+  if (await observed().catch(() => false)) return true;
+  const timeout = actionTimeout(deadline);
+  if (timeout <= 0) return false;
+
+  let clickFailed = false;
+  try {
+    await target.click({ timeout });
+  } catch {
+    clickFailed = true;
+  }
+
+  if (page.isClosed()) return false;
+  const landed = await observeToolbarEffect(observed, deadline);
+  if (landed) return true;
+  if (clickFailed) return false;
+  return observed().catch(() => false);
 }
 
 async function openOverflow(page: Page, deadline: number, opts: ToolbarAction) {
   if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
-  const timeout = actionTimeout(deadline);
-  if (timeout <= 0) return failToolbar(page, opts, deadline, "TOOLBAR_ACTION_FAILED");
 
   const menu = page.locator(".toolbar-overflow-pop.show");
-  if (!(await menu.isVisible())) {
-    await page.getByTestId("toolbar-more").click({ timeout });
-  }
-  await expect(menu).toBeVisible({ timeout });
+  const opened = await clickOnceAndObserve(
+    page,
+    page.getByTestId("toolbar-more"),
+    () => menu.isVisible().catch(() => false),
+    deadline,
+  );
+  if (!opened) return failToolbar(page, opts, deadline, "TOOLBAR_ACTION_FAILED");
 
   // The menu remembers its drill view. Walk back to the root before handing it to the action.
   const back = menu.locator(".toolbar-overflow-back");
-  if (await back.isVisible()) await back.click({ timeout });
+  if (await back.isVisible().catch(() => false)) {
+    const atRoot = await clickOnceAndObserve(
+      page,
+      back,
+      async () => (await menu.isVisible().catch(() => false))
+        && !(await back.isVisible().catch(() => false)),
+      deadline,
+    );
+    if (!atRoot) return failToolbar(page, opts, deadline, "TOOLBAR_ACTION_FAILED");
+  }
   return menu;
 }
-
-type ToolbarAction = {
-  /** True iff the action has landed / the requested surface is open. */
-  done: () => Promise<boolean>;
-  /** The toolbar control whose committed visibility selects direct versus overflow. */
-  control: Locator;
-  /** Act on the committed direct control. */
-  direct: (timeout: number) => Promise<void>;
-  /** Act via the committed More menu. */
-  overflow: (menu: Locator, timeout: number) => Promise<void>;
-  what: string;
-};
 
 /**
  * Consume one committed adaptive-toolbar revision, choose one route, and act once. A second action
@@ -250,50 +320,36 @@ async function viaToolbar(page: Page, opts: ToolbarAction) {
     if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
 
     const timeout = actionTimeout(deadline);
-    if (timeout <= 0) return failToolbar(page, opts, deadline, "TOOLBAR_ACTION_FAILED");
+    if (timeout <= 0) return failToolbarActionUnlessDone(page, opts, deadline);
 
-    let actionError = false;
+    // Visibility is inspected only after the atomic committed receipt. If a newer revision moves
+    // the control during the click, the post-action revision check permits exactly one recovery.
+    const directVisible = await opts.control.isVisible().catch(() => false);
     try {
-      const beforeAction = await readToolbarSnapshot(page);
-      if (
-        !beforeAction.settled
-        || beforeAction.revision !== snapshot.revision
-        || beforeAction.mode !== snapshot.mode
-      ) {
-        if (attempt === 0) continue;
-        return failToolbar(page, opts, deadline, "TOOLBAR_ACTION_FAILED");
-      }
-
-      if (await opts.control.isVisible()) {
+      if (directVisible) {
         await opts.direct(timeout);
       } else {
         await opts.overflow(await openOverflow(page, deadline, opts), timeout);
       }
-
-      const effectTimeout = boundedTimeout(deadline, TOOLBAR_EFFECT_SETTLE_MS);
-      if (effectTimeout > 0) {
-        await expect.poll(opts.done, {
-          timeout: effectTimeout,
-          intervals: [50, 100, 200, 300],
-          message: `toolbar action did not reach ${opts.what}`,
-        }).toBe(true);
-      }
-      if (await opts.done()) return;
-      actionError = true;
     } catch {
-      actionError = true;
+      // A click promise may time out after its event already landed. Observe the promised effect
+      // below before classifying it as a failure; never repeat the action on the same revision.
     }
 
+    if (await observeToolbarEffect(opts.done, deadline)) return;
     if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
+
     const afterAction = await readToolbarSnapshot(page);
     const revisionChanged = !afterAction.settled
       || afterAction.revision !== snapshot.revision
       || afterAction.mode !== snapshot.mode;
     if (attempt === 0 && revisionChanged) continue;
-    if (actionError) return failToolbar(page, opts, deadline, "TOOLBAR_ACTION_FAILED");
+
+    await failToolbarActionUnlessDone(page, opts, deadline);
+    return;
   }
 
-  return failToolbar(page, opts, deadline, "TOOLBAR_ACTION_FAILED");
+  await failToolbarActionUnlessDone(page, opts, deadline);
 }
 
 function routeOnlyAction(page: Page, what: string, control: Locator): ToolbarAction {
