@@ -52,9 +52,11 @@ function actionTimeout(deadline: number): number {
 
 async function readToolbarSnapshot(page: Page): Promise<ToolbarSnapshot> {
   if (page.isClosed()) return { mode: null, revision: null, settled: false };
-  return page.locator(".chart-tabs").first().evaluate((root) => {
+  return page.locator(".chart-tabs").first().evaluate((root): ToolbarSnapshot => {
     const rawMode = root.getAttribute("data-toolbar-mode");
-    const mode = rawMode === "full" || rawMode === "overflow" || rawMode === "compact"
+    const mode: ToolbarMode | null = rawMode === "full"
+      || rawMode === "overflow"
+      || rawMode === "compact"
       ? rawMode
       : null;
     const rawRevision = root.getAttribute("data-toolbar-revision");
@@ -66,7 +68,7 @@ async function readToolbarSnapshot(page: Page): Promise<ToolbarSnapshot> {
       revision,
       settled: root.getAttribute("data-toolbar-settled") === "true",
     };
-  }).catch(() => ({ mode: null, revision: null, settled: false }));
+  }).catch((): ToolbarSnapshot => ({ mode: null, revision: null, settled: false }));
 }
 
 async function captureToolbarFailure(
