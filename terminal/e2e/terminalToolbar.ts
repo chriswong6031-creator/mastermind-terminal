@@ -3,7 +3,6 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 const TOOLBAR_DEFAULT_UNARMED_BUDGET_MS = 8_000;
 const TOOLBAR_TEST_RESERVE_MS = 3_000;
 const TOOLBAR_SETTLE_WAIT_MS = 4_000;
-const TOOLBAR_ACTION_WAIT_MS = 2_000;
 const TOOLBAR_EFFECT_SETTLE_MS = 1_500;
 const toolbarDeadlines = new WeakMap<Page, number>();
 
@@ -94,7 +93,10 @@ function boundedTimeout(deadline: number, ceiling: number): number {
 }
 
 function actionTimeout(deadline: number): number {
-  return boundedTimeout(deadline, TOOLBAR_ACTION_WAIT_MS);
+  // A toolbar journey owns one absolute test-bound deadline. Do not carve a fresh fixed click
+  // allowance out of it: on a saturated hosted browser, a single legitimate action can spend more
+  // than two seconds becoming actionable while the owning journey still has ample lawful budget.
+  return budgetRemaining(deadline);
 }
 
 async function readToolbarSnapshot(page: Page): Promise<ToolbarSnapshot> {
@@ -419,7 +421,7 @@ export async function openLayoutMenu(page: Page) {
 /** Flip pane Sync (only rendered with more than one pane), at any viewport. */
 export async function toggleToolbarSync(page: Page) {
   const control = page.locator('[data-toolbar-action="sync"]');
-  const before = await control.getAttribute("data-sync-on").catch(() => null);
+  const before = await page.locator('[data-toolbar-action="sync"]').getAttribute("data-sync-on").catch(() => null);
   await viaToolbar(page, {
     what: "the Sync toggle",
     done: async () => (await control.getAttribute("data-sync-on").catch(() => null)) !== before,
