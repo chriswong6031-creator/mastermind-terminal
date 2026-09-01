@@ -45,9 +45,8 @@ function modeForWidth(width: number, metrics: ToolbarMetrics): AdaptiveToolbarMo
   return "compact";
 }
 
-function withdrawAdaptiveToolbarSettled(root: HTMLElement): void {
+function markAdaptiveToolbarUnsettled(root: HTMLElement): void {
   delete root.dataset.toolbarSettled;
-  root.dataset.toolbarMeasuring = "true";
 }
 
 /**
@@ -66,7 +65,7 @@ export function publishAdaptiveToolbarSettled(
     || currentRevision !== snapshot.revision
     || root.dataset.toolbarMode !== snapshot.mode
   ) {
-    delete root.dataset.toolbarSettled;
+    markAdaptiveToolbarUnsettled(root);
     return false;
   }
 
@@ -79,14 +78,14 @@ export function publishAdaptiveToolbarSettled(
 /**
  * Measures the toolbar's rendered labels instead of guessing from viewport breakpoints. That makes
  * the same priority rules work for English, Chinese, user-customised timeframe favourites, and a
- * resized detail rail. Hidden overflow items are exposed only during the pre-paint measurement
- * pass, then returned to their selected mode.
+ * resized detail rail. Hidden overflow items are exposed only during the synchronous pre-paint
+ * measurement pass, then immediately returned to their selected mode.
  *
  * `data-toolbar-settled=true` is a revisioned COMMIT receipt, not a measurement receipt. It is
  * withheld while the FontFaceSet gate is pending, withdrawn before each authoritative font/resize
  * measurement, and published from a later layout effect only after the corresponding controls and
- * `data-toolbar-mode` have committed. Consumers can therefore choose one route without racing a
- * late font measurement.
+ * `data-toolbar-mode` have committed. The measurement-only CSS override never survives the
+ * synchronous measurement closure, so an unsettled toolbar does not force every item visible.
  */
 export function useAdaptiveToolbar(signature: string) {
   const ref = useRef<HTMLDivElement>(null);
@@ -128,7 +127,7 @@ export function useAdaptiveToolbar(signature: string) {
         && lastMeasurement.mode === nextMode
       ) return;
 
-      withdrawAdaptiveToolbarSettled(root);
+      markAdaptiveToolbarUnsettled(root);
       lastMeasurement = { width, mode: nextMode };
       const revision = ++revisionRef.current;
       setSnapshot({
@@ -141,39 +140,46 @@ export function useAdaptiveToolbar(signature: string) {
 
     const measureAll = (force: boolean) => {
       if (cancelled) return;
-      withdrawAdaptiveToolbarSettled(root);
+      markAdaptiveToolbarUnsettled(root);
+      root.dataset.toolbarMeasuring = "true";
 
-      const tools = root.querySelector<HTMLElement>(":scope > .tools");
-      const title = root.querySelector<HTMLElement>(":scope > .ct");
-      const more = tools?.querySelector<HTMLElement>(":scope > [data-toolbar-more]");
-      const allItems = tools
-        ? Array.from(tools.querySelectorAll<HTMLElement>(":scope > [data-toolbar-item]"))
-        : [];
-      const coreItems = allItems.filter((element) => element.dataset.toolbarCore === "true");
-      const timeframe = tools?.querySelector<HTMLElement>(":scope > [data-toolbar-timeframes]");
+      try {
+        const tools = root.querySelector<HTMLElement>(":scope > .tools");
+        const title = root.querySelector<HTMLElement>(":scope > .ct");
+        const more = tools?.querySelector<HTMLElement>(":scope > [data-toolbar-more]");
+        const allItems = tools
+          ? Array.from(tools.querySelectorAll<HTMLElement>(":scope > [data-toolbar-item]"))
+          : [];
+        const coreItems = allItems.filter((element) => element.dataset.toolbarCore === "true");
+        const timeframe = tools?.querySelector<HTMLElement>(":scope > [data-toolbar-timeframes]");
 
-      if (!tools || !title || !more || !timeframe || !allItems.length) return;
+        if (!tools || !title || !more || !timeframe || !allItems.length) return;
 
-      const toolsStyle = getComputedStyle(tools);
-      const gap = cssPixels(toolsStyle.columnGap || toolsStyle.gap);
-      const rootStyle = getComputedStyle(root);
-      const rootGap = cssPixels(rootStyle.columnGap || rootStyle.gap);
-      const full = outerWidth(title) + rootGap + sumWithGap(allItems, gap);
-      const overflowItems = [
-        timeframe,
-        ...coreItems.filter((element) => element !== timeframe),
-        more,
-      ];
-      const overflow = sumWithGap(overflowItems, gap);
-      const compactTfButtons = Array.from(
-        timeframe.querySelectorAll<HTMLElement>(".tfbtn.on,.tfbtn-edit"),
-      );
-      const compactTf = sumWithGap(compactTfButtons, 0);
-      const compact = overflow - outerWidth(timeframe) + compactTf;
-      const metrics = { full, overflow, compact };
-      metricsRef.current = metrics;
-      const width = readAvailableWidth();
-      commitMeasurement(width, modeForWidth(width, metrics), { force });
+        const toolsStyle = getComputedStyle(tools);
+        const gap = cssPixels(toolsStyle.columnGap || toolsStyle.gap);
+        const rootStyle = getComputedStyle(root);
+        const rootGap = cssPixels(rootStyle.columnGap || rootStyle.gap);
+        const full = outerWidth(title) + rootGap + sumWithGap(allItems, gap);
+        const overflowItems = [
+          timeframe,
+          ...coreItems.filter((element) => element !== timeframe),
+          more,
+        ];
+        const overflow = sumWithGap(overflowItems, gap);
+        const compactTfButtons = Array.from(
+          timeframe.querySelectorAll<HTMLElement>(".tfbtn.on,.tfbtn-edit"),
+        );
+        const compactTf = sumWithGap(compactTfButtons, 0);
+        const compact = overflow - outerWidth(timeframe) + compactTf;
+        const metrics = { full, overflow, compact };
+        metricsRef.current = metrics;
+        const width = readAvailableWidth();
+        commitMeasurement(width, modeForWidth(width, metrics), { force });
+      } finally {
+        // This attribute changes product visibility through globals.css and is measurement-only.
+        // It must be removed before paint even while the independent settled receipt stays absent.
+        delete root.dataset.toolbarMeasuring;
+      }
     };
 
     const measureResize = () => {
@@ -228,9 +234,7 @@ export function useAdaptiveToolbar(signature: string) {
     if (!root || snapshot.revision <= 0) return;
 
     root.dataset.toolbarRevision = String(snapshot.revision);
-    if (!publishAdaptiveToolbarSettled(root, snapshot, revisionRef.current)) {
-      root.dataset.toolbarMeasuring = "true";
-    }
+    publishAdaptiveToolbarSettled(root, snapshot, revisionRef.current);
 
     return () => {
       if (root.dataset.toolbarRevision === String(snapshot.revision)) {
