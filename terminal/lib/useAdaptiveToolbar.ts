@@ -119,12 +119,11 @@ export function useAdaptiveToolbar(signature: string) {
     const commitMeasurement = (
       width: number,
       nextMode: AdaptiveToolbarMode,
-      *,
-      force: boolean,
+      options: { force: boolean },
     ) => {
       if (cancelled) return;
       if (
-        !force
+        !options.force
         && lastMeasurement?.width === width
         && lastMeasurement.mode === nextMode
       ) return;
