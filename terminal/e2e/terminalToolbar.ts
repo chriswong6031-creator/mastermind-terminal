@@ -288,7 +288,10 @@ async function openOverflow(page: Page, deadline: number, opts: ToolbarAction) {
     () => menu.isVisible().catch(() => false),
     deadline,
   );
-  if (!opened) return failToolbar(page, opts, deadline, "TOOLBAR_ACTION_FAILED");
+  if (!opened) {
+    if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
+    return failToolbar(page, opts, deadline, "TOOLBAR_ACTION_FAILED");
+  }
 
   // The menu remembers its drill view. Walk back to the root before handing it to the action.
   const back = menu.locator(".toolbar-overflow-back");
@@ -300,7 +303,10 @@ async function openOverflow(page: Page, deadline: number, opts: ToolbarAction) {
         && !(await back.isVisible().catch(() => false)),
       deadline,
     );
-    if (!atRoot) return failToolbar(page, opts, deadline, "TOOLBAR_ACTION_FAILED");
+    if (!atRoot) {
+      if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
+      return failToolbar(page, opts, deadline, "TOOLBAR_ACTION_FAILED");
+    }
   }
   return menu;
 }
@@ -329,7 +335,13 @@ async function viaToolbar(page: Page, opts: ToolbarAction) {
       if (directVisible) {
         await opts.direct(timeout);
       } else {
-        await opts.overflow(await openOverflow(page, deadline, opts), timeout);
+        const menu = await openOverflow(page, deadline, opts);
+        const overflowTimeout = actionTimeout(deadline);
+        if (overflowTimeout <= 0) {
+          await failToolbarActionUnlessDone(page, opts, deadline);
+          return;
+        }
+        await opts.overflow(menu, overflowTimeout);
       }
     } catch {
       // A click promise may time out after its event already landed. Observe the promised effect
