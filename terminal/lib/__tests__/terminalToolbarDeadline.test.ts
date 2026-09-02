@@ -62,4 +62,16 @@ describe("toolbar invocation deadline ownership", () => {
     expect(source).not.toContain("budgetRemaining(deadline) - reserveAfterMs");
     expect(source).not.toContain("return budgetRemaining(deadline);");
   });
+
+  it("keeps every toolbar-local click actionable without waiting for impossible navigation", () => {
+    const source = helperSource();
+
+    expect(source).toContain("function clickLocalToolbarControl(");
+    expect(source).toContain("target.click({ timeout, noWaitAfter: true })");
+    // More, Back, Split, Workspaces, Sync, Replay and Detect are all local React controls.
+    // Any new raw click would reintroduce Playwright's post-click navigation wait on one route.
+    expect(source.match(/\.click\(/g) ?? []).toHaveLength(1);
+    expect(source).not.toContain("force: true");
+    expect(source).not.toContain("dispatchEvent(");
+  });
 });
