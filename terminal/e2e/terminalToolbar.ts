@@ -73,8 +73,24 @@ function boundedTimeout(deadline: number, ceiling: number): number {
   return Math.max(0, Math.min(ceiling, budgetRemaining(deadline)));
 }
 
+export function allocateToolbarStage(
+  remainingMs: number,
+  requestedFutureReserveMs: number,
+): { currentMs: number; futureMs: number } {
+  const remaining = Math.max(0, Math.floor(remainingMs));
+  if (remaining === 0) return { currentMs: 0, futureMs: 0 };
+
+  // A fixed future reserve can exceed the real test-bound budget late in a long scenario. The old
+  // helper then refused to issue the current click even while several usable seconds remained.
+  // Preserve the requested reserve when the invocation can afford it; otherwise split the remaining
+  // budget evenly so the current stage and its declared continuation can both make progress.
+  const requested = Math.max(0, Math.floor(requestedFutureReserveMs));
+  const futureMs = Math.min(requested, Math.floor(remaining / 2));
+  return { currentMs: remaining - futureMs, futureMs };
+}
+
 function actionTimeout(deadline: number, reserveAfterMs = TOOLBAR_EFFECT_SETTLE_MS): number {
-  return Math.max(0, budgetRemaining(deadline) - reserveAfterMs);
+  return allocateToolbarStage(budgetRemaining(deadline), reserveAfterMs).currentMs;
 }
 
 async function readToolbarSnapshot(page: Page): Promise<ToolbarSnapshot> {
@@ -174,10 +190,11 @@ async function observeToolbarEffect(
   reserveAfterMs = 0,
 ): Promise<boolean> {
   if (await observed().catch(() => false)) return true;
-  const timeout = Math.max(
-    0,
-    Math.min(TOOLBAR_EFFECT_SETTLE_MS, budgetRemaining(deadline) - reserveAfterMs),
-  );
+  const observationBudget = allocateToolbarStage(
+    budgetRemaining(deadline),
+    reserveAfterMs,
+  ).currentMs;
+  const timeout = Math.min(TOOLBAR_EFFECT_SETTLE_MS, observationBudget);
   if (timeout <= 0) return observed().catch(() => false);
   try {
     await expect.poll(
