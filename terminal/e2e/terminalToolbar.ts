@@ -93,6 +93,15 @@ function actionTimeout(deadline: number, reserveAfterMs = TOOLBAR_EFFECT_SETTLE_
   return allocateToolbarStage(budgetRemaining(deadline), reserveAfterMs).currentMs;
 }
 
+/**
+ * Toolbar controls mutate local React state; none of these actions navigates. Keep Playwright's real
+ * actionability checks, but do not let its post-click navigation watcher consume this intent's
+ * bounded budget after the browser event has already landed. Semantic state remains the authority.
+ */
+function clickLocalToolbarControl(target: Locator, timeout: number): Promise<void> {
+  return target.click({ timeout, noWaitAfter: true });
+}
+
 async function readToolbarSnapshot(page: Page): Promise<ToolbarSnapshot> {
   if (page.isClosed()) return { mode: null, revision: null, settled: false };
   return page.locator(".chart-tabs").first().evaluate((root): ToolbarSnapshot => {
@@ -218,7 +227,7 @@ async function clickOnceAndObserve(
   const timeout = actionTimeout(deadline, TOOLBAR_EFFECT_SETTLE_MS + reserveAfterMs);
   if (timeout <= 0) return false;
   let clickFailed = false;
-  try { await target.click({ timeout }); } catch { clickFailed = true; }
+  try { await clickLocalToolbarControl(target, timeout); } catch { clickFailed = true; }
   if (page.isClosed()) return false;
   if (await observeToolbarEffect(observed, deadline, reserveAfterMs)) return true;
   if (clickFailed) return false;
@@ -307,11 +316,14 @@ export async function toggleToolbarReplay(page: Page): Promise<void> {
   const deadline = toolbarJourneyDeadline();
   await waitForSettledToolbar(page, opts, deadline);
   if (await direct.isVisible()) {
-    await direct.click({ timeout: actionTimeout(deadline) });
+    await clickLocalToolbarControl(direct, actionTimeout(deadline));
     return;
   }
   const menu = await openOverflow(page, deadline, opts);
-  await menu.locator('[data-toolbar-menu-action="replay"]').click({ timeout: actionTimeout(deadline) });
+  await clickLocalToolbarControl(
+    menu.locator('[data-toolbar-menu-action="replay"]'),
+    actionTimeout(deadline),
+  );
 }
 
 export async function chooseToolbarSplit(page: Page, count: 1 | 2 | 4): Promise<void> {
@@ -320,9 +332,12 @@ export async function chooseToolbarSplit(page: Page, count: 1 | 2 | 4): Promise<
     what: `split ${count}`,
     done: async () => (await page.locator(".chart-wrap").count()) === count,
     control: seg,
-    direct: (timeout) => seg.click({ timeout }),
-    overflow: (menu, timeout) => menu.locator(".toolbar-overflow-group .seg")
-      .getByRole("button", { name: String(count), exact: true }).click({ timeout }),
+    direct: (timeout) => clickLocalToolbarControl(seg, timeout),
+    overflow: (menu, timeout) => clickLocalToolbarControl(
+      menu.locator(".toolbar-overflow-group .seg")
+        .getByRole("button", { name: String(count), exact: true }),
+      timeout,
+    ),
   });
 }
 
@@ -335,8 +350,11 @@ export async function openLayoutMenu(page: Page): Promise<Locator> {
     done: async () => (await directPop.locator("[data-layout-save]").isVisible())
       || (await overflowPop.locator("[data-layout-save]").isVisible()),
     control,
-    direct: (timeout) => control.click({ timeout }),
-    overflow: (menu, timeout) => menu.locator('[data-toolbar-menu-action="layouts"]').click({ timeout }),
+    direct: (timeout) => clickLocalToolbarControl(control, timeout),
+    overflow: (menu, timeout) => clickLocalToolbarControl(
+      menu.locator('[data-toolbar-menu-action="layouts"]'),
+      timeout,
+    ),
   });
   return (await directPop.locator("[data-layout-save]").isVisible()) ? directPop : overflowPop;
 }
@@ -348,8 +366,11 @@ export async function toggleToolbarSync(page: Page): Promise<void> {
     what: "the Sync toggle",
     done: async () => (await control.getAttribute("data-sync-on").catch(() => null)) !== before,
     control,
-    direct: (timeout) => control.click({ timeout }),
-    overflow: (menu, timeout) => menu.locator('[data-toolbar-menu-action="sync"]').click({ timeout }),
+    direct: (timeout) => clickLocalToolbarControl(control, timeout),
+    overflow: (menu, timeout) => clickLocalToolbarControl(
+      menu.locator('[data-toolbar-menu-action="sync"]'),
+      timeout,
+    ),
   });
 }
 
@@ -359,17 +380,23 @@ export async function runToolbarDetector(page: Page, label: string): Promise<voi
   const deadline = toolbarJourneyDeadline();
   await waitForSettledToolbar(page, opts, deadline);
   if (await direct.isVisible()) {
-    await direct.locator(":scope > button").click({
-      timeout: actionTimeout(deadline, TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS),
-    });
-    await page.locator(".pop.show .menu-row").filter({ hasText: label })
-      .click({ timeout: actionTimeout(deadline) });
+    await clickLocalToolbarControl(
+      direct.locator(":scope > button"),
+      actionTimeout(deadline, TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS),
+    );
+    await clickLocalToolbarControl(
+      page.locator(".pop.show .menu-row").filter({ hasText: label }),
+      actionTimeout(deadline),
+    );
     return;
   }
   const menu = await openOverflow(page, deadline, opts, 2);
-  await menu.locator('[data-toolbar-menu-action="detect"]').click({
-    timeout: actionTimeout(deadline, TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS),
-  });
-  await menu.locator('[data-toolbar-menu-action^="detect-"]').filter({ hasText: label })
-    .click({ timeout: actionTimeout(deadline) });
+  await clickLocalToolbarControl(
+    menu.locator('[data-toolbar-menu-action="detect"]'),
+    actionTimeout(deadline, TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS),
+  );
+  await clickLocalToolbarControl(
+    menu.locator('[data-toolbar-menu-action^="detect-"]').filter({ hasText: label }),
+    actionTimeout(deadline),
+  );
 }
