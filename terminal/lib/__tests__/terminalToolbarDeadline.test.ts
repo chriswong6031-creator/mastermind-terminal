@@ -15,6 +15,11 @@ describe("toolbar invocation deadline ownership", () => {
     const source = helperSource();
 
     expect(source).toContain("export function createToolbarIntent()");
+    // `TestInfo.duration` is the supported live elapsed-test clock in this Playwright version. The
+    // former private `_startWallTime` probe is absent in ordinary runs, silently falling back to an
+    // eight-second budget even when the enclosing test has ample real time left.
+    expect(source).toContain("Date.now() - info.duration");
+    expect(source).not.toContain("info._startWallTime");
     expect(source).toContain("Math.min(now + TOOLBAR_INVOCATION_BUDGET_MS, testBound)");
     expect(source).not.toContain("new WeakMap<Page, number>()");
     expect(source).not.toContain("toolbarDeadlines.get(page)");

@@ -9,7 +9,6 @@ const TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS = 2_000;
 
 type ToolbarMode = "full" | "overflow" | "compact";
 type ToolbarSnapshot = { mode: ToolbarMode | null; revision: number | null; settled: boolean };
-type DeadlineAwareTestInfo = ReturnType<typeof test.info> & { _startWallTime?: number };
 type ToolbarAction = {
   done: () => Promise<boolean>;
   control: Locator;
@@ -61,8 +60,12 @@ export function armToolbarJourneyDeadline(testTimeoutMs: number, testStartedAtMs
 export function createToolbarIntent(): ToolbarIntent {
   try {
     const timeout = test.info().timeout;
-    const info = test.info() as DeadlineAwareTestInfo;
-    return { deadline: armToolbarJourneyDeadline(timeout, info._startWallTime) };
+    const info = test.info();
+    // This Playwright version exposes an elapsed duration, not a public start timestamp. Recover
+    // the latter from the live clock so a normal in-test invocation gets its actual capped budget
+    // instead of the unarmed eight-second fallback. `_startWallTime` was a private probe, never a
+    // TestInfo contract, and deliberately does not participate in the deadline calculation.
+    return { deadline: armToolbarJourneyDeadline(timeout, Date.now() - info.duration) };
   } catch {
     return { deadline: armToolbarJourneyDeadline(TOOLBAR_DEFAULT_UNARMED_BUDGET_MS + TOOLBAR_TEST_RESERVE_MS) };
   }
