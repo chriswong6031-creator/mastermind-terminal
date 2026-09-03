@@ -4,7 +4,12 @@ import {
   forceStaleRevision, seedNameConflict, seedUnreadableWorkspace, seedFutureFloorWorkspace,
   seedUnknownWidgetTypeWorkspace, seedTolerantDefectWorkspace,
 } from "./layoutStore";
-import { openLayoutMenu } from "./terminalToolbar";
+import {
+  createToolbarIntent,
+  createToolbarTestBound,
+  openLayoutMenu,
+  type ToolbarTestBound,
+} from "./terminalToolbar";
 import { expectTapTarget } from "./tapTarget";
 
 // W2-A Terminal workspace-management UX — builder screenshot checklist + non-screenshot assertions
@@ -38,8 +43,8 @@ async function shot(page: Page, name: string) {
 }
 
 /** Save through the real menu; `name` empty exercises the blank auto-name path. */
-async function saveWorkspace(page: Page, name: string) {
-  const menu = await openLayoutMenu(page);
+async function saveWorkspace(page: Page, name: string, bound?: ToolbarTestBound) {
+  const menu = await openLayoutMenu(page, createToolbarIntent(bound));
   const input = menu.locator("[data-layout-save] input");
   await input.fill(name);
   await menu.locator("[data-layout-save-btn]").click();
@@ -385,10 +390,15 @@ test.describe("W2-A workspace menu — 820×1180 (drill-down mount)", () => {
   });
 
   test("ready / row-open", async ({ page, baseURL }, testInfo) => {
+    const testStartedAtMs = Date.now();
+    const toolbarBound = createToolbarTestBound({
+      testStartedAtMs,
+      testTimeoutMs: testInfo.timeout,
+    });
     await isolateLayoutStore(page, testInfo, baseURL);
     await gotoTerminal(page);
-    await saveWorkspace(page, "Tablet Setup");
-    const menu = await openLayoutMenu(page);
+    await saveWorkspace(page, "Tablet Setup", toolbarBound);
+    const menu = await openLayoutMenu(page, createToolbarIntent(toolbarBound));
     await expect(page.locator(".toolbar-overflow-back")).toBeVisible();
     await expect(menu.locator('[data-layout-row="Tablet Setup"]')).toBeVisible();
     await shot(page, "820-en-ready");

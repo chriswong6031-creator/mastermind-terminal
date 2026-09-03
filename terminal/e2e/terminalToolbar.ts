@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 const TOOLBAR_DEFAULT_UNARMED_BUDGET_MS = 8_000;
 const TOOLBAR_INVOCATION_BUDGET_MS = 12_000;
@@ -34,45 +34,63 @@ export type ToolbarFailureReceipt = {
 /** One logical toolbar journey owns one deadline; callers may pass it through a composition. */
 export type ToolbarIntent = { deadline: number };
 
-type ToolbarFailureCode = "TOOLBAR_PAGE_CLOSED" | "TOOLBAR_NOT_SETTLED" | "TOOLBAR_ACTION_FAILED";
+/** Public absolute ceiling supplied by the owning test callback. */
+export type ToolbarTestBound = { deadline: number };
+
+export type ToolbarFailureCode =
+  | "TOOLBAR_PAGE_CLOSED"
+  | "TOOLBAR_BUDGET_EXHAUSTED"
+  | "TOOLBAR_NOT_SETTLED"
+  | "TOOLBAR_ACTION_FAILED";
+
+export type ToolbarStageExecution<T> =
+  | { ok: true; value: T }
+  | { ok: false; code: "TOOLBAR_BUDGET_EXHAUSTED"; budgetRemainingMs: number };
 
 export function formatToolbarFailure(code: ToolbarFailureCode, receipt: ToolbarFailureReceipt): string {
   return `${code} ${JSON.stringify(receipt)}`;
 }
 
-/** One fresh finite deadline per exported toolbar intent, capped by the owning test. */
-export function armToolbarJourneyDeadline(testTimeoutMs: number, testStartedAtMs?: number): number {
-  const now = Date.now();
-  const validTimeout = Number.isFinite(testTimeoutMs) && testTimeoutMs > 0;
-  const validStart = Number.isFinite(testStartedAtMs)
-    && Number(testStartedAtMs) > 0
-    && Number(testStartedAtMs) <= now;
-  if (validTimeout && validStart) {
-    const testBound = Number(testStartedAtMs) + testTimeoutMs - TOOLBAR_TEST_RESERVE_MS;
-    return Math.min(now + TOOLBAR_INVOCATION_BUDGET_MS, testBound);
+/** Derive a deterministic public bound from values captured by the owning test callback. */
+export function createToolbarTestBound({
+  testStartedAtMs,
+  testTimeoutMs,
+}: {
+  testStartedAtMs: number;
+  testTimeoutMs: number;
+}): ToolbarTestBound {
+  if (!Number.isFinite(testStartedAtMs) || !Number.isFinite(testTimeoutMs)) {
+    throw new TypeError("Toolbar test bounds require finite start and timeout values");
   }
-  const fallbackBudget = validTimeout
-    ? Math.min(TOOLBAR_DEFAULT_UNARMED_BUDGET_MS, Math.max(0, testTimeoutMs - TOOLBAR_TEST_RESERVE_MS))
-    : TOOLBAR_DEFAULT_UNARMED_BUDGET_MS;
-  return now + fallbackBudget;
+  return {
+    deadline: testStartedAtMs + Math.max(0, testTimeoutMs - TOOLBAR_TEST_RESERVE_MS),
+  };
 }
 
-export function createToolbarIntent(): ToolbarIntent {
-  try {
-    const timeout = test.info().timeout;
-    const info = test.info();
-    // This Playwright version exposes an elapsed duration, not a public start timestamp. Recover
-    // the latter from the live clock so a normal in-test invocation gets its actual capped budget
-    // instead of the unarmed eight-second fallback. `_startWallTime` was a private probe, never a
-    // TestInfo contract, and deliberately does not participate in the deadline calculation.
-    return { deadline: armToolbarJourneyDeadline(timeout, Date.now() - info.duration) };
-  } catch {
-    return { deadline: armToolbarJourneyDeadline(TOOLBAR_DEFAULT_UNARMED_BUDGET_MS + TOOLBAR_TEST_RESERVE_MS) };
-  }
+/**
+ * Arm one invocation without inspecting framework state. Callers provide the public test bound;
+ * runtime probes such as `test.info().timeout` and private fields such as `_startWallTime` are
+ * explicitly forbidden inputs.
+ */
+export function armToolbarJourneyDeadline(
+  bound?: ToolbarTestBound,
+  nowMs = Date.now(),
+): number {
+  const localDeadline = nowMs + TOOLBAR_DEFAULT_UNARMED_BUDGET_MS;
+  if (!bound) return localDeadline;
+  return Math.min(nowMs + TOOLBAR_INVOCATION_BUDGET_MS, bound.deadline);
 }
 
-function budgetRemaining(deadline: number): number {
-  return Math.max(0, deadline - Date.now());
+/** Mint one invocation deadline from an explicit bound or an honestly local fallback. */
+export function createToolbarIntent(
+  bound?: ToolbarTestBound,
+  nowMs = Date.now(),
+): ToolbarIntent {
+  return { deadline: armToolbarJourneyDeadline(bound, nowMs) };
+}
+
+function budgetRemaining(deadline: number, nowMs = Date.now()): number {
+  return Math.max(0, deadline - nowMs);
 }
 
 function boundedTimeout(deadline: number, ceiling: number): number {
@@ -95,8 +113,31 @@ export function allocateToolbarStage(
   return { currentMs: remaining - futureMs, futureMs };
 }
 
-function actionTimeout(deadline: number, reserveAfterMs = TOOLBAR_EFFECT_SETTLE_MS): number {
-  return allocateToolbarStage(budgetRemaining(deadline), reserveAfterMs).currentMs;
+/**
+ * Execute one stage only when the same absolute intent can admit the complete remaining plan.
+ * The action callback is deliberately below the gate so an insufficient plan has zero effects.
+ */
+export async function executeToolbarStage<T>(
+  intent: ToolbarIntent,
+  remainingStages: number,
+  action: (timeoutMs: number) => Promise<T>,
+  nowMs = Date.now(),
+): Promise<ToolbarStageExecution<T>> {
+  const stages = Math.max(1, Math.floor(remainingStages));
+  const remainingMs = budgetRemaining(intent.deadline, nowMs);
+  const minimumPlanMs = stages * TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS;
+  if (remainingMs < minimumPlanMs) {
+    return {
+      ok: false,
+      code: "TOOLBAR_BUDGET_EXHAUSTED",
+      budgetRemainingMs: remainingMs,
+    };
+  }
+  const timeoutMs = allocateToolbarStage(
+    remainingMs,
+    (stages - 1) * TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS,
+  ).currentMs;
+  return { ok: true, value: await action(timeoutMs) };
 }
 
 /**
@@ -162,7 +203,11 @@ async function failToolbarActionUnlessDone(page: Page, opts: ToolbarAction, dead
   const receipt = await captureToolbarFailure(page, opts, deadline);
   if (receipt.done) return;
   throw new Error(formatToolbarFailure(
-    receipt.page_closed ? "TOOLBAR_PAGE_CLOSED" : "TOOLBAR_ACTION_FAILED",
+    receipt.page_closed
+      ? "TOOLBAR_PAGE_CLOSED"
+      : receipt.budget_remaining_ms <= 0
+        ? "TOOLBAR_BUDGET_EXHAUSTED"
+        : "TOOLBAR_ACTION_FAILED",
     receipt,
   ));
 }
@@ -174,7 +219,7 @@ async function waitForSettledToolbar(
 ): Promise<ToolbarSnapshot> {
   if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
   const timeout = boundedTimeout(deadline, TOOLBAR_SETTLE_WAIT_MS);
-  if (timeout <= 0) return failToolbar(page, opts, deadline, "TOOLBAR_NOT_SETTLED");
+  if (timeout <= 0) return failToolbar(page, opts, deadline, "TOOLBAR_BUDGET_EXHAUSTED");
   try {
     const handle = await page.waitForFunction(() => {
       const root = document.querySelector<HTMLElement>(".chart-tabs");
@@ -193,7 +238,11 @@ async function waitForSettledToolbar(
       page,
       opts,
       deadline,
-      page.isClosed() ? "TOOLBAR_PAGE_CLOSED" : "TOOLBAR_NOT_SETTLED",
+      page.isClosed()
+        ? "TOOLBAR_PAGE_CLOSED"
+        : budgetRemaining(deadline) <= 0
+          ? "TOOLBAR_BUDGET_EXHAUSTED"
+          : "TOOLBAR_NOT_SETTLED",
     );
   }
 }
@@ -226,18 +275,33 @@ async function clickOnceAndObserve(
   page: Page,
   target: Locator,
   observed: () => Promise<boolean>,
-  deadline: number,
-  reserveAfterMs = 0,
-): Promise<boolean> {
-  if (await observed().catch(() => false)) return true;
-  const timeout = actionTimeout(deadline, TOOLBAR_EFFECT_SETTLE_MS + reserveAfterMs);
-  if (timeout <= 0) return false;
+  intent: ToolbarIntent,
+  remainingStages: number,
+): Promise<{ done: boolean; budgetExhausted: boolean }> {
+  if (await observed().catch(() => false)) return { done: true, budgetExhausted: false };
   let clickFailed = false;
-  try { await clickLocalToolbarControl(target, timeout); } catch { clickFailed = true; }
-  if (page.isClosed()) return false;
-  if (await observeToolbarEffect(observed, deadline, reserveAfterMs)) return true;
-  if (clickFailed) return false;
-  return observed().catch(() => false);
+  let execution: ToolbarStageExecution<void>;
+  try {
+    execution = await executeToolbarStage(
+      intent,
+      remainingStages,
+      (timeout) => clickLocalToolbarControl(target, timeout),
+    );
+  } catch {
+    clickFailed = true;
+    execution = { ok: true, value: undefined };
+  }
+  if (!execution.ok) return { done: false, budgetExhausted: true };
+  if (page.isClosed()) return { done: false, budgetExhausted: false };
+  const reserveAfterMs = Math.max(0, remainingStages - 1) * TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS;
+  if (await observeToolbarEffect(observed, intent.deadline, reserveAfterMs)) {
+    return { done: true, budgetExhausted: false };
+  }
+  if (clickFailed) return { done: false, budgetExhausted: false };
+  return {
+    done: await observed().catch(() => false),
+    budgetExhausted: false,
+  };
 }
 
 async function openOverflow(
@@ -247,19 +311,24 @@ async function openOverflow(
   remainingMenuActions = 1,
 ): Promise<Locator> {
   if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
+  const intent = { deadline };
   const menu = page.locator(".toolbar-overflow-pop.show");
   const opened = await clickOnceAndObserve(
     page,
     page.getByTestId("toolbar-more"),
     () => menu.isVisible().catch(() => false),
-    deadline,
-    (remainingMenuActions + 1) * TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS,
+    intent,
+    remainingMenuActions + 2,
   );
-  if (!opened) return failToolbar(
+  if (!opened.done) return failToolbar(
     page,
     opts,
     deadline,
-    page.isClosed() ? "TOOLBAR_PAGE_CLOSED" : "TOOLBAR_ACTION_FAILED",
+    page.isClosed()
+      ? "TOOLBAR_PAGE_CLOSED"
+      : opened.budgetExhausted
+        ? "TOOLBAR_BUDGET_EXHAUSTED"
+        : "TOOLBAR_ACTION_FAILED",
   );
   const back = menu.locator(".toolbar-overflow-back");
   if (await back.isVisible().catch(() => false)) {
@@ -268,17 +337,48 @@ async function openOverflow(
       back,
       async () => (await menu.isVisible().catch(() => false))
         && !(await back.isVisible().catch(() => false)),
-      deadline,
-      remainingMenuActions * TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS,
+      intent,
+      remainingMenuActions + 1,
     );
-    if (!atRoot) return failToolbar(
+    if (!atRoot.done) return failToolbar(
       page,
       opts,
       deadline,
-      page.isClosed() ? "TOOLBAR_PAGE_CLOSED" : "TOOLBAR_ACTION_FAILED",
+      page.isClosed()
+        ? "TOOLBAR_PAGE_CLOSED"
+        : atRoot.budgetExhausted
+          ? "TOOLBAR_BUDGET_EXHAUSTED"
+          : "TOOLBAR_ACTION_FAILED",
     );
   }
   return menu;
+}
+
+async function executeRouteOnlyStage(
+  page: Page,
+  opts: ToolbarAction,
+  intent: ToolbarIntent,
+  remainingStages: number,
+  target: Locator,
+): Promise<void> {
+  let execution: ToolbarStageExecution<void>;
+  try {
+    execution = await executeToolbarStage(
+      intent,
+      remainingStages,
+      (timeout) => clickLocalToolbarControl(target, timeout),
+    );
+  } catch {
+    return failToolbar(
+      page,
+      opts,
+      intent.deadline,
+      page.isClosed() ? "TOOLBAR_PAGE_CLOSED" : "TOOLBAR_ACTION_FAILED",
+    );
+  }
+  if (!execution.ok) {
+    return failToolbar(page, opts, intent.deadline, "TOOLBAR_BUDGET_EXHAUSTED");
+  }
 }
 
 async function viaToolbar(page: Page, opts: ToolbarAction, intent: ToolbarIntent): Promise<void> {
@@ -287,19 +387,25 @@ async function viaToolbar(page: Page, opts: ToolbarAction, intent: ToolbarIntent
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const snapshot = await waitForSettledToolbar(page, opts, deadline);
     if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
-    const timeout = actionTimeout(deadline);
-    if (timeout <= 0) return failToolbarActionUnlessDone(page, opts, deadline);
     const directVisible = await opts.control.isVisible().catch(() => false);
-    try {
-      if (directVisible) {
-        await opts.direct(timeout);
-      } else {
-        const menu = await openOverflow(page, deadline, opts);
-        const overflowTimeout = actionTimeout(deadline);
-        if (overflowTimeout <= 0) return failToolbarActionUnlessDone(page, opts, deadline);
-        await opts.overflow(menu, overflowTimeout);
-      }
-    } catch { /* observe the one click's semantic effect below */ }
+    let execution: ToolbarStageExecution<void> | null = null;
+    if (directVisible) {
+      try {
+        execution = await executeToolbarStage(intent, 1, opts.direct);
+      } catch { /* observe the one click's semantic effect below */ }
+    } else {
+      const menu = await openOverflow(page, deadline, opts);
+      try {
+        execution = await executeToolbarStage(
+          intent,
+          1,
+          (timeout) => opts.overflow(menu, timeout),
+        );
+      } catch { /* observe the one click's semantic effect below */ }
+    }
+    if (execution && !execution.ok) {
+      return failToolbar(page, opts, deadline, "TOOLBAR_BUDGET_EXHAUSTED");
+    }
     if (await observeToolbarEffect(opts.done, deadline)) return;
     if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
     const after = await readToolbarSnapshot(page);
@@ -323,13 +429,16 @@ export async function toggleToolbarReplay(page: Page, intent?: ToolbarIntent): P
   const deadline = activeIntent.deadline;
   await waitForSettledToolbar(page, opts, deadline);
   if (await direct.isVisible()) {
-    await clickLocalToolbarControl(direct, actionTimeout(deadline));
+    await executeRouteOnlyStage(page, opts, activeIntent, 1, direct);
     return;
   }
   const menu = await openOverflow(page, deadline, opts);
-  await clickLocalToolbarControl(
+  await executeRouteOnlyStage(
+    page,
+    opts,
+    activeIntent,
+    1,
     menu.locator('[data-toolbar-menu-action="replay"]'),
-    actionTimeout(deadline),
   );
 }
 
@@ -391,23 +500,29 @@ export async function runToolbarDetector(page: Page, label: string, intent?: Too
   const deadline = activeIntent.deadline;
   await waitForSettledToolbar(page, opts, deadline);
   if (await direct.isVisible()) {
-    await clickLocalToolbarControl(
-      direct.locator(":scope > button"),
-      actionTimeout(deadline, TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS),
-    );
-    await clickLocalToolbarControl(
+    await executeRouteOnlyStage(page, opts, activeIntent, 2, direct.locator(":scope > button"));
+    await executeRouteOnlyStage(
+      page,
+      opts,
+      activeIntent,
+      1,
       page.locator(".pop.show .menu-row").filter({ hasText: label }),
-      actionTimeout(deadline),
     );
     return;
   }
   const menu = await openOverflow(page, deadline, opts, 2);
-  await clickLocalToolbarControl(
+  await executeRouteOnlyStage(
+    page,
+    opts,
+    activeIntent,
+    2,
     menu.locator('[data-toolbar-menu-action="detect"]'),
-    actionTimeout(deadline, TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS),
   );
-  await clickLocalToolbarControl(
+  await executeRouteOnlyStage(
+    page,
+    opts,
+    activeIntent,
+    1,
     menu.locator('[data-toolbar-menu-action^="detect-"]').filter({ hasText: label }),
-    actionTimeout(deadline),
   );
 }

@@ -1,7 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 import { injectLayoutFault, isolateLayoutStore, renderAsGuest, useLang } from "./layoutStore";
 import { isPhoneViewport } from "./phoneChrome";
-import { chooseToolbarSplit, createToolbarIntent, openLayoutMenu, toggleToolbarSync } from "./terminalToolbar";
+import {
+  chooseToolbarSplit,
+  createToolbarIntent,
+  createToolbarTestBound,
+  openLayoutMenu,
+  toggleToolbarSync,
+  type ToolbarIntent,
+} from "./terminalToolbar";
 
 // Saved-layout integrity, in the browser, at all three contract viewports.
 //
@@ -29,8 +36,8 @@ const skipWithoutLayoutMenu = (page: Page) =>
   test.skip(isPhoneViewport(page), "no phone entry point for Saved Layouts (Analysis-hub Templates tile is a ghost)");
 
 /** Save through the real menu; `name` empty exercises the blank auto-name path. */
-async function saveLayout(page: Page, name = "") {
-  const menu = await openLayoutMenu(page);
+async function saveLayout(page: Page, name = "", intent?: ToolbarIntent) {
+  const menu = await openLayoutMenu(page, intent);
   const input = menu.locator("[data-layout-save] input");
   await input.fill(name);
   await menu.locator("[data-layout-save-btn]").click();
@@ -160,6 +167,11 @@ test.describe("saved layouts", () => {
   });
 
   test("a loaded layout restores the workspace it saved, through the real UI", async ({ page, baseURL }, testInfo) => {
+    const testStartedAtMs = Date.now();
+    const toolbarBound = createToolbarTestBound({
+      testStartedAtMs,
+      testTimeoutMs: testInfo.timeout,
+    });
     skipWithoutLayoutMenu(page);
     await isolateLayoutStore(page, testInfo, baseURL);
     await gotoTerminal(page);
@@ -167,10 +179,13 @@ test.describe("saved layouts", () => {
     // Build a workspace that is NOT the default, save it, then change it and load it back. The pure
     // capture/apply contract is unit-tested in lib/__tests__/layoutConfig.test.ts; what this proves
     // is the WIRING — that the shell captures the live workspace and re-applies all of it.
-    await chooseToolbarSplit(page, 4);
+    await chooseToolbarSplit(page, 4, createToolbarIntent(toolbarBound));
     await expect(page.locator(".pane, .chart-pane").first()).toBeVisible();
-    await saveLayout(page, "Workspace A");
-    await expect((await openLayoutMenu(page)).locator('[data-layout-feedback="saved"]')).toBeVisible();
+    await saveLayout(page, "Workspace A", createToolbarIntent(toolbarBound));
+    await expect((await openLayoutMenu(
+      page,
+      createToolbarIntent(toolbarBound),
+    )).locator('[data-layout-feedback="saved"]')).toBeVisible();
 
     // W2-A: every save now stores a `workspace_layout.v1` ENVELOPE (freeze §1/§7), not a flat v2
     // config — the chart's own fields live under `widgets[0].config` (the "chart-main" primary
@@ -215,7 +230,7 @@ test.describe("saved layouts", () => {
     // Mutate: flip Sync away from what was saved, then collapse the grid.
     // This is one composed local-toolbar journey: each action consumes the same finite test-bound
     // intent rather than silently minting a fresh helper deadline before reopening Workspaces.
-    const restoreToolbarIntent = createToolbarIntent();
+    const restoreToolbarIntent = createToolbarIntent(toolbarBound);
     await toggleToolbarSync(page, restoreToolbarIntent);
     await chooseToolbarSplit(page, 1, restoreToolbarIntent);
 
@@ -224,8 +239,11 @@ test.describe("saved layouts", () => {
 
     // Re-capturing the restored workspace must reproduce the stored contract exactly. Any field the
     // shell fails to restore shows up here as a difference.
-    await saveLayout(page, "Workspace B");
-    await expect((await openLayoutMenu(page)).locator('[data-layout-feedback="saved"]')).toBeVisible();
+    await saveLayout(page, "Workspace B", createToolbarIntent(toolbarBound));
+    await expect((await openLayoutMenu(
+      page,
+      createToolbarIntent(toolbarBound),
+    )).locator('[data-layout-feedback="saved"]')).toBeVisible();
     const configB = (await inventory(page)).find((l) => l.name === "Workspace B")!.config;
     expect(configB).toEqual(configA);
   });
