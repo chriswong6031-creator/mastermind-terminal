@@ -14,9 +14,7 @@ describe("toolbar invocation deadline ownership", () => {
   it("does not cache one toolbar intent's deadline on a shared Page", () => {
     const source = helperSource();
 
-    expect(source).toContain("function toolbarJourneyDeadline()");
-    expect(source.match(/const deadline = toolbarJourneyDeadline\(\);/g) ?? [])
-      .toHaveLength(3);
+    expect(source).toContain("export function createToolbarIntent()");
     expect(source).toContain("Math.min(now + TOOLBAR_INVOCATION_BUDGET_MS, testBound)");
     expect(source).not.toContain("new WeakMap<Page, number>()");
     expect(source).not.toContain("toolbarDeadlines.get(page)");

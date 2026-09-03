@@ -32,6 +32,9 @@ export type ToolbarFailureReceipt = {
   page_closed: boolean;
 };
 
+/** One logical toolbar journey owns one deadline; callers may pass it through a composition. */
+export type ToolbarIntent = { deadline: number };
+
 type ToolbarFailureCode = "TOOLBAR_PAGE_CLOSED" | "TOOLBAR_NOT_SETTLED" | "TOOLBAR_ACTION_FAILED";
 
 export function formatToolbarFailure(code: ToolbarFailureCode, receipt: ToolbarFailureReceipt): string {
@@ -55,13 +58,13 @@ export function armToolbarJourneyDeadline(testTimeoutMs: number, testStartedAtMs
   return now + fallbackBudget;
 }
 
-function toolbarJourneyDeadline(): number {
+export function createToolbarIntent(): ToolbarIntent {
   try {
     const timeout = test.info().timeout;
     const info = test.info() as DeadlineAwareTestInfo;
-    return armToolbarJourneyDeadline(timeout, info._startWallTime);
+    return { deadline: armToolbarJourneyDeadline(timeout, info._startWallTime) };
   } catch {
-    return armToolbarJourneyDeadline(TOOLBAR_DEFAULT_UNARMED_BUDGET_MS + TOOLBAR_TEST_RESERVE_MS);
+    return { deadline: armToolbarJourneyDeadline(TOOLBAR_DEFAULT_UNARMED_BUDGET_MS + TOOLBAR_TEST_RESERVE_MS) };
   }
 }
 
@@ -275,8 +278,8 @@ async function openOverflow(
   return menu;
 }
 
-async function viaToolbar(page: Page, opts: ToolbarAction): Promise<void> {
-  const deadline = toolbarJourneyDeadline();
+async function viaToolbar(page: Page, opts: ToolbarAction, intent: ToolbarIntent): Promise<void> {
+  const deadline = intent.deadline;
   if (await opts.done()) return;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const snapshot = await waitForSettledToolbar(page, opts, deadline);
@@ -310,10 +313,11 @@ function routeOnlyAction(what: string, control: Locator): ToolbarAction {
   return { what, done: async () => false, control, direct: async () => {}, overflow: async () => {} };
 }
 
-export async function toggleToolbarReplay(page: Page): Promise<void> {
+export async function toggleToolbarReplay(page: Page, intent?: ToolbarIntent): Promise<void> {
   const direct = page.locator('[data-toolbar-action="replay"]');
   const opts = routeOnlyAction("the Replay toggle", direct);
-  const deadline = toolbarJourneyDeadline();
+  const activeIntent = intent ?? createToolbarIntent();
+  const deadline = activeIntent.deadline;
   await waitForSettledToolbar(page, opts, deadline);
   if (await direct.isVisible()) {
     await clickLocalToolbarControl(direct, actionTimeout(deadline));
@@ -326,8 +330,9 @@ export async function toggleToolbarReplay(page: Page): Promise<void> {
   );
 }
 
-export async function chooseToolbarSplit(page: Page, count: 1 | 2 | 4): Promise<void> {
+export async function chooseToolbarSplit(page: Page, count: 1 | 2 | 4, intent?: ToolbarIntent): Promise<void> {
   const seg = page.locator('[data-toolbar-action="split"]').getByRole("button", { name: String(count), exact: true });
+  const activeIntent = intent ?? createToolbarIntent();
   await viaToolbar(page, {
     what: `split ${count}`,
     done: async () => (await page.locator(".chart-wrap").count()) === count,
@@ -338,13 +343,14 @@ export async function chooseToolbarSplit(page: Page, count: 1 | 2 | 4): Promise<
         .getByRole("button", { name: String(count), exact: true }),
       timeout,
     ),
-  });
+  }, activeIntent);
 }
 
-export async function openLayoutMenu(page: Page): Promise<Locator> {
+export async function openLayoutMenu(page: Page, intent?: ToolbarIntent): Promise<Locator> {
   const directPop = page.locator('[data-toolbar-action="layouts"] .pop.show');
   const overflowPop = page.locator(".toolbar-overflow-pop.show");
   const control = page.locator('[data-toolbar-action="layouts"] > button');
+  const activeIntent = intent ?? createToolbarIntent();
   await viaToolbar(page, {
     what: "the Saved Layouts menu",
     done: async () => (await directPop.locator("[data-layout-save]").isVisible())
@@ -355,13 +361,14 @@ export async function openLayoutMenu(page: Page): Promise<Locator> {
       menu.locator('[data-toolbar-menu-action="layouts"]'),
       timeout,
     ),
-  });
+  }, activeIntent);
   return (await directPop.locator("[data-layout-save]").isVisible()) ? directPop : overflowPop;
 }
 
-export async function toggleToolbarSync(page: Page): Promise<void> {
+export async function toggleToolbarSync(page: Page, intent?: ToolbarIntent): Promise<void> {
   const control = page.locator('[data-toolbar-action="sync"]');
   const before = await control.getAttribute("data-sync-on").catch(() => null);
+  const activeIntent = intent ?? createToolbarIntent();
   await viaToolbar(page, {
     what: "the Sync toggle",
     done: async () => (await control.getAttribute("data-sync-on").catch(() => null)) !== before,
@@ -371,13 +378,14 @@ export async function toggleToolbarSync(page: Page): Promise<void> {
       menu.locator('[data-toolbar-menu-action="sync"]'),
       timeout,
     ),
-  });
+  }, activeIntent);
 }
 
-export async function runToolbarDetector(page: Page, label: string): Promise<void> {
+export async function runToolbarDetector(page: Page, label: string, intent?: ToolbarIntent): Promise<void> {
   const direct = page.locator('[data-toolbar-action="detect"]');
   const opts = routeOnlyAction(`the ${label} detector`, direct);
-  const deadline = toolbarJourneyDeadline();
+  const activeIntent = intent ?? createToolbarIntent();
+  const deadline = activeIntent.deadline;
   await waitForSettledToolbar(page, opts, deadline);
   if (await direct.isVisible()) {
     await clickLocalToolbarControl(

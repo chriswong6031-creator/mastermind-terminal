@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { injectLayoutFault, isolateLayoutStore, renderAsGuest, useLang } from "./layoutStore";
 import { isPhoneViewport } from "./phoneChrome";
-import { chooseToolbarSplit, openLayoutMenu, toggleToolbarSync } from "./terminalToolbar";
+import { chooseToolbarSplit, createToolbarIntent, openLayoutMenu, toggleToolbarSync } from "./terminalToolbar";
 
 // Saved-layout integrity, in the browser, at all three contract viewports.
 //
@@ -213,10 +213,13 @@ test.describe("saved layouts", () => {
     expect(chartA).not.toHaveProperty("favTF");
 
     // Mutate: flip Sync away from what was saved, then collapse the grid.
-    await toggleToolbarSync(page);
-    await chooseToolbarSplit(page, 1);
+    // This is one composed local-toolbar journey: each action consumes the same finite test-bound
+    // intent rather than silently minting a fresh helper deadline before reopening Workspaces.
+    const restoreToolbarIntent = createToolbarIntent();
+    await toggleToolbarSync(page, restoreToolbarIntent);
+    await chooseToolbarSplit(page, 1, restoreToolbarIntent);
 
-    const menu = await openLayoutMenu(page);
+    const menu = await openLayoutMenu(page, restoreToolbarIntent);
     await menu.locator('[data-layout-row="Workspace A"]').click();
 
     // Re-capturing the restored workspace must reproduce the stored contract exactly. Any field the
