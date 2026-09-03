@@ -24,6 +24,24 @@ describe("toolbar invocation deadline ownership", () => {
     expect(source).not.toContain("toolbarDeadline(page)");
   });
 
+  it("threads one explicit aggregate intent through every public toolbar operation", () => {
+    // This catches the hosted 33597855125 defect: a composed toolbar journey could mint a new
+    // twelve-second deadline at each exported call, even though the owning Playwright test has one
+    // finite clock. Removing intent propagation or recreating a deadline at an exported boundary
+    // must make this contract RED.
+    const source = helperSource();
+
+    expect(source).toContain("export type ToolbarIntent");
+    expect(source).toContain("export function createToolbarIntent()");
+    expect(source).toContain("const activeIntent = intent ?? createToolbarIntent();");
+    expect(source).toContain("async function viaToolbar(page: Page, opts: ToolbarAction, intent: ToolbarIntent)");
+    expect(source).toContain("export async function chooseToolbarSplit(page: Page, count: 1 | 2 | 4, intent?: ToolbarIntent)");
+    expect(source).toContain("export async function openLayoutMenu(page: Page, intent?: ToolbarIntent)");
+    expect(source).toContain("export async function toggleToolbarSync(page: Page, intent?: ToolbarIntent)");
+    expect(source).toContain("export async function runToolbarDetector(page: Page, label: string, intent?: ToolbarIntent)");
+    expect(source).not.toContain("function toolbarJourneyDeadline()");
+  });
+
   it("preserves the requested continuation reserve when the invocation can afford it", () => {
     expect(allocateToolbarStage(12_000, 5_500)).toEqual({
       currentMs: 6_500,
