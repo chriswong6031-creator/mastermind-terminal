@@ -23,6 +23,17 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
+  // Every worker below shares ONE dev server process (`webServer`, not one per worker) — that
+  // server is the actual bottleneck, not the CPU count Playwright defaults to. Locally this
+  // config auto-detects up to a dozen workers and still passes because the machine has cores to
+  // spare; the CI runner does not, and every one of the specs that has recently gone red in CI
+  // (crosshair-price-label, drawing-system, indicator-snapshot, marker-tooltip, layout-integrity,
+  // watchlist-bulk-actions) reproduced 100% clean locally against this exact commit with no code
+  // change — the failures are timing budgets (an `expect.poll`, a `toBeVisible`, a toolbar
+  // remeasurement retry) losing a race against a saturated shared server, not a broken assertion.
+  // Capping CI concurrency trades wall-clock time for headroom on those budgets, the same trade
+  // #438 (bounded Playwright install) and #452 (route pre-warming) already made for this suite.
+  workers: process.env.CI ? 2 : undefined,
   reporter: process.env.CI ? "github" : "list",
   use: {
     baseURL,
