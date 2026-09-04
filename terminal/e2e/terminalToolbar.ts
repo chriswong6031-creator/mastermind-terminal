@@ -113,6 +113,22 @@ export function allocateToolbarStage(
   return { currentMs: remaining - futureMs, futureMs };
 }
 
+/** Count only stages that exist in the toolbar's currently committed overflow geometry. */
+export function countToolbarOverflowStages({
+  overflowOpen,
+  backVisible,
+  remainingMenuActions,
+}: {
+  overflowOpen: boolean;
+  backVisible: boolean;
+  remainingMenuActions: number;
+}): number {
+  const remaining = Math.max(0, Math.floor(remainingMenuActions));
+  if (!overflowOpen) return remaining + 1; // More, then the declared menu actions.
+  if (backVisible) return remaining + 1; // Back, then the declared menu actions.
+  return remaining; // Already open at the root menu.
+}
+
 /**
  * Execute one stage only when the same absolute intent can admit the complete remaining plan.
  * The action callback is deliberately below the gate so an insufficient plan has zero effects.
@@ -313,12 +329,15 @@ async function openOverflow(
   if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
   const intent = { deadline };
   const menu = page.locator(".toolbar-overflow-pop.show");
+  const back = menu.locator(".toolbar-overflow-back");
+  const overflowOpen = await menu.isVisible().catch(() => false);
+  const backVisible = overflowOpen && await back.isVisible().catch(() => false);
   const opened = await clickOnceAndObserve(
     page,
     page.getByTestId("toolbar-more"),
     () => menu.isVisible().catch(() => false),
     intent,
-    remainingMenuActions + 2,
+    countToolbarOverflowStages({ overflowOpen, backVisible, remainingMenuActions }),
   );
   if (!opened.done) return failToolbar(
     page,
@@ -330,7 +349,6 @@ async function openOverflow(
         ? "TOOLBAR_BUDGET_EXHAUSTED"
         : "TOOLBAR_ACTION_FAILED",
   );
-  const back = menu.locator(".toolbar-overflow-back");
   if (await back.isVisible().catch(() => false)) {
     const atRoot = await clickOnceAndObserve(
       page,
@@ -338,7 +356,11 @@ async function openOverflow(
       async () => (await menu.isVisible().catch(() => false))
         && !(await back.isVisible().catch(() => false)),
       intent,
-      remainingMenuActions + 1,
+      countToolbarOverflowStages({
+        overflowOpen: true,
+        backVisible: true,
+        remainingMenuActions,
+      }),
     );
     if (!atRoot.done) return failToolbar(
       page,

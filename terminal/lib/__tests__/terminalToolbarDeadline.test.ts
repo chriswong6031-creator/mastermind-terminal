@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allocateToolbarStage,
+  countToolbarOverflowStages,
   createToolbarIntent,
   createToolbarTestBound,
   executeToolbarStage,
@@ -50,6 +51,57 @@ describe("toolbar invocation deadline ownership", () => {
     expect(first.deadline).toBe(28_000);
     expect(later.deadline).toBe(28_000);
     expect(incorrectlyUnboundLater.deadline).toBe(34_000);
+  });
+
+  it("admits the hosted detector's feasible More → submenu → target plan with 7.7s left", async () => {
+    const clicks: number[] = [];
+    const remainingStages = countToolbarOverflowStages({
+      overflowOpen: false,
+      backVisible: false,
+      remainingMenuActions: 2,
+    });
+    const result = await executeToolbarStage(
+      { deadline: 7_759 },
+      remainingStages,
+      async (timeout) => { clicks.push(timeout); return "opened More"; },
+      0,
+    );
+
+    expect(remainingStages).toBe(3);
+    expect(result).toEqual({ ok: true, value: "opened More" });
+    expect(clicks).toEqual([3_880]);
+  });
+
+  it("counts only real Saved Layouts/W2-A stages for closed, root, and drilled overflow", async () => {
+    expect(countToolbarOverflowStages({
+      overflowOpen: false,
+      backVisible: false,
+      remainingMenuActions: 1,
+    })).toBe(2); // More → Workspaces
+    expect(countToolbarOverflowStages({
+      overflowOpen: true,
+      backVisible: false,
+      remainingMenuActions: 1,
+    })).toBe(1); // Workspaces only
+    expect(countToolbarOverflowStages({
+      overflowOpen: true,
+      backVisible: true,
+      remainingMenuActions: 1,
+    })).toBe(2); // Back → Workspaces
+
+    let clicks = 0;
+    const result = await executeToolbarStage(
+      { deadline: 4_500 },
+      countToolbarOverflowStages({
+        overflowOpen: false,
+        backVisible: false,
+        remainingMenuActions: 1,
+      }),
+      async () => { clicks += 1; },
+      0,
+    );
+    expect(result).toEqual({ ok: true, value: undefined });
+    expect(clicks).toBe(1);
   });
 
   it("fails an insufficient multi-stage plan before invoking its first action", async () => {
