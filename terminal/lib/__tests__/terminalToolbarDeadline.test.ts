@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Locator, Page } from "@playwright/test";
 import {
@@ -15,6 +16,58 @@ import {
 } from "../../e2e/terminalToolbar";
 
 describe("toolbar invocation deadline ownership", () => {
+  it("binds every W2-A toolbar journey to one test-owned deadline at callback entry", () => {
+    const source = readFileSync(
+      new URL("../../e2e/w2a-workspaces.spec.ts", import.meta.url),
+      "utf8",
+    );
+    const callbackFirstLines = [
+      ...source.matchAll(/async \(\{ page(?:, baseURL)? \}, testInfo\) => \{\n([^\n]+)/g),
+    ].map((match) => match[1].trim());
+    const toolbarOpenCalls = source.match(/openLayoutMenu\(page(?:, createToolbarIntent\(toolbarBound\))?\)/g) ?? [];
+    const saveCalls = source.split("\n").filter((line) => line.includes("await saveWorkspace(page,"));
+
+    expect(callbackFirstLines.length).toBeGreaterThan(0);
+    expect(callbackFirstLines).toEqual(
+      callbackFirstLines.map(() => "const toolbarBound = createW2AToolbarBound(testInfo);"),
+    );
+    expect(source).toContain("bound: ToolbarTestBound");
+    expect(source).not.toContain("bound?: ToolbarTestBound");
+    expect(toolbarOpenCalls.length).toBeGreaterThan(0);
+    expect(toolbarOpenCalls).toEqual(
+      toolbarOpenCalls.map(() => "openLayoutMenu(page, createToolbarIntent(toolbarBound))"),
+    );
+    expect(saveCalls.length).toBeGreaterThan(0);
+    expect(saveCalls.every((line) => /, toolbarBound\);\s*$/.test(line))).toBe(true);
+  });
+
+  it("rejects a late W2-A menu route before effect instead of minting a fresh fallback window", async () => {
+    const bound = createToolbarTestBound({
+      testStartedAtMs: 1_000,
+      testTimeoutMs: 30_000,
+    });
+    const nowMs = 27_999;
+    const boundIntent = createToolbarIntent(bound, nowMs);
+    const fallbackIntent = createToolbarIntent(undefined, nowMs);
+    let effects = 0;
+
+    const result = await executeToolbarStage(
+      boundIntent,
+      2,
+      async () => { effects += 1; },
+      nowMs,
+    );
+
+    expect(boundIntent).toEqual({ deadline: 28_000 });
+    expect(fallbackIntent).toEqual({ deadline: 35_999 });
+    expect(result).toEqual({
+      ok: false,
+      code: "TOOLBAR_BUDGET_EXHAUSTED",
+      budgetRemainingMs: 1,
+    });
+    expect(effects).toBe(0);
+  });
+
   it("caps a late toolbar intent at the caller-owned absolute test bound", () => {
     const bound = createToolbarTestBound({
       testStartedAtMs: 1_000,
