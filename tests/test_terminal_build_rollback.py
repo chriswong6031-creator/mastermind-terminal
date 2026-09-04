@@ -23,9 +23,11 @@ fails closed unless all THREE identities agree: the intended full Git SHA, the l
 HERMETIC BY CONSTRUCTION
 ------------------------
 `ops/terminal-build.sh` hardcodes /opt/terminal, so the rollback state machine is
-sourced — not executed — via the `TERMINAL_BUILD_LIB_ONLY` guard, and driven against
-a temporary directory. Nothing here contacts the VPS, SSH, systemd, GitHub, Supabase
-or the public site, and nothing reads or writes any real deploy root.
+sourced — not executed — and driven against a temporary directory. The seam is
+sourced-ness itself, never an environment variable: a variable could be inherited
+into a real root deploy and turn it into a silent `exit 0`. Nothing here contacts the
+VPS, SSH, systemd, GitHub, Supabase or the public site, and nothing reads or writes
+any real deploy root.
 
 Structure is not trusted on its own: the static tests below assert the deploy body
 performs no raw `$APP/.deployment-id` mutation outside the generation functions, so
@@ -36,6 +38,7 @@ restoration and the BUILD_ID comparison are load-bearing rather than decorative.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import textwrap
@@ -65,7 +68,6 @@ def run_gen(script: Path, body: str) -> subprocess.CompletedProcess:
     """Source the deploy script as a library and run `body` against it."""
     driver = textwrap.dedent(
         f"""
-        export TERMINAL_BUILD_LIB_ONLY=1
         . "{script}"
         set +e            # the script sets -e; the driver tests failure paths on purpose
         {textwrap.dedent(body)}
@@ -127,7 +129,7 @@ def artifacts(app: Path) -> list[str]:
 # the sourceable seam
 # --------------------------------------------------------------------------
 
-def test_lib_only_source_does_not_run_the_deploy():
+def test_sourcing_does_not_run_the_deploy():
     """Sourcing must expose the state machine without deploying anything."""
     r = run_gen(SCRIPT, 'echo SOURCED_OK')
     assert r.returncode == 0, f"sourcing failed:\n{r.stdout}\n{r.stderr}"
@@ -175,7 +177,7 @@ def test_rollback_with_prior_marker_restores_exact_bytes_and_metadata(tmp_path):
 
     simulate_swap(app, NEW_BUILD_ID)
 
-    r = run_gen(SCRIPT, f'deploy_generation_rollback "{app}"; echo "RC=$?"')
+    r = run_gen(SCRIPT, f'deploy_generation_rollback "{app}" 1; echo "RC=$?"')
     assert "RC=0" in r.stdout, f"rollback reported unresolved:\n{r.stdout}\n{r.stderr}"
 
     # This is the assertion the shipped script fails today.
@@ -199,7 +201,7 @@ def test_rollback_without_prior_marker_removes_the_new_marker(tmp_path):
     assert (app / ".deployment-id.absent").exists(), "absent sentinel not recorded"
 
     simulate_swap(app, NEW_BUILD_ID)
-    r = run_gen(SCRIPT, f'deploy_generation_rollback "{app}"; echo "RC=$?"')
+    r = run_gen(SCRIPT, f'deploy_generation_rollback "{app}" 1; echo "RC=$?"')
     assert "RC=0" in r.stdout, f"rollback reported unresolved:\n{r.stdout}\n{r.stderr}"
 
     assert marker_of(app) is None, (
@@ -216,7 +218,7 @@ def test_swap_failure_after_marker_replacement_restores_marker(tmp_path):
 
     r = run_gen(SCRIPT, f"""
         deploy_generation_begin "{app}" "{new}"
-        deploy_generation_rollback "{app}"; echo "RC=$?"
+        deploy_generation_rollback "{app}" 0; echo "RC=$?"
     """)
     assert "RC=0" in r.stdout, f"{r.stdout}\n{r.stderr}"
     assert marker_of(app) == OLD_SHA
@@ -230,7 +232,7 @@ def test_restart_health_failure_after_activation_restores_both(tmp_path):
 
     run_gen(SCRIPT, f'deploy_generation_begin "{app}" "{new}"')
     simulate_swap(app, NEW_BUILD_ID)
-    r = run_gen(SCRIPT, f'deploy_generation_rollback "{app}"; echo "RC=$?"')
+    r = run_gen(SCRIPT, f'deploy_generation_rollback "{app}" 1; echo "RC=$?"')
 
     assert "RC=0" in r.stdout, f"{r.stdout}\n{r.stderr}"
     assert marker_of(app) == OLD_SHA
@@ -269,9 +271,80 @@ def test_rollback_reports_unresolved_when_the_record_is_gone(tmp_path):
     simulate_swap(app, NEW_BUILD_ID)
     (app / ".deployment-id.bak").unlink()          # rollback record destroyed
 
-    r = run_gen(SCRIPT, f'deploy_generation_rollback "{app}"; echo "RC=$?"')
-    assert "RC=0" not in r.stdout, (
+    r = run_gen(SCRIPT, f'deploy_generation_rollback "{app}" 1; echo "RC=$?"')
+    assert "RC=1" in r.stdout, (
         "rollback claimed success while the identity state was unrecoverable"
+    )
+
+
+def test_rollback_after_a_swap_with_no_previous_build_is_not_success(tmp_path):
+    """"Nothing to restore" must never be reported as "restored".
+
+    Reachable on a bootstrap deploy, and whenever an earlier run died between the
+    marker install and the swap: the next run's `rm -rf .next.bak` destroys the last
+    good build, so no .next.bak is created. If rollback returned 0 here the box would
+    keep serving the build that just FAILED its health check while the log claimed a
+    clean rollback — the inverse of the defect this branch fixes.
+    """
+    app = make_app(tmp_path, None, build_id=None)
+    new = staged_marker(tmp_path, NEW_SHA)
+
+    run_gen(SCRIPT, f'deploy_generation_begin "{app}" "{new}"')
+    (app / ".next").mkdir()                       # the new build swapped in
+    (app / ".next" / "BUILD_ID").write_text(NEW_BUILD_ID + "\n")
+
+    r = run_gen(SCRIPT, f'deploy_generation_rollback "{app}" 1; echo "RC=$?"')
+    assert "RC=1" in r.stdout, (
+        "rollback reported success with no previous build to return to — the failing "
+        f"build is still live:\n{r.stdout}\n{r.stderr}"
+    )
+    assert live_build_id(app) == NEW_BUILD_ID, "sanity: the failing build is indeed still live"
+
+
+def test_pre_swap_rollback_with_no_previous_build_is_success(tmp_path):
+    """The mirror case: nothing was swapped, so nothing needs restoring."""
+    app = make_app(tmp_path, OLD_SHA, build_id=OLD_BUILD_ID)
+    new = staged_marker(tmp_path, NEW_SHA)
+    run_gen(SCRIPT, f'deploy_generation_begin "{app}" "{new}"')
+    r = run_gen(SCRIPT, f'deploy_generation_rollback "{app}" 0; echo "RC=$?"')
+    assert "RC=0" in r.stdout, f"{r.stdout}\n{r.stderr}"
+    assert marker_of(app) == OLD_SHA
+    assert live_build_id(app) == OLD_BUILD_ID
+
+
+def test_rollback_reports_that_the_live_build_moved(tmp_path):
+    """The caller must be able to tell a restart is mandatory.
+
+    `next start` resolves .next/* at request time, so a server left bound to a
+    renamed tree serves the restored build's chunks against the failed build's
+    in-memory manifests. The restart cannot be conditional on the identity being
+    resolvable.
+    """
+    app = make_app(tmp_path, OLD_SHA, build_id=OLD_BUILD_ID)
+    new = staged_marker(tmp_path, NEW_SHA)
+    run_gen(SCRIPT, f'deploy_generation_begin "{app}" "{new}"')
+    simulate_swap(app, NEW_BUILD_ID)
+    (app / ".deployment-id.bak").unlink()          # force the unresolved path
+
+    r = run_gen(SCRIPT, f"""
+        deploy_generation_rollback "{app}" 1; rc=$?
+        echo "RC=$rc MOVED=$DEPLOY_ROLLBACK_MOVED_BUILD"
+    """)
+    assert "RC=1 MOVED=1" in r.stdout, (
+        "an unresolved rollback that already moved .next must still demand a restart:\n"
+        f"{r.stdout}\n{r.stderr}"
+    )
+
+
+def test_deploy_restarts_whenever_the_build_moved_even_if_unresolved():
+    """Static: the restart must not sit inside the resolved-only branch."""
+    body = _deploy_body(code_only=True)
+    guard = body.index('if [ "$DEPLOY_ROLLBACK_MOVED_BUILD" = 1 ]')
+    restart = body.index("systemctl restart terminal", guard)
+    resolved = body.index('if [ "$ROLLBACK_RC" = 0 ]')
+    assert restart < resolved, (
+        "the rollback restart is gated on the identity being resolved; an unresolved "
+        "rollback would leave the server bound to a directory that moved"
     )
 
 
@@ -287,11 +360,17 @@ def test_identity_gate_accepts_only_full_agreement(tmp_path):
 
 
 def test_identity_gate_rejects_stale_build_id(tmp_path):
-    """THE NAMED MUTANT: source HEAD == marker, but the OLD build is still serving."""
+    """The gate must reject on the BUILD_ID leg alone when the marker agrees.
+
+    Note this state is not reachable in production: with deploymentId set, BUILD_ID is
+    a constant literal, so the leg is a completeness check on .next rather than a
+    generation discriminator. It is pinned because it must stay correct if
+    deploymentId is ever removed.
+    """
     app = make_app(tmp_path, NEW_SHA, build_id=OLD_BUILD_ID)
     r = run_gen(SCRIPT,
                 f'deploy_identity_verified "{app}" "{NEW_SHA}" "{NEW_BUILD_ID}"; echo "RC=$?"')
-    assert "RC=0" not in r.stdout, (
+    assert "RC=1" in r.stdout, (
         "verification passed on marker agreement alone while a rolled-back build was live"
     )
 
@@ -310,11 +389,11 @@ def test_identity_gate_rejects_a_rolled_back_generation(tmp_path):
 
     run_gen(SCRIPT, f'deploy_generation_begin "{app}" "{new}"')
     simulate_swap(app, NEW_BUILD_ID)
-    run_gen(SCRIPT, f'deploy_generation_rollback "{app}"')
+    run_gen(SCRIPT, f'deploy_generation_rollback "{app}" 1')
 
     r = run_gen(SCRIPT,
                 f'deploy_identity_verified "{app}" "{NEW_SHA}" "{NEW_BUILD_ID}"; echo "RC=$?"')
-    assert "RC=0" not in r.stdout, (
+    assert "RC=1" in r.stdout, (
         "a rolled-back deploy was certified as successful — the P0 defect is back"
     )
 
@@ -323,21 +402,21 @@ def test_identity_gate_rejects_marker_mismatch(tmp_path):
     app = make_app(tmp_path, OLD_SHA, build_id=NEW_BUILD_ID)
     r = run_gen(SCRIPT,
                 f'deploy_identity_verified "{app}" "{NEW_SHA}" "{NEW_BUILD_ID}"; echo "RC=$?"')
-    assert "RC=0" not in r.stdout
+    assert "RC=1" in r.stdout
 
 
 def test_identity_gate_rejects_missing_build_id(tmp_path):
     app = make_app(tmp_path, NEW_SHA)
     r = run_gen(SCRIPT,
                 f'deploy_identity_verified "{app}" "{NEW_SHA}" "{NEW_BUILD_ID}"; echo "RC=$?"')
-    assert "RC=0" not in r.stdout
+    assert "RC=1" in r.stdout
 
 
 def test_identity_gate_rejects_missing_marker(tmp_path):
     app = make_app(tmp_path, None, build_id=NEW_BUILD_ID)
     r = run_gen(SCRIPT,
                 f'deploy_identity_verified "{app}" "{NEW_SHA}" "{NEW_BUILD_ID}"; echo "RC=$?"')
-    assert "RC=0" not in r.stdout
+    assert "RC=1" in r.stdout
 
 
 # --------------------------------------------------------------------------
@@ -368,7 +447,7 @@ def test_mutant_without_marker_restoration_is_caught(tmp_path):
 
     run_gen(mutant, f'deploy_generation_begin "{app}" "{new}"')
     simulate_swap(app, NEW_BUILD_ID)
-    run_gen(mutant, f'deploy_generation_rollback "{app}"')
+    run_gen(mutant, f'deploy_generation_rollback "{app}" 1')
 
     # The mutant reproduces the exact production bug: old build, new marker.
     assert live_build_id(app) == OLD_BUILD_ID
@@ -378,7 +457,11 @@ def test_mutant_without_marker_restoration_is_caught(tmp_path):
 
 
 def test_mutant_accepting_marker_only_agreement_is_caught(tmp_path):
-    """Drop the BUILD_ID comparison -> the gate must start certifying a rolled-back build."""
+    """Drop the BUILD_ID comparison -> the gate must stop rejecting on that leg.
+
+    This proves the comparison is wired in, not that it discriminates builds in
+    production — with deploymentId set it cannot. See test_identity_gate_rejects_stale_build_id.
+    """
     mutant = _mutate(
         tmp_path,
         '[ "$live_build" = "$want_build" ]',
@@ -396,11 +479,14 @@ def test_mutant_accepting_marker_only_agreement_is_caught(tmp_path):
 # static structure: the defect must not be re-inlined later
 # --------------------------------------------------------------------------
 
-def _deploy_body() -> str:
+def _deploy_body(code_only: bool = False) -> str:
+    """Everything after the sourced-ness guard. code_only strips comment lines, so a
+    passing mention of a function name in prose can never satisfy an ordering test."""
     text = SCRIPT.read_text()
-    marker = "TERMINAL_BUILD_LIB_ONLY"
-    idx = text.rindex(marker)
-    return text[idx:]
+    body = text[text.rindex('if [ "${BASH_SOURCE[0]}" != "$0" ]'):]
+    if code_only:
+        body = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith("#"))
+    return body
 
 
 def test_script_syntax_is_valid():
@@ -410,8 +496,8 @@ def test_script_syntax_is_valid():
 
 def test_deploy_body_never_mutates_the_marker_directly():
     """All marker writes go through the generation functions, which own rollback."""
-    body = _deploy_body()
-    assert '$APP/.deployment-id' not in body, (
+    body = _deploy_body(code_only=True)
+    assert not re.search(r"\$\{?APP\}?/\.deployment-id", body), (
         "the deploy body mutates $APP/.deployment-id directly; that is exactly how the "
         "marker escaped rollback in the first place"
     )
@@ -425,7 +511,7 @@ def test_health_failure_path_rolls_back_the_generation():
 
 
 def test_success_is_only_committed_after_the_identity_gate():
-    body = _deploy_body()
+    body = _deploy_body(code_only=True)
     assert body.index("deploy_identity_verified") < body.index("deploy_generation_commit"), (
         "artifacts are cleared before the three identities are checked — rollback would be "
         "impossible by the time the deploy discovers it is incoherent"

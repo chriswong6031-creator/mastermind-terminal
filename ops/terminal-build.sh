@@ -46,9 +46,12 @@ log(){ echo "[build] $*"; }
 #   .deployment-id.bak      exact prior marker (cp -p keeps bytes AND metadata)
 #   .deployment-id.absent   sentinel — there was no prior marker, so rollback deletes
 #   .deployment-id.new      staged marker, never left behind
-# tests/test_terminal_build_rollback.py sources this file with
-# TERMINAL_BUILD_LIB_ONLY to drive the state machine against a temp dir. Guarding
-# the source is all that variable does; a real deploy never sets it.
+# tests/test_terminal_build_rollback.py sources this file to drive the state machine
+# against a temp dir; sourcing stops at the guard below and deploys nothing.
+
+# Set by deploy_generation_rollback: 1 once the live .next has been moved, so the
+# caller knows a restart is mandatory even when the identity is unresolved.
+DEPLOY_ROLLBACK_MOVED_BUILD=0
 
 # Purge rollback records left by an interrupted earlier attempt. Deliberately
 # never touches .deployment-id itself: a stale .absent would delete a valid live
@@ -75,17 +78,24 @@ deploy_generation_commit(){
   deploy_generation_reset "$1"
 }
 
-# Restore the previous generation whole. Non-zero means the identity state could
-# NOT be restored, so the caller must report it unresolved rather than claim a
-# clean rollback.
+# Restore the previous generation whole. $2 is 1 when the .next swap already
+# happened, which is what makes "there is no .next.bak" a FAILURE rather than a
+# no-op: after the swap, nothing to restore means the build that just failed its
+# health check is still the live one. Non-zero means the generation could not be
+# fully restored, so the caller must report it unresolved instead of claiming a
+# clean rollback. Sets DEPLOY_ROLLBACK_MOVED_BUILD when the live .next moved.
 deploy_generation_rollback(){
-  local app=$1 rc=0
+  local app=$1 swapped=$2 rc=0
+  DEPLOY_ROLLBACK_MOVED_BUILD=0
   if [ -d "$app/.next.bak" ]; then
     rm -rf "$app/.next.broken"
     if [ -d "$app/.next" ]; then
       mv "$app/.next" "$app/.next.broken" || rc=1
     fi
     mv "$app/.next.bak" "$app/.next" || rc=1
+    DEPLOY_ROLLBACK_MOVED_BUILD=1
+  elif [ "$swapped" = 1 ]; then
+    rc=1   # swapped with no previous build to return to — the failing build is live
   fi
   if [ -f "$app/.deployment-id.bak" ]; then
     mv -f "$app/.deployment-id.bak" "$app/.deployment-id" || rc=1
@@ -132,8 +142,13 @@ deploy_identity_line(){
   echo "intended=$want_sha marker=$marker BUILD_ID=$build"
 }
 
-if [ -n "${TERMINAL_BUILD_LIB_ONLY:-}" ]; then
-  return 0 2>/dev/null || exit 0
+# Sourced -> expose the library and stop. Executed -> deploy.
+# Gated on sourced-ness, NOT an environment variable: an inherited env var would
+# turn a real root deploy into a silent `exit 0` that shipped nothing while every
+# caller recorded success — the same "certify a deploy that never happened" failure
+# this script exists to prevent. Sourced-ness cannot be forged by the environment.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
 fi
 
 log "node $(node -v)"
@@ -200,9 +215,11 @@ log "new build OK: BUILD_ID=$NEW_BUILD_ID sha=$FULL_SHA"
 deploy_generation_begin "$APP" "$STAGE/.deployment-id"
 
 # 6) atomic swap (rename within one filesystem is atomic).
+SWAPPED=0
 rm -rf "$APP/.next.bak"
 [ -d "$APP/.next" ] && mv "$APP/.next" "$APP/.next.bak"
 mv "$STAGE/.next" "$APP/.next"
+SWAPPED=1
 log "swapped .next (previous build kept as .next.bak)"
 
 # 7) restart onto the complete build, then accept the generation only if it is
@@ -229,13 +246,23 @@ if [ "$DEPLOY_OK" = 1 ]; then
   log "identity verified: $(deploy_identity_line "$APP" "$FULL_SHA")"
 else
   log "rolling back the deploy generation (build + identity)"
-  if deploy_generation_rollback "$APP"; then
+  ROLLBACK_RC=0
+  deploy_generation_rollback "$APP" "$SWAPPED" || ROLLBACK_RC=$?
+  # Restart whenever the live .next moved, INCLUDING when the identity is
+  # unresolved. `next start` resolves .next/* at request time, so a server left
+  # bound to a renamed tree serves the restored build's chunks against the failed
+  # build's in-memory manifests. "Identity unresolved" is a reporting state; it is
+  # never a reason to leave the process pointed at a directory that moved.
+  if [ "$DEPLOY_ROLLBACK_MOVED_BUILD" = 1 ]; then
     systemctl restart terminal
+  fi
+  if [ "$ROLLBACK_RC" = 0 ]; then
     log "rolled back — $(deploy_identity_line "$APP" "$FULL_SHA")"
   else
     log "ROLLBACK INCOMPLETE — deployment identity UNRESOLVED"
     log "  $(deploy_identity_line "$APP" "$FULL_SHA")"
     log "  this box is NOT serving any provable commit — reconcile by hand before trusting it"
+    log "  the failed build, if it was swapped in, is kept at $APP/.next.broken"
   fi
   exit 1
 fi
@@ -290,7 +317,9 @@ log "installed ops/terminal-build.sh -> /opt/terminal/terminal-build.sh (effecti
 log "syncing $APP source <- origin/$BRANCH:terminal"
 rsync -a --delete \
   --exclude='.next' --exclude='.next.bak' --exclude='.next.broken' --exclude='.stage.*' \
-  --exclude='node_modules' --exclude='.env' --exclude='.env.*' --exclude='.deployment-id' --exclude='public/data' \
+  --exclude='node_modules' --exclude='.env' --exclude='.env.*' --exclude='public/data' \
+  --exclude='.deployment-id' --exclude='.deployment-id.bak' --exclude='.deployment-id.absent' \
+  --exclude='.deployment-id.new' \
   "$TSRC/" "$APP/"
 
 # 10) suite-alerts sidecar bundle: ingest/suite_alerts.ts imports terminal/lib (the real suite

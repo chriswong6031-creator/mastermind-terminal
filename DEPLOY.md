@@ -91,13 +91,24 @@ Offset +4 min so each run follows the 5-min data/flagship refresh:
 - `next.config.ts` sets `typescript.ignoreBuildErrors` + `eslint.ignoreDuringBuilds`, so the build won't
   catch type errors — run `tsc --noEmit` yourself before merging.
 - **Rollback restores the identity and the build together.** `.deployment-id` and the `.next` it names are
-  one deploy generation. Before the new marker is installed, the previous one is snapshotted to
-  `.deployment-id.bak` (`cp -p`, exact bytes and metadata) — or `.deployment-id.absent` is dropped when
-  there was no prior marker — and a failed health check restores `.next.bak` **and** the marker as a pair.
-  A forced manual rollback must do the same: swapping `.next.bak` back while leaving `.deployment-id` on
-  the new commit leaves the box serving an old build that advertises a commit it is not running. If the
-  marker cannot be restored, the deploy exits non-zero and reports the identity `UNRESOLVED` rather than
-  claiming a clean rollback.
+  one deploy generation. Before the new marker is installed the previous one is snapshotted to
+  `.deployment-id.bak` (`cp -p`, exact bytes and metadata) — or `.deployment-id.absent` records that there
+  was none — and a failed health check restores `.next.bak` **and** the marker as a pair. The failed build
+  is kept at `.next.broken` for diagnosis.
+  Two cases do **not** produce a clean rollback, and the script says so instead of pretending otherwise:
+  if the marker record is gone, or if the swap already happened and there is **no** `.next.bak` to return
+  to (a bootstrap deploy, or a previous run that died between the marker install and the swap). Both exit
+  non-zero and report the identity `UNRESOLVED`. In the second case the build that just failed its health
+  check is still live — treat the box as serving nothing provable until reconciled by hand.
+  Whenever the live `.next` was moved the service is restarted, **including** on the unresolved path:
+  `next start` resolves `.next/*` at request time, so a server left bound to a renamed directory serves
+  one build's chunks against another build's manifests.
+- **To force a rollback by hand:** stop `terminal`, `mv .next .next.broken && mv .next.bak .next`, then set
+  `.deployment-id` to the SHA that build was deployed from and restart. Note the rollback snapshot is
+  **not** available for this — `.deployment-id.bak` is purged on every successful deploy — so recover the
+  previous SHA from `git -C /opt/terminal/.gitsrc rev-parse HEAD~1` or the prior deploy's log line.
+  Swapping `.next.bak` back while leaving `.deployment-id` on the new commit is exactly the incoherent
+  state this machinery exists to prevent.
 - **Verifying a deploy names three identities:** the intended `origin/master` SHA, the live
   `/opt/terminal/terminal/.deployment-id`, and the live `/opt/terminal/terminal/.next/BUILD_ID`. The
   deploy fails closed unless all three agree.
