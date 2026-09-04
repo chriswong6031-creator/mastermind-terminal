@@ -104,10 +104,30 @@ describe("toolbar invocation deadline ownership", () => {
     expect(clicks).toBe(1);
   });
 
-  it("fails an insufficient multi-stage plan before invoking its first action", async () => {
+  it.each([
+    [3_392, 1_696],
+    [337, 169],
+    [52, 26],
+  ])(
+    "admits a two-stage plan whenever both stages retain a positive proportional slice (%ims left)",
+    async (remainingMs, expectedCurrentMs) => {
+      const timeouts: number[] = [];
+      const result = await executeToolbarStage(
+        { deadline: remainingMs },
+        2,
+        async (timeout) => { timeouts.push(timeout); return "clicked"; },
+        0,
+      );
+
+      expect(result).toEqual({ ok: true, value: "clicked" });
+      expect(timeouts).toEqual([expectedCurrentMs]);
+    },
+  );
+
+  it("fails a truly indivisible multi-stage plan before invoking its first action", async () => {
     let clicks = 0;
     const result = await executeToolbarStage(
-      { deadline: 28_000 },
+      { deadline: 26_501 },
       2,
       async () => { clicks += 1; },
       26_500,
@@ -117,7 +137,7 @@ describe("toolbar invocation deadline ownership", () => {
     expect(result).toEqual({
       ok: false,
       code: "TOOLBAR_BUDGET_EXHAUSTED",
-      budgetRemainingMs: 1_500,
+      budgetRemainingMs: 1,
     });
     if (result.ok) throw new Error("expected the insufficient plan to be rejected");
 
@@ -131,7 +151,7 @@ describe("toolbar invocation deadline ownership", () => {
       more_enabled: true,
       overflow_open: false,
       done: false,
-      budget_remaining_ms: 1_500,
+      budget_remaining_ms: 1,
       page_closed: false,
     };
     expect(formatToolbarFailure(result.code, settledReceipt)).toContain(
