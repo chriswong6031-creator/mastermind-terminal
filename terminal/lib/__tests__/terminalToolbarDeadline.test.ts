@@ -58,7 +58,7 @@ describe("toolbar invocation deadline ownership", () => {
     expect(incorrectlyUnboundLater.deadline).toBe(34_000);
   });
 
-  it("refuses the incomplete hosted detector plan before opening More when 7.7s remain", async () => {
+  it("admits the complete hosted detector plan with bounded stage actions when 7.7s remain", async () => {
     const clicks: number[] = [];
     const remainingStages = countToolbarOverflowStages({
       overflowOpen: false,
@@ -73,17 +73,13 @@ describe("toolbar invocation deadline ownership", () => {
     );
 
     expect(remainingStages).toBe(3);
-    expect(result).toEqual({
-      ok: false,
-      code: "TOOLBAR_BUDGET_EXHAUSTED",
-      budgetRemainingMs: 7_759,
-    });
-    expect(clicks).toEqual([]);
+    expect(result).toEqual({ ok: true, value: "opened More" });
+    expect(clicks).toEqual([2_000]);
   });
 
   it.each([
-    [9_000, [2_000, 2_000, 2_000]],
-    [10_000, [2_000, 2_000, 2_000]],
+    [6_001, [2_000, 2_000, 2_000]],
+    [7_759, [2_000, 2_000, 2_000]],
   ])(
     "enforces the future reservation across a sequential three-stage action+effect journey (%ims)",
     async (budgetMs, expectedTimeouts) => {
@@ -118,57 +114,64 @@ describe("toolbar invocation deadline ownership", () => {
   );
 
   it.each([
-    [6_000, true, []],
-    [7_759, true, []],
-    [9_000, false, [2_000, 2_000, 2_000]],
+    [6_000, true],
+    [7_759, false],
   ] as const)(
-    "accounts for production click/effect transitions across the whole three-stage route (%ims)",
-    async (budgetMs, rejectedBeforeEffect, expectedTimeouts) => {
+    "accounts for one observed More transition plus two real route actions (%ims)",
+    async (budgetMs, rejectedBeforeEffect) => {
       let nowMs = 0;
       const clickTimeouts: number[] = [];
       let observedEffects = 0;
       const page = { isClosed: () => false } as unknown as Page;
-      const results: Array<{ done: boolean; budgetExhausted: boolean }> = [];
-
-      for (const remainingStages of [3, 2, 1]) {
-        const target = {
-          click: async ({ timeout }: { timeout: number }) => {
-            clickTimeouts.push(timeout);
-            nowMs += timeout;
-          },
-        } as unknown as Locator;
-        const result = await clickOnceAndObserve(
-          page,
-          target,
-          async () => {
-            if (clickTimeouts.length <= observedEffects) return false;
-            nowMs += 1_000; // hosted trace: one real effect/transition query costs positive wall time
-            observedEffects += 1;
-            return true;
-          },
-          { deadline: budgetMs },
-          remainingStages,
-          false,
-          () => nowMs,
-        );
-        results.push(result);
-        if (result.budgetExhausted) break;
-      }
+      const intent = { deadline: budgetMs };
+      const target = {
+        click: async ({ timeout }: { timeout: number }) => {
+          clickTimeouts.push(timeout);
+          nowMs += timeout;
+        },
+      } as unknown as Locator;
+      const opened = await clickOnceAndObserve(
+        page,
+        target,
+        async () => {
+          if (clickTimeouts.length <= observedEffects) return false;
+          nowMs += 1_000; // hosted trace: the real More effect/transition query costs wall time
+          observedEffects += 1;
+          return true;
+        },
+        intent,
+        3,
+        false,
+        () => nowMs,
+      );
+      const drilled = opened.done
+        ? await executeToolbarStage(intent, 2, async (timeout) => {
+          clickTimeouts.push(timeout);
+          nowMs += timeout;
+        }, nowMs)
+        : null;
+      const selected = drilled?.ok
+        ? await executeToolbarStage(intent, 1, async (timeout) => {
+          clickTimeouts.push(timeout);
+          nowMs += timeout;
+        }, nowMs)
+        : null;
 
       if (rejectedBeforeEffect) {
-        expect(results).toEqual([{ done: false, budgetExhausted: true }]);
+        expect(opened).toEqual({ done: false, budgetExhausted: true });
+        expect(drilled).toBeNull();
+        expect(selected).toBeNull();
         expect(clickTimeouts).toEqual([]);
         expect(observedEffects).toBe(0);
         expect(nowMs).toBe(0);
       } else {
-        expect(results).toEqual([
-          { done: true, budgetExhausted: false },
-          { done: true, budgetExhausted: false },
-          { done: true, budgetExhausted: false },
-        ]);
-        expect(clickTimeouts).toEqual(expectedTimeouts);
-        expect(observedEffects).toBe(3);
-        expect(nowMs).toBe(budgetMs);
+        expect(opened).toEqual({ done: true, budgetExhausted: false });
+        expect(drilled).toEqual({ ok: true, value: undefined });
+        expect(selected).toEqual({ ok: true, value: undefined });
+        expect(clickTimeouts).toEqual([2_000, 2_000, 2_000]);
+        expect(observedEffects).toBe(1);
+        expect(nowMs).toBe(7_000);
+        expect(budgetMs - nowMs).toBe(759);
       }
     },
   );
