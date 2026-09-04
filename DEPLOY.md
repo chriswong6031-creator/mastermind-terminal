@@ -90,5 +90,20 @@ Offset +4 min so each run follows the 5-min data/flagship refresh:
 - Secrets live in `/opt/terminal/.env` / `terminal/.env.local` on the box (gitignored) — preserved across deploys.
 - `next.config.ts` sets `typescript.ignoreBuildErrors` + `eslint.ignoreDuringBuilds`, so the build won't
   catch type errors — run `tsc --noEmit` yourself before merging.
-- Rollback: the previous build is kept at `/opt/terminal/terminal/.next.bak` (auto-restored on a failed
-  health check); to force a rollback, swap it back and `systemctl restart terminal`.
+- **Rollback restores the identity and the build together.** `.deployment-id` and the `.next` it names are
+  one deploy generation. Before the new marker is installed, the previous one is snapshotted to
+  `.deployment-id.bak` (`cp -p`, exact bytes and metadata) — or `.deployment-id.absent` is dropped when
+  there was no prior marker — and a failed health check restores `.next.bak` **and** the marker as a pair.
+  A forced manual rollback must do the same: swapping `.next.bak` back while leaving `.deployment-id` on
+  the new commit leaves the box serving an old build that advertises a commit it is not running. If the
+  marker cannot be restored, the deploy exits non-zero and reports the identity `UNRESOLVED` rather than
+  claiming a clean rollback.
+- **Verifying a deploy names three identities:** the intended `origin/master` SHA, the live
+  `/opt/terminal/terminal/.deployment-id`, and the live `/opt/terminal/terminal/.next/BUILD_ID`. The
+  deploy fails closed unless all three agree.
+  **`BUILD_ID` is not a per-deploy witness here** — Next 16.2.9 returns the constant literal
+  `build-TfctsWXpff2fKS` whenever `deploymentId` is set, which `next.config.ts` always does, so it reads
+  the same before and after every deploy and every rollback. It proves the live `.next` is present and
+  complete, nothing more. The discriminating identity is the marker, and it is only trustworthy because
+  rollback now restores it. For live proof from outside the box, read `?dpl=<full sha>` on
+  `/_next/static/*` or `data-dpl-id` on `<html>` — never `BUILD_ID`.

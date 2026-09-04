@@ -296,6 +296,29 @@ def test_identity_gate_rejects_stale_build_id(tmp_path):
     )
 
 
+def test_identity_gate_rejects_a_rolled_back_generation(tmp_path):
+    """End-to-end: the state the old script certified as a successful deploy.
+
+    This is the acceptance test for the whole repair. Note the BUILD_ID passed in is
+    the one the *new* build would have — under Next 16.2.9 with deploymentId set,
+    .next/BUILD_ID is a constant literal, so it is identical for the old and new
+    build and cannot discriminate them. The rejection therefore has to come from the
+    restored marker, which is precisely what this change makes trustworthy.
+    """
+    app = make_app(tmp_path, OLD_SHA, build_id=NEW_BUILD_ID)
+    new = staged_marker(tmp_path, NEW_SHA)
+
+    run_gen(SCRIPT, f'deploy_generation_begin "{app}" "{new}"')
+    simulate_swap(app, NEW_BUILD_ID)
+    run_gen(SCRIPT, f'deploy_generation_rollback "{app}"')
+
+    r = run_gen(SCRIPT,
+                f'deploy_identity_verified "{app}" "{NEW_SHA}" "{NEW_BUILD_ID}"; echo "RC=$?"')
+    assert "RC=0" not in r.stdout, (
+        "a rolled-back deploy was certified as successful — the P0 defect is back"
+    )
+
+
 def test_identity_gate_rejects_marker_mismatch(tmp_path):
     app = make_app(tmp_path, OLD_SHA, build_id=NEW_BUILD_ID)
     r = run_gen(SCRIPT,
@@ -409,8 +432,26 @@ def test_success_is_only_committed_after_the_identity_gate():
     )
 
 
-def test_final_report_names_all_three_identities():
+def test_identity_report_names_all_three(tmp_path):
+    """Behavioural: one reporter, and it cannot report only two of the three."""
+    app = make_app(tmp_path, NEW_SHA, build_id=OLD_BUILD_ID)
+    r = run_gen(SCRIPT, f'deploy_identity_line "{app}" "{NEW_SHA}"')
+    out = r.stdout
+    assert NEW_SHA in out, "intended SHA missing from the identity report"
+    assert OLD_BUILD_ID in out, "live BUILD_ID missing from the identity report"
+    assert "marker=" in out, "live marker missing from the identity report"
+
+
+def test_identity_report_marks_a_missing_marker_absent(tmp_path):
+    app = make_app(tmp_path, None, build_id=OLD_BUILD_ID)
+    r = run_gen(SCRIPT, f'deploy_identity_line "{app}" "{NEW_SHA}"')
+    assert "marker=<absent>" in r.stdout, (
+        "a missing marker must be reported as absent, never as blank agreement"
+    )
+
+
+def test_both_outcomes_report_the_full_identity_triple():
     body = _deploy_body()
-    assert "FULL_SHA" in body and "LIVE_MARKER" in body and "LIVE_BUILD_ID" in body, (
-        "the deploy must report intended SHA, live marker and live BUILD_ID by name"
+    assert body.count("deploy_identity_line") >= 2, (
+        "success and failure must both report intended SHA, live marker and live BUILD_ID"
     )

@@ -35,6 +35,107 @@ TSRC="$SRC/terminal"
 BRANCH=master
 log(){ echo "[build] $*"; }
 
+# ── deploy generation: the identity and the build it names move together ──────
+# .deployment-id and the .next it describes are ONE generation. Installing the
+# marker before the swap and then rolling back only .next leaves the box serving
+# the OLD build while .gitsrc HEAD and .deployment-id both read the NEW commit —
+# so a verifier trusting source-HEAD + marker certifies a deploy that was rolled
+# back, and only .next/BUILD_ID still witnesses what is actually live. Every
+# marker mutation below is therefore paired with a same-filesystem rollback
+# record, and rollback restores identity and build together or reports neither:
+#   .deployment-id.bak      exact prior marker (cp -p keeps bytes AND metadata)
+#   .deployment-id.absent   sentinel — there was no prior marker, so rollback deletes
+#   .deployment-id.new      staged marker, never left behind
+# tests/test_terminal_build_rollback.py sources this file with
+# TERMINAL_BUILD_LIB_ONLY to drive the state machine against a temp dir. Guarding
+# the source is all that variable does; a real deploy never sets it.
+
+# Purge rollback records left by an interrupted earlier attempt. Deliberately
+# never touches .deployment-id itself: a stale .absent would delete a valid live
+# marker, and a stale .bak would later restore a long-dead SHA.
+deploy_generation_reset(){
+  rm -f "$1/.deployment-id.bak" "$1/.deployment-id.absent" "$1/.deployment-id.new"
+}
+
+# Snapshot the current identity, then install the staged one ($2).
+deploy_generation_begin(){
+  local app=$1 staged=$2
+  deploy_generation_reset "$app"
+  if [ -f "$app/.deployment-id" ]; then
+    cp -p "$app/.deployment-id" "$app/.deployment-id.bak"
+  else
+    : > "$app/.deployment-id.absent"
+  fi
+  install -m 0644 "$staged" "$app/.deployment-id.new"
+  mv -f "$app/.deployment-id.new" "$app/.deployment-id"
+}
+
+# Reached only once health AND the three-identity gate agree.
+deploy_generation_commit(){
+  deploy_generation_reset "$1"
+}
+
+# Restore the previous generation whole. Non-zero means the identity state could
+# NOT be restored, so the caller must report it unresolved rather than claim a
+# clean rollback.
+deploy_generation_rollback(){
+  local app=$1 rc=0
+  if [ -d "$app/.next.bak" ]; then
+    rm -rf "$app/.next.broken"
+    if [ -d "$app/.next" ]; then
+      mv "$app/.next" "$app/.next.broken" || rc=1
+    fi
+    mv "$app/.next.bak" "$app/.next" || rc=1
+  fi
+  if [ -f "$app/.deployment-id.bak" ]; then
+    mv -f "$app/.deployment-id.bak" "$app/.deployment-id" || rc=1
+  elif [ -f "$app/.deployment-id.absent" ]; then
+    rm -f "$app/.deployment-id" || rc=1
+  else
+    rc=1   # no rollback record — the marker cannot be proven correct
+  fi
+  rm -f "$app/.deployment-id.absent" "$app/.deployment-id.new"
+  return $rc
+}
+
+# Fail-closed over all three identities.
+#
+# READ THIS BEFORE TRUSTING THE BUILD_ID LEG. Next 16.2.9 returns the constant
+# literal 'build-TfctsWXpff2fKS' from getBuildId() whenever config.deploymentId is
+# set, and terminal/next.config.ts always sets it to the deployed SHA. So
+# .next/BUILD_ID is the SAME string before and after every deploy and every
+# rollback: here it proves the live .next is present and complete, and it does NOT
+# discriminate an old build from a new one.
+#
+# What makes this gate discriminating is the MARKER, and only because rollback now
+# restores it (deploy_generation_rollback). After a rolled-back deploy the marker
+# reads the previous SHA, so live_marker != want_sha and this returns non-zero —
+# which is exactly the certification failure the old script could not produce.
+# Keep all three compared anyway: the BUILD_ID leg is cheap, it catches a truncated
+# or missing .next, and it stays correct if deploymentId is ever removed.
+deploy_identity_verified(){
+  local app=$1 want_sha=$2 want_build=$3 live_marker live_build
+  [ -f "$app/.deployment-id" ] || return 1
+  [ -f "$app/.next/BUILD_ID" ] || return 1
+  live_marker=$(cat "$app/.deployment-id")
+  live_build=$(cat "$app/.next/BUILD_ID")
+  [ "$live_marker" = "$want_sha" ] || return 1
+  [ "$live_build" = "$want_build" ]
+}
+
+# The only identity report. Routing every log line through one place is what stops
+# a future edit from cheerfully reporting two of the three identities.
+deploy_identity_line(){
+  local app=$1 want_sha=$2 marker build
+  marker=$(cat "$app/.deployment-id" 2>/dev/null || echo '<absent>')
+  build=$(cat "$app/.next/BUILD_ID" 2>/dev/null || echo '<absent>')
+  echo "intended=$want_sha marker=$marker BUILD_ID=$build"
+}
+
+if [ -n "${TERMINAL_BUILD_LIB_ONLY:-}" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 log "node $(node -v)"
 
 # 0) GIT GATE — the ONLY code that gets built is origin/$BRANCH.
@@ -87,12 +188,16 @@ if [ ! -f "$STAGE/.next/BUILD_ID" ]; then
   log "BUILD FAILED (no BUILD_ID) — live site untouched, aborting"
   exit 1
 fi
-log "new build OK: BUILD_ID=$(cat "$STAGE/.next/BUILD_ID")"
+NEW_BUILD_ID=$(cat "$STAGE/.next/BUILD_ID")
+# BUILD_ID is a constant literal while deploymentId is set (see deploy_identity_verified),
+# so print the SHA beside it — the bare BUILD_ID line makes a healthy deploy look like a no-op.
+log "new build OK: BUILD_ID=$NEW_BUILD_ID sha=$FULL_SHA"
 
 # 5) Pin the same deployment id for `next start`, which evaluates next.config.ts again.
-#    Install it only after the staged build verifies, immediately before the atomic build swap.
-install -m 0644 "$STAGE/.deployment-id" "$APP/.deployment-id.new"
-mv -f "$APP/.deployment-id.new" "$APP/.deployment-id"
+#    Install it only after the staged build verifies, immediately before the atomic
+#    build swap — and open a deploy generation as it goes, so the prior marker is
+#    snapshotted and a failed health check can restore identity and build together.
+deploy_generation_begin "$APP" "$STAGE/.deployment-id"
 
 # 6) atomic swap (rename within one filesystem is atomic).
 rm -rf "$APP/.next.bak"
@@ -100,19 +205,37 @@ rm -rf "$APP/.next.bak"
 mv "$STAGE/.next" "$APP/.next"
 log "swapped .next (previous build kept as .next.bak)"
 
-# 7) restart onto the complete build; auto-rollback if it doesn't come up.
+# 7) restart onto the complete build, then accept the generation only if it is
+#    coherent. A 200 is not proof of a deploy: a stale or rolled-back build answers
+#    it just as happily. The generation is accepted only when the intended SHA, the
+#    live marker and the live BUILD_ID all agree, and any rejection rolls identity
+#    and build back TOGETHER.
 systemctl restart terminal
 sleep 6
+DEPLOY_OK=1
 if curl -fsS http://127.0.0.1:3000/ -o /dev/null -w "[build] localhost:3000 -> %{http_code}\n"; then
   log "health OK"
 else
-  log "post-restart health check FAILED — rolling back to previous .next.bak"
-  if [ -d "$APP/.next.bak" ]; then
-    rm -rf "$APP/.next.broken"
-    mv "$APP/.next" "$APP/.next.broken"
-    mv "$APP/.next.bak" "$APP/.next"
+  log "post-restart health check FAILED"
+  DEPLOY_OK=0
+fi
+if [ "$DEPLOY_OK" = 1 ] && ! deploy_identity_verified "$APP" "$FULL_SHA" "$NEW_BUILD_ID"; then
+  log "deploy identity MISMATCH — the live build is not the commit being deployed"
+  DEPLOY_OK=0
+fi
+
+if [ "$DEPLOY_OK" = 1 ]; then
+  deploy_generation_commit "$APP"
+  log "identity verified: $(deploy_identity_line "$APP" "$FULL_SHA")"
+else
+  log "rolling back the deploy generation (build + identity)"
+  if deploy_generation_rollback "$APP"; then
     systemctl restart terminal
-    log "rolled back to previous build"
+    log "rolled back — $(deploy_identity_line "$APP" "$FULL_SHA")"
+  else
+    log "ROLLBACK INCOMPLETE — deployment identity UNRESOLVED"
+    log "  $(deploy_identity_line "$APP" "$FULL_SHA")"
+    log "  this box is NOT serving any provable commit — reconcile by hand before trusting it"
   fi
   exit 1
 fi
