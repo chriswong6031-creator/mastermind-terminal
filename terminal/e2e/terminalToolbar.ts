@@ -9,7 +9,7 @@ const TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS = 2_000;
 
 type ToolbarMode = "full" | "overflow" | "compact";
 type ToolbarSnapshot = { mode: ToolbarMode | null; revision: number | null; settled: boolean };
-type ToolbarAction = {
+export type ToolbarAction = {
   done: () => Promise<boolean>;
   control: Locator;
   direct: (timeout: number) => Promise<void>;
@@ -238,7 +238,7 @@ async function failToolbarActionUnlessDone(page: Page, opts: ToolbarAction, dead
   ));
 }
 
-async function waitForSettledToolbar(
+export async function waitForSettledToolbar(
   page: Page,
   opts: ToolbarAction,
   deadline: number,
@@ -278,10 +278,11 @@ async function observeToolbarEffect(
   observed: () => Promise<boolean>,
   deadline: number,
   reserveAfterMs = 0,
+  nowMs = Date.now,
 ): Promise<boolean> {
   if (await observed().catch(() => false)) return true;
   const observationBudget = allocateToolbarStage(
-    budgetRemaining(deadline),
+    budgetRemaining(deadline, nowMs()),
     reserveAfterMs,
   ).currentMs;
   const timeout = Math.min(TOOLBAR_EFFECT_SETTLE_MS, observationBudget);
@@ -297,14 +298,18 @@ async function observeToolbarEffect(
   }
 }
 
-async function clickOnceAndObserve(
+export async function clickOnceAndObserve(
   page: Page,
   target: Locator,
   observed: () => Promise<boolean>,
   intent: ToolbarIntent,
   remainingStages: number,
+  initiallyObserved = false,
+  nowMs = Date.now,
 ): Promise<{ done: boolean; budgetExhausted: boolean }> {
-  if (await observed().catch(() => false)) return { done: true, budgetExhausted: false };
+  if (initiallyObserved || await observed().catch(() => false)) {
+    return { done: true, budgetExhausted: false };
+  }
   let clickFailed = false;
   let execution: ToolbarStageExecution<void>;
   try {
@@ -312,6 +317,7 @@ async function clickOnceAndObserve(
       intent,
       remainingStages,
       (timeout) => clickLocalToolbarControl(target, timeout),
+      nowMs(),
     );
   } catch {
     clickFailed = true;
@@ -320,7 +326,7 @@ async function clickOnceAndObserve(
   if (!execution.ok) return { done: false, budgetExhausted: true };
   if (page.isClosed()) return { done: false, budgetExhausted: false };
   const reserveAfterMs = Math.max(0, remainingStages - 1) * TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS;
-  if (await observeToolbarEffect(observed, intent.deadline, reserveAfterMs)) {
+  if (await observeToolbarEffect(observed, intent.deadline, reserveAfterMs, nowMs)) {
     return { done: true, budgetExhausted: false };
   }
   if (clickFailed) return { done: false, budgetExhausted: false };

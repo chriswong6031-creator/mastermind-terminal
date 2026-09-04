@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
+import type { Locator, Page } from "@playwright/test";
 import {
   allocateToolbarStage,
   classifyToolbarActionFailure,
+  clickOnceAndObserve,
   countToolbarOverflowStages,
   createToolbarIntent,
   createToolbarTestBound,
   executeToolbarStage,
   formatToolbarFailure,
+  waitForSettledToolbar,
+  type ToolbarAction,
   type ToolbarFailureReceipt,
 } from "../../e2e/terminalToolbar";
 
@@ -108,6 +112,93 @@ describe("toolbar invocation deadline ownership", () => {
       expect(journey.nowMs).toBe(budgetMs);
     },
   );
+
+  it.each([
+    [6_000, true, []],
+    [7_759, true, []],
+    [9_000, false, [2_000, 2_000, 2_000]],
+  ] as const)(
+    "accounts for production click/effect transitions across the whole three-stage route (%ims)",
+    async (budgetMs, rejectedBeforeEffect, expectedTimeouts) => {
+      let nowMs = 0;
+      const clickTimeouts: number[] = [];
+      let observedEffects = 0;
+      const page = { isClosed: () => false } as unknown as Page;
+      const results: Array<{ done: boolean; budgetExhausted: boolean }> = [];
+
+      for (const remainingStages of [3, 2, 1]) {
+        const target = {
+          click: async ({ timeout }: { timeout: number }) => {
+            clickTimeouts.push(timeout);
+            nowMs += timeout;
+          },
+        } as unknown as Locator;
+        const result = await clickOnceAndObserve(
+          page,
+          target,
+          async () => {
+            if (clickTimeouts.length <= observedEffects) return false;
+            nowMs += 1_000; // hosted trace: one real effect/transition query costs positive wall time
+            observedEffects += 1;
+            return true;
+          },
+          { deadline: budgetMs },
+          remainingStages,
+          false,
+          () => nowMs,
+        );
+        results.push(result);
+        if (result.budgetExhausted) break;
+      }
+
+      if (rejectedBeforeEffect) {
+        expect(results).toEqual([{ done: false, budgetExhausted: true }]);
+        expect(clickTimeouts).toEqual([]);
+        expect(observedEffects).toBe(0);
+        expect(nowMs).toBe(0);
+      } else {
+        expect(results).toEqual([
+          { done: true, budgetExhausted: false },
+          { done: true, budgetExhausted: false },
+          { done: true, budgetExhausted: false },
+        ]);
+        expect(clickTimeouts).toEqual(expectedTimeouts);
+        expect(observedEffects).toBe(3);
+        expect(nowMs).toBe(budgetMs);
+      }
+    },
+  );
+
+  it("returns a toolbar that settles during failure capture instead of emitting a contradictory receipt", async () => {
+    const settledSnapshot = {
+      mode: "overflow" as const,
+      revision: 9,
+      settled: true,
+    };
+    const visibility = (visible: boolean) => ({
+      isVisible: async () => visible,
+      isEnabled: async () => visible,
+    });
+    const page = {
+      isClosed: () => false,
+      waitForFunction: async () => { throw new Error("wait timed out during the settling commit"); },
+      getByTestId: () => visibility(true),
+      locator: (selector: string) => selector === ".chart-tabs"
+        ? { first: () => ({ evaluate: async () => settledSnapshot }) }
+        : visibility(false),
+    } as unknown as Page;
+    const opts: ToolbarAction = {
+      what: "the Saved Layouts menu",
+      done: async () => false,
+      control: visibility(false) as unknown as Locator,
+      direct: async () => {},
+      overflow: async () => {},
+    };
+
+    await expect(waitForSettledToolbar(page, opts, Date.now() + 10_000)).resolves.toEqual(
+      settledSnapshot,
+    );
+  });
 
   it("counts only real Saved Layouts/W2-A stages for closed, root, and drilled overflow", async () => {
     expect(countToolbarOverflowStages({
