@@ -159,12 +159,12 @@ export async function executeToolbarStage<T>(
   const remainingMs = budgetRemaining(intent.deadline, nowMs);
   const stageEnvelopeMs = TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS + TOOLBAR_STAGE_OVERHEAD_RESERVE_MS;
   // Hosted traces show that a stage is not only a click: its semantic effect/route read consumes
-  // positive wall time too. A non-final stage therefore admits only a complete sequence of action
-  // plus effect envelopes. The final stage keeps the accepted positive-remainder escape hatch, but
-  // uses the full envelope whenever the admitted plan preserved it.
+  // positive wall time too. Each non-final stage therefore preserves one full action+transition
+  // envelope for itself and the recursively complete continuation. The genuine final route action
+  // keeps the accepted positive-remainder escape hatch.
   const minimumPlanMs = stages === 1
     ? 1
-    : stages * stageEnvelopeMs;
+    : (stages - 1) * stageEnvelopeMs + 1;
   if (remainingMs < minimumPlanMs) {
     return {
       ok: false,
@@ -172,9 +172,9 @@ export async function executeToolbarStage<T>(
       budgetRemainingMs: remainingMs,
     };
   }
-  const reserveAfterActionMs = remainingMs >= stageEnvelopeMs
-    ? TOOLBAR_STAGE_OVERHEAD_RESERVE_MS + (stages - 1) * stageEnvelopeMs
-    : 0;
+  const reserveAfterActionMs = stages === 1
+    ? remainingMs >= stageEnvelopeMs ? TOOLBAR_STAGE_OVERHEAD_RESERVE_MS : 0
+    : TOOLBAR_STAGE_OVERHEAD_RESERVE_MS + (stages - 2) * stageEnvelopeMs + 1;
   const timeoutMs = Math.min(
     TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS,
     allocateToolbarStage(remainingMs, reserveAfterActionMs).currentMs,
@@ -382,8 +382,12 @@ export async function clickOnceAndObserve(
   }
   if (!execution.ok) return { done: false, budgetExhausted: true };
   if (page.isClosed()) return { done: false, budgetExhausted: false };
-  const reserveAfterMs = Math.max(0, remainingStages - 1)
-    * (TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS + TOOLBAR_STAGE_OVERHEAD_RESERVE_MS);
+  const futureStages = Math.max(0, remainingStages - 1);
+  const reserveAfterMs = futureStages === 0
+    ? 0
+    : (futureStages - 1)
+      * (TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS + TOOLBAR_STAGE_OVERHEAD_RESERVE_MS)
+      + 1;
   if (await observeToolbarEffect(observed, intent.deadline, reserveAfterMs, nowMs)) {
     return { done: true, budgetExhausted: false };
   }
