@@ -142,7 +142,7 @@ def test_generation_contract_is_exposed():
     r = run_gen(SCRIPT, """
         for fn in deploy_generation_reset deploy_generation_begin \\
                   deploy_generation_commit deploy_generation_rollback \\
-                  deploy_identity_verified; do
+                  deploy_identity_verified deploy_generation_abort; do
           type -t "$fn" >/dev/null || { echo "MISSING:$fn"; exit 1; }
         done
         echo ALL_PRESENT
@@ -338,10 +338,10 @@ def test_rollback_reports_that_the_live_build_moved(tmp_path):
 
 def test_deploy_restarts_whenever_the_build_moved_even_if_unresolved():
     """Static: the restart must not sit inside the resolved-only branch."""
-    body = _library()
-    guard = body.index('if [ "$DEPLOY_ROLLBACK_MOVED_BUILD" = 1 ]')
-    restart = body.index("systemctl restart terminal", guard)
-    resolved = body.index('if [ "$ROLLBACK_RC" = 0 ]')
+    lib = _library()
+    guard = lib.index('if [ "$DEPLOY_ROLLBACK_MOVED_BUILD" = 1 ]')
+    restart = lib.index("systemctl restart terminal", guard)
+    resolved = lib.index('if [ "$rc" = 0 ]')
     assert restart < resolved, (
         "the rollback restart is gated on the identity being resolved; an unresolved "
         "rollback would leave the server bound to a directory that moved"
@@ -625,7 +625,7 @@ def test_mutant_unguarded_swap_move_is_caught(tmp_path):
     mutant = _mutate(
         tmp_path,
         'if ! mv "$STAGE/.next" "$APP/.next"; then',
-        'if false; then  # MUTANT: swap failure no longer guarded\n  :\nelif false; then',
+        'mv "$STAGE/.next" "$APP/.next"  # MUTANT: unguarded, set -e aborts\nif false; then',
     )
     proc, app = run_deploy(tmp_path, script=mutant, FAIL_MV_MATCH=".stage.")
     assert proc.returncode != 0
@@ -639,7 +639,7 @@ def test_mutant_unguarded_restart_is_caught(tmp_path):
     mutant = _mutate(
         tmp_path,
         'if ! systemctl restart terminal; then',
-        'if false; then  # MUTANT: restart failure no longer guarded\n  :\nelif false; then',
+        'systemctl restart terminal  # MUTANT: unguarded, set -e aborts\nif false; then',
     )
     proc, app = run_deploy(tmp_path, script=mutant, FAIL_RESTART="1")
     assert proc.returncode != 0
@@ -683,11 +683,26 @@ def test_deploy_body_never_mutates_the_marker_directly():
     )
 
 
-def test_health_failure_path_rolls_back_the_generation():
-    body = _deploy_body()
-    assert "deploy_generation_rollback" in body, "health failure does not roll back the generation"
+def test_every_failure_path_routes_through_the_single_abort():
+    """No failure may reach `exit` without passing through deploy_generation_abort.
+
+    A second, ad-hoc rollback path is how the swap and restart aborts came to bypass
+    rollback in the first place.
+    """
+    body = _deploy_body(code_only=True)
+    assert "deploy_generation_abort" in body, "the deploy has no guarded failure exit"
+    assert "deploy_generation_rollback" not in body, (
+        "the deploy body rolls back directly instead of going through the single abort "
+        "path — that is the shape that let `set -e` skip rollback entirely"
+    )
     assert "deploy_identity_verified" in body, "the deploy does not run the three-identity gate"
     assert "deploy_generation_commit" in body, "rollback artifacts are never committed away"
+    # the three failure points that previously aborted past rollback
+    assert 'if ! mv "$STAGE/.next" "$APP/.next"; then' in body, "swap move is unguarded"
+    assert "if ! systemctl restart terminal; then" in body, "restart is unguarded"
+    assert body.count("deploy_generation_abort") >= 4, (
+        "not every guarded failure routes into the abort path"
+    )
 
 
 def test_success_is_only_committed_after_the_identity_gate():
@@ -717,7 +732,9 @@ def test_identity_report_marks_a_missing_marker_absent(tmp_path):
 
 
 def test_both_outcomes_report_the_full_identity_triple():
-    body = _deploy_body()
-    assert body.count("deploy_identity_line") >= 2, (
-        "success and failure must both report intended SHA, live marker and live BUILD_ID"
+    assert _deploy_body().count("deploy_identity_line") >= 1, (
+        "the success path must report intended SHA, live marker and live BUILD_ID"
+    )
+    assert _library().count("deploy_identity_line") >= 2, (
+        "both the rolled-back and the unresolved outcome must report the full triple"
     )
