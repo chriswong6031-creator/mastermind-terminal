@@ -338,7 +338,7 @@ def test_rollback_reports_that_the_live_build_moved(tmp_path):
 
 def test_deploy_restarts_whenever_the_build_moved_even_if_unresolved():
     """Static: the restart must not sit inside the resolved-only branch."""
-    body = _deploy_body(code_only=True)
+    body = _library()
     guard = body.index('if [ "$DEPLOY_ROLLBACK_MOVED_BUILD" = 1 ]')
     restart = body.index("systemctl restart terminal", guard)
     resolved = body.index('if [ "$ROLLBACK_RC" = 0 ]')
@@ -476,8 +476,188 @@ def test_mutant_accepting_marker_only_agreement_is_caught(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# integration: the EXECUTED deploy flow, not just the library in isolation
+# --------------------------------------------------------------------------
+#
+# Unit-testing the generation functions proves they are correct WHEN CALLED. It says
+# nothing about whether the deploy actually reaches them. Under `set -euo pipefail` a
+# bare failing command aborts the script instantly, so a failed swap `mv` or a failed
+# `systemctl restart` terminated the deploy with the marker already advanced (step 5)
+# and .next possibly displaced — rollback never ran at all. That is an orchestration
+# defect invisible to every unit test above, so these drive the real body.
+#
+# Hermetic by construction and WITHOUT adding any production seam: the script keeps
+# its hardcoded /opt/terminal paths, and the test executes a rewritten COPY pointed at
+# a temp sandbox, with git/npm/node/systemctl/curl/sleep/mv shimmed onto PATH. Every
+# absolute path is rewritten, so even a runaway run cannot touch a real deploy root.
+
+SHIMS = {
+    "node": "#!/bin/sh\necho v20.0.0\n",
+    "git": '#!/bin/sh\ncase "$*" in *rev-parse*) echo "$FAKE_SHA" ;; esac\nexit 0\n',
+    "npm": (
+        '#!/bin/sh\n'
+        'if [ "$1" = run ] && [ "$2" = build ]; then\n'
+        '  mkdir -p .next && printf "%s\\n" "$FAKE_BUILD_ID" > .next/BUILD_ID\n'
+        'fi\nexit 0\n'
+    ),
+    "systemctl": (
+        '#!/bin/sh\n'
+        '[ -n "${FAIL_RESTART:-}" ] && { echo "systemctl: simulated failure" >&2; exit 1; }\n'
+        'exit 0\n'
+    ),
+    "curl": '#!/bin/sh\n[ -n "${FAIL_HEALTH:-}" ] && exit 22\nexit 0\n',
+    "sleep": "#!/bin/sh\nexit 0\n",
+    "mv": (
+        '#!/bin/sh\n'
+        'if [ -n "${FAIL_MV_MATCH:-}" ]; then\n'
+        '  case "$*" in *"$FAIL_MV_MATCH"*) echo "mv: simulated failure: $*" >&2; exit 1 ;; esac\n'
+        'fi\nexec /bin/mv "$@"\n'
+    ),
+}
+
+
+def run_deploy(tmp_path: Path, script: Path = SCRIPT, **flags) -> tuple:
+    """Execute a sandboxed copy of the real deploy script. Returns (proc, app)."""
+    # NOT named "opt": the post-rewrite guard below greps for /opt/terminal, and a
+    # sandbox ending in /opt would make the rewritten text match it spuriously.
+    root = tmp_path / "deployroot"
+    app, src = root / "terminal", root / ".gitsrc"
+    tsrc = src / "terminal"
+    usrbin = tmp_path / "usrbin"
+    for d in (app / "node_modules", app / "public" / "data", tsrc, src / ".git", usrbin):
+        d.mkdir(parents=True, exist_ok=True)
+    # identical lockfiles so the deploy skips `npm ci`
+    (app / "package-lock.json").write_text("lock\n")
+    (tsrc / "package-lock.json").write_text("lock\n")
+    (tsrc / "package.json").write_text("{}\n")
+    (app / "node_modules" / "marker").write_text("x")
+    # the PREVIOUS generation that a rollback must restore
+    (app / ".next").mkdir()
+    (app / ".next" / "BUILD_ID").write_text(OLD_BUILD_ID + "\n")
+    (app / ".deployment-id").write_text(OLD_SHA + "\n")
+
+    text = script.read_text()
+    assert "/opt/terminal/" in text, "deploy root anchor vanished — cannot sandbox"
+    text = text.replace("/usr/local/bin", str(usrbin)).replace("/opt/terminal/", f"{root}/")
+    assert "/opt/terminal" not in text, "a real deploy path survived the rewrite"
+    copy = tmp_path / "sandboxed-terminal-build.sh"
+    copy.write_text(text)
+    copy.chmod(0o755)
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    for name, body in SHIMS.items():
+        s = bindir / name
+        s.write_text(body)
+        s.chmod(0o755)
+
+    env = dict(os.environ)
+    env.update({
+        "PATH": f"{bindir}:{env['PATH']}",
+        "FAKE_SHA": NEW_SHA,
+        "FAKE_BUILD_ID": NEW_BUILD_ID,
+    })
+    env.update({k: str(v) for k, v in flags.items()})
+    proc = subprocess.run(
+        [_bash(), str(copy)], capture_output=True, text=True, timeout=180, env=env
+    )
+    return proc, app
+
+
+def test_swap_move_failure_enters_rollback(tmp_path):
+    """A failed `mv` of the new build must NOT abort past rollback.
+
+    The marker was already advanced in step 5 and the old .next has already been moved
+    aside, so a bare `set -e` abort here leaves the box with the NEW commit's marker and
+    no live build at all — strictly worse than the defect this branch set out to fix.
+    """
+    proc, app = run_deploy(tmp_path, FAIL_MV_MATCH=".stage.")
+
+    assert proc.returncode != 0, "a failed swap reported success"
+    assert marker_of(app) == OLD_SHA, (
+        "marker still advertises the commit that never went live — the deploy aborted "
+        f"without rolling back:\n{proc.stdout}\n{proc.stderr}"
+    )
+    assert live_build_id(app) == OLD_BUILD_ID, (
+        f"the previous build was not restored:\n{proc.stdout}\n{proc.stderr}"
+    )
+    assert "rolling back" in proc.stdout.lower(), (
+        f"rollback never ran:\n{proc.stdout}\n{proc.stderr}"
+    )
+
+
+def test_restart_failure_enters_rollback(tmp_path):
+    """`systemctl restart` failing must route into rollback, not abort the script."""
+    proc, app = run_deploy(tmp_path, FAIL_RESTART="1")
+
+    assert proc.returncode != 0, "a failed restart reported success"
+    assert "rolling back" in proc.stdout.lower(), (
+        f"rollback never ran after a failed restart:\n{proc.stdout}\n{proc.stderr}"
+    )
+    assert marker_of(app) == OLD_SHA, (
+        "marker was left advanced after a restart that never succeeded:\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+    assert live_build_id(app) == OLD_BUILD_ID
+
+
+def test_health_failure_enters_rollback_end_to_end(tmp_path):
+    """The path that already worked, now pinned against the executed flow."""
+    proc, app = run_deploy(tmp_path, FAIL_HEALTH="1")
+
+    assert proc.returncode != 0
+    assert marker_of(app) == OLD_SHA
+    assert live_build_id(app) == OLD_BUILD_ID
+    assert "rolling back" in proc.stdout.lower()
+
+
+def test_restart_failure_reports_unresolved_not_clean(tmp_path):
+    """If the service cannot be restarted at all, the box is not provably serving
+    anything — say so rather than logging a tidy rollback."""
+    proc, _ = run_deploy(tmp_path, FAIL_RESTART="1")
+    assert "UNRESOLVED" in proc.stdout, (
+        f"a deploy that could never restart the service claimed a clean rollback:\n{proc.stdout}"
+    )
+
+
+def test_mutant_unguarded_swap_move_is_caught(tmp_path):
+    """Remove the swap guard -> the abort-without-rollback defect must come back."""
+    mutant = _mutate(
+        tmp_path,
+        'if ! mv "$STAGE/.next" "$APP/.next"; then',
+        'if false; then  # MUTANT: swap failure no longer guarded\n  :\nelif false; then',
+    )
+    proc, app = run_deploy(tmp_path, script=mutant, FAIL_MV_MATCH=".stage.")
+    assert proc.returncode != 0
+    assert marker_of(app) == NEW_SHA, (
+        "mutation was inert — the swap guard is not what routes a failed move into rollback"
+    )
+
+
+def test_mutant_unguarded_restart_is_caught(tmp_path):
+    """Remove the restart guard -> `set -e` must abort before rollback again."""
+    mutant = _mutate(
+        tmp_path,
+        'if ! systemctl restart terminal; then',
+        'if false; then  # MUTANT: restart failure no longer guarded\n  :\nelif false; then',
+    )
+    proc, app = run_deploy(tmp_path, script=mutant, FAIL_RESTART="1")
+    assert proc.returncode != 0
+    assert marker_of(app) == NEW_SHA, (
+        "mutation was inert — the restart guard is not what routes a failed restart "
+        "into rollback"
+    )
+
+
+# --------------------------------------------------------------------------
 # static structure: the defect must not be re-inlined later
 # --------------------------------------------------------------------------
+
+def _library() -> str:
+    """Everything BEFORE the sourced-ness guard: the generation state machine."""
+    text = SCRIPT.read_text()
+    return text[: text.rindex('if [ "${BASH_SOURCE[0]}" != "$0" ]')]
+
 
 def _deploy_body(code_only: bool = False) -> str:
     """Everything after the sourced-ness guard. code_only strips comment lines, so a
