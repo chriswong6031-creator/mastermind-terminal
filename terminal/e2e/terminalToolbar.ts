@@ -54,9 +54,10 @@ export function formatToolbarFailure(code: ToolbarFailureCode, receipt: ToolbarF
 /** Classify an action rejection after the action has had a chance to consume its stage budget. */
 export function classifyToolbarActionFailure(
   pageClosed: boolean,
-  _budgetRemainingMs: number,
+  budgetRemainingMs: number,
 ): ToolbarFailureCode {
-  return pageClosed ? "TOOLBAR_PAGE_CLOSED" : "TOOLBAR_ACTION_FAILED";
+  if (pageClosed) return "TOOLBAR_PAGE_CLOSED";
+  return budgetRemainingMs <= 0 ? "TOOLBAR_BUDGET_EXHAUSTED" : "TOOLBAR_ACTION_FAILED";
 }
 
 /** Derive a deterministic public bound from values captured by the owning test callback. */
@@ -112,12 +113,11 @@ export function allocateToolbarStage(
   const remaining = Math.max(0, Math.floor(remainingMs));
   if (remaining === 0) return { currentMs: 0, futureMs: 0 };
 
-  // A fixed future reserve can exceed the real test-bound budget late in a long scenario. The old
-  // helper then refused to issue the current click even while several usable seconds remained.
-  // Preserve the requested reserve when the invocation can afford it; otherwise split the remaining
-  // budget evenly so the current stage and its declared continuation can both make progress.
+  // A reservation is a hard boundary, not a hint. If the remaining clock cannot fund the complete
+  // requested continuation, the current action/effect pair receives no time; executeToolbarStage's
+  // admission gate decides whether that means a typed pre-effect budget failure.
   const requested = Math.max(0, Math.floor(requestedFutureReserveMs));
-  const futureMs = Math.min(requested, Math.floor(remaining / 2));
+  const futureMs = Math.min(requested, remaining);
   return { currentMs: remaining - futureMs, futureMs };
 }
 
@@ -233,11 +233,7 @@ async function failToolbarActionUnlessDone(page: Page, opts: ToolbarAction, dead
   const receipt = await captureToolbarFailure(page, opts, deadline);
   if (receipt.done) return;
   throw new Error(formatToolbarFailure(
-    receipt.page_closed
-      ? "TOOLBAR_PAGE_CLOSED"
-      : receipt.budget_remaining_ms <= 0
-        ? "TOOLBAR_BUDGET_EXHAUSTED"
-        : "TOOLBAR_ACTION_FAILED",
+    classifyToolbarActionFailure(receipt.page_closed, receipt.budget_remaining_ms),
     receipt,
   ));
 }
