@@ -16,6 +16,34 @@ import {
 } from "../../e2e/terminalToolbar";
 
 describe("toolbar invocation deadline ownership", () => {
+  it("binds every layout-integrity toolbar journey at callback entry with no unarmed call site", () => {
+    const source = readFileSync(
+      new URL("../../e2e/layout-integrity.spec.ts", import.meta.url),
+      "utf8",
+    );
+    const testCallbacks = [
+      ...source.matchAll(
+        /  test\("([^"]+)", async \(\{ page, baseURL \}, testInfo\) => \{\n([\s\S]*?)(?=\n  test\(|\n\}\);)/g,
+      ),
+    ];
+    const toolbarCallbacks = testCallbacks.filter((match) =>
+      /\b(?:openLayoutMenu|saveLayout|chooseToolbarSplit|toggleToolbarSync)\(/.test(match[2]));
+    const callbackFirstLines = toolbarCallbacks.map((match) => match[2].split("\n")[0].trim());
+    const toolbarOpenCalls = source.match(/openLayoutMenu\(page(?:, [^)]+(?:\([^)]*\))?)?\)/g) ?? [];
+    const saveCalls = source.split("\n").filter((line) => line.includes("await saveLayout(page,"));
+
+    expect(toolbarCallbacks.length).toBeGreaterThan(0);
+    expect(callbackFirstLines).toEqual(
+      callbackFirstLines.map(() => "const toolbarBound = createLayoutToolbarBound(testInfo);"),
+    );
+    expect(source).toContain("bound: ToolbarTestBound");
+    expect(source).not.toContain("intent?: ToolbarIntent");
+    expect(toolbarOpenCalls.length).toBeGreaterThan(0);
+    expect(toolbarOpenCalls).not.toContain("openLayoutMenu(page)");
+    expect(saveCalls.length).toBeGreaterThan(0);
+    expect(saveCalls.every((line) => /, toolbarBound\)(?:;|,)/.test(line))).toBe(true);
+  });
+
   it("binds every W2-A toolbar journey to one test-owned deadline at callback entry", () => {
     const source = readFileSync(
       new URL("../../e2e/w2a-workspaces.spec.ts", import.meta.url),
@@ -67,6 +95,30 @@ describe("toolbar invocation deadline ownership", () => {
     });
     expect(effects).toBe(0);
   });
+
+  it.each([
+    [5_434, 4_433],
+    [4_198, 3_197],
+    [4_246, 3_245],
+  ] as const)(
+    "lets a feasible two-stage hosted action use its truthful aggregate share (%ims left)",
+    async (remainingMs, expectedActionMs) => {
+      const actionTimeouts: number[] = [];
+      const result = await executeToolbarStage(
+        { deadline: remainingMs },
+        2,
+        async (timeoutMs) => {
+          actionTimeouts.push(timeoutMs);
+          if (timeoutMs < 3_000) throw new Error("hosted actionability needed three seconds");
+          return "effect committed";
+        },
+        0,
+      );
+
+      expect(result).toEqual({ ok: true, value: "effect committed" });
+      expect(actionTimeouts).toEqual([expectedActionMs]);
+    },
+  );
 
   it("caps a late toolbar intent at the caller-owned absolute test bound", () => {
     const bound = createToolbarTestBound({
