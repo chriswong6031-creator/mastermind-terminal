@@ -38,7 +38,7 @@ describe("toolbar invocation deadline ownership", () => {
       toolbarOpenCalls.map(() => "openLayoutMenu(page, createToolbarIntent(toolbarBound))"),
     );
     expect(saveCalls.length).toBeGreaterThan(0);
-    expect(saveCalls.every((line) => /, toolbarBound\);\s*$/.test(line))).toBe(true);
+    expect(saveCalls.every((line) => /, toolbarBound\);(?:\s*\/\/.*)?\s*$/.test(line))).toBe(true);
   });
 
   it("rejects a late W2-A menu route before effect instead of minting a fresh fallback window", async () => {
