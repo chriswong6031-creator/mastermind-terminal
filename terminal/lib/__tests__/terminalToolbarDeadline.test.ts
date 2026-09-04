@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allocateToolbarStage,
+  classifyToolbarActionFailure,
   countToolbarOverflowStages,
   createToolbarIntent,
   createToolbarTestBound,
@@ -53,7 +54,7 @@ describe("toolbar invocation deadline ownership", () => {
     expect(incorrectlyUnboundLater.deadline).toBe(34_000);
   });
 
-  it("admits the hosted detector's feasible More → submenu → target plan with 7.7s left", async () => {
+  it("reserves the complete hosted detector plan when 7.7s remain", async () => {
     const clicks: number[] = [];
     const remainingStages = countToolbarOverflowStages({
       overflowOpen: false,
@@ -69,8 +70,44 @@ describe("toolbar invocation deadline ownership", () => {
 
     expect(remainingStages).toBe(3);
     expect(result).toEqual({ ok: true, value: "opened More" });
-    expect(clicks).toEqual([3_880]);
+    expect(clicks).toEqual([3_759]);
   });
+
+  it.each([
+    [7_759, [3_759, 2_000, 2_000]],
+    [6_000, [2_000, 2_000, 2_000]],
+  ])(
+    "enforces the future reservation across a sequential three-stage action+effect journey (%ims)",
+    async (budgetMs, expectedTimeouts) => {
+      const runJourney = async () => {
+        let nowMs = 0;
+        const effects: string[] = [];
+        const results: Array<{ ok: boolean }> = [];
+        for (const remainingStages of [3, 2, 1]) {
+          const result = await executeToolbarStage(
+            { deadline: budgetMs },
+            remainingStages,
+            async (timeout) => {
+              effects.push(`stage-${remainingStages}:${timeout}`);
+              nowMs += timeout; // the action and its effect observation consume the whole stage cap
+            },
+            nowMs,
+          );
+          results.push(result);
+          if (!result.ok) break;
+        }
+        return { effects, nowMs, results };
+      };
+
+      const journey = await runJourney();
+      expect(journey.results).toHaveLength(3);
+      expect(journey.results.every((result) => result.ok)).toBe(true);
+      expect(journey.effects).toEqual(expectedTimeouts.map(
+        (timeout, index) => `stage-${3 - index}:${timeout}`,
+      ));
+      expect(journey.nowMs).toBe(budgetMs);
+    },
+  );
 
   it("counts only real Saved Layouts/W2-A stages for closed, root, and drilled overflow", async () => {
     expect(countToolbarOverflowStages({
@@ -169,6 +206,30 @@ describe("toolbar invocation deadline ownership", () => {
     expect(timeouts).toEqual([52]);
   });
 
+  it("keeps a rejecting final action typed as budget exhaustion after it consumes the deadline", async () => {
+    let nowMs = 0;
+    let rejected = false;
+    try {
+      await executeToolbarStage(
+        { deadline: 52 },
+        1,
+        async (timeout) => {
+          nowMs += timeout;
+          throw new Error("locator rejected after consuming its timeout");
+        },
+        nowMs,
+      );
+    } catch {
+      rejected = true;
+    }
+
+    expect(rejected).toBe(true);
+    expect(nowMs).toBe(52);
+    expect(classifyToolbarActionFailure(false, Math.max(0, 52 - nowMs))).toBe(
+      "TOOLBAR_BUDGET_EXHAUSTED",
+    );
+  });
+
   it("invokes one action once when the complete remaining stage plan fits", async () => {
     const timeouts: number[] = [];
     const result = await executeToolbarStage(
@@ -193,14 +254,22 @@ describe("toolbar invocation deadline ownership", () => {
     });
   });
 
-  it("never lets an oversized future reserve suppress the current real action", () => {
+  it("never lends the future reservation to the current action or its effect observation", () => {
+    expect(allocateToolbarStage(7_759, 4_000)).toEqual({
+      currentMs: 3_759,
+      futureMs: 4_000,
+    });
+    expect(allocateToolbarStage(6_000, 4_000)).toEqual({
+      currentMs: 2_000,
+      futureMs: 4_000,
+    });
     expect(allocateToolbarStage(5_400, 5_500)).toEqual({
-      currentMs: 2_700,
-      futureMs: 2_700,
+      currentMs: 0,
+      futureMs: 5_400,
     });
     expect(allocateToolbarStage(1, 5_500)).toEqual({
-      currentMs: 1,
-      futureMs: 0,
+      currentMs: 0,
+      futureMs: 1,
     });
     expect(allocateToolbarStage(0, 5_500)).toEqual({
       currentMs: 0,

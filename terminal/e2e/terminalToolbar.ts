@@ -51,6 +51,14 @@ export function formatToolbarFailure(code: ToolbarFailureCode, receipt: ToolbarF
   return `${code} ${JSON.stringify(receipt)}`;
 }
 
+/** Classify an action rejection after the action has had a chance to consume its stage budget. */
+export function classifyToolbarActionFailure(
+  pageClosed: boolean,
+  _budgetRemainingMs: number,
+): ToolbarFailureCode {
+  return pageClosed ? "TOOLBAR_PAGE_CLOSED" : "TOOLBAR_ACTION_FAILED";
+}
+
 /** Derive a deterministic public bound from values captured by the owning test callback. */
 export function createToolbarTestBound({
   testStartedAtMs,
@@ -401,7 +409,7 @@ async function executeRouteOnlyStage(
       page,
       opts,
       intent.deadline,
-      page.isClosed() ? "TOOLBAR_PAGE_CLOSED" : "TOOLBAR_ACTION_FAILED",
+      classifyToolbarActionFailure(page.isClosed(), budgetRemaining(intent.deadline)),
     );
   }
   if (!execution.ok) {
