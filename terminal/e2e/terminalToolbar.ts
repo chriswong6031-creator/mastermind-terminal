@@ -141,7 +141,11 @@ export async function executeToolbarStage<T>(
 ): Promise<ToolbarStageExecution<T>> {
   const stages = Math.max(1, Math.floor(remainingStages));
   const remainingMs = budgetRemaining(intent.deadline, nowMs);
-  const minimumPlanMs = stages * TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS;
+  // The shared absolute deadline is the real bound. The follow-up reserve shapes each action's
+  // timeout, but it is not a fixed minimum duration: committed, already-actionable controls can
+  // complete in far less than the nominal reserve. Admit the plan whenever every declared stage
+  // can retain a positive timeout slice; otherwise fail before issuing the first partial action.
+  const minimumPlanMs = stages;
   if (remainingMs < minimumPlanMs) {
     return {
       ok: false,
