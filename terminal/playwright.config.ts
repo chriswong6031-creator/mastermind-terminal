@@ -34,6 +34,13 @@ export default defineConfig({
   // Capping CI concurrency trades wall-clock time for headroom on those budgets, the same trade
   // #438 (bounded Playwright install) and #452 (route pre-warming) already made for this suite.
   workers: process.env.CI ? 2 : undefined,
+  // The same saturated-runner arithmetic applies to each test's own clock: several specs
+  // legitimately spend a 15-25s poll or two 20s visibility budgets before their last
+  // assertion, which cannot fit the 30s default once the shared server adds measured
+  // multi-second stalls (run 33873537063: every "flaky" retry-pass hit "Test timeout of
+  // 30000ms exceeded" mid-poll, not a poll's own budget). CI-only, like the worker cap;
+  // locally the default stands.
+  timeout: process.env.CI ? 60_000 : undefined,
   reporter: process.env.CI ? "github" : "list",
   use: {
     baseURL,

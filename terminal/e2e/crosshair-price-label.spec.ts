@@ -159,6 +159,10 @@ test("a diverged premarket label remains on its true projected price", async ({ 
 
 test("persistent and hover labels follow the price pane when a study moves above it", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Pane move controls are a desktop interaction.");
+  // This walk alone spends two 20s visibility budgets plus a menu interaction before its
+  // first assertion — it cannot fit even the raised CI default when the runner stalls
+  // React commits, so it gets the same 90s clock as the other multi-stage walks.
+  test.setTimeout(90_000);
   await page.addInitScript(() => localStorage.setItem("mm.inds", JSON.stringify(["rsi"])));
   await routePremarket(page, 192.53);
   await page.goto("/terminal?symbol=NVDA");
@@ -176,7 +180,7 @@ test("persistent and hover labels follow the price pane when a study moves above
   await expect(paneMenu).toBeVisible({ timeout: 20_000 });
   await paneMenu.getByText("Move pane up", { exact: true }).click();
 
-  await expect.poll(async () => (await labels(page)).pricePaneTop, { timeout: 10_000 }).toBeGreaterThan(20);
+  await expect.poll(async () => (await labels(page)).pricePaneTop, { timeout: 20_000 }).toBeGreaterThan(20);
   const state = await labels(page);
   expect(state.pricePaneTop).toBeGreaterThan(20);
   expect(state.primaryTop).toBeCloseTo(state.pricePaneTop + Math.round(state.primaryAnchorY! - 8), 0);
