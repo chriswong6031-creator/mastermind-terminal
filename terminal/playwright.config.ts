@@ -33,7 +33,12 @@ export default defineConfig({
   // remeasurement retry) losing a race against a saturated shared server, not a broken assertion.
   // Capping CI concurrency trades wall-clock time for headroom on those budgets, the same trade
   // #438 (bounded Playwright install) and #452 (route pre-warming) already made for this suite.
-  workers: process.env.CI ? 2 : undefined,
+  // ONE worker, not two: at 2 workers on the 2-vCPU hosted runner the suite livelocks rather
+  // than lags — run 33878617300 shows a click on a VISIBLE menu item unable to complete within
+  // a 90s test clock on both attempts (Playwright's actionability stability check never sees a
+  // quiet frame while the sibling worker mounts charts), so no finite budget fixes it. The job
+  // has no timeout-minutes (6h default) and the required check reports late but honestly.
+  workers: process.env.CI ? 1 : undefined,
   // The same saturated-runner arithmetic applies to each test's own clock: several specs
   // legitimately spend a 15-25s poll or two 20s visibility budgets before their last
   // assertion, which cannot fit the 30s default once the shared server adds measured
