@@ -93,8 +93,11 @@ Offset +4 min so each run follows the 5-min data/flagship refresh:
 - **Rollback restores the identity and the build together.** `.deployment-id` and the `.next` it names are
   one deploy generation. Before the new marker is installed the previous one is snapshotted to
   `.deployment-id.bak` (`cp -p`, exact bytes and metadata) — or `.deployment-id.absent` records that there
-  was none — and a failed health check restores `.next.bak` **and** the marker as a pair. The failed build
-  is kept at `.next.broken` for diagnosis.
+  was none. **Every** failure after that point restores `.next.bak` **and** the marker as a pair: a failed
+  `.next` swap, a failed `systemctl restart`, or a failed health/identity check. They all route through one
+  guarded exit, so none of them can abort the script past rollback — the script runs under `set -e`, and a
+  bare failing command used to terminate the deploy with the marker already advanced. The failed build is
+  kept at `.next.broken` for diagnosis.
   Two cases do **not** produce a clean rollback, and the script says so instead of pretending otherwise:
   if the marker record is gone, or if the swap already happened and there is **no** `.next.bak` to return
   to (a bootstrap deploy, or a previous run that died between the marker install and the swap). Both exit
