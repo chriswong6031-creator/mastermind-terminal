@@ -104,59 +104,69 @@ describe("toolbar invocation deadline ownership", () => {
     expect(clicks).toBe(1);
   });
 
-  it.each([
-    [3_392, 1_696],
-    [337, 169],
-    [52, 26],
-  ])(
-    "admits a two-stage plan whenever both stages retain a positive proportional slice (%ims left)",
-    async (remainingMs, expectedCurrentMs) => {
-      const timeouts: number[] = [];
-      const result = await executeToolbarStage(
-        { deadline: remainingMs },
+  it.each([2, 52])(
+    "rejects an underfunded two-stage route before its first effect (%ims left)",
+    async (remainingMs) => {
+      const intent = { deadline: remainingMs };
+      const effects: string[] = [];
+      let nowMs = 0;
+      const first = await executeToolbarStage(
+        intent,
         2,
-        async (timeout) => { timeouts.push(timeout); return "clicked"; },
-        0,
+        async (timeout) => {
+          effects.push(`route:${timeout}`);
+          nowMs = remainingMs;
+        },
+        nowMs,
       );
+      const final = first.ok
+        ? await executeToolbarStage(
+          intent,
+          1,
+          async (timeout) => { effects.push(`target:${timeout}`); },
+          nowMs,
+        )
+        : null;
 
-      expect(result).toEqual({ ok: true, value: "clicked" });
-      expect(timeouts).toEqual([expectedCurrentMs]);
+      expect(first).toEqual({
+        ok: false,
+        code: "TOOLBAR_BUDGET_EXHAUSTED",
+        budgetRemainingMs: remainingMs,
+      });
+      expect(final).toBeNull();
+      expect(effects).toEqual([]);
+      if (first.ok) throw new Error("expected the incomplete plan to be rejected before stage one");
+
+      const settledReceipt: ToolbarFailureReceipt = {
+        what: "the Saved Layouts menu",
+        mode: "overflow",
+        revision: 7,
+        settled: true,
+        direct_visible: false,
+        more_visible: true,
+        more_enabled: true,
+        overflow_open: false,
+        done: false,
+        budget_remaining_ms: remainingMs,
+        page_closed: false,
+      };
+      expect(formatToolbarFailure(first.code, settledReceipt)).toContain(
+        'TOOLBAR_BUDGET_EXHAUSTED {"what":"the Saved Layouts menu","mode":"overflow","revision":7,"settled":true',
+      );
     },
   );
 
-  it("fails a truly indivisible multi-stage plan before invoking its first action", async () => {
-    let clicks = 0;
+  it("admits any positive remainder only for a genuine final stage", async () => {
+    const timeouts: number[] = [];
     const result = await executeToolbarStage(
-      { deadline: 26_501 },
-      2,
-      async () => { clicks += 1; },
-      26_500,
+      { deadline: 52 },
+      1,
+      async (timeout) => { timeouts.push(timeout); return "clicked final target"; },
+      0,
     );
 
-    expect(clicks).toBe(0);
-    expect(result).toEqual({
-      ok: false,
-      code: "TOOLBAR_BUDGET_EXHAUSTED",
-      budgetRemainingMs: 1,
-    });
-    if (result.ok) throw new Error("expected the insufficient plan to be rejected");
-
-    const settledReceipt: ToolbarFailureReceipt = {
-      what: "the Saved Layouts menu",
-      mode: "overflow",
-      revision: 7,
-      settled: true,
-      direct_visible: false,
-      more_visible: true,
-      more_enabled: true,
-      overflow_open: false,
-      done: false,
-      budget_remaining_ms: 1,
-      page_closed: false,
-    };
-    expect(formatToolbarFailure(result.code, settledReceipt)).toContain(
-      'TOOLBAR_BUDGET_EXHAUSTED {"what":"the Saved Layouts menu","mode":"overflow","revision":7,"settled":true',
-    );
+    expect(result).toEqual({ ok: true, value: "clicked final target" });
+    expect(timeouts).toEqual([52]);
   });
 
   it("invokes one action once when the complete remaining stage plan fits", async () => {
