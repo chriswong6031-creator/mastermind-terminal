@@ -179,12 +179,12 @@ describe("toolbar invocation deadline ownership", () => {
 
     expect(remainingStages).toBe(3);
     expect(result).toEqual({ ok: true, value: "opened More" });
-    expect(clicks).toEqual([2_000]);
+    expect(clicks).toEqual([3_758]);
   });
 
   it.each([
-    [6_001, [2_000, 2_000, 2_000]],
-    [7_759, [2_000, 2_000, 2_000]],
+    [6_001, [2_000, 3_000, 1_001]],
+    [7_759, [3_758, 3_000, 1_001]],
   ])(
     "enforces the future reservation across a sequential three-stage action+effect journey (%ims)",
     async (budgetMs, expectedTimeouts) => {
@@ -198,7 +198,7 @@ describe("toolbar invocation deadline ownership", () => {
             remainingStages,
             async (timeout) => {
               effects.push(`stage-${remainingStages}:${timeout}`);
-              nowMs += timeout; // this unit slice consumes only the action cap
+              nowMs += timeout; // this unit slice consumes the exact admitted action share
             },
             nowMs,
           );
@@ -214,7 +214,7 @@ describe("toolbar invocation deadline ownership", () => {
       expect(journey.effects).toEqual(expectedTimeouts.map(
         (timeout, index) => `stage-${3 - index}:${timeout}`,
       ));
-      expect(journey.nowMs).toBe(6_000);
+      expect(journey.nowMs).toBe(budgetMs);
     },
   );
 
@@ -273,10 +273,10 @@ describe("toolbar invocation deadline ownership", () => {
         expect(opened).toEqual({ done: true, budgetExhausted: false });
         expect(drilled).toEqual({ ok: true, value: undefined });
         expect(selected).toEqual({ ok: true, value: undefined });
-        expect(clickTimeouts).toEqual([2_000, 2_000, 2_000]);
+        expect(clickTimeouts).toEqual([3_758, 2_000, 1_001]);
         expect(observedEffects).toBe(1);
-        expect(nowMs).toBe(7_000);
-        expect(budgetMs - nowMs).toBe(759);
+        expect(nowMs).toBe(7_759);
+        expect(budgetMs - nowMs).toBe(0);
       }
     },
   );
@@ -479,7 +479,7 @@ describe("toolbar invocation deadline ownership", () => {
     );
 
     expect(result).toEqual({ ok: true, value: "clicked" });
-    expect(timeouts).toEqual([2_000]);
+    expect(timeouts).toEqual([5_999]);
   });
 
   it("preserves the requested continuation reserve when the invocation can afford it", () => {

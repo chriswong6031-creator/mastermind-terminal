@@ -175,10 +175,7 @@ export async function executeToolbarStage<T>(
   const reserveAfterActionMs = stages === 1
     ? remainingMs >= stageEnvelopeMs ? TOOLBAR_STAGE_OVERHEAD_RESERVE_MS : 0
     : TOOLBAR_STAGE_OVERHEAD_RESERVE_MS + (stages - 2) * stageEnvelopeMs + 1;
-  const timeoutMs = Math.min(
-    TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS,
-    allocateToolbarStage(remainingMs, reserveAfterActionMs).currentMs,
-  );
+  const timeoutMs = allocateToolbarStage(remainingMs, reserveAfterActionMs).currentMs;
   return { ok: true, value: await action(timeoutMs) };
 }
 
