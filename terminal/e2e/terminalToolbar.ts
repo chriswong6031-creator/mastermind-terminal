@@ -6,9 +6,16 @@ const TOOLBAR_TEST_RESERVE_MS = 3_000;
 const TOOLBAR_SETTLE_WAIT_MS = 4_000;
 const TOOLBAR_EFFECT_SETTLE_MS = 1_500;
 const TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS = 2_000;
+const TOOLBAR_STAGE_OVERHEAD_RESERVE_MS = 1_000;
 
 type ToolbarMode = "full" | "overflow" | "compact";
-type ToolbarSnapshot = { mode: ToolbarMode | null; revision: number | null; settled: boolean };
+type ToolbarSnapshot = {
+  mode: ToolbarMode | null;
+  revision: number | null;
+  settled: boolean;
+  overflowOpen: boolean;
+  backVisible: boolean;
+};
 export type ToolbarAction = {
   done: () => Promise<boolean>;
   control: Locator;
@@ -26,6 +33,7 @@ export type ToolbarFailureReceipt = {
   more_visible: boolean;
   more_enabled: boolean;
   overflow_open: boolean;
+  overflow_back_visible: boolean;
   done: boolean;
   budget_remaining_ms: number;
   page_closed: boolean;
@@ -149,13 +157,14 @@ export async function executeToolbarStage<T>(
 ): Promise<ToolbarStageExecution<T>> {
   const stages = Math.max(1, Math.floor(remainingStages));
   const remainingMs = budgetRemaining(intent.deadline, nowMs);
-  // The shared absolute deadline is the real bound. A non-final stage may mutate routing state, so
-  // admit it only when the complete remaining plan still owns its established per-stage reserve.
-  // Once the genuine final stage is reached, any positive remainder may be used: suppressing that
-  // already-actionable target would strand the route the admitted plan was required to complete.
+  const stageEnvelopeMs = TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS + TOOLBAR_STAGE_OVERHEAD_RESERVE_MS;
+  // Hosted traces show that a stage is not only a click: its semantic effect/route read consumes
+  // positive wall time too. A non-final stage therefore admits only a complete sequence of action
+  // plus effect envelopes. The final stage keeps the accepted positive-remainder escape hatch, but
+  // uses the full envelope whenever the admitted plan preserved it.
   const minimumPlanMs = stages === 1
     ? 1
-    : stages * TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS;
+    : stages * stageEnvelopeMs;
   if (remainingMs < minimumPlanMs) {
     return {
       ok: false,
@@ -163,10 +172,13 @@ export async function executeToolbarStage<T>(
       budgetRemainingMs: remainingMs,
     };
   }
-  const timeoutMs = allocateToolbarStage(
-    remainingMs,
-    (stages - 1) * TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS,
-  ).currentMs;
+  const reserveAfterActionMs = remainingMs >= stageEnvelopeMs
+    ? TOOLBAR_STAGE_OVERHEAD_RESERVE_MS + (stages - 1) * stageEnvelopeMs
+    : 0;
+  const timeoutMs = Math.min(
+    TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS,
+    allocateToolbarStage(remainingMs, reserveAfterActionMs).currentMs,
+  );
   return { ok: true, value: await action(timeoutMs) };
 }
 
@@ -180,14 +192,29 @@ function clickLocalToolbarControl(target: Locator, timeout: number): Promise<voi
 }
 
 async function readToolbarSnapshot(page: Page): Promise<ToolbarSnapshot> {
-  if (page.isClosed()) return { mode: null, revision: null, settled: false };
+  if (page.isClosed()) {
+    return { mode: null, revision: null, settled: false, overflowOpen: false, backVisible: false };
+  }
   return page.locator(".chart-tabs").first().evaluate((root): ToolbarSnapshot => {
     const rawMode = root.getAttribute("data-toolbar-mode");
     const mode = rawMode === "full" || rawMode === "overflow" || rawMode === "compact" ? rawMode : null;
     const rawRevision = root.getAttribute("data-toolbar-revision");
     const revision = rawRevision != null && /^\d+$/.test(rawRevision) ? Number(rawRevision) : null;
-    return { mode, revision, settled: root.getAttribute("data-toolbar-settled") === "true" };
-  }).catch(() => ({ mode: null, revision: null, settled: false }));
+    const overflow = root.querySelector(".toolbar-overflow-pop.show");
+    return {
+      mode,
+      revision,
+      settled: root.getAttribute("data-toolbar-settled") === "true",
+      overflowOpen: overflow != null,
+      backVisible: overflow?.querySelector(".toolbar-overflow-back") != null,
+    };
+  }).catch(() => ({
+    mode: null,
+    revision: null,
+    settled: false,
+    overflowOpen: false,
+    backVisible: false,
+  }));
 }
 
 async function captureToolbarFailure(
@@ -199,24 +226,26 @@ async function captureToolbarFailure(
     return {
       what: opts.what, mode: null, revision: null, settled: false,
       direct_visible: false, more_visible: false, more_enabled: false,
-      overflow_open: false, done: false, budget_remaining_ms: budgetRemaining(deadline),
+      overflow_open: false, overflow_back_visible: false,
+      done: false, budget_remaining_ms: budgetRemaining(deadline),
       page_closed: true,
     };
   }
   const snapshot = await readToolbarSnapshot(page);
   const more = page.getByTestId("toolbar-more");
-  const [directVisible, moreVisible, moreEnabled, overflowOpen, done] = await Promise.all([
+  const [directVisible, moreVisible, moreEnabled, done] = await Promise.all([
     opts.control.isVisible().catch(() => false),
     more.isVisible().catch(() => false),
     more.isEnabled().catch(() => false),
-    page.locator(".toolbar-overflow-pop.show").isVisible().catch(() => false),
     opts.done().catch(() => false),
   ]);
+  const pageClosed = page.isClosed();
   return {
     what: opts.what, mode: snapshot.mode, revision: snapshot.revision, settled: snapshot.settled,
     direct_visible: directVisible, more_visible: moreVisible, more_enabled: moreEnabled,
-    overflow_open: overflowOpen, done, budget_remaining_ms: budgetRemaining(deadline),
-    page_closed: false,
+    overflow_open: snapshot.overflowOpen, overflow_back_visible: snapshot.backVisible,
+    done, budget_remaining_ms: budgetRemaining(deadline),
+    page_closed: pageClosed,
   };
 }
 
@@ -238,14 +267,43 @@ async function failToolbarActionUnlessDone(page: Page, opts: ToolbarAction, dead
   ));
 }
 
+async function recoverSettledToolbarOrFail(
+  page: Page,
+  opts: ToolbarAction,
+  deadline: number,
+): Promise<ToolbarSnapshot> {
+  const receipt = await captureToolbarFailure(page, opts, deadline);
+  if (receipt.page_closed) {
+    throw new Error(formatToolbarFailure("TOOLBAR_PAGE_CLOSED", receipt));
+  }
+  if (
+    receipt.settled
+    && receipt.mode != null
+    && receipt.revision != null
+    && receipt.revision > 0
+  ) {
+    return {
+      mode: receipt.mode,
+      revision: receipt.revision,
+      settled: true,
+      overflowOpen: receipt.overflow_open,
+      backVisible: receipt.overflow_back_visible,
+    };
+  }
+  const code = receipt.budget_remaining_ms <= 0
+    ? "TOOLBAR_BUDGET_EXHAUSTED"
+    : "TOOLBAR_NOT_SETTLED";
+  throw new Error(formatToolbarFailure(code, receipt));
+}
+
 export async function waitForSettledToolbar(
   page: Page,
   opts: ToolbarAction,
   deadline: number,
 ): Promise<ToolbarSnapshot> {
-  if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
+  if (page.isClosed()) return recoverSettledToolbarOrFail(page, opts, deadline);
   const timeout = boundedTimeout(deadline, TOOLBAR_SETTLE_WAIT_MS);
-  if (timeout <= 0) return failToolbar(page, opts, deadline, "TOOLBAR_BUDGET_EXHAUSTED");
+  if (timeout <= 0) return recoverSettledToolbarOrFail(page, opts, deadline);
   try {
     const handle = await page.waitForFunction(() => {
       const root = document.querySelector<HTMLElement>(".chart-tabs");
@@ -254,22 +312,20 @@ export async function waitForSettledToolbar(
       const mode = root.dataset.toolbarMode;
       if (!revision || !/^\d+$/.test(revision) || Number(revision) <= 0) return false;
       if (mode !== "full" && mode !== "overflow" && mode !== "compact") return false;
-      return { mode, revision: Number(revision), settled: true };
+      const overflow = root.querySelector(".toolbar-overflow-pop.show");
+      return {
+        mode,
+        revision: Number(revision),
+        settled: true,
+        overflowOpen: overflow != null,
+        backVisible: overflow?.querySelector(".toolbar-overflow-back") != null,
+      };
     }, undefined, { timeout });
     const snapshot = await handle.jsonValue() as ToolbarSnapshot;
     await handle.dispose();
     return snapshot;
   } catch {
-    return failToolbar(
-      page,
-      opts,
-      deadline,
-      page.isClosed()
-        ? "TOOLBAR_PAGE_CLOSED"
-        : budgetRemaining(deadline) <= 0
-          ? "TOOLBAR_BUDGET_EXHAUSTED"
-          : "TOOLBAR_NOT_SETTLED",
-    );
+    return recoverSettledToolbarOrFail(page, opts, deadline);
   }
 }
 
@@ -304,10 +360,11 @@ export async function clickOnceAndObserve(
   observed: () => Promise<boolean>,
   intent: ToolbarIntent,
   remainingStages: number,
-  initiallyObserved = false,
+  initiallyObserved?: boolean,
   nowMs = Date.now,
 ): Promise<{ done: boolean; budgetExhausted: boolean }> {
-  if (initiallyObserved || await observed().catch(() => false)) {
+  const alreadyObserved = initiallyObserved ?? await observed().catch(() => false);
+  if (alreadyObserved) {
     return { done: true, budgetExhausted: false };
   }
   let clickFailed = false;
@@ -325,7 +382,8 @@ export async function clickOnceAndObserve(
   }
   if (!execution.ok) return { done: false, budgetExhausted: true };
   if (page.isClosed()) return { done: false, budgetExhausted: false };
-  const reserveAfterMs = Math.max(0, remainingStages - 1) * TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS;
+  const reserveAfterMs = Math.max(0, remainingStages - 1)
+    * (TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS + TOOLBAR_STAGE_OVERHEAD_RESERVE_MS);
   if (await observeToolbarEffect(observed, intent.deadline, reserveAfterMs, nowMs)) {
     return { done: true, budgetExhausted: false };
   }
@@ -341,19 +399,22 @@ async function openOverflow(
   deadline: number,
   opts: ToolbarAction,
   remainingMenuActions = 1,
+  initialSnapshot?: ToolbarSnapshot,
 ): Promise<Locator> {
   if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
   const intent = { deadline };
   const menu = page.locator(".toolbar-overflow-pop.show");
   const back = menu.locator(".toolbar-overflow-back");
-  const overflowOpen = await menu.isVisible().catch(() => false);
-  const backVisible = overflowOpen && await back.isVisible().catch(() => false);
+  const routeSnapshot = initialSnapshot ?? await readToolbarSnapshot(page);
+  const overflowOpen = routeSnapshot.overflowOpen;
+  const backVisible = overflowOpen && routeSnapshot.backVisible;
   const opened = await clickOnceAndObserve(
     page,
     page.getByTestId("toolbar-more"),
     () => menu.isVisible().catch(() => false),
     intent,
     countToolbarOverflowStages({ overflowOpen, backVisible, remainingMenuActions }),
+    overflowOpen,
   );
   if (!opened.done) return failToolbar(
     page,
@@ -377,6 +438,7 @@ async function openOverflow(
         backVisible: true,
         remainingMenuActions,
       }),
+      false,
     );
     if (!atRoot.done) return failToolbar(
       page,
@@ -425,14 +487,14 @@ async function viaToolbar(page: Page, opts: ToolbarAction, intent: ToolbarIntent
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const snapshot = await waitForSettledToolbar(page, opts, deadline);
     if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
-    const directVisible = await opts.control.isVisible().catch(() => false);
+    const directVisible = snapshot.mode === "full";
     let execution: ToolbarStageExecution<void> | null = null;
     if (directVisible) {
       try {
         execution = await executeToolbarStage(intent, 1, opts.direct);
       } catch { /* observe the one click's semantic effect below */ }
     } else {
-      const menu = await openOverflow(page, deadline, opts);
+      const menu = await openOverflow(page, deadline, opts, 1, snapshot);
       try {
         execution = await executeToolbarStage(
           intent,
@@ -465,12 +527,12 @@ export async function toggleToolbarReplay(page: Page, intent?: ToolbarIntent): P
   const opts = routeOnlyAction("the Replay toggle", direct);
   const activeIntent = intent ?? createToolbarIntent();
   const deadline = activeIntent.deadline;
-  await waitForSettledToolbar(page, opts, deadline);
-  if (await direct.isVisible()) {
+  const snapshot = await waitForSettledToolbar(page, opts, deadline);
+  if (snapshot.mode === "full") {
     await executeRouteOnlyStage(page, opts, activeIntent, 1, direct);
     return;
   }
-  const menu = await openOverflow(page, deadline, opts);
+  const menu = await openOverflow(page, deadline, opts, 1, snapshot);
   await executeRouteOnlyStage(
     page,
     opts,
@@ -536,8 +598,8 @@ export async function runToolbarDetector(page: Page, label: string, intent?: Too
   const opts = routeOnlyAction(`the ${label} detector`, direct);
   const activeIntent = intent ?? createToolbarIntent();
   const deadline = activeIntent.deadline;
-  await waitForSettledToolbar(page, opts, deadline);
-  if (await direct.isVisible()) {
+  const snapshot = await waitForSettledToolbar(page, opts, deadline);
+  if (snapshot.mode === "full") {
     await executeRouteOnlyStage(page, opts, activeIntent, 2, direct.locator(":scope > button"));
     await executeRouteOnlyStage(
       page,
@@ -548,7 +610,7 @@ export async function runToolbarDetector(page: Page, label: string, intent?: Too
     );
     return;
   }
-  const menu = await openOverflow(page, deadline, opts, 2);
+  const menu = await openOverflow(page, deadline, opts, 2, snapshot);
   await executeRouteOnlyStage(
     page,
     opts,

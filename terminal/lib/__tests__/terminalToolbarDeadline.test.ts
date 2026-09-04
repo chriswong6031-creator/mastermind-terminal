@@ -58,7 +58,7 @@ describe("toolbar invocation deadline ownership", () => {
     expect(incorrectlyUnboundLater.deadline).toBe(34_000);
   });
 
-  it("reserves the complete hosted detector plan when 7.7s remain", async () => {
+  it("refuses the incomplete hosted detector plan before opening More when 7.7s remain", async () => {
     const clicks: number[] = [];
     const remainingStages = countToolbarOverflowStages({
       overflowOpen: false,
@@ -73,13 +73,17 @@ describe("toolbar invocation deadline ownership", () => {
     );
 
     expect(remainingStages).toBe(3);
-    expect(result).toEqual({ ok: true, value: "opened More" });
-    expect(clicks).toEqual([3_759]);
+    expect(result).toEqual({
+      ok: false,
+      code: "TOOLBAR_BUDGET_EXHAUSTED",
+      budgetRemainingMs: 7_759,
+    });
+    expect(clicks).toEqual([]);
   });
 
   it.each([
-    [7_759, [3_759, 2_000, 2_000]],
-    [6_000, [2_000, 2_000, 2_000]],
+    [9_000, [2_000, 2_000, 2_000]],
+    [10_000, [2_000, 2_000, 2_000]],
   ])(
     "enforces the future reservation across a sequential three-stage action+effect journey (%ims)",
     async (budgetMs, expectedTimeouts) => {
@@ -93,7 +97,7 @@ describe("toolbar invocation deadline ownership", () => {
             remainingStages,
             async (timeout) => {
               effects.push(`stage-${remainingStages}:${timeout}`);
-              nowMs += timeout; // the action and its effect observation consume the whole stage cap
+              nowMs += timeout; // this unit slice consumes only the action cap
             },
             nowMs,
           );
@@ -109,7 +113,7 @@ describe("toolbar invocation deadline ownership", () => {
       expect(journey.effects).toEqual(expectedTimeouts.map(
         (timeout, index) => `stage-${3 - index}:${timeout}`,
       ));
-      expect(journey.nowMs).toBe(budgetMs);
+      expect(journey.nowMs).toBe(6_000);
     },
   );
 
@@ -174,6 +178,8 @@ describe("toolbar invocation deadline ownership", () => {
       mode: "overflow" as const,
       revision: 9,
       settled: true,
+      overflowOpen: false,
+      backVisible: false,
     };
     const visibility = (visible: boolean) => ({
       isVisible: async () => visible,
@@ -200,6 +206,39 @@ describe("toolbar invocation deadline ownership", () => {
     );
   });
 
+  it("keeps page closure higher priority than a settled snapshot captured during the same failure receipt", async () => {
+    let closureChecks = 0;
+    const visibility = () => ({ isVisible: async () => false, isEnabled: async () => false });
+    const page = {
+      isClosed: () => {
+        closureChecks += 1;
+        return closureChecks >= 4;
+      },
+      waitForFunction: async () => { throw new Error("page closed while the wait rejected"); },
+      getByTestId: () => visibility(),
+      locator: (selector: string) => selector === ".chart-tabs"
+        ? { first: () => ({ evaluate: async () => ({
+          mode: "overflow",
+          revision: 11,
+          settled: true,
+          overflowOpen: false,
+          backVisible: false,
+        }) }) }
+        : visibility(),
+    } as unknown as Page;
+    const opts: ToolbarAction = {
+      what: "the Saved Layouts menu",
+      done: async () => false,
+      control: visibility() as unknown as Locator,
+      direct: async () => {},
+      overflow: async () => {},
+    };
+
+    await expect(waitForSettledToolbar(page, opts, Date.now() + 10_000)).rejects.toThrow(
+      /^TOOLBAR_PAGE_CLOSED .*"settled":true.*"page_closed":true/,
+    );
+  });
+
   it("counts only real Saved Layouts/W2-A stages for closed, root, and drilled overflow", async () => {
     expect(countToolbarOverflowStages({
       overflowOpen: false,
@@ -219,7 +258,7 @@ describe("toolbar invocation deadline ownership", () => {
 
     let clicks = 0;
     const result = await executeToolbarStage(
-      { deadline: 4_500 },
+      { deadline: 6_000 },
       countToolbarOverflowStages({
         overflowOpen: false,
         backVisible: false,
@@ -274,6 +313,7 @@ describe("toolbar invocation deadline ownership", () => {
         more_visible: true,
         more_enabled: true,
         overflow_open: false,
+        overflow_back_visible: false,
         done: false,
         budget_remaining_ms: remainingMs,
         page_closed: false,
@@ -331,7 +371,7 @@ describe("toolbar invocation deadline ownership", () => {
     );
 
     expect(result).toEqual({ ok: true, value: "clicked" });
-    expect(timeouts).toEqual([5_000]);
+    expect(timeouts).toEqual([2_000]);
   });
 
   it("preserves the requested continuation reserve when the invocation can afford it", () => {
