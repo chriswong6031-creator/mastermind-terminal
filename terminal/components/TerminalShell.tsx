@@ -142,6 +142,7 @@ import { getJSON, prefetch, loadCoverage } from "@/lib/dataCache";
 import { type CmpCfg, type CmpMode, defaultCmpCfg, cmpKey, isCmpKey, cmpSymOf } from "@/lib/compare";
 import { isComposite, parseComposite, compositeQuote as calcCompositeQuote } from "@/lib/composite";
 import { pushRecentlyViewed } from "@/lib/recentlyViewed";
+import { writeActiveSymbol } from "@/lib/activeSymbol";
 import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
 import LayoutMenu, { type LayoutFeedback, type LayoutStatus, type SavedWorkspace } from "@/components/LayoutMenu";
 import WorkspaceTile from "@/components/WorkspaceTile";
@@ -1122,9 +1123,16 @@ export default function TerminalShell({ symbols, email, userId, initialSymbol, s
   // The active chart is the source of truth for Recently viewed. Recording here (instead of only
   // inside the search picker) includes direct Macro Dashboard links, the warm iframe bridge,
   // watchlists, movers, and search results. Composite expressions are not standalone ticker rows.
+  //
+  // The same event publishes the cross-route cursor (lib/activeSymbol): the chart is where a
+  // symbol is usually chosen, and until it said so out loud, every OTHER workspace opened on its
+  // own default — which is how a user charting SMR got a full NVDA intelligence read from the
+  // mobile drawer. `writeActiveSymbol` refuses composites itself, so a composite chart leaves the
+  // cursor on the last real company rather than on something /analysis has no page for.
   useEffect(() => {
     if (!active || !workspaceRestored) return;
     if (!isComposite(active)) pushRecentlyViewed(active);
+    writeActiveSymbol(active);
   }, [active, workspaceRestored]);
   // Analytics: emit a ticker_view whenever the active chart symbol changes. The symbol is client
   // state (not a route), so the route tracker never sees it — fire a decoupled window event that
