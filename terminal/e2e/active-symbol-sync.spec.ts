@@ -22,10 +22,21 @@ const usesDrawer = (page: Page) => page.locator(".mobilebar").first().isVisible(
 const chartSymbol = async (page: Page) =>
   (await usesDrawer(page)) ? page.locator(".m-symbar .m-sym b") : page.locator(".pair b");
 
-/** Open a chart on `symbol` and wait until the shell has actually adopted it. */
+/**
+ * Open a chart on `symbol` and wait until the shell has actually published it.
+ *
+ * Asserting only the top-bar readout is not enough, and CI proved it: the chart painted MSFT
+ * while the cursor was still unpublished, so this spec's next navigation raced a real product
+ * gap (TerminalShell used to hold the cursor behind the workspace restore) and read as a flake.
+ * The cursor IS the precondition every case here depends on, so wait for the cursor.
+ */
 async function chart(page: Page, symbol: string) {
   await page.goto(`/terminal?symbol=${symbol}`);
   await expect(await chartSymbol(page)).toHaveText(symbol, { timeout: 45_000 });
+  await expect
+    .poll(() => page.evaluate(() => { try { return localStorage.getItem("mm.activeSymbol"); } catch { return null; } }),
+      { timeout: 20_000, message: `the chart never published ${symbol} as the cross-route cursor` })
+    .toBe(symbol);
 }
 
 /** Follow a primary-nav destination the way a user does, through this viewport's own nav. */
