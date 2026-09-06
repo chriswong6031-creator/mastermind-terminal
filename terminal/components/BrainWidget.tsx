@@ -123,10 +123,16 @@ export default function BrainWidget({
     if (document.querySelector(`script[src="${SCRIPT_SRC}"]`)) return;
 
     w.MM_BRAIN_CFG = {
-      // Load-bearing invariant: the anchor:'top' build renders no launcher chrome of its
-      // own, so on /analysis (which mounts this widget with no visible dock) the ONLY
-      // panel entry point is a host-driven window.MMBrain.open()/.toggle() call from an
-      // attach/open affordance elsewhere in the page — there is no fallback UI here.
+      // This config's anchor:'top' asks the production mm_brain.js bundle for no docked
+      // launcher; this repo renders no launcher chrome of its own either way (confirmed:
+      // no "launcher" or MMBrain.toggle call exists outside this file and the external
+      // script). Review round 2, MAJOR 6: the /analysis proof screenshots (e2e/proof/
+      // rctx-analysis/*) show a floating circular launcher anyway — that element is drawn
+      // by the external mm_brain.js script itself, which does not honor this anchor
+      // setting the way TerminalShell's usage assumed. The intended entry point is a
+      // host-driven window.MMBrain.open()/.toggle() call from an attach/open affordance
+      // elsewhere in the page, but the external script also renders its own floating
+      // launcher regardless — see PR body "Release status" for the disposition.
       anchor: "top", // no built-in launcher; host calls window.MMBrain.open()/.toggle()
       api: "", // same-origin — /api/brain/* with credentials:'include'
       symbol: () => w.__MM_BRAIN_ACTIVE_SYMBOL__ || symRef.current,
@@ -144,8 +150,9 @@ export default function BrainWidget({
     s.src = SCRIPT_SRC;
     s.defer = true;
     document.body.appendChild(s);
-    // Intentionally NOT removed on unmount: the widget is a document-level singleton and
-    // TerminalShell is the only mount site; tearing the script down would orphan window.MMBrain.
+    // Intentionally NOT removed on unmount: the widget is a document-level singleton mounted
+    // from two sites (TerminalShell on /terminal, AppShell on /analysis) that never render at
+    // the same time; tearing the script down would orphan window.MMBrain.
   }, []);
 
   return null;
