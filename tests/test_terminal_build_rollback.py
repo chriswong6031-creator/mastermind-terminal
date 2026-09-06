@@ -312,6 +312,45 @@ def test_pre_swap_rollback_with_no_previous_build_is_success(tmp_path):
     assert live_build_id(app) == OLD_BUILD_ID
 
 
+def test_pre_swap_abort_never_overwrites_the_still_good_live_build_with_a_stale_bak(tmp_path):
+    """The exact review repro (#504 M1): swapped=0 must not open the `.next.bak`
+    restore branch, even when a leftover `.next.bak` exists (e.g. a prior deploy's
+    `rm -rf .next.bak` failed to clear it, or died between generations).
+
+        .next      = the currently LIVE GOOD build (never touched — swap never ran)
+        .next.bak  = a STALE build from TWO generations ago
+        marker     = the OLD sha, about to be superseded
+
+    Before this fix, `deploy_generation_rollback` branched on `[ -d .next.bak ]`
+    alone: it moved the still-good live `.next` to `.next.broken` and restored the
+    stale two-generations-old `.next.bak` in its place — replacing a healthy live
+    build with a dead one, on a rollback path that is supposed to be a no-op.
+    """
+    app = make_app(tmp_path, OLD_SHA, build_id=OLD_BUILD_ID)
+    stale_bak = app / ".next.bak"
+    stale_bak.mkdir()
+    (stale_bak / "BUILD_ID").write_text("build-STALEtwoGensOld\n")
+    new = staged_marker(tmp_path, NEW_SHA)
+
+    run_gen(SCRIPT, f'deploy_generation_begin "{app}" "{new}"')
+    # sanity: begin only touches the marker, never .next / .next.bak
+    assert live_build_id(app) == OLD_BUILD_ID
+
+    r = run_gen(SCRIPT, f'deploy_generation_rollback "{app}" 0; echo "RC=$?"')
+    assert "RC=0" in r.stdout, f"{r.stdout}\n{r.stderr}"
+    assert marker_of(app) == OLD_SHA
+    assert live_build_id(app) == OLD_BUILD_ID, (
+        "the still-good live build was overwritten by a stale .next.bak on a "
+        f"pre-swap (swapped=0) abort:\n{r.stdout}\n{r.stderr}"
+    )
+    assert stale_bak.is_dir() and (stale_bak / "BUILD_ID").read_text().strip() == (
+        "build-STALEtwoGensOld"
+    ), "the stale .next.bak must be left exactly where it was — swapped=0 restores nothing"
+    assert not (app / ".next.broken").exists(), (
+        "nothing should have been moved aside — .next was never touched"
+    )
+
+
 def test_rollback_reports_that_the_live_build_moved(tmp_path):
     """The caller must be able to tell a restart is mandatory.
 

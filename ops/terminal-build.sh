@@ -84,18 +84,29 @@ deploy_generation_commit(){
 # health check is still the live one. Non-zero means the generation could not be
 # fully restored, so the caller must report it unresolved instead of claiming a
 # clean rollback. Sets DEPLOY_ROLLBACK_MOVED_BUILD when the live .next moved.
+#
+# $swapped gates the WHOLE .next branch, not just the "no .next.bak" fallback
+# (#504 review M1). Before this guard the function branched on `[ -d .next.bak ]`
+# alone: a pre-swap abort (swapped=0) with a leftover STALE .next.bak — e.g. a
+# prior deploy's `rm -rf .next.bak` failed to clear it — moved the still-good
+# live `.next` to `.next.broken` and restored the two-generations-old
+# `.next.bak` over it, destroying a healthy build on a path that must be a
+# no-op. When swapped=0, `.next` was never touched by this attempt and stays
+# exactly as it is, regardless of what `.next.bak` happens to contain.
 deploy_generation_rollback(){
   local app=$1 swapped=$2 rc=0
   DEPLOY_ROLLBACK_MOVED_BUILD=0
-  if [ -d "$app/.next.bak" ]; then
-    rm -rf "$app/.next.broken"
-    if [ -d "$app/.next" ]; then
-      mv "$app/.next" "$app/.next.broken" || rc=1
+  if [ "$swapped" = 1 ]; then
+    if [ -d "$app/.next.bak" ]; then
+      rm -rf "$app/.next.broken"
+      if [ -d "$app/.next" ]; then
+        mv "$app/.next" "$app/.next.broken" || rc=1
+      fi
+      mv "$app/.next.bak" "$app/.next" || rc=1
+      DEPLOY_ROLLBACK_MOVED_BUILD=1
+    else
+      rc=1   # swapped with no previous build to return to — the failing build is live
     fi
-    mv "$app/.next.bak" "$app/.next" || rc=1
-    DEPLOY_ROLLBACK_MOVED_BUILD=1
-  elif [ "$swapped" = 1 ]; then
-    rc=1   # swapped with no previous build to return to — the failing build is live
   fi
   if [ -f "$app/.deployment-id.bak" ]; then
     mv -f "$app/.deployment-id.bak" "$app/.deployment-id" || rc=1
@@ -259,10 +270,17 @@ fi
 if [ -d "$APP/.next" ] && ! mv "$APP/.next" "$APP/.next.bak"; then
   deploy_generation_abort "$APP" "$FULL_SHA" "$SWAPPED" "could not move the live .next aside" || exit 1
 fi
+# From here the live .next slot has been vacated — moved to .next.bak, or there
+# was none to begin with (bootstrap deploy) — so any abort from this point on
+# must go through the swapped=1 path: restore .next.bak, or fail loudly. It must
+# never take the swapped=0 no-op path, which would silently leave no live build
+# at all while claiming a clean rollback (#504 review M1's mirror case: the
+# THIRD mv, moving the new build in, can still fail after the old one already
+# moved out).
+SWAPPED=1
 if ! mv "$STAGE/.next" "$APP/.next"; then
   deploy_generation_abort "$APP" "$FULL_SHA" "$SWAPPED" "could not swap in the new build" || exit 1
 fi
-SWAPPED=1
 log "swapped .next (previous build kept as .next.bak)"
 
 # 7) restart onto the complete build, then accept the generation only if it is
