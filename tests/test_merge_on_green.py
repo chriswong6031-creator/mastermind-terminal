@@ -5,9 +5,12 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
+from scripts import merge_on_green as mog
 from scripts.merge_on_green import (
+    ApiError,
     ARM_LABEL,
     BLOCK_LABEL,
     REQUIRED_CHECK_APP_ID,
@@ -39,16 +42,31 @@ def checks(
     return result
 
 
-def pull(number: int = 7, *, labels=None, mergeable=True, draft=False, fork=False):
+def pull(
+    number: int = 7,
+    *,
+    labels=None,
+    mergeable=True,
+    mergeable_state=None,
+    base_sha="base-sha",
+    draft=False,
+    fork=False,
+):
     selected_labels = [ARM_LABEL] if labels is None else labels
+    # mergeable_state, when given explicitly, is the live GitHub relation to the
+    # CURRENT base branch tip and is independent of base_sha (which the sweeper
+    # must never trust for this decision -- see the "behind" tests below, which
+    # deliberately set a base_sha that would look fine under the old base_sha
+    # comparison while mergeable_state is the live "behind").
+    state = mergeable_state if mergeable_state is not None else ("clean" if mergeable else "dirty")
     return {
         "number": number,
         "created_at": f"2026-08-{number:02d}T00:00:00Z",
         "draft": draft,
         "mergeable": mergeable,
-        "mergeable_state": "clean" if mergeable else "dirty",
+        "mergeable_state": state,
         "labels": [{"name": name} for name in selected_labels],
-        "base": {"ref": "master", "sha": "base-sha"},
+        "base": {"ref": "master", "sha": base_sha},
         "head": {
             "ref": f"claude/pr-{number}",
             "sha": f"head-{number}",
@@ -60,10 +78,11 @@ def pull(number: int = 7, *, labels=None, mergeable=True, draft=False, fork=Fals
 class FakeApi:
     repo = "owner/repo"
 
-    def __init__(self, pulls, runs=None, relations=None):
+    def __init__(self, pulls, runs=None, merge_errors=None):
         self.pulls = {item["number"]: deepcopy(item) for item in pulls}
         self.runs = runs or {item["head"]["sha"]: checks() for item in pulls}
-        self.relations = relations or {item["number"]: "ahead" for item in pulls}
+        # number -> (status, message) to raise as ApiError instead of merging.
+        self.merge_errors = merge_errors or {}
         self.actions = []
 
     def list_pulls(self):
@@ -75,11 +94,6 @@ class FakeApi:
     def check_runs(self, sha):
         return deepcopy(self.runs.get(sha, []))
 
-    def compare(self, base_sha, head_sha):
-        number = int(head_sha.rsplit("-", 1)[1])
-        self.actions.append(("compare", number, base_sha, head_sha))
-        return self.relations[number]
-
     def update_branch(self, number, head_sha):
         self.actions.append(("update", number, head_sha))
 
@@ -88,6 +102,9 @@ class FakeApi:
 
     def merge(self, number, head_sha):
         self.actions.append(("merge", number, head_sha))
+        if number in self.merge_errors:
+            status, message = self.merge_errors[number]
+            raise ApiError(status, message)
         return {"merged": True}
 
     def add_labels(self, number, labels):
@@ -272,7 +289,13 @@ def test_candidate_ci_explicitly_pins_read_only_contents_permission():
 
 
 def test_job_level_permission_elevation_is_rejected_by_the_candidate_ci_guard():
-    # The guard must kill the forbidden mutation, not merely pass on today's file.
+    # Reviewer minor #3 on PR #487: the previous version of this test asserted
+    # only the helper's return value, never that the guard itself (the same
+    # `job_level_permissions(workflow) == {}` assertion used above in
+    # test_candidate_ci_explicitly_pins_read_only_contents_permission) actually
+    # FAILS when run against the mutant. Prove that here with pytest.raises,
+    # mutation-testing style: the guard must kill this mutation, not merely
+    # compute a value that happens to differ from it.
     workflow = ci_workflow()
     elevated = dict(workflow)
     elevated["jobs"] = dict(workflow["jobs"])
@@ -282,6 +305,8 @@ def test_job_level_permission_elevation_is_rejected_by_the_candidate_ci_guard():
     }
 
     assert job_level_permissions(elevated) == {"probe": {"contents": "write"}}
+    with pytest.raises(AssertionError):
+        assert job_level_permissions(elevated) == {}
 
 
 def test_green_current_head_is_sha_pinned_merged_and_deleted():
@@ -308,12 +333,84 @@ def test_wrong_app_green_never_reaches_merge_or_quarantine():
 
 
 def test_green_stale_head_is_updated_then_waits_for_fresh_ci():
-    api = FakeApi([pull()], relations={7: "diverged"})
+    api = FakeApi([pull(mergeable_state="behind")])
     result = sweep(api)
     assert ("update", 7, "head-7") in api.actions
     assert ("dispatch_ci", "claude/pr-7") in api.actions
     assert not any(action[0] == "merge" for action in api.actions)
     assert result == ["#7: updated onto current master; awaiting fresh CI"]
+
+
+def test_stale_base_sha_with_live_behind_mergeable_state_takes_the_refresh_path():
+    # Regression for the 405 sweeper defect (#422): pull.base.sha here is set to
+    # a value that would have satisfied the OLD base_sha-vs-head compare() logic
+    # (it is exactly the sha the fixture always used, i.e. indistinguishable from
+    # "not stale" under that check), while mergeable_state -- GitHub's own LIVE
+    # relation to the current master tip -- reads "behind". The refresh path
+    # must be taken from mergeable_state alone, and merge() must never be called.
+    api = FakeApi([pull(base_sha="base-sha", mergeable_state="behind")])
+    result = sweep(api)
+    assert ("update", 7, "head-7") in api.actions
+    assert ("dispatch_ci", "claude/pr-7") in api.actions
+    assert not any(action[0] == "merge" for action in api.actions)
+    assert result == ["#7: updated onto current master; awaiting fresh CI"]
+
+
+def test_blocked_or_unstable_mergeable_state_waits_without_attempting_merge():
+    for state in ("blocked", "unstable", "unknown", "has_hooks"):
+        api = FakeApi([pull(mergeable_state=state)])
+        result = sweep(api)
+        assert not any(action[0] == "merge" for action in api.actions), state
+        assert result == [f"#7: waiting (mergeable_state={state})"], state
+
+
+def test_405_on_merge_is_declined_for_that_pr_and_the_sweep_continues():
+    # Regression for the sweeper-dead defect diagnosed 2026-09-06 16:30Z: a
+    # merge attempt GitHub itself refuses with a 4xx (405 under strict required
+    # -status protection was the observed case on #422) must be recorded as a
+    # per-PR "declined" outcome, and the sweep must still evaluate every other
+    # armed PR -- never abort the whole sweep on the first such error.
+    first = pull(1)
+    second = pull(2)
+    api = FakeApi(
+        [first, second],
+        merge_errors={1: (405, "3 of 3 required status checks are expected.")},
+    )
+
+    result = sweep(api)
+
+    assert ("merge", 1, "head-1") in api.actions
+    # The sweep proceeded past the declined PR and evaluated/merged the next one.
+    assert ("merge", 2, "head-2") in api.actions
+    assert ("delete", "claude/pr-2") in api.actions
+    assert result == [
+        "#1: declined: GitHub API 405: 3 of 3 required status checks are expected.",
+        "#2: merged and deleted claude/pr-2",
+        "no additional armed green branch required a base refresh",
+    ]
+
+
+def test_main_exits_non_zero_when_any_pr_was_declined_but_never_mid_sweep(monkeypatch, capsys):
+    monkeypatch.setenv("GH_REPO", "owner/repo")
+    monkeypatch.setenv("MERGE_TOKEN", "token")
+    monkeypatch.delenv("TRIGGER_PR_NUMBER", raising=False)
+    monkeypatch.setattr(
+        mog,
+        "sweep",
+        lambda api, trigger: [
+            "#1: declined: GitHub API 405: nope",
+            "#2: merged and deleted claude/pr-2",
+        ],
+    )
+
+    exit_code = mog.main()
+
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    # Both notices were printed -- the non-zero exit is end-of-sweep reporting,
+    # never a signal that the sweep stopped early.
+    assert "#1: declined" in out
+    assert "#2: merged and deleted claude/pr-2" in out
 
 
 def test_conflict_is_quarantined_once_without_admin_merge():
@@ -362,8 +459,8 @@ def test_draft_fork_unarmed_and_hold_pull_requests_are_never_candidates():
 
 def test_after_one_merge_the_next_stale_green_is_refreshed_not_merged():
     first = pull(1)
-    second = pull(2)
-    api = FakeApi([first, second], relations={1: "ahead", 2: "diverged"})
+    second = pull(2, mergeable_state="behind")
+    api = FakeApi([first, second])
     result = sweep(api)
     assert ("merge", 1, "head-1") in api.actions
     assert ("update", 2, "head-2") in api.actions

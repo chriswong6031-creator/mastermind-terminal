@@ -91,11 +91,6 @@ class GitHubApi:
         data = self.request("GET", f"/commits/{quoted}/check-runs?per_page=100")
         return data.get("check_runs", [])
 
-    def compare(self, base_sha: str, head_sha: str) -> str:
-        base = urllib.parse.quote(base_sha, safe="")
-        head = urllib.parse.quote(head_sha, safe="")
-        return str(self.request("GET", f"/compare/{base}...{head}").get("status", "unknown"))
-
     def update_branch(self, number: int, head_sha: str) -> None:
         self.request("PUT", f"/pulls/{number}/update-branch", {"expected_head_sha": head_sha})
 
@@ -141,7 +136,6 @@ class MergeApi(Protocol):
     def list_pulls(self) -> list[dict[str, Any]]: ...
     def pull(self, number: int) -> dict[str, Any]: ...
     def check_runs(self, sha: str) -> list[dict[str, Any]]: ...
-    def compare(self, base_sha: str, head_sha: str) -> str: ...
     def update_branch(self, number: int, head_sha: str) -> None: ...
     def dispatch_ci(self, branch: str) -> None: ...
     def merge(self, number: int, head_sha: str) -> dict[str, Any]: ...
@@ -266,9 +260,14 @@ def sweep(api: MergeApi, trigger_number: int | None = None) -> list[str]:
         if BLOCK_LABEL in label_names(pull):
             api.remove_label(number, BLOCK_LABEL)
 
-        base_sha = str(pull["base"]["sha"])
-        relation = api.compare(base_sha, head_sha)
-        if relation not in {"ahead", "identical"}:
+        # `pull["base"]["sha"]` on this same payload is the base ref position at
+        # the moment the PR was last synced by GitHub and can sit many commits
+        # behind the live branch tip (measured on #422: base.sha was stale while
+        # master had moved on). `mergeable_state` is GitHub's own live relation to
+        # the CURRENT base branch, so the refresh-vs-merge decision reads that
+        # field instead of comparing against the stale sha.
+        mergeable_state = str(pull.get("mergeable_state") or "unknown")
+        if mergeable_state == "behind":
             branch = str(pull["head"]["ref"])
             api.update_branch(number, head_sha)
             api.dispatch_ci(branch)
@@ -276,8 +275,23 @@ def sweep(api: MergeApi, trigger_number: int | None = None) -> list[str]:
             # An update creates the next safe wake-up. Stop so no other green is
             # judged against a base snapshot this mutation just invalidated.
             break
+        if mergeable_state != "clean":
+            # blocked/unstable/unknown/has_hooks: GitHub has not (yet) confirmed a
+            # clean merge against the current base. Wait for the next sweep
+            # rather than attempting a merge GitHub has not settled on, or that a
+            # strict-protection 405 would only refuse anyway.
+            actions.append(f"#{number}: waiting (mergeable_state={mergeable_state})")
+            continue
 
-        result = api.merge(number, head_sha)
+        try:
+            result = api.merge(number, head_sha)
+        except ApiError as error:
+            # GitHub itself refusing the merge call (405 under strict
+            # required-status protection when its own view of the PR is still
+            # settling, or any other 4xx) is this PR's own wait, never a reason
+            # to stop evaluating the rest of the sweep.
+            actions.append(f"#{number}: declined: {error}")
+            continue
         if not result.get("merged"):
             # The head/base may have moved between proof and the SHA-pinned write.
             # That is a wait, not permission to force an admin merge.
@@ -315,6 +329,17 @@ def main() -> int:
     else:
         for action in actions:
             print(f"::notice::{action}")
+    # A declined merge (e.g. GitHub 405s a merge attempt) is reported only after
+    # every armed pull request has been evaluated (never mid-sweep, unlike the
+    # unhandled-exception path above that aborted the whole sweep on the first
+    # such PR); exiting non-zero here still surfaces it to the workflow run
+    # without having skipped any other armed pull request.
+    if any(": declined:" in action for action in actions):
+        print(
+            "::error::one or more armed pull requests were declined by GitHub this sweep; see notices above",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
