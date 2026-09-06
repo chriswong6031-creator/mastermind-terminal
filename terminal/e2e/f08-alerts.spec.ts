@@ -40,7 +40,7 @@ async function installFixtures(page: Page, opts: {
   }));
 }
 
-const dataState = (page: Page, name: string) => page.locator(`[data-alerts-state="${name}"]`);
+const dataState = (page: Page, name: string) => page.locator(`[data-alerts-state="${name}"]`).first();
 
 test("calm requires a recent successful run receipt", async ({ page }) => {
   await setLang(page, "en");
@@ -89,5 +89,5 @@ test("ZH language renders ZH monitor copy", async ({ page }) => {
   await installFixtures(page, { alerts: [], runsState: "READ_OK_ZERO" });
   await page.goto("/alerts");
   await expect(page.locator('[data-monitor-state="never_ran"]')).toBeVisible({ timeout: 45_000 });
-  await expect(page.getByText("尚无记录")).toBeVisible();
+  await expect(page.getByText("尚无记录").first()).toBeVisible();
 });
