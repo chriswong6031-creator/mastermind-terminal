@@ -107,7 +107,7 @@ table in this README in the same pull request. A collision resolves in favour of
 earlier-opened pull request; the later one renumbers before merging.
 
 **(c) The initial seed is a one-time ruling exception to (b):** `0011` stays with #507 because it
-is a one-file Ready PR whose DDL is already applied live, while #502 is a 24-file Draft that must
+is a one-file Ready PR whose DDL is already applied live, while #502 is a 25-file Draft that must
 rebase regardless; no future exception to (b) without a DEC amendment.
 
 **(d) Every file stays re-runnable, and applying it stays out of band.** Each migration is
@@ -137,8 +137,9 @@ amendment, only a README edit.
   opened) is never invisible to the next claimant.
 - **Release path.** A reservation is released — its owning claim stood down — the moment its
   pull request closes without merging, or (for a pre-reservation) the moment Meta-CEO B stands it
-  down; the row is not removed. Its status changes to `released` in place, replacing `reserved`,
-  so the table stops reading it as an active claim. Because the formula fold-in above counts
+  down; the row is not removed. Its status changes to `released` in place, replacing `open PR`
+  (or `reserved` for a number never opened as a PR), so the table stops reading it as an active
+  claim. Because the formula fold-in above counts
   every row in this table regardless of status, a released row's number keeps counting toward
   `max()` like any other row — `released` marks the claim as abandoned, it does not free the
   number for reissue. `released` is a status this README defines to implement the release path
@@ -148,7 +149,7 @@ amendment, only a README edit.
 
 | number | name | owner (PR / packet) | status |
 |---|---|---|---|
-| `0011` | `analytics_eid` | PR #507 (applied live 2026-09-05; readback receipt on #507) | applied |
+| `0011` | `analytics_eid` | PR #507 (applied live 2026-09-05; readback receipt: https://github.com/mastermindx-market-intelligence/mastermind-terminal/pull/507#issuecomment-5557754941) | applied |
 | `0012` | `thesis_objects` | PR #502 (renumbering in flight) | open PR |
 | `0013` | `alert_runs_outbox` | PR #513 (open PR, packet B-F08-2) | open PR |
 | `0014` | `tenancy_foundation` | PR #514 (open PR, packet B-F12-1) | open PR |
