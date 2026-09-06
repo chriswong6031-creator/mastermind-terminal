@@ -140,9 +140,10 @@ def main() -> int:
     bootstrap(admin)
     applied = apply_migrations(admin, Path(args.migrations))
 
-    # Seed three users A/B/C.
+    # Seed four users A/B/C/X. X is never added to any team by an ordinary path — it exists only
+    # as the target of the BLOCKER-1 insert-mints-an-owner probe below.
     user_ids: dict[str, str] = {}
-    for label in ("a", "b", "c"):
+    for label in ("a", "b", "c", "x"):
         row = admin_row(admin, "insert into auth.users default values returning id")
         user_ids[label] = str(row[0])
 
@@ -257,7 +258,9 @@ def main() -> int:
     proof.check("rls:admin_can_add", row == (1,), f"row={row}")
 
     # 8b. M1: admin (B) cannot self-promote to owner. tm_update_admin's WITH CHECK restricts the
-    # new role to admin/member only — owner transfer is out of scope for V1.
+    # new role to admin/member only — owner transfer is out of scope for V1. Pinned to the exact
+    # SQLSTATE (42501 InsufficientPrivilege, the RLS WITH CHECK violation code) so a typo or an
+    # unrelated error would not misread as a pass (round-4 ruling m2).
     def b_admin_self_promotes():
         with conn_b.cursor() as cur:
             cur.execute(
@@ -267,11 +270,37 @@ def main() -> int:
 
     proof.check(
         "rls:admin_cannot_self_promote",
-        expect_database_error(b_admin_self_promotes),
-        "admin self-promotion to owner did not raise",
+        expect_database_error(b_admin_self_promotes, sqlstate="42501"),
+        "admin self-promotion to owner did not raise 42501 InsufficientPrivilege",
     )
 
-    # 8c. M1/B2: admin (B) cannot demote the owner (A). tm_update_admin's USING clause is a row
+    # 8c. BLOCKER-1 (ruling r2): admin (B) cannot mint a NEW owner row by INSERTing role='owner'
+    # for a different account (X, who is not on the team at all). tm_insert_admin's WITH CHECK
+    # restricts the written role to admin/member, so this INSERT raises a WITH CHECK violation
+    # (42501) — but assert on EFFECT too (an admin-connection re-read), not only on the exception,
+    # since that is the stronger and more future-proof proof the ruling asks for.
+    def b_admin_inserts_owner_for_x():
+        with conn_b.cursor() as cur:
+            cur.execute(
+                "insert into public.team_members (team_id, user_id, role) values (%s, %s, 'owner')",
+                (team_id, user_ids["x"]),
+            )
+
+    insert_owner_raised = expect_database_error(b_admin_inserts_owner_for_x, sqlstate="42501")
+    row = admin_row(
+        admin,
+        "select count(*) filter (where role = 'owner') as owners, "
+        "count(*) filter (where user_id = %s and role = 'owner') as x_is_owner "
+        "from public.team_members where team_id = %s",
+        (user_ids["x"], team_id),
+    )
+    proof.check(
+        "rls:admin_cannot_insert_owner",
+        insert_owner_raised and row == (1, 0),
+        f"insert_raised_42501={insert_owner_raised}, (owner_count, x_is_owner)={row} (want (1, 0))",
+    )
+
+    # 8d. M1/B2: admin (B) cannot demote the owner (A). tm_update_admin's USING clause is a row
     # filter, not a check — a Postgres RLS USING clause on UPDATE silently excludes the non-
     # matching row instead of raising, so this must be asserted on EFFECT (RETURNING is empty, and
     # a follow-up admin-connection SELECT shows A's row unchanged), never via expect_database_error.
@@ -292,7 +321,7 @@ def main() -> int:
         f"admin demoting the owner affected rows={demote_returned}, owner row after={row}",
     )
 
-    # 8d. M1/B2: admin (B) cannot delete the owner (A)'s membership row. tm_delete_admin's USING
+    # 8e. M1/B2: admin (B) cannot delete the owner (A)'s membership row. tm_delete_admin's USING
     # clause is likewise a silent row filter on DELETE — assert 0 rows returned and the row still
     # present afterward, not that an exception was raised.
     with conn_b.cursor() as cur:
@@ -310,6 +339,27 @@ def main() -> int:
         "rls:admin_cannot_delete_owner",
         delete_returned == [] and row == (1,),
         f"admin deleting the owner affected rows={delete_returned}, owner row count after={row}",
+    )
+
+    # 8f. MAJOR-1 (ruling r2): the owner (A) cannot demote THEMSELVES either — round-2's SQL let
+    # the owner through a disjunct in tm_update_admin's USING clause; round 4 removes it, so this
+    # UPDATE is now filtered for everyone, owner included. Assert on EFFECT for the same silent-
+    # row-filter reason as 8d/8e: RETURNING is empty and the row is unchanged afterward.
+    with conn_a.cursor() as cur:
+        cur.execute(
+            "update public.team_members set role = 'member' where team_id = %s and user_id = %s returning id",
+            (team_id, user_ids["a"]),
+        )
+        self_demote_returned = cur.fetchall()
+    row = admin_row(
+        admin,
+        "select role from public.team_members where team_id = %s and user_id = %s",
+        (team_id, user_ids["a"]),
+    )
+    proof.check(
+        "rls:owner_cannot_self_demote",
+        self_demote_returned == [] and row == ("owner",),
+        f"owner self-demote affected rows={self_demote_returned}, owner row after={row}",
     )
 
     # 9. anon: no privilege at all on any tenancy table (0014 revokes all from anon and grants

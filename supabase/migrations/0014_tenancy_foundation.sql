@@ -82,16 +82,24 @@ drop policy if exists teams_insert_self on public.teams;
 create policy teams_insert_self   on public.teams        for insert to authenticated with check (created_by = auth.uid());
 drop policy if exists tm_select_member on public.team_members;
 create policy tm_select_member    on public.team_members for select to authenticated using (public.is_team_member(team_id));
+-- Owner invariant (ruling r2, round 4): exactly one owner row exists per team, and it is written
+-- ONLY by the creator-becomes-owner trigger (handle_new_team, SECURITY DEFINER — it bypasses RLS
+-- entirely, since its owning role carries BYPASSRLS, so this WITH CHECK never has to special-case
+-- it). No policy below ever lets an authenticated caller write 'owner' into this table again: an
+-- admin cannot INSERT a fresh owner row for another account (WITH CHECK excludes 'owner' here),
+-- and no UPDATE can turn an existing row into 'owner' (tm_update_admin's WITH CHECK below also
+-- excludes it). Ownership transfer is not available in this version.
 drop policy if exists tm_insert_admin on public.team_members;
-create policy tm_insert_admin     on public.team_members for insert to authenticated with check (public.team_role(team_id) in ('owner','admin'));
--- Owner transfer and owner eviction are OUT OF SCOPE for V1 (M1 ruling): the caller must be
--- owner/admin (USING), the row being touched must not currently be 'owner' unless the caller IS
--- the owner (USING), and the row can never be written to 'owner' by this policy at all (WITH
--- CHECK) — so an admin can neither self-promote nor demote/evict the owner, and no path here can
--- ever create a second owner.
+create policy tm_insert_admin     on public.team_members for insert to authenticated
+  with check (role in ('admin','member') and public.team_role(team_id) in ('owner','admin'));
+-- Owner transfer and owner eviction are OUT OF SCOPE for V1 (M1 ruling, tightened round 4): a row
+-- whose CURRENT role is 'owner' can never be touched by this policy — not by an admin, and not by
+-- the owner themselves — so nobody can demote, evict, or otherwise rewrite the owner row via
+-- UPDATE; the row can also never be written TO 'owner' (WITH CHECK), so no path here can ever
+-- create a second owner or restore one once removed.
 drop policy if exists tm_update_admin on public.team_members;
 create policy tm_update_admin     on public.team_members for update to authenticated
-  using (public.team_role(team_id) in ('owner','admin') and (role <> 'owner' or public.team_role(team_id) = 'owner'))
+  using (public.team_role(team_id) in ('owner','admin') and role <> 'owner')
   with check (role in ('admin','member') and public.team_role(team_id) in ('owner','admin'));
 drop policy if exists tm_delete_admin on public.team_members;
 create policy tm_delete_admin     on public.team_members for delete to authenticated using (public.team_role(team_id) in ('owner','admin') and role <> 'owner');
