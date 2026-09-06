@@ -334,6 +334,7 @@
 .ci-qa-row{min-width:0;border:1px solid var(--hairline);border-radius:var(--r-tile);background:var(--panel-2);overflow:hidden}
 .ci-qa-row>summary{display:flex;align-items:center;gap:10px;min-height:40px;padding:8px 12px;cursor:pointer;list-style:none}
 .ci-qa-row>summary::-webkit-details-marker{display:none}
+.ci-theme-list details{margin:0;min-width:0}.ci-theme-list details>summary{padding:0;cursor:pointer;list-style:none;font:600 10.5px/1 var(--font-ui);color:var(--text-2)}.ci-theme-list details>summary::-webkit-details-marker{display:none}
 .ci-qa-row>summary strong{flex:none;color:var(--brand-2);font:700 11px/1 var(--font-ui)}
 .ci-qa-row>summary span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font:620 12px/1.2 var(--font-ui)}
 .ci-qa-body{display:grid;gap:10px;padding:0 12px 12px;min-width:0}

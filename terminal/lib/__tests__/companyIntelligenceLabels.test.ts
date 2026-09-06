@@ -74,6 +74,26 @@ describe("company intelligence labels", () => {
     expect(managerStyleLabel(style, false).charAt(0)).toBe("M");
   });
 
+  it("lower-cases an ALL-CAPS slug before capitalising the first letter", () => {
+    expect(managerStyleLabel("MULTI_STRAT", false)).toBe("Multi strat");
+    expect(managerStyleLabel("MULTI_STRAT", true)).toBe("Multi strat");
+    expect(topicTagLabel("AI_CAPEX", false)).toBe("Ai capex");
+    expect(topicTagLabel("AI_CAPEX", true)).toBe("Ai capex");
+  });
+
+  it("uses plain finance wording for the mandated EN/ZH labels", () => {
+    expect(typedAbsenceReasonLabel("document_bytes_not_held", false)).toBe("The document file is not stored.");
+    expect(typedAbsenceReasonLabel("document_bytes_not_held", true)).toBe("未保存该文档文件。");
+    expect(typedAbsenceReasonLabel("no_primary_release", false)).toBe("No official company release.");
+    expect(typedAbsenceReasonLabel("no_primary_release", true)).toBe("没有公司正式公告。");
+    expect(managerStyleLabel("quality_growth", false)).toBe("Quality growth");
+    expect(managerStyleLabel("quality_growth", true)).toBe("优质成长");
+    expect(typedAbsenceReasonLabel("speaker_unresolvable", true)).toBe("无法确定发言人。");
+    expect(typedAbsenceReasonLabel("missing_period", true)).toBe("缺少报告期间。");
+    expect(managerStyleLabel("activist", true)).toBe("维权股东");
+    expect(managerStyleLabel("long_only", true)).toBe("纯多头");
+  });
+
   it("returns the neutral label for an empty topic tag", () => {
     expect(topicTagLabel("", false)).toBe(NOT_CLASSIFIED.en);
     expect(topicTagLabel("   ", true)).toBe(NOT_CLASSIFIED.zh);

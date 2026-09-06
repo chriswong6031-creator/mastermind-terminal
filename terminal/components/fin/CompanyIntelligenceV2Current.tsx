@@ -399,7 +399,6 @@ export default function CompanyIntelligenceV2Current({
             {" "}
             <time className="num" dateTime={presented.event_date}>{fmtDate(presented.event_date)}</time>
           </span>
-          <span>{pick(zh, "Generation", "版本")} <code>{presented.generation_id.slice(0, 12)}</code></span>
           <span>{pick(zh, "Authority", "权限")} <b>{pick(zh, "Context only", "仅供背景参考")}</b></span>
           <span>{pick(zh, EVENT_WORKSPACE_ATTRIBUTION.en, EVENT_WORKSPACE_ATTRIBUTION.zh)}</span>
         </div>
@@ -609,7 +608,7 @@ export default function CompanyIntelligenceV2Current({
                   {v1.topics.timeline.map((topic) => (
                     <li key={topic.tag}>
                       <span className={`ci-topic-status ${topic.status}`} aria-hidden />
-                      <div><strong>{topicTagLabel(topic.tag, zh)}</strong><small>{topic.first_event_id} → {topic.last_event_id}</small></div>
+                      <div><strong>{topicTagLabel(topic.tag, zh)}</strong></div>
                       <span className="fin-tag" style={{ "--c": "var(--rcpt-exact)" } as React.CSSProperties}>{topicStateLabel(topic.status, zh)}</span>
                       <b className="num">{topic.event_count}</b>
                     </li>
