@@ -11,7 +11,8 @@
 .stanceMuted { color: var(--muted); border-left: 3px solid var(--line-3); padding-left: 8px; }
 .facts { display: flex; gap: 18px; font: 500 var(--fs-label)/1 var(--font-ui); color: var(--muted); flex: 1; }
 .factNum { font-family: var(--font-num); font-variant-numeric: tabular-nums; color: var(--text); }
-.coverage { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-weight: 650; }
+.coverage { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-weight: 650; display: flex; align-items: baseline; gap: 5px; }
+.coverageLabel { font-family: var(--font-ui); font-variant-numeric: normal; font-weight: 500; font-size: var(--fs-label); color: var(--muted); }
 
 .module { margin-top: 12px; }
 .moduleHead { display: flex; align-items: baseline; gap: 8px; }
@@ -45,7 +46,22 @@
 
 .ceiling { color: var(--muted); font-size: var(--fs-label); margin-top: 6px; }
 
-.detail { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
+/* Major 2: drillback needs command-center depth, not naked text on the page background —
+   an elevated panel, a scrim behind it, and a real close affordance. */
+.detailScrim {
+  position: fixed; inset: 0; background: color-mix(in srgb, black 55%, transparent);
+  display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; z-index: 60;
+}
+.detail {
+  display: flex; flex-direction: column; gap: 10px; padding: 20px; max-width: 560px; width: 100%;
+  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  box-shadow: 0 24px 64px -16px rgba(0,0,0,.6); position: relative;
+}
+.detailClose {
+  position: absolute; top: 12px; right: 12px; background: var(--panel-3); border: 1px solid var(--line-3);
+  border-radius: var(--r-md); color: var(--text); font: 600 var(--fs-label)/1 var(--font-ui);
+  padding: 5px 10px; cursor: pointer;
+}
 .detailFact { display: flex; gap: 8px; }
 .detailLabel { color: var(--muted); width: 160px; flex-shrink: 0; }
 .receiptDisclosure { margin-top: 8px; font-family: var(--font-num); font-size: var(--fs-label); color: var(--muted); }

@@ -18,8 +18,10 @@ export default function AlertTimeline({
   return (
     <div className={s.module}>
       <div className={s.moduleHead}>
-        <span>{lang === "zh" ? "自上次访问以来" : "Since you were here"}</span>
-        {rows.length > 0 && <span className={s.moduleCount}>{rows.length} {lang === "zh" ? "条新" : "new"}</span>}
+        {/* Not anchored to a last-visit timestamp yet (Major 4) — "recent activity" makes
+            no claim about when the account last looked, unlike "new"/"since you were here". */}
+        <span>{lang === "zh" ? "近期活动" : "Recent activity"}</span>
+        {rows.length > 0 && <span className={s.moduleCount}>{rows.length} {lang === "zh" ? "条" : "shown"}</span>}
       </div>
       <div className={s.spine} data-alerts-state={spineState}>
         {rows.map((r) => (

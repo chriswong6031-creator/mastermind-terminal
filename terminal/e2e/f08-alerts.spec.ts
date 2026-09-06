@@ -100,6 +100,10 @@ test("ZH language renders ZH monitor copy", async ({ page }) => {
 //   npx playwright test e2e/f08-alerts.spec.ts -g "crop:"
 const PROOF_DIR = "e2e/proof/f08-alerts";
 
+const WATCHING_ALERT = {
+  id: "a0", symbol: "NVDA", active: true, created_at: "2026-08-01T00:00:00Z",
+  condition: { type: "price" },
+};
 const FIRED_ALERT = {
   id: "a1", symbol: "NVDA", active: false, created_at: "2026-08-01T00:00:00Z",
   // Production shape (see the "fired alert" test above) — never the bare-boolean shape alone.
@@ -130,6 +134,20 @@ async function crop(page: Page, width: number, name: string) {
 
 for (const vp of [1440, 390] as const) {
   test(`crop: ${vp}-en-calm`, async ({ page }) => {
+    // Blocker 2: calm is the watching-with-no-recent-fire state, distinct from the
+    // fired-and-delivered state below — two crops from one fixture were the same PNG.
+    await setLang(page, "en");
+    await installFixtures(page, {
+      alerts: [WATCHING_ALERT], run: FRESH_RUN, runsState: "READ_OK",
+      lastSuccessAt: FRESH_RUN.concluded_at, outbox: [], outboxState: "READ_OK_ZERO",
+    });
+    await page.setViewportSize({ width: vp, height: vp === 390 ? 844 : 900 });
+    await page.goto("/alerts");
+    await expect(page.locator('[data-monitor-state="watching"]')).toBeVisible({ timeout: 45_000 });
+    await crop(page, vp, `${vp}-en-calm`);
+  });
+
+  test(`crop: ${vp}-en-fired-delivery`, async ({ page }) => {
     await setLang(page, "en");
     await installFixtures(page, {
       alerts: [FIRED_ALERT], run: FRESH_RUN, runsState: "READ_OK",
@@ -139,8 +157,7 @@ for (const vp of [1440, 390] as const) {
     await page.goto("/alerts");
     await expect(page.locator('[data-monitor-state="watching"]')).toBeVisible({ timeout: 45_000 });
     await expect(page.locator('[data-delivery="sent"]').first()).toBeVisible();
-    await crop(page, vp, `${vp}-en-${vp === 1440 ? "fired-delivery" : "calm"}`);
-    if (vp === 1440) await crop(page, vp, `${vp}-en-calm`);
+    await crop(page, vp, `${vp}-en-fired-delivery`);
   });
 
   test(`crop: ${vp}-en-degraded`, async ({ page }) => {

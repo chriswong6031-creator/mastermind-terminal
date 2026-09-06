@@ -205,6 +205,7 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
   "monitor.degraded": ["Monitoring degraded — last successful check {t}", "监控降级 —— 上次成功检查 {t}"],
   "monitor.never_ran": ["Not recorded", "尚无记录"],
   "monitor.unknown": ["Cannot confirm", "无法确认"],
+  "coverage.label": ["tracked", "条被跟踪"],
   "fact.lastAttempt": ["Last check", "上次检查"],
   "fact.lastSuccess": ["Last successful check", "上次成功检查"],
   "null.notRecorded": ["not recorded", "尚无记录"],

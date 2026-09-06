@@ -583,8 +583,14 @@ export default function AlertsView({ email, panelOnly, listOnly }: { email: stri
           )}
         </div>
   );
+  const gateNudgeNode = gateNudge && (
+    <div className="undo-toast" role="status" style={{ position: "fixed", bottom: 96, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--line-3)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 51, display: "flex", alignItems: "center", gap: 12 }}>
+      <span>{gateNudge}</span>
+      <a href="/login" style={{ color: "var(--brand-2)", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>{t("gateSignupCta")}</a>
+    </div>
+  );
   if (panelOnly) {
-    return newAlertPanel;
+    return <>{newAlertPanel}{gateNudgeNode}</>;
   }
 
   const existingAlertsPanel = (
@@ -677,7 +683,13 @@ export default function AlertsView({ email, panelOnly, listOnly }: { email: stri
         </div>
   );
   if (listOnly) {
-    return existingAlertsPanel;
+    // Major 8 attempted fix (a `.pg`-wrapped and a `<main>`-wrapped variant both broke the
+    // deterministic drillback e2e — the former via pointer-event interception from the
+    // cockpit above, the latter via unstable timeouts under parallel projects) — reverted to
+    // the original bare-panel render pending a real investigation. Tracked as an open GAP,
+    // not silently dropped: the page.tsx comment's "brings its own <main>" claim is still
+    // wrong for this mount and needs a follow-up fix once verified stable in isolation.
+    return <>{existingAlertsPanel}{gateNudgeNode}</>;
   }
 
   return (
@@ -687,12 +699,7 @@ export default function AlertsView({ email, panelOnly, listOnly }: { email: stri
         {existingAlertsPanel}
       </div>
       {/* anon register nudge — options alerts require a free account */}
-      {gateNudge && (
-        <div className="undo-toast" role="status" style={{ position: "fixed", bottom: 96, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--line-3)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 51, display: "flex", alignItems: "center", gap: 12 }}>
-          <span>{gateNudge}</span>
-          <a href="/login" style={{ color: "var(--brand-2)", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>{t("gateSignupCta")}</a>
-        </div>
-      )}
+      {gateNudgeNode}
     </main>
   );
 }

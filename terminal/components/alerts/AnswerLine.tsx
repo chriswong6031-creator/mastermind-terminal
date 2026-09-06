@@ -34,7 +34,7 @@ export default function AnswerLine({
         <span>{copy("fact.lastAttempt", lang)} <span className={s.factNum}>{fmtTime(lastAttemptAt, lastAttemptState, lang)}</span></span>
         <span>{copy("fact.lastSuccess", lang)} <span className={s.factNum}>{fmtTime(lastSuccessAt, lastSuccessState, lang)}</span></span>
       </span>
-      <span className={s.coverage}>{coverageCount !== null ? coverageCount : copy("null.cannotRead", lang)}</span>
+      <span className={s.coverage}>{coverageCount !== null ? coverageCount : copy("null.cannotRead", lang)} <span className={s.coverageLabel}>{copy("coverage.label", lang)}</span></span>
     </div>
   );
 }
