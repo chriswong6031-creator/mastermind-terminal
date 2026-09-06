@@ -125,22 +125,36 @@ def _scan(sql: str):
                 continue
             if sql.startswith("/*", i):
                 state = "/"
-                yield i, ch, state
+                # Yield BOTH delimiter characters -- a single-character yield
+                # here silently dropped the "*" from the callers that rebuild
+                # text out of yielded (index, char) pairs (split_statements,
+                # strip_sql_comments), which left a bare "/" in the sent SQL
+                # and defeated the second stripping pass entirely.
+                yield i, sql[i], state
+                yield i + 1, sql[i + 1], state
                 i += 2
                 continue
             if ch == "$":
                 m = re.match(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$", sql[i:])
                 if m:
                     tag = m.group(1) or ""
+                    token = m.group(0)
                     state = ("$", tag)
-                    yield i, ch, state
-                    i += len(m.group(0))
+                    # Yield every character of the opening delimiter ("$$" or
+                    # "$tag$"), not just the first "$" -- see note above.
+                    for j, c in enumerate(token):
+                        yield i + j, c, state
+                    i += len(token)
                     continue
             yield i, ch, state
             i += 1
         elif state == "'":
             if sql.startswith("''", i):
-                yield i, ch, state
+                # Escaped quote inside a string literal -- both characters
+                # are content and must both be yielded (a one-character
+                # yield here dropped one quote, corrupting the literal).
+                yield i, sql[i], state
+                yield i + 1, sql[i + 1], state
                 i += 2
                 continue
             if ch == "'":
@@ -152,7 +166,9 @@ def _scan(sql: str):
             i += 1
         elif state == '"':
             if sql.startswith('""', i):
-                yield i, ch, state
+                # Escaped quote inside a quoted identifier -- see note above.
+                yield i, sql[i], state
+                yield i + 1, sql[i + 1], state
                 i += 2
                 continue
             if ch == '"':
@@ -166,7 +182,11 @@ def _scan(sql: str):
             tag = state[1]
             closer = f"${tag}$"
             if sql.startswith(closer, i):
-                yield i, ch, state
+                # Yield every character of the closing delimiter -- see the
+                # opening-delimiter note above for why a single-char yield
+                # here corrupted the statement (e.g. "end $$;" -> "end $;").
+                for j, c in enumerate(closer):
+                    yield i + j, c, state
                 i += len(closer)
                 state = None
                 continue
@@ -485,7 +505,16 @@ def build_receipt(**kw) -> dict:
 
 
 def apply_mode(statements: list[str]) -> str:
-    return "single-transaction" if has_transaction_wrapper(statements) else "statement-at-a-time"
+    # run_apply sends one POST per statement unconditionally -- a begin;/
+    # commit;-wrapped file is not sent as a single transactional POST (the
+    # Management API splits on ';' server-side regardless, so it never was
+    # one transaction either way). This must never report "single-
+    # transaction": that label went straight into the receipt that is the
+    # PR's own proof artifact and claimed an atomicity the tool does not
+    # provide (review-#516 MAJOR 2). has_transaction_wrapper() still exists
+    # to describe the FILE's own shape; this describes what the tool DOES.
+    del statements  # unused; kept for a stable call signature
+    return "statement-at-a-time"
 
 
 # --------------------------------------------------------------------------
@@ -722,16 +751,16 @@ def run_apply(
             return 5
 
     if rb_statements is None or not expected:
+        reason = (
+            "no readback available for this legacy file"
+            if rb_statements is None
+            else "no object names could be read out of this file"
+        )
         if not accept_unverifiable:
             _write(_receipt(
                 pre=pre, post=post, status="unverified", expected_objects=[],
                 missing_after=[], failed_statement_index=None, error=None,
             ))
-            reason = (
-                "no readback available for this legacy file"
-                if rb_statements is None
-                else "no object names could be read out of this file"
-            )
             print(
                 f"null: {reason}, so the post-readback cannot be checked "
                 "automatically -- read the rows yourself and re-run with "
@@ -739,6 +768,23 @@ def run_apply(
                 file=out,
             )
             return 6
+        # --accept-unverifiable proceeds (exit 0) but must never claim the
+        # plain "applied" status a checked run gets: falling through to that
+        # status silently hid the null (no message printed, and the receipt
+        # -- the PR's own proof artifact -- looked identical to a verified
+        # pass) (review-#516 MAJOR 3). "applied_unverified" is a distinct,
+        # honest status and the null is still printed.
+        _write(_receipt(
+            pre=pre, post=post, status="applied_unverified", expected_objects=[],
+            missing_after=[], failed_statement_index=None, error=None,
+        ))
+        print(
+            f"null: {reason}, so the post-readback could not be checked "
+            "automatically. Proceeding because --accept-unverifiable was "
+            "set -- read the rows yourself to confirm this actually landed.",
+            file=out,
+        )
+        return 0
     else:
         missing = missing_after(expected, post)
         if missing:

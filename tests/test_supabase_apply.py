@@ -284,12 +284,53 @@ def test_allow_legacy_waives_only_versions_0001_to_0010():
     assert migration_version("no_version_prefix.sql") is None
 
 
-def test_transaction_wrapper_is_detected_and_selects_single_transaction_mode():
+def test_strip_sql_comments_is_byte_exact_around_dollar_quotes_and_escaped_quotes():
+    # Regression for the review-#516 blocker: the scanner used to yield only
+    # the FIRST character of every multi-character delimiter (dollar-quote
+    # open/close, "/*", and the "''"/'""' escaped-quote pairs) and advance
+    # past the rest, so callers that rebuild text from yielded characters
+    # (strip_sql_comments, split_statements) silently dropped a character at
+    # every one of those boundaries. None of the cases below contain a
+    # comment, so a byte-exact scanner must return the input unchanged.
+    cases = [
+        "do $$ begin exception when duplicate_object then null; end $$;",
+        "create function f() returns void as $tag$ begin end $tag$ language plpgsql;",
+        "select 'it''s' as x;",
+        'select "a""b" as y;',
+    ]
+    for sql in cases:
+        assert strip_sql_comments(sql) == sql
+
+
+def test_split_statements_preserves_block_comments_across_the_pipeline():
+    # The corruption above was invisible when strip_sql_comments was called
+    # directly on the original text (one clean pass over an intact "/*"),
+    # but run_apply calls split_statements(text) FIRST and then
+    # strip_sql_comments on each returned statement -- exactly this order --
+    # and the dropped "*" meant the corrupted statement no longer contained
+    # a recognizable "/*", so the second pass left "/ note */" as literal,
+    # unstripped SQL text sent to the API.
+    sql = "create table if not exists public.t2 /* note */ (id int);"
+    stmts = split_statements(sql)
+    assert stmts == ["create table if not exists public.t2 /* note */ (id int)"]
+    cleaned = strip_sql_comments(stmts[0])
+    assert "/*" not in cleaned
+    assert "*/" not in cleaned
+    assert "public.t2" in cleaned and "(id int)" in cleaned
+
+
+def test_transaction_wrapper_is_detected_but_apply_mode_never_claims_single_transaction():
+    # apply_mode used to return "single-transaction" for a begin;/commit;
+    # wrapped file even though run_apply always sends one POST per
+    # statement -- a false atomicity label on the receipt that is the PR's
+    # own proof artifact (review-#516 MAJOR 2). has_transaction_wrapper still
+    # reports the file's own shape; apply_mode must describe what the tool
+    # actually does, which is statement-at-a-time regardless of wrapper.
     stmts_wrapped = split_statements(FIXTURE_0014)
     stmts_unwrapped = split_statements(FIXTURE_0013)
     assert has_transaction_wrapper(stmts_wrapped) is True
     assert has_transaction_wrapper(stmts_unwrapped) is False
-    assert apply_mode(stmts_wrapped) == "single-transaction"
+    assert apply_mode(stmts_wrapped) == "statement-at-a-time"
     assert apply_mode(stmts_unwrapped) == "statement-at-a-time"
 
 
@@ -321,13 +362,14 @@ def test_wrapped_migrations_still_apply_one_statement_per_post(tmp_path):
     f.write_text(FIXTURE_0014)
     fake = FakeApi()
     receipt_path = tmp_path / "receipt.json"
-    # apply_mode labels this "single-transaction" (has_transaction_wrapper is
-    # True) but the tool never POSTs the whole file as one query: the
-    # Management API splits on ';' server-side (supabase/migrations/
-    # README.md), so a single POST was never actually one transaction, and
-    # it also made a mid-file failure unreportable (failed_statement_index
-    # forced to None). Every migration -- wrapped or not -- applies one
-    # statement per POST.
+    # has_transaction_wrapper() is True for this fixture, but the tool never
+    # POSTs the whole file as one query: the Management API splits on ';'
+    # server-side (supabase/migrations/README.md), so a single POST was
+    # never actually one transaction, and it also made a mid-file failure
+    # unreportable (failed_statement_index forced to None). Every migration
+    # -- wrapped or not -- applies one statement per POST, and apply_mode()
+    # says so in the receipt (never the false "single-transaction" label --
+    # review-#516 MAJOR 2).
     #
     # This fixture's own readback query only asserts the `tenants` table, so
     # a fake catalog that never echoes the other expected names (index/
@@ -345,7 +387,7 @@ def test_wrapped_migrations_still_apply_one_statement_per_post(tmp_path):
     begin_calls = [c for c in fake.calls if c.strip().lower() == "begin"]
     assert len(begin_calls) == 1
     receipt = json.loads(receipt_path.read_text())
-    assert receipt["apply_mode"] == "single-transaction"
+    assert receipt["apply_mode"] == "statement-at-a-time"
     assert receipt["failed_statement_index"] is None
 
 
@@ -402,7 +444,7 @@ def test_missing_objects_after_apply_exit_6_and_names_them_in_plain_words(tmp_pa
     assert any("widget" in m for m in receipt["missing_after"])
 
 
-def test_unverifiable_expected_objects_exit_6_unless_accept_unverifiable(tmp_path):
+def test_unverifiable_expected_objects_exit_6_unless_accept_unverifiable(tmp_path, capsys):
     text = (
         "alter table public.x add column y int;\n"
         "-- down:\n-- alter table public.x drop column y;\n"
@@ -423,6 +465,16 @@ def test_unverifiable_expected_objects_exit_6_unless_accept_unverifiable(tmp_pat
     rc2 = run_apply(f, runner=fake2, receipt_path=receipt_path2, project_ref="ref123",
                      accept_unverifiable=True)
     assert rc2 == 0
+    # review-#516 MAJOR 3: --accept-unverifiable used to fall through to the
+    # plain "applied" status with nothing printed, making the receipt --
+    # this PR's own proof artifact -- indistinguishable from a checked pass.
+    # It must carry a distinct status and the null must still be printed.
+    receipt2 = json.loads(receipt_path2.read_text())
+    assert receipt2["status"] == "applied_unverified"
+    assert receipt2["status"] != "applied"
+    printed = capsys.readouterr().out
+    assert "null:" in printed
+    assert "accept-unverifiable" in printed
 
 
 def test_dotenv_parser_reads_quoted_and_exported_values_and_ignores_comments(tmp_path):
