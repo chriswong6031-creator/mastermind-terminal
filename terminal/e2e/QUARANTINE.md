@@ -15,7 +15,9 @@ Rules (Meta-CEO ruling 2026-09-05, under issue #485):
 3. Every row names its evidence run ids, an owner, and a re-enable condition, and states any
    coverage given up beyond the row's own defect (assertions inside the same test body that stop
    running as a side effect of the quarantine).
-4. This table shrinks. It never grows without the ruling above and a row here.
+4. This table shrinks. It never grows without the ruling above and a row here. When the
+   table empties, keep this file in place with an empty table — CI hard-fails if the file
+   is missing, by design (see "Disclose quarantined e2e journeys" in ci.yml).
 
 | Spec:line | Test title | Project | Evidence runs | Owner | Re-enable condition |
 | --- | --- | --- | --- | --- | --- |
@@ -71,7 +73,16 @@ pass (issue #485 body: run 33286870497 "passed only after seven flaky retries").
 them would be coverage loss with no effect on the check. Re-open the question if any of them
 appears in a `failed` bucket on a run made after 2026-09-04.
 
-| Spec:line | Symptom | Evidence runs | Note |
+Every run id below is cited as a *flake* (a check-run annotation's `flaky` bucket, or a
+retry-then-pass with no annotation at all), never as a `failed` bucket entry — the column is
+titled "Flaked in" rather than "Evidence runs" for exactly that reason. Two rows were
+verified directly: run 33787644981's annotations list both
+`watchlist-bulk-actions.spec.ts:143` and `drawing-system.spec.ts:1586` under "3 flaky", with
+no failure stack trace for either — confirming they never reached the `failed` bucket in that
+run. A retry-then-pass with zero remaining flakiness produces no GitHub annotation at all, so
+an unannotated citation elsewhere in this table records a locally-observed flake, not a gap.
+
+| Spec:line | Symptom | Flaked in | Note |
 | --- | --- | --- | --- |
 | terminal/e2e/marker-tooltip.spec.ts:465 | `.mm-sig-tip` hidden after a touch tap | 33942726252 (tablet, flaky) | The only anomaly besides the quarantine on the current harness |
 | terminal/e2e/marker-tooltip.spec.ts:483 | same tooltip race on the travel-is-a-pan journey | 33915200713 (tablet), 33599177226 (mobile) | Quarantine-eligible by run count; deliberately not taken |
