@@ -15,7 +15,16 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { resolveShellBrainSymbol, SHELL_DEFAULT_BRAIN_SYMBOL, type ShellBrainSymbolHost } from "@/lib/shellBrainSymbol";
+import {
+  resolveShellBrainSymbol,
+  announceShellBrainSymbol,
+  subscribeShellBrainSymbol,
+  SHELL_DEFAULT_BRAIN_SYMBOL,
+  SHELL_BRAIN_SYMBOL_EVENT,
+  type ShellBrainSymbolHost,
+  type ShellBrainSymbolBroadcastHost,
+  type ShellBrainSymbolListenHost,
+} from "@/lib/shellBrainSymbol";
 
 function makeHost(href: string, mmWs?: unknown): ShellBrainSymbolHost {
   const store = new Map<string, string>();
@@ -69,22 +78,77 @@ describe("resolveShellBrainSymbol", () => {
   });
 });
 
-describe("AppShell wires BrainWidget's active prop to resolveShellBrainSymbol (regression guard for the exact reviewer-cited bug site)", () => {
+describe("AppShell wires BrainWidget's active prop to useShellBrainSymbol (regression guard for the exact reviewer-cited bug site)", () => {
   const APP_SHELL_TSX = readFileSync(join(__dirname, "..", "..", "components", "chrome", "AppShell.tsx"), "utf8");
 
   it("no longer mounts BrainWidget with the literal empty-string active prop", () => {
     expect(APP_SHELL_TSX).not.toMatch(/<BrainWidget\s+active=""/);
   });
 
-  it("imports resolveShellBrainSymbol and passes its result as BrainWidget's active prop", () => {
-    expect(APP_SHELL_TSX).toMatch(/import\s*\{\s*resolveShellBrainSymbol\s*\}\s*from\s*["']@\/lib\/shellBrainSymbol["']/);
-    // Whatever local name the memoized value is given, it must (a) be produced by
-    // resolveShellBrainSymbol and (b) be the exact expression handed to <BrainWidget active=...>.
-    const assignment = APP_SHELL_TSX.match(/const\s+(\w+)\s*=\s*useMemo\(\s*\(\)\s*=>[\s\S]{0,200}?resolveShellBrainSymbol\(\)/);
-    expect(assignment, "no useMemo(...) assignment calling resolveShellBrainSymbol() found").not.toBeNull();
+  it("imports useShellBrainSymbol and passes its result as BrainWidget's active prop", () => {
+    // Review round-4: a plain useMemo(() => resolveShellBrainSymbol(), [path]) never re-ran on
+    // a same-route symbol switch (AnalysisWorkspace rewrites ?symbol= with
+    // history.replaceState, which triggers no re-render) — see MAJOR-1 above and
+    // useShellBrainSymbol's own test in the next describe block.
+    expect(APP_SHELL_TSX).toMatch(/import\s*\{\s*useShellBrainSymbol\s*\}\s*from\s*["']@\/lib\/shellBrainSymbol["']/);
+    const assignment = APP_SHELL_TSX.match(/const\s+(\w+)\s*=\s*useShellBrainSymbol\(/);
+    expect(assignment, "no useShellBrainSymbol(...) assignment found").not.toBeNull();
     const localName = assignment![1];
     const activeProp = APP_SHELL_TSX.match(/<BrainWidget\s+active=\{(\w+)\}/);
     expect(activeProp, "<BrainWidget active={...}> prop not found").not.toBeNull();
     expect(activeProp![1]).toBe(localName);
+  });
+});
+
+describe("announceShellBrainSymbol / subscribeShellBrainSymbol (review round-4, MAJOR 1 — the channel useShellBrainSymbol uses to stay live)", () => {
+  // A minimal in-memory EventTarget stub — same host-injection pattern as makeHost() above —
+  // so this suite needs no jsdom `window` (plain Node's global EventTarget/CustomEvent, used
+  // directly here, is what the real browser window satisfies structurally too).
+  function makeEventHost(): ShellBrainSymbolBroadcastHost & ShellBrainSymbolListenHost & EventTarget {
+    return new EventTarget() as ShellBrainSymbolBroadcastHost & ShellBrainSymbolListenHost & EventTarget;
+  }
+
+  it("delivers an announced symbol to a subscriber", () => {
+    const host = makeEventHost();
+    const received: string[] = [];
+    subscribeShellBrainSymbol((s) => received.push(s), host);
+
+    announceShellBrainSymbol("AAPL", host);
+
+    expect(received).toEqual(["AAPL"]);
+  });
+
+  it("drops a malformed symbol instead of broadcasting it", () => {
+    const host = makeEventHost();
+    const received: string[] = [];
+    subscribeShellBrainSymbol((s) => received.push(s), host);
+
+    announceShellBrainSymbol("not a symbol", host);
+
+    expect(received).toEqual([]);
+  });
+
+  it("stops delivering after unsubscribe", () => {
+    const host = makeEventHost();
+    const received: string[] = [];
+    const unsubscribe = subscribeShellBrainSymbol((s) => received.push(s), host);
+
+    unsubscribe();
+    announceShellBrainSymbol("MSFT", host);
+
+    expect(received).toEqual([]);
+  });
+
+  it("is a no-op (never throws) with no host, on either side", () => {
+    expect(() => announceShellBrainSymbol("AAPL", undefined)).not.toThrow();
+    expect(() => subscribeShellBrainSymbol(() => undefined, undefined)()).not.toThrow();
+  });
+
+  it("uses one well-known event name both sides agree on", () => {
+    const host = makeEventHost();
+    let sawEvent = false;
+    host.addEventListener(SHELL_BRAIN_SYMBOL_EVENT, () => { sawEvent = true; });
+    announceShellBrainSymbol("AAPL", host);
+    expect(sawEvent).toBe(true);
   });
 });

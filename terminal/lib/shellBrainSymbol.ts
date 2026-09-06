@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { normalizeAnalysisSymbol } from "./analysisSymbol";
 
 /**
@@ -67,4 +68,76 @@ export function resolveShellBrainSymbol(
   }
 
   return SHELL_DEFAULT_BRAIN_SYMBOL;
+}
+
+/** The custom DOM event `announceShellBrainSymbol` dispatches and `subscribeShellBrainSymbol` listens for. */
+export const SHELL_BRAIN_SYMBOL_EVENT = "mm:shell-brain-symbol";
+
+/** The minimal event-target shape `announceShellBrainSymbol` needs — real `window` satisfies it. */
+export interface ShellBrainSymbolBroadcastHost {
+  dispatchEvent(event: Event): boolean;
+}
+
+/**
+ * Tell the shell's resolved Brain symbol changed (review round-4, MAJOR 1). `AnalysisWorkspace`
+ * calls this every time its own `sym` state changes — the SAME moment it rewrites `?symbol=`
+ * via `window.history.replaceState` (`writeParam`). `replaceState` fires no Next.js navigation
+ * and no native DOM event, so `usePathname()` alone can never see a same-route symbol switch;
+ * this is the one channel that tells `AppShell` (via `useShellBrainSymbol` below) to re-resolve
+ * and re-hand-off to the mounted `BrainWidget`. A value that fails the analysis-symbol grammar
+ * is dropped silently — the same rule every other candidate in `resolveShellBrainSymbol` obeys.
+ */
+export function announceShellBrainSymbol(
+  symbol: string,
+  host: ShellBrainSymbolBroadcastHost | undefined = typeof window === "undefined" ? undefined : window,
+): void {
+  const normalized = normalizeAnalysisSymbol(symbol);
+  if (!normalized || !host) return;
+  host.dispatchEvent(new CustomEvent<string>(SHELL_BRAIN_SYMBOL_EVENT, { detail: normalized }));
+}
+
+/** The minimal event-target shape `subscribeShellBrainSymbol` needs — real `window` satisfies it. */
+export interface ShellBrainSymbolListenHost {
+  addEventListener(type: string, listener: EventListener): void;
+  removeEventListener(type: string, listener: EventListener): void;
+}
+
+/**
+ * Subscribe to `announceShellBrainSymbol` broadcasts. Returns an unsubscribe function so a
+ * caller can wire this straight into a `useEffect` cleanup.
+ */
+export function subscribeShellBrainSymbol(
+  onChange: (symbol: string) => void,
+  host: ShellBrainSymbolListenHost | undefined = typeof window === "undefined" ? undefined : window,
+): () => void {
+  if (!host) return () => undefined;
+  const listener = (event: Event) => {
+    const detail = (event as CustomEvent<string>).detail;
+    if (typeof detail === "string" && detail) onChange(detail);
+  };
+  host.addEventListener(SHELL_BRAIN_SYMBOL_EVENT, listener);
+  return () => host.removeEventListener(SHELL_BRAIN_SYMBOL_EVENT, listener);
+}
+
+/**
+ * `AppShell`'s own hook for the live Brain symbol on `/analysis` (review round-4, MAJOR 1's
+ * fix): resolved once whenever `active` turns true (a fresh `/analysis` entry, mirroring the
+ * old `useMemo(..., [path])` this replaces), and kept current afterward via
+ * `subscribeShellBrainSymbol` — the only way `AppShell` learns about a same-route symbol
+ * switch, because `AnalysisWorkspace` changes the URL with `history.replaceState`, which the
+ * component tree never observes on its own. `active=false` (every non-`/analysis` route)
+ * always returns `""` and holds no subscription — `AppShell` does not even mount `BrainWidget`
+ * there, matching the router-real gate in `components/chrome/AppShell.tsx`.
+ */
+export function useShellBrainSymbol(active: boolean): string {
+  const [symbol, setSymbol] = useState<string>(() => (active ? resolveShellBrainSymbol() : ""));
+  useEffect(() => {
+    if (!active) {
+      setSymbol("");
+      return;
+    }
+    setSymbol(resolveShellBrainSymbol());
+    return subscribeShellBrainSymbol(setSymbol);
+  }, [active]);
+  return symbol;
 }

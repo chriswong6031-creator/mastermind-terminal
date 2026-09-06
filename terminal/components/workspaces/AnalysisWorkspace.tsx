@@ -11,6 +11,7 @@ import { getFund, getBars, type Fund, type Bar } from "@/lib/fund";
 import { getJSON } from "@/lib/dataCache";
 import { useLang } from "@/lib/i18n";
 import { normalizeAnalysisSymbol } from "@/lib/analysisSymbol";
+import { announceShellBrainSymbol } from "@/lib/shellBrainSymbol";
 
 /**
  * Analysis workspace composer (Wave-2 IA) — the `/analysis` body.
@@ -93,10 +94,15 @@ export default function AnalysisWorkspace({ initialSymbol, initialPage }: Analys
     window.history.replaceState(null, "", u.toString());
   }, []);
 
-  // ── symbol change → rewrite ?symbol= shallowly ──
+  // ── symbol change → rewrite ?symbol= shallowly, and tell AppShell's Brain host ──
+  // (review round-4, MAJOR 1): `writeParam` uses `history.replaceState`, which fires no
+  // Next.js navigation and no native DOM event, so AppShell's shell-level resolver would
+  // otherwise never learn the user switched company on the same /analysis visit.
+  // `announceShellBrainSymbol` is the one channel that reaches it — see lib/shellBrainSymbol.ts.
   useEffect(() => {
     if (invalidSymbol) return;
     writeParam("symbol", sym);
+    announceShellBrainSymbol(sym);
   }, [invalidSymbol, sym, writeParam]);
 
   // ── sub-page change (MegaPane onPage) → state + ?page= shallowly ──

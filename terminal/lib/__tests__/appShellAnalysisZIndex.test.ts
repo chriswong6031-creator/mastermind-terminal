@@ -6,25 +6,88 @@
 // colliding `.fin-pane--workspace` overlay (components/workspaces/AnalysisWorkspace.tsx).
 //
 // Source-scan style (matches lib/__tests__/suiteAlerts.test.ts): this repo has no React
-// render-test harness for components/, so CSS/markup contracts are pinned by reading the
-// real files, the same way the app ships them.
+// render-test harness for components/, so markup contracts are pinned by reading the real
+// files, the same way the app ships them. The z-index/offset CSS contract below (review
+// round-4, MAJOR 1) is instead parsed through a real CSS engine — see that describe block's
+// header comment for why a text regex over the source was rejected.
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { JSDOM } from "jsdom";
 
 const GLOBALS_CSS = readFileSync(join(__dirname, "..", "..", "app", "globals.css"), "utf8");
+const FIN_CSS = readFileSync(join(__dirname, "..", "..", "app", "fin.css"), "utf8");
 const APP_SHELL_TSX = readFileSync(join(__dirname, "..", "..", "components", "chrome", "AppShell.tsx"), "utf8");
+
+// ── real-CSSOM helpers (review round-4, MAJOR 1 measurement fix) ──
+// jsdom's `document.styleSheets` runs the actual browser CSS parser — it is immune to the
+// whitespace/comment/rule-reordering that breaks a text regex, and every value read below
+// comes from the parsed `CSSStyleDeclaration` (the same interface `getComputedStyle` returns),
+// not from scraping source text. jsdom does not evaluate `@media` against a real viewport for
+// `getComputedStyle` (verified: no headless-browser support in this environment, and the
+// house rule for this PR forbids running Playwright locally), so this reads the parsed media
+// condition's own `max-width` value and reasons about applicability explicitly instead of
+// pretending a fake viewport size — a narrower but honest substitute for the Playwright
+// measurement this pass could not run locally.
+interface FlatRule {
+  selectorText: string;
+  style: CSSStyleDeclaration;
+  mediaConditions: string[];
+}
+
+function parseStylesheet(css: string): CSSRule[] {
+  // `@import url(tailwindcss)` has no base URL to resolve against in a bare jsdom document;
+  // jsdom reports that as an async console error but does not stop parsing the rest of the
+  // sheet (verified against the real file). Stripped here since this test never needs it.
+  const withoutImports = css.replace(/@import[^;]+;/g, "");
+  const dom = new JSDOM(`<!doctype html><html><head><style>${withoutImports}</style></head><body></body></html>`);
+  const sheet = dom.window.document.styleSheets[0];
+  return sheet ? Array.from(sheet.cssRules) : [];
+}
+
+function flattenRules(rules: CSSRule[], mediaConditions: string[] = []): FlatRule[] {
+  const out: FlatRule[] = [];
+  for (const rule of rules) {
+    if (rule.constructor.name === "CSSMediaRule") {
+      const mediaRule = rule as unknown as { conditionText?: string; media: { mediaText: string }; cssRules: CSSRule[] };
+      const condition = mediaRule.conditionText || mediaRule.media.mediaText;
+      out.push(...flattenRules(Array.from(mediaRule.cssRules), [...mediaConditions, condition]));
+    } else if (rule.constructor.name === "CSSStyleRule") {
+      const styleRule = rule as unknown as { selectorText: string; style: CSSStyleDeclaration };
+      out.push({ selectorText: styleRule.selectorText, style: styleRule.style, mediaConditions });
+    }
+  }
+  return out;
+}
+
+/** The smallest `max-width:Npx` breakpoint named across a rule's media conditions, or null. */
+function maxWidthPx(mediaConditions: string[]): number | null {
+  let smallest: number | null = null;
+  for (const condition of mediaConditions) {
+    const match = condition.match(/max-width:\s*(\d+)px/);
+    if (match) {
+      const value = Number(match[1]);
+      if (smallest === null || value < smallest) smallest = value;
+    }
+  }
+  return smallest;
+}
+
+const GLOBALS_RULES = flattenRules(parseStylesheet(GLOBALS_CSS));
+const FIN_RULES = flattenRules(parseStylesheet(FIN_CSS));
+const ALL_RULES = [...GLOBALS_RULES, ...FIN_RULES];
 
 describe("AppShell analysis-only mobilebar z-index scoping", () => {
   it("keeps the shared .mobilebar rule at its historical z-index (every non-analysis route)", () => {
-    const baseRule = GLOBALS_CSS.match(/(?<!\.analysis-shell )\.mobilebar\{[^}]*\}/);
-    expect(baseRule, ".mobilebar base rule not found in globals.css").not.toBeNull();
-    expect(baseRule![0]).toContain("z-index:30");
-    expect(baseRule![0]).not.toContain("z-index:95");
+    const baseRule = GLOBALS_RULES.find((r) => r.selectorText === ".mobilebar" && r.mediaConditions.length === 0);
+    expect(baseRule, ".mobilebar base rule not found in globals.css").toBeTruthy();
+    expect(baseRule!.style.getPropertyValue("z-index")).toBe("30");
   });
 
   it("raises .mobilebar above .fin-pane's overlay (z-index:90) ONLY inside .analysis-shell", () => {
-    expect(GLOBALS_CSS).toMatch(/\.analysis-shell \.mobilebar\{z-index:95\}/);
+    const scopedRule = GLOBALS_RULES.find((r) => r.selectorText === ".analysis-shell .mobilebar");
+    expect(scopedRule, ".analysis-shell .mobilebar rule not found in globals.css").toBeTruthy();
+    expect(scopedRule!.style.getPropertyValue("z-index")).toBe("95");
   });
 
   it("AppShell applies the analysis-shell class only when the route is /analysis", () => {
@@ -41,32 +104,69 @@ describe("AppShell analysis-only mobilebar z-index scoping", () => {
   });
 });
 
-describe("AppShell analysis-only fin-pane offset (review round 3, MAJOR 1)", () => {
+describe("AppShell analysis-only fin-pane offset, parsed via real CSSOM (review round 3 MAJOR 1, round-4 measurement fix)", () => {
   // Raising .mobilebar to z-index:95 (above) stopped it from being covered by .fin-pane's
   // z-index:90 overlay, but at <=860px .fin-pane--workspace falls back to .fin-pane's base
   // inset:0 (app/fin.css), so the pane's OWN header now painted directly under the mobilebar
   // instead of being covered by it. Fix: push the pane down by the mobilebar's own height so
-  // the two never share the same strip of the viewport, independent of z-index. Assert the
-  // offset is numerically tied to the mobilebar's real height (not just a matching literal) —
-  // if .mobilebar's height ever changes, this fails instead of silently reopening the collision.
-  it("offsets .analysis-shell .fin-pane--workspace by exactly .mobilebar's height, at <=860px", () => {
-    const mobilebarBase = GLOBALS_CSS.match(/(?<!\.analysis-shell )\.mobilebar\{[^}]*\}/);
-    expect(mobilebarBase, ".mobilebar base rule not found in globals.css").not.toBeNull();
-    const mobilebarHeight = mobilebarBase![0].match(/height:(\d+)px/);
-    expect(mobilebarHeight, ".mobilebar has no height:Npx declaration").not.toBeNull();
+  // the two never share the same strip of the viewport, independent of z-index.
+  //
+  // Round-4 review: the round-3 version of this test matched a hand-written text regex
+  // against the raw CSS source — it could not detect a cascade/specificity/media-application
+  // problem, only whether two numbers written as source text happened to be equal. This
+  // version reads the values through jsdom's real CSS parser (document.styleSheets), the same
+  // CSSStyleDeclaration interface getComputedStyle exposes, and reasons explicitly about which
+  // rules apply at <=860px via each rule's own parsed media condition.
+  it("offsets .analysis-shell .fin-pane--workspace by exactly .mobilebar's real height, scoped to <=860px", () => {
+    const mobilebarBase = GLOBALS_RULES.find((r) => r.selectorText === ".mobilebar" && r.mediaConditions.length === 0);
+    expect(mobilebarBase, ".mobilebar base rule not found in globals.css").toBeTruthy();
+    const mobilebarHeight = mobilebarBase!.style.getPropertyValue("height");
+    expect(mobilebarHeight, ".mobilebar has no height declaration").toMatch(/^\d+px$/);
 
-    const paneOffsetBlock = GLOBALS_CSS.match(
-      /@media \(max-width:860px\)\{\s*\.analysis-shell \.fin-pane--workspace\{top:(\d+)px\}\s*\}/,
+    const offsetRule = ALL_RULES.find(
+      (r) => r.selectorText === ".analysis-shell .fin-pane--workspace" && r.style.getPropertyValue("top"),
     );
     expect(
-      paneOffsetBlock,
-      ".analysis-shell .fin-pane--workspace top-offset rule not found inside @media (max-width:860px)",
-    ).not.toBeNull();
+      offsetRule,
+      "no '.analysis-shell .fin-pane--workspace{top:...}' rule found in globals.css or fin.css",
+    ).toBeTruthy();
 
-    expect(Number(paneOffsetBlock![1])).toBe(Number(mobilebarHeight![1]));
+    const breakpoint = maxWidthPx(offsetRule!.mediaConditions);
+    expect(breakpoint, `offset rule's media condition ${JSON.stringify(offsetRule!.mediaConditions)} names no max-width`).not.toBeNull();
+    expect(breakpoint).toBeLessThanOrEqual(860);
+
+    expect(offsetRule!.style.getPropertyValue("top")).toBe(mobilebarHeight);
   });
 
-  it("does not touch .fin-pane--workspace outside .analysis-shell (every other AppShell route)", () => {
-    expect(GLOBALS_CSS).not.toMatch(/(?<!\.analysis-shell )\.fin-pane--workspace\{top:\d+px\}/);
+  it("does not give .fin-pane--workspace a top offset outside .analysis-shell, in EITHER stylesheet", () => {
+    // Review round-4, minor: the round-3 version of this guard scanned only globals.css, but
+    // every OTHER `.fin-pane--workspace` declaration (the >860px desktop override) actually
+    // lives in app/fin.css — so it could never fail for the reason it claimed to guard against.
+    // Scanning the parsed rules from both files closes that hole.
+    const unscopedOffsets = ALL_RULES.filter(
+      (r) =>
+        /(^|[^-\w])\.fin-pane--workspace($|[^-\w])/.test(r.selectorText) &&
+        !r.selectorText.includes(".analysis-shell") &&
+        r.style.getPropertyValue("top"),
+    );
+    expect(unscopedOffsets.map((r) => r.selectorText)).toEqual([]);
+  });
+
+  // Review round-4 minor: the 52px offset is a flat literal, not `calc(52px + env(safe-area-inset-top))`
+  // — deliberately, not by oversight. `.mobilebar` also gets `padding-top:env(safe-area-inset-top)`
+  // on this same breakpoint, but under global `box-sizing:border-box` (asserted below) padding is
+  // absorbed INSIDE the declared `height`, so `.mobilebar`'s real on-screen height stays exactly its
+  // declared height regardless of the device's safe-area inset — adding the inset again to the pane
+  // offset would OVER-space the two elements. This pins the assumption so a change to global
+  // box-sizing (the one thing that would make it wrong) fails a test instead of silently reopening
+  // a gap or overlap on notched devices.
+  it("relies on global border-box sizing so the offset stays exact even with .mobilebar's safe-area padding-top", () => {
+    const universalBorderBox = GLOBALS_RULES.find(
+      (r) => r.selectorText === "*" && r.style.getPropertyValue("box-sizing") === "border-box",
+    );
+    expect(
+      universalBorderBox,
+      "global '*{box-sizing:border-box}' rule not found — the fin-pane offset assumes .mobilebar's safe-area padding-top is absorbed inside its declared height, not added on top of it",
+    ).toBeTruthy();
   });
 });

@@ -9,7 +9,7 @@ import SettingsButton from "@/components/settings/SettingsButton";
 import BrainWidget from "@/components/BrainWidget";
 import { SettingsProvider } from "@/components/settings/SettingsProvider";
 import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
-import { resolveShellBrainSymbol } from "@/lib/shellBrainSymbol";
+import { useShellBrainSymbol } from "@/lib/shellBrainSymbol";
 import { useT } from "@/lib/i18n";
 import { backToMacro, useFromMacro } from "@/lib/originNav";
 import { accountIdentity, GUEST_IDENTITY, identityEmail, type AccountIdentity } from "@/lib/accountIdentity";
@@ -88,15 +88,14 @@ export default function AppShell({
   const title = hit ? t(hit[1], hit[2]) : t("flow", "Options");
   const { fromMacro, macroHref } = useFromMacro();
   const onBack = useCallback(() => backToMacro(macroHref), [macroHref]);
-  // Review ruling (MAJOR 2): resolved once per /analysis entry — never "" — so a cold load
-  // through the external floating launcher (which never calls the in-app "attach exact
-  // source" handoff) still has a real symbol the first time it reads window.MM_BRAIN_CFG.
-  // Recomputed only when the pathname itself changes (not on every render), matching the
-  // BrainWidget mount below which is likewise gated on path.startsWith("/analysis").
-  const brainSymbol = useMemo(
-    () => (path.startsWith("/analysis") ? resolveShellBrainSymbol() : ""),
-    [path],
-  );
+  // Review ruling (MAJOR 2): resolved on /analysis entry — never "" — so a cold load through
+  // the external floating launcher (which never calls the in-app "attach exact source"
+  // handoff) still has a real symbol the first time it reads window.MM_BRAIN_CFG. Round-4
+  // fix: a plain useMemo([path]) never re-ran on a same-route symbol switch, because
+  // AnalysisWorkspace rewrites `?symbol=` with `history.replaceState` — no Next.js navigation,
+  // no re-render trigger. useShellBrainSymbol re-resolves on /analysis entry AND stays live
+  // afterward via announceShellBrainSymbol/subscribeShellBrainSymbol (see lib/shellBrainSymbol.ts).
+  const brainSymbol = useShellBrainSymbol(path.startsWith("/analysis"));
   // Memoized on the two primitives, so a shell re-render hands children the SAME identity
   // object — an owner-scoped store keys on the owner string either way, but a stable identity
   // keeps it out of every consumer's dependency arrays.
