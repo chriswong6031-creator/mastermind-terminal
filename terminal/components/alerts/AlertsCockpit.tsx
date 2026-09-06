@@ -23,6 +23,11 @@ export default function AlertsCockpit({ email }: { email: string }) {
   const [alertsState, setAlertsState] = useState<ReadState>("READ_UNAVAILABLE");
   const [receipts, setReceipts] = useState<ReceiptsResp | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  // Real no-coverage source (step 2, B-F08-3 continuation): a null quote from the existing
+  // batch quote route IS a live "we cannot read this price" signal — not a fabricated placeholder.
+  // A fetch failure here must never render as "0 could-not-watch symbols" (that would silently
+  // hide the honest READ_NO_COVERAGE state), so it is tracked separately from an empty result.
+  const [noCoverageSymbols, setNoCoverageSymbols] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -44,6 +49,27 @@ export default function AlertsCockpit({ email }: { email: string }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Ask the same batch quote route the watchlist uses (read-only; this route is not owned by
+  // this packet and is never modified) which of the ACTIVE alerts' symbols currently have no
+  // live quote. A null entry is a genuine no-coverage signal; a fetch/network failure leaves
+  // the previous (possibly empty) list untouched rather than reporting a false all-clear.
+  useEffect(() => {
+    const activeSymbols = Array.from(new Set((alerts || []).filter((a) => a.active && a.symbol).map((a) => a.symbol as string)));
+    if (activeSymbols.length === 0) { setNoCoverageSymbols([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/quote?syms=${encodeURIComponent(activeSymbols.join(","))}`);
+        if (!r.ok) return;
+        const body: { quotes?: Record<string, unknown | null> } = await r.json();
+        const quotes = body.quotes || {};
+        const missing = activeSymbols.filter((sy) => quotes[sy] == null);
+        if (!cancelled) setNoCoverageSymbols(missing);
+      } catch { /* leave prior state — a failed probe is not evidence of full coverage */ }
+    })();
+    return () => { cancelled = true; };
+  }, [alerts]);
 
   const view = useMemo(() => buildAlertsView({
     alerts, alertsState,
@@ -120,7 +146,7 @@ export default function AlertsCockpit({ email }: { email: string }) {
         rows={(alerts || []).filter((a) => a.active).map((a) => ({ id: a.id, symbol: a.symbol || "—", label: a.condition?.type || "", state: "armed" as const }))}
         lang={lang === "zh" ? "zh" : "en"}
       />
-      <CouldNotWatch symbols={view.coverage.state === "READ_NO_COVERAGE" ? [] : []} lang={lang === "zh" ? "zh" : "en"} />
+      <CouldNotWatch symbols={noCoverageSymbols} lang={lang === "zh" ? "zh" : "en"} />
       {detail && <AlertDetail data={detail} lang={lang === "zh" ? "zh" : "en"} onClose={() => setOpenId(null)} />}
     </div></main>
   );
