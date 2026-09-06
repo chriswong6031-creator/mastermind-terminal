@@ -10,7 +10,7 @@ import MegaPane, { FIN_PAGES as FIN_PAGE_LIST, type FinPage } from "@/components
 import { getFund, getBars, type Fund, type Bar } from "@/lib/fund";
 import { getJSON } from "@/lib/dataCache";
 import { useLang } from "@/lib/i18n";
-import { normalizeAnalysisSymbol } from "@/lib/analysisSymbol";
+import { ANALYSIS_DEFAULT_SYMBOL, normalizeAnalysisSymbol } from "@/lib/analysisSymbol";
 import { announceShellBrainSymbol } from "@/lib/shellBrainSymbol";
 
 /**
@@ -43,7 +43,11 @@ import { announceShellBrainSymbol } from "@/lib/shellBrainSymbol";
  */
 
 const FIN_PAGES = new Set<FinPage>(FIN_PAGE_LIST);
-const DEFAULT_SYMBOL = "NVDA";
+// Sourced from lib/analysisSymbol.ts (not redeclared here) so lib/shellBrainSymbol.ts's
+// shell-side fallback (SHELL_DEFAULT_BRAIN_SYMBOL) can share the exact same constant instead
+// of duplicating the literal in a second file, where it could silently drift out of sync
+// (review ruling, PR #490 MINOR: default symbol).
+const DEFAULT_SYMBOL = ANALYSIS_DEFAULT_SYMBOL;
 const DEFAULT_PAGE: FinPage = "overview";
 /**
  * A symbol is an identifier, never a path fragment.  Keep this distinct from

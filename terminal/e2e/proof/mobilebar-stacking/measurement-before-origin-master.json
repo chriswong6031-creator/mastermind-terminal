@@ -1,0 +1,144 @@
+{
+  "label": "BEFORE-origin-master",
+  "port": 3912,
+  "viewports": {
+    "1440x900": {
+      "mobilebar": {
+        "zIndex": "1",
+        "position": "relative",
+        "top": "auto",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0,
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        }
+      },
+      "finPane": {
+        "zIndex": "1",
+        "position": "relative",
+        "top": "0px",
+        "rect": {
+          "x": 0,
+          "y": 469,
+          "width": 1440,
+          "height": 431,
+          "top": 469,
+          "bottom": 900,
+          "left": 0,
+          "right": 1440
+        }
+      },
+      "finHead": {
+        "zIndex": "auto",
+        "position": "static",
+        "top": "auto",
+        "rect": {
+          "x": 0,
+          "y": 469,
+          "width": 1440,
+          "height": 52,
+          "top": 469,
+          "bottom": 521,
+          "left": 0,
+          "right": 1440
+        }
+      },
+      "menuButton": {
+        "zIndex": "auto",
+        "position": "static",
+        "top": "auto",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0,
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        }
+      },
+      "menuHitTest": {
+        "hitElementTag": "HEADER",
+        "hitElementIsMenuButton": false
+      },
+      "mobilebarOverlapsFinPane": false,
+      "finHeadCoveredByMobilebar": false,
+      "screenshot": "/tmp/mo490_stacking/BEFORE-origin-master-1440x900.png"
+    },
+    "390x844": {
+      "mobilebar": {
+        "zIndex": "1",
+        "position": "relative",
+        "top": "0px",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 390,
+          "height": 52,
+          "top": 0,
+          "bottom": 52,
+          "left": 0,
+          "right": 390
+        }
+      },
+      "finPane": {
+        "zIndex": "90",
+        "position": "fixed",
+        "top": "0px",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 390,
+          "height": 844,
+          "top": 0,
+          "bottom": 844,
+          "left": 0,
+          "right": 390
+        }
+      },
+      "finHead": {
+        "zIndex": "auto",
+        "position": "static",
+        "top": "auto",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 390,
+          "height": 52,
+          "top": 0,
+          "bottom": 52,
+          "left": 0,
+          "right": 390
+        }
+      },
+      "menuButton": {
+        "zIndex": "auto",
+        "position": "static",
+        "top": "auto",
+        "rect": {
+          "x": 8,
+          "y": 5.5,
+          "width": 40,
+          "height": 40,
+          "top": 5.5,
+          "bottom": 45.5,
+          "left": 8,
+          "right": 48
+        }
+      },
+      "menuHitTest": {
+        "hitElementTag": "svg",
+        "hitElementIsMenuButton": false
+      },
+      "mobilebarOverlapsFinPane": true,
+      "finHeadCoveredByMobilebar": true,
+      "screenshot": "/tmp/mo490_stacking/BEFORE-origin-master-390x844.png"
+    }
+  }
+}

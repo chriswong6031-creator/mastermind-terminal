@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
-import { normalizeAnalysisSymbol } from "./analysisSymbol";
+import { ANALYSIS_DEFAULT_SYMBOL, normalizeAnalysisSymbol } from "./analysisSymbol";
 
 /**
- * The Analysis workspace's own fallback symbol when nothing else resolves
- * (matches `components/workspaces/AnalysisWorkspace.tsx`'s `DEFAULT_SYMBOL`).
+ * The Analysis workspace's own fallback symbol when nothing else resolves. Re-exported from
+ * `lib/analysisSymbol.ts`'s `ANALYSIS_DEFAULT_SYMBOL` — the same constant
+ * `components/workspaces/AnalysisWorkspace.tsx` seeds its `DEFAULT_SYMBOL` from — rather than
+ * a second `"NVDA"` literal, so the two can never silently drift apart (review ruling, PR #490
+ * MINOR: default symbol).
  */
-export const SHELL_DEFAULT_BRAIN_SYMBOL = "NVDA";
+export const SHELL_DEFAULT_BRAIN_SYMBOL = ANALYSIS_DEFAULT_SYMBOL;
 
 interface ShellWorkspaceStore {
   panes?: unknown;

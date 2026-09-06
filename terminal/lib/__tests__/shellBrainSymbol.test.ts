@@ -25,6 +25,7 @@ import {
   type ShellBrainSymbolBroadcastHost,
   type ShellBrainSymbolListenHost,
 } from "@/lib/shellBrainSymbol";
+import { ANALYSIS_DEFAULT_SYMBOL } from "@/lib/analysisSymbol";
 
 function makeHost(href: string, mmWs?: unknown): ShellBrainSymbolHost {
   const store = new Map<string, string>();
@@ -150,5 +151,29 @@ describe("announceShellBrainSymbol / subscribeShellBrainSymbol (review round-4, 
     host.addEventListener(SHELL_BRAIN_SYMBOL_EVENT, () => { sawEvent = true; });
     announceShellBrainSymbol("AAPL", host);
     expect(sawEvent).toBe(true);
+  });
+});
+
+describe("SHELL_DEFAULT_BRAIN_SYMBOL cannot drift from AnalysisWorkspace's own default (review ruling, PR #490 MINOR: default symbol)", () => {
+  // Before this fix, lib/shellBrainSymbol.ts and components/workspaces/AnalysisWorkspace.tsx
+  // each declared their own `"NVDA"` literal — nothing would catch one changing without the
+  // other. Both now derive from lib/analysisSymbol.ts's ANALYSIS_DEFAULT_SYMBOL; this pins
+  // that single-source relationship two ways: a value check (the exported constant) and a
+  // source scan (AnalysisWorkspace.tsx's own DEFAULT_SYMBOL is a reference, not a re-declared
+  // literal), so a future edit that reintroduces a second literal fails here.
+  it("SHELL_DEFAULT_BRAIN_SYMBOL is exactly lib/analysisSymbol.ts's ANALYSIS_DEFAULT_SYMBOL", () => {
+    expect(SHELL_DEFAULT_BRAIN_SYMBOL).toBe(ANALYSIS_DEFAULT_SYMBOL);
+  });
+
+  it("AnalysisWorkspace.tsx's DEFAULT_SYMBOL is derived from ANALYSIS_DEFAULT_SYMBOL, not a re-declared literal", () => {
+    const ANALYSIS_WORKSPACE_TSX = readFileSync(
+      join(__dirname, "..", "..", "components", "workspaces", "AnalysisWorkspace.tsx"),
+      "utf8",
+    );
+    expect(ANALYSIS_WORKSPACE_TSX).toMatch(
+      /import\s*\{[^}]*\bANALYSIS_DEFAULT_SYMBOL\b[^}]*\}\s*from\s*["']@\/lib\/analysisSymbol["']/,
+    );
+    expect(ANALYSIS_WORKSPACE_TSX).toMatch(/const\s+DEFAULT_SYMBOL\s*=\s*ANALYSIS_DEFAULT_SYMBOL\s*;/);
+    expect(ANALYSIS_WORKSPACE_TSX).not.toMatch(/const\s+DEFAULT_SYMBOL\s*=\s*["']NVDA["']/);
   });
 });
