@@ -73,7 +73,7 @@ alter table public.team_members enable row level security;
 alter table public.team_invites enable row level security;
 
 drop policy if exists teams_select_member on public.teams;
-create policy teams_select_member on public.teams        for select to authenticated using (public.is_team_member(id));
+create policy teams_select_member on public.teams        for select to authenticated using (public.is_team_member(id) or created_by = auth.uid());
 drop policy if exists teams_insert_self on public.teams;
 create policy teams_insert_self   on public.teams        for insert to authenticated with check (created_by = auth.uid());
 drop policy if exists tm_select_member on public.team_members;
