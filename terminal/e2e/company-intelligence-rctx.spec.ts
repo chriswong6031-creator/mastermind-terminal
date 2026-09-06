@@ -215,9 +215,15 @@ test("the real Analysis shell hosts one-turn exact source sends in the existing 
 
   // Review repair 2a: a client-side navigation away from /analysis (via the real nav "Chart"
   // link, NOT page.goto — this is a genuine App Router transition, not a fresh document load)
-  // must reuse the SAME document-level Brain script rather than spawning a second one, and must
-  // re-bind the singleton's symbol getter to the chart's own active symbol rather than leaving it
-  // on the Analysis mount's "" stub (AppShell mounts BrainWidget with active=""). Below 860px
+  // must reuse the SAME document-level Brain script rather than spawning a second one. Review
+  // round 3, minor 1: this comment used to credit that reuse with also doing the symbol
+  // rebind and pointed at AppShell's since-fixed `active=""` mount — corrected. The mount-once
+  // install effect (components/BrainWidget.tsx `if (w.MMBrain) return`) is a deliberate no-op
+  // here, because the singleton already exists from the /analysis mount; the rebind to
+  // /terminal's own active symbol instead happens through the separate `[active]` effect's
+  // `handoffMastermindBrainSymbol` call, which reassigns `MM_BRAIN_CFG.symbol` on every mount
+  // regardless of the install effect's guard (lib/mastermindBrain.ts). AppShell no longer
+  // mounts with an empty symbol either way — see lib/shellBrainSymbol.ts. Below 860px
   // (tablet/mobile projects) AppNav itself is `display:none` (globals.css) and MobileNav's
   // hamburger + drawer is the real entry point instead — same TOP list (AppNav.tsx), same href.
   //
@@ -229,8 +235,14 @@ test("the real Analysis shell hosts one-turn exact source sends in the existing 
   // where the "Menu" button is `display:none` and `.click()` times out. Pick the branch from the
   // same CSS breakpoint the app itself uses (globals.css `@media (max-width:860px)`) instead —
   // deterministic from the project's own viewport, no race against hydration.
-  const viewportWidth = page.viewportSize()?.width ?? 0;
-  const isDesktopNav = viewportWidth > 860;
+  // Review round 3, minor 2: a `?? 0` default here would silently pick the mobile branch for
+  // any project with no fixed viewport (page.viewportSize() returns null) — a branch that
+  // cannot pass on a wide window. Every project in playwright.config.ts sets an explicit
+  // viewport, so this should never actually be null; fail loudly instead of guessing if a
+  // future project ever removes one.
+  const viewportSize = page.viewportSize();
+  if (!viewportSize) throw new Error("company-intelligence-rctx.spec.ts requires a project with a fixed viewport (page.viewportSize() was null)");
+  const isDesktopNav = viewportSize.width > 860;
   const appNavChart = page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Chart" });
   if (isDesktopNav) {
     await expect(appNavChart).toBeVisible();

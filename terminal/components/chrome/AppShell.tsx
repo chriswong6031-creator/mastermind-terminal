@@ -9,6 +9,7 @@ import SettingsButton from "@/components/settings/SettingsButton";
 import BrainWidget from "@/components/BrainWidget";
 import { SettingsProvider } from "@/components/settings/SettingsProvider";
 import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
+import { resolveShellBrainSymbol } from "@/lib/shellBrainSymbol";
 import { useT } from "@/lib/i18n";
 import { backToMacro, useFromMacro } from "@/lib/originNav";
 import { accountIdentity, GUEST_IDENTITY, identityEmail, type AccountIdentity } from "@/lib/accountIdentity";
@@ -87,6 +88,15 @@ export default function AppShell({
   const title = hit ? t(hit[1], hit[2]) : t("flow", "Options");
   const { fromMacro, macroHref } = useFromMacro();
   const onBack = useCallback(() => backToMacro(macroHref), [macroHref]);
+  // Review ruling (MAJOR 2): resolved once per /analysis entry — never "" — so a cold load
+  // through the external floating launcher (which never calls the in-app "attach exact
+  // source" handoff) still has a real symbol the first time it reads window.MM_BRAIN_CFG.
+  // Recomputed only when the pathname itself changes (not on every render), matching the
+  // BrainWidget mount below which is likewise gated on path.startsWith("/analysis").
+  const brainSymbol = useMemo(
+    () => (path.startsWith("/analysis") ? resolveShellBrainSymbol() : ""),
+    [path],
+  );
   // Memoized on the two primitives, so a shell re-render hands children the SAME identity
   // object — an owner-scoped store keys on the owner string either way, but a stable identity
   // keeps it out of every consumer's dependency arrays.
@@ -125,7 +135,7 @@ export default function AppShell({
             its own creation. */}
         {path.startsWith("/analysis") && (
           <BrainWidget
-            active=""
+            active={brainSymbol}
             onCommand={ignoreBrainShellEvent}
             onAnnotate={ignoreBrainShellEvent}
             onAuthRequired={requireBrainShellAuth}
