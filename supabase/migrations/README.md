@@ -47,6 +47,7 @@ and have been.** Application status, re-censused 2026-08-21:
 | `0008_chart_layouts_unique_name.sql` | `chart_layouts_user_name` | **yes** — applied 2026-08-21 |
 | `0009_watchlist_symbol_unique.sql` | `wls_watchlist_symbol` | **yes** — applied 2026-08-19 |
 | `0010_search_event_stats.sql` | `search_event_stats()` + `search_events_created_at` | **yes** — applied 2026-08-21 |
+| `0014_tenancy_foundation.sql` | `teams`, `team_members`, `team_invites`, 2 definer helpers, `on_team_created` trigger, RLS | **no** — reserved 2026-09-06 (packet B-F12-1), not applied |
 
 `0009` was applied two days before `0008`. The numbering records *when the DDL entered the repo*,
 not when an operator ran it — so **never infer application status from file order.** Ask the
@@ -83,3 +84,5 @@ to apply **everything** from `0001`. That is survivable only because every file 
 
 **Keep it that way.** A migration that is not safe to re-run is a migration that cannot be applied
 in this estate, because nothing here records that it already was.
+
+`0011`–`0013` were claimed by pull requests that had not merged when `0014` was reserved (#502 claims `0011`), so this packet took `0014` rather than a contested prefix; `tests/test_migration_ledger.py` is the only enforcement of prefix uniqueness (§ Version prefixes must be unique).
