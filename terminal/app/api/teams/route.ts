@@ -49,7 +49,7 @@ export async function POST(req: Request) {
 
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body) return invalid("Send a JSON body.");
-  if (body.action !== undefined && body.action !== "create") return invalid("Unknown action.");
+  if (body.action !== undefined && body.action !== "create") return invalid("We do not recognise that action.");
 
   const name = normalizeTeamName(body.name);
   if (!name) return invalid("A team needs a name of 1 to 120 characters.");

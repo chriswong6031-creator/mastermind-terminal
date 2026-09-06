@@ -169,10 +169,18 @@ describe("0014 DDL contract", () => {
       "create unique index if not exists team_invites_team_email_pending on public.team_invites(team_id, lower(email)) where accepted_at is null;",
     );
   });
-  it("tm_update_admin (M1) blocks admin self-promotion to owner and blocks touching an existing owner row unless the caller is the owner", () => {
+  it("tm_insert_admin (BLOCKER-1, ruling r2) never admits an INSERT that writes role='owner'", () => {
     expect(flat).toContain(
-      "create policy tm_update_admin on public.team_members for update to authenticated using (public.team_role(team_id) in ('owner','admin') and (role <> 'owner' or public.team_role(team_id) = 'owner')) with check (role in ('admin','member') and public.team_role(team_id) in ('owner','admin'));",
+      "create policy tm_insert_admin on public.team_members for insert to authenticated with check (role in ('admin','member') and public.team_role(team_id) in ('owner','admin'));",
     );
+    expect(flat).not.toContain("with check (public.team_role(team_id) in ('owner','admin'))");
+  });
+  it("tm_update_admin (MAJOR-1, ruling r2) denies UPDATE on any row whose CURRENT role is owner, for everyone including the owner", () => {
+    expect(flat).toContain(
+      "create policy tm_update_admin on public.team_members for update to authenticated using (public.team_role(team_id) in ('owner','admin') and role <> 'owner') with check (role in ('admin','member') and public.team_role(team_id) in ('owner','admin'));",
+    );
+    // The round-2 disjunct that let the owner touch their own owner row must be gone entirely.
+    expect(flat).not.toContain("team_role(team_id) = 'owner'");
   });
   it("tm_delete_admin (M1) blocks deleting a row whose role is owner", () => {
     expect(flat).toContain(
