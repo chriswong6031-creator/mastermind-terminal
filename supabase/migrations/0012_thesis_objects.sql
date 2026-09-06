@@ -599,3 +599,43 @@ grant execute on function public.apply_thesis_version_v1(uuid, integer, text, js
   to authenticated;
 
 commit;
+
+-- down:
+-- drop public.apply_thesis_version_v1(uuid, integer, text, jsonb, jsonb, uuid, text) and
+-- public.read_current_thesis_versions_v1(uuid[], integer[]), both RLS policies, both indexes
+-- pairs, and both tables. Run manually; not part of any automated rollback.
+--
+-- begin;
+-- drop function if exists public.apply_thesis_version_v1(uuid, integer, text, jsonb, jsonb, uuid, text);
+-- drop function if exists public.read_current_thesis_versions_v1(uuid[], integer[]);
+-- drop policy if exists thesis_versions_select_own on public.thesis_versions;
+-- drop policy if exists theses_select_own on public.theses;
+-- drop index if exists public.thesis_versions_owner_thesis_idx;
+-- drop index if exists public.theses_owner_subject_idx;
+-- drop index if exists public.theses_owner_updated_idx;
+-- drop table if exists public.thesis_versions;
+-- drop table if exists public.theses;
+-- commit;
+
+-- readback:
+-- Post-apply verification (run manually against the target database):
+--
+-- select relname, relrowsecurity from pg_class
+--   where relname in ('theses','thesis_versions') and relnamespace = 'public'::regnamespace;
+--   -- expect relrowsecurity = true for both rows
+--
+-- select schemaname, tablename, policyname from pg_policies
+--   where schemaname = 'public' and tablename in ('theses','thesis_versions')
+--   order by tablename, policyname;
+--   -- expect exactly: theses/theses_select_own, thesis_versions/thesis_versions_select_own
+--
+-- select table_name, grantee, privilege_type from information_schema.role_table_grants
+--   where table_schema = 'public' and table_name in ('theses','thesis_versions')
+--   order by table_name, grantee, privilege_type;
+--   -- expect select-only grants to authenticated (no insert/update/delete/public/anon)
+--
+-- select p.proname, p.prosecdef, p.proconfig from pg_proc p
+--   join pg_namespace n on n.oid = p.pronamespace
+--   where n.nspname = 'public'
+--     and p.proname in ('apply_thesis_version_v1','read_current_thesis_versions_v1');
+--   -- expect prosecdef = true for both; proconfig carries the function's search_path pin

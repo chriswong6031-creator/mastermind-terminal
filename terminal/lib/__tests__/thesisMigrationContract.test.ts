@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-const migrationPath = path.resolve(__dirname, "../../../supabase/migrations/0011_thesis_objects.sql");
+const migrationPath = path.resolve(__dirname, "../../../supabase/migrations/0012_thesis_objects.sql");
 const sql = readFileSync(migrationPath, "utf8");
 const flat = sql.replace(/--[^\n]*/g, " ").replace(/\s+/g, " ").toLowerCase();
 
-describe("0011 thesis persistence contract", () => {
+describe("0012 thesis persistence contract", () => {
   it("owns exactly one head table, one immutable lineage table, and their required identities", () => {
     expect([...flat.matchAll(/create table if not exists public\.([a-z_]+)/g)].map((match) => match[1]))
       .toEqual(["theses", "thesis_versions"]);

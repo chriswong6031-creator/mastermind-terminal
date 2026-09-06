@@ -3,7 +3,7 @@ name: F11 thesis PostgreSQL canary
 on:
   pull_request:
     paths:
-      - supabase/migrations/0011_thesis_objects.sql
+      - supabase/migrations/0012_thesis_objects.sql
       - terminal/scripts/f11_thesis_postgres_canary.py
       - .github/workflows/f11-thesis-postgres-canary.yml
 
@@ -54,7 +54,7 @@ jobs:
           F11_GITHUB_JOB: ${{ github.job }}
         run: >-
           python terminal/scripts/f11_thesis_postgres_canary.py
-          --migration supabase/migrations/0011_thesis_objects.sql
+          --migration supabase/migrations/0012_thesis_objects.sql
           --receipt f11-thesis-postgres-canary-receipt.json
       - name: Upload sanitized canary receipt
         uses: actions/upload-artifact@v4

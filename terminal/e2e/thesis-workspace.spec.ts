@@ -19,7 +19,7 @@ async function fillNew(page: Page, zh = false, title = "NVDA operating leverage"
   await page.getByLabel(zh ? "标题" : "Title").fill(title);
   await page.getByLabel(zh ? "论点陈述" : "Thesis statement").fill("Demand will outrun supply through the next platform cycle.");
   await page.getByLabel(zh ? "催化因素" : "Catalysts").fill("Data-center revenue compounds\nSoftware mix expands");
-  await page.getByLabel(zh ? "证伪条件" : "Falsifiers").fill("Gross margin falls below 65%");
+  await page.getByLabel(zh ? "什么情况会推翻这个判断" : "What would prove this wrong").fill("Gross margin falls below 65%");
   await page.getByLabel(zh ? "风险" : "Risks").fill("Customer concentration");
   await page.getByLabel(zh ? "时间范围" : "Horizon").selectOption("quarters");
 }
