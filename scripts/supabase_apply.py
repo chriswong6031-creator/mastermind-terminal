@@ -77,11 +77,27 @@ def _is_missing_relation_error(exc: "ApiError") -> bool:
     if '"code":"42p01"' in body or '"code": "42p01"' in body or "undefined_table" in body:
         return True
     # A message-only match must still name the SPECIFIC failure this guard
-    # exists for -- an undefined relation/table/index/policy -- never a bare
-    # "does not exist". A stale/wrong --project-ref 404s with a message like
-    # "Project ref123 does not exist", and that must fail the run, not be
-    # swallowed as "expected before a create" (review-#516 round-3 MINOR 1).
-    if "does not exist" in body and re.search(r"\b(relation|table|index|policy)\b", body):
+    # exists for -- an undefined relation/table/index/policy/... -- never a
+    # bare "does not exist". A stale/wrong --project-ref 404s with a message
+    # like "Project ref123 does not exist", and that must fail the run, not
+    # be swallowed as "expected before a create" (review-#516 round-3 MINOR
+    # 1). The object-kind list is deliberately narrow and enumerated rather
+    # than a bare "does not exist" match, but it must still cover every kind
+    # of object a `-- readback:` query can legitimately pre-check for before
+    # a create -- round-3 covered relation/table/index/policy only, which
+    # left sequence/view/trigger/function/type/schema/column/constraint
+    # readback failures (all real Postgres "does not exist" wordings) out of
+    # the guard, forcing a false failure on the very first apply of a file
+    # whose readback checks one of those kinds (review-#516 round-4 MINOR:
+    # "_is_missing_relation_error over-narrowed"). None of these words can
+    # appear in the stale-project-ref 404 message the round-3 fix guards
+    # against ("Project <ref> does not exist"), so widening this list does
+    # not reopen that hole.
+    if "does not exist" in body and re.search(
+        r"\b(relation|table|index|policy|sequence|view|trigger|function|"
+        r"type|schema|column|constraint)\b",
+        body,
+    ):
         return True
     return False
 
@@ -261,8 +277,48 @@ def extract_block(text: str, anchor: str) -> Optional[str]:
         rest = stripped[2:]
         if rest.startswith(" "):
             rest = rest[1:]
+        # A block line that, once its own single layer of "-- " marking is
+        # removed, STILL begins with "--" is a nested comment inside the
+        # block -- e.g. the "--   -- expect ..." annotations under each
+        # query in 0012_thesis_objects.sql's `-- readback:` block. Drop it
+        # outright instead of keeping it as block content: leaving it in
+        # only worked downstream because strip_sql_comments() happened to
+        # neutralize the still-literal "--" later, which is incidental, not
+        # a parsing guarantee (Meta-CEO B ruling r2, review-#516).
+        if rest.strip().startswith("--"):
+            continue
         captured.append(rest)
     return "\n".join(captured)
+
+
+_STATEMENT_KEYWORD_RE = re.compile(
+    r"(?im)^[ \t]*("
+    r"select|with|explain|insert|update|delete|drop|alter|create|revoke|"
+    r"grant|begin|commit|do"
+    r")\b"
+)
+
+
+def _drop_leading_prose(stmt: str) -> str:
+    """Drop any leading prose that precedes the first recognized SQL keyword.
+
+    A `-- readback:`/`-- down:` block's own descriptive header line (e.g.
+    "Post-apply verification (run manually against the target database):"
+    in 0012_thesis_objects.sql) is human-facing prose, not SQL -- but once
+    extract_block() has stripped the block's own single layer of `-- `
+    comment marking, that line carries no comment marker of its own and was
+    glued straight onto the statement that follows it (the parser sent
+    "Post-apply verification ...\\n\\nselect ..." as one statement, which the
+    Management API rejected with `syntax error at or near "Post"` on the
+    very first --apply of 0012 -- the production incident this fix answers,
+    Meta-CEO B ruling r2). A statement starts only at one of these keywords;
+    anything before the first line-anchored match is prose and must never
+    reach the endpoint as part of the SQL.
+    """
+    m = _STATEMENT_KEYWORD_RE.search(stmt)
+    if m is None:
+        return stmt
+    return stmt[m.start():]
 
 
 def readback_statements(text: str) -> list[str]:
@@ -272,6 +328,10 @@ def readback_statements(text: str) -> list[str]:
             "no -- readback: block -- there is no query that proves this landed"
         )
     stmts = split_statements(strip_sql_comments(block))
+    # Drop any leading prose glued onto a statement -- see _drop_leading_prose
+    # docstring. A no-op for a statement that already starts with a keyword
+    # (every case except the block's own descriptive header line, if any).
+    stmts = [_drop_leading_prose(s) for s in stmts]
     if not stmts:
         raise MigrationError(
             "no -- readback: block -- there is no query that proves this landed"
@@ -614,6 +674,22 @@ def run_dry(path: Path, *, allow_legacy: bool = False, project_ref: Optional[str
             print(f"guards:  REFUSED -- {exc.message}", file=out)
             print("no network call was made.", file=out)
             return 3
+        if project_ref:
+            # resolve_credentials() could not check --project-ref against a
+            # fully resolved SUPABASE_ACCESS_TOKEN/SUPABASE_PROJECT_REF pair
+            # (one or both are missing), so the stale-.env guard above never
+            # ran for this override -- dry-run still proceeds (it needs no
+            # credentials), but say so explicitly instead of silently
+            # printing the unchecked override as if it had been validated
+            # (review-#516 round-4 MINOR: "dry-run guard bypass when creds
+            # incomplete").
+            print(
+                f"note:    --project-ref {project_ref!r} could not be checked "
+                "against stored credentials (SUPABASE_ACCESS_TOKEN/"
+                "SUPABASE_PROJECT_REF are not both set) -- the stale-.env "
+                "guard did not run for this override.",
+                file=out,
+            )
         ref = project_ref or "<unresolved: no credentials -- dry-run does not need them>"
     print(f"project: {ref}    mode: dry-run", file=out)
     print(f"sha256:  {digest}", file=out)

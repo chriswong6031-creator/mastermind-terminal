@@ -55,14 +55,31 @@ question about itself, every time it is applied. The guards enforce that:
 - **`--allow-legacy` outside `0001`–`0010`** — refused. The waiver exists only
   for the files that predate this convention.
 
-## 5. The 401 playbook
+## 5. `--project-ref` — the stale-`.env` guard
+
+Both `--dry-run` and `--apply` accept an explicit `--project-ref <ref>`. It is
+never the only source of truth: `SUPABASE_ACCESS_TOKEN`/`SUPABASE_PROJECT_REF`
+(env, or `charting-app/.env`) still have to resolve to a real token and ref,
+and the override must **match** the resolved ref or the run is refused —
+`--project-ref wrongref does not match the resolved ref 'realref' -- refusing
+(stale .env guard). Nothing was sent.` This exists so a stale `--project-ref`
+typed at the command line can never silently target the wrong Supabase
+project — the resolved `.env`/env pair is what actually gets used, and a
+mismatch is a hard refusal, not a warning. `--dry-run` honours the same check
+(round-3 minor 3) even though it makes no network call, so both modes behave
+identically for this flag. If `SUPABASE_ACCESS_TOKEN`/`SUPABASE_PROJECT_REF`
+are not both set at all, `--dry-run` still proceeds (it needs no credentials)
+but prints a `note:` line saying the override could not be checked against
+anything — that is not the same as a passed guard.
+
+## 6. The 401 playbook
 
 A Supabase Management PAT expires roughly 30 days after it is minted
 (`DSC-SUPABASE-MANAGEMENT-PAT-EXPIRES-AT-30-DAYS`). An HTTP 401 here means
 **rotate the token**, not debug this script or the migration: mint a fresh
 `sbp_…` value and update `charting-app/.env`.
 
-## 6. Transaction-wrapped files
+## 7. Transaction-wrapped files
 
 A file that opens with `begin;` and closes with `commit;` (e.g. `0014`) is
 still sent to the Management API **one statement at a time, same as any other
@@ -76,7 +93,7 @@ does not provide. The `begin;`/`commit;` wrapper itself is still sent as
 ordinary statements — it is a no-op against a connection that only ever sees
 one statement per request, and it costs nothing to leave in the file.
 
-## 7. Worked example (`FIXTURE_0013` from `tests/test_supabase_apply.py`, `--dry-run`)
+## 8. Worked example (`FIXTURE_0013` from `tests/test_supabase_apply.py`, `--dry-run`)
 
 There is no `0013_alert_runs_outbox.sql` on disk yet (migrations on disk stop
 at `0010`) — this repo's own idempotent 0013-shaped test fixture is written

@@ -870,3 +870,218 @@ def test_dry_run_prints_comments_stripped_not_the_raw_statement(tmp_path, capsys
     out = capsys.readouterr().out
     assert "this comment must not appear" not in out
     assert "create table if not exists public.thing" in out
+
+
+# --- Regression tests: Meta-CEO B ruling r2 (2026-09-06, review-#516) ------
+#
+# A production --apply of supabase/migrations/0012_thesis_objects.sql
+# aborted at the PRE-readback with `HTTP 400 ... syntax error at or near
+# "Post" LINE 1: Post-apply verification (run manually against the target
+# database):` -- extract_block() only stripped the readback block's OWN
+# single layer of "-- " comment marking, which left the block's descriptive
+# header line glued onto the first `select` as bare prose (no comment
+# marker survived the one-level strip), and the nested "--   -- expect ..."
+# annotations under each query only happened to get neutralized downstream
+# by strip_sql_comments() rather than being excluded by the block parser
+# itself.
+
+# Copied byte-for-byte from the `-- readback:` block of
+# supabase/migrations/0012_thesis_objects.sql on origin/master (verified
+# against `git show origin/master:supabase/migrations/0012_thesis_objects.sql`).
+# The surrounding create-table/down-block scaffolding is NOT from that file
+# -- it exists only to make this a syntactically valid, idempotent fixture
+# so run_dry's guard passes and reaches the readback listing.
+FIXTURE_0012_READBACK_BLOCK = """
+create table if not exists public.theses (id bigint generated always as identity primary key);
+
+-- down:
+-- drop table if exists public.theses;
+
+-- readback:
+-- Post-apply verification (run manually against the target database):
+--
+-- select relname, relrowsecurity from pg_class
+--   where relname in ('theses','thesis_versions') and relnamespace = 'public'::regnamespace;
+--   -- expect relrowsecurity = true for both rows
+--
+-- select schemaname, tablename, policyname from pg_policies
+--   where schemaname = 'public' and tablename in ('theses','thesis_versions')
+--   order by tablename, policyname;
+--   -- expect exactly: theses/theses_select_own, thesis_versions/thesis_versions_select_own
+--
+-- select table_name, grantee, privilege_type from information_schema.role_table_grants
+--   where table_schema = 'public' and table_name in ('theses','thesis_versions')
+--   order by table_name, grantee, privilege_type;
+--   -- expect select-only grants to authenticated (no insert/update/delete/public/anon)
+--
+-- select p.proname, p.prosecdef, p.proconfig from pg_proc p
+--   join pg_namespace n on n.oid = p.pronamespace
+--   where n.nspname = 'public'
+--     and p.proname in ('apply_thesis_version_v1','read_current_thesis_versions_v1');
+--   -- expect prosecdef = true for both; proconfig carries the function's search_path pin
+"""
+
+
+def test_readback_statements_for_0012_thesis_objects_yields_four_select_statements(tmp_path):
+    # Meta-CEO B ruling r2, acceptance test (2): feed the LITERAL readback
+    # block of 0012_thesis_objects.sql and assert exactly 4 parsed
+    # statements, each beginning with `select`.
+    text = FIXTURE_0012_READBACK_BLOCK
+    stmts = readback_statements(text)
+    assert len(stmts) == 4
+    for s in stmts:
+        assert s.strip().lower().startswith("select"), repr(s)
+    # The prose header must be gone entirely, not merely off the front of
+    # the first statement.
+    assert not any("post-apply verification" in s.lower() for s in stmts)
+
+
+def test_dry_run_for_0012_readback_lists_clean_statements_with_prose_excluded(tmp_path, capsys):
+    # Meta-CEO B ruling r2, requirement (3): --dry-run output must list the
+    # parsed readback statements so an operator can see prose was excluded.
+    f = tmp_path / "0012_thesis_objects.sql"
+    f.write_text(FIXTURE_0012_READBACK_BLOCK)
+    rc = run_dry(f)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "readback query that WOULD run (4 statements):" in out
+    assert "post-apply verification" not in out.lower()
+    assert "select relname, relrowsecurity" in out
+
+
+def test_is_missing_relation_error_recognizes_more_object_kinds_without_reopening_the_project_ref_hole():
+    # review-#516 round-4 MINOR: "_is_missing_relation_error over-narrowed".
+    # Round-3's message-only fallback matched only relation/table/index/
+    # policy wording -- a pre-readback query against a not-yet-created
+    # sequence, view, trigger, function, type, schema, column, or constraint
+    # is just as "expected before a create" as a missing table, but none of
+    # those wordings matched, so the FIRST --apply of a file whose readback
+    # checks one of those object kinds would fail the run instead of
+    # proceeding. RED-FIRST: this fails against the pre-fix (round-3) regex.
+    for word in ("sequence", "view", "trigger", "function", "type", "schema", "column", "constraint"):
+        exc = ApiError(400, '{"message":"%s \\"foo\\" does not exist"}' % word)
+        assert supabase_apply_module._is_missing_relation_error(exc), word
+
+    # The round-3 fix this must not reopen: a stale/wrong --project-ref 404
+    # never names any of these object-kind words, so it must still fail the
+    # run rather than being swallowed.
+    stale = ApiError(404, '{"message":"Project ref123 does not exist"}')
+    assert not supabase_apply_module._is_missing_relation_error(stale)
+
+
+def test_pat_string_kwarg_leak_loop_would_catch_a_leaked_token_in_a_non_input_kwarg():
+    # review-#516 round-4 MINOR: "vacuous kwargs loop". The loop in
+    # test_pat_never_appears_in_curl_argv_or_in_stdout --
+    #   for key, value in kwargs.items():
+    #       if key == "input": continue
+    #       if isinstance(value, str): assert token not in value
+    # -- never actually executes its assertion against CurlRunner's real
+    # call: the only kwargs __call__ passes besides "input" today are
+    # capture_output=True and text=True, both bools, so `isinstance(value,
+    # str)` is False for both and the loop body never runs a single
+    # assertion. This is that loop's positive control: a fabricated kwargs
+    # dict carrying a leaked token in a THIRD string-valued kwarg proves the
+    # mechanism actually catches a leak when one exists, rather than passing
+    # vacuously because nothing was ever there to check.
+    token = "sbp_super_secret_token"
+    leaking_kwargs = {
+        "input": "safe stdin, token belongs here",
+        "capture_output": True,
+        "text": True,
+        "extra_header": f"-H X-Leak: Bearer {token}",
+    }
+    checked = 0
+    found_leak = False
+    for key, value in leaking_kwargs.items():
+        if key == "input":
+            continue
+        if isinstance(value, str):
+            checked += 1
+            if token in value:
+                found_leak = True
+    assert checked >= 1, "the loop never inspected any non-input string kwarg"
+    assert found_leak, "the loop failed to notice the token in a leaked string kwarg"
+
+
+def test_dry_run_notes_the_project_ref_guard_did_not_run_when_credentials_are_incomplete(
+    monkeypatch, tmp_path, capsys
+):
+    # review-#516 round-4 MINOR: "dry-run guard bypass when creds
+    # incomplete". run_dry's except-SystemExit4 branch used to silently fall
+    # through to `ref = project_ref or "<unresolved...>"` for ANY
+    # resolve_credentials() failure, including the case where
+    # SUPABASE_ACCESS_TOKEN/SUPABASE_PROJECT_REF are simply not set at all --
+    # a different failure than "the override conflicts with a resolved
+    # ref". In that case the stale-.env guard never even ran against the
+    # override, but the printed "project: <override>" line looked identical
+    # to a validated pass. The operator must be told the override was not
+    # checked. RED-FIRST: fails against the pre-fix run_dry (no such note is
+    # printed).
+    monkeypatch.delenv("SUPABASE_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("SUPABASE_PROJECT_REF", raising=False)
+    f = tmp_path / "0013_alert_runs_outbox.sql"
+    f.write_text(FIXTURE_0013)
+
+    rc = run_dry(f, project_ref="someref")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "project: someref" in out
+    assert "could not be checked against stored credentials" in out
+
+
+def test_main_wires_project_ref_through_dry_run_and_apply(monkeypatch, tmp_path, capsys):
+    # review-#516 round-4 MINOR: "main() --project-ref wiring unpinned" --
+    # every existing --project-ref test drives run_dry()/run_apply()
+    # directly, never main() itself, so a regression in main()'s own
+    # argv-to-function wiring for --project-ref (dry-run and apply alike)
+    # would not be caught by any test. Drive the real CLI entry point
+    # end-to-end for both modes.
+    monkeypatch.setenv("SUPABASE_ACCESS_TOKEN", "sbp_test_token")
+    monkeypatch.setenv("SUPABASE_PROJECT_REF", "realref")
+    f = tmp_path / "0013_alert_runs_outbox.sql"
+    f.write_text(FIXTURE_0013)
+
+    rc = main([str(f), "--dry-run", "--project-ref", "realref"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "project: realref" in out
+
+    rc2 = main([str(f), "--dry-run", "--project-ref", "wrongref"])
+    assert rc2 == 3
+
+    calls = []
+    response = json.dumps([
+        {"relname": "alert_runs"},
+        {"indexname": "alert_runs_id_key"},
+        {"polname": "alert_runs_read"},
+    ])
+
+    def fake_subprocess_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+
+        class R:
+            stdout = f"{response}\n200"
+            stderr = ""
+            returncode = 0
+
+        return R()
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+    receipt_path = tmp_path / "receipt.json"
+    rc3 = main([
+        str(f), "--apply", "--receipt", str(receipt_path), "--project-ref", "realref",
+    ])
+    assert rc3 == 0
+    assert len(calls) >= 1
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["project_ref"] == "realref"
+    assert receipt["status"] == "applied"
+
+    # A mismatched override must still refuse end to end through main(),
+    # never reaching the runner (no extra calls recorded).
+    calls_before = len(calls)
+    rc4 = main([
+        str(f), "--apply", "--receipt", str(tmp_path / "r2.json"), "--project-ref", "wrongref",
+    ])
+    assert rc4 == 4
+    assert len(calls) == calls_before
