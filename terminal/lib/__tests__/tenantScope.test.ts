@@ -37,7 +37,7 @@ describe("tenantScope decision function", () => {
   const owned: ScopedResource = { id: "res-1", ownerId: "u1", teamId: "team-a", visibility: "private" };
 
   it("is deterministic across repeated calls", () => {
-    const memberships: Membership[] = [{ teamId: "team-a", role: "member", revokedAt: null }];
+    const memberships: Membership[] = [{ userId: "u1", teamId: "team-a", role: "member", revokedAt: null }];
     const grants: Grant[] = [];
     const a = decideTenantScope(identity, memberships, owned, grants);
     const b = decideTenantScope(identity, memberships, owned, grants);
@@ -45,7 +45,7 @@ describe("tenantScope decision function", () => {
   });
 
   it("does not mutate its inputs", () => {
-    const memberships: Membership[] = [{ teamId: "team-a", role: "member", revokedAt: null }];
+    const memberships: Membership[] = [{ userId: "u1", teamId: "team-a", role: "member", revokedAt: null }];
     const grants: Grant[] = [{ resourceId: "res-1", granteeUserId: "u1", revokedAt: null }];
     const resource: ScopedResource = { ...owned };
     const identityClone = { ...identity };
@@ -85,9 +85,30 @@ describe("tenantScope decision function", () => {
   it("honours row order — grant outranks team membership", () => {
     const resource: ScopedResource = { id: "res-4", ownerId: "u2", teamId: "team-a", visibility: "team" };
     const grants: Grant[] = [{ resourceId: "res-4", granteeUserId: "u1", revokedAt: null }];
-    const memberships: Membership[] = [{ teamId: "team-a", role: "member", revokedAt: null }];
+    const memberships: Membership[] = [{ userId: "u1", teamId: "team-a", role: "member", revokedAt: null }];
     const decision = decideTenantScope(identity, memberships, resource, grants);
     expect(decision).toEqual({ allow: true, reason: "explicit_grant", via: "grant" });
+  });
+
+  it("BLOCKER: a membership row belonging to a different user never grants access", () => {
+    // A caller could mis-source `memberships` from a team-wide reader (e.g.
+    // `listMembers`, PR #514 diff line 286) instead of the identity-scoped
+    // `listTeams` (PR #514 diff line 368). Even then, a membership row whose
+    // `userId` is not the caller's must be invisible to the decision.
+    const resource: ScopedResource = { id: "res-5", ownerId: "u3", teamId: "team-a", visibility: "team" };
+    const foreignMemberships: Membership[] = [{ userId: "u2", teamId: "team-a", role: "member", revokedAt: null }];
+    const decision = decideTenantScope(identity, foreignMemberships, resource, []);
+    expect(decision).toEqual({ allow: false, reason: "no_membership" });
+  });
+
+  it("MAJOR: an active team membership outranks an unrelated revoked grant", () => {
+    // A revoked one-off grant to THIS resource must never deny a user who
+    // separately holds an active membership on the resource's team.
+    const resource: ScopedResource = { id: "res-6", ownerId: "u2", teamId: "team-a", visibility: "team" };
+    const memberships: Membership[] = [{ userId: "u1", teamId: "team-a", role: "member", revokedAt: null }];
+    const grants: Grant[] = [{ resourceId: "res-6", granteeUserId: "u1", revokedAt: "2026-01-01T00:00:00Z" }];
+    const decision = decideTenantScope(identity, memberships, resource, grants);
+    expect(decision).toEqual({ allow: true, reason: "team_member_visible", via: "membership" });
   });
 
   it("carries `via` on every allow and omits it on every deny", () => {

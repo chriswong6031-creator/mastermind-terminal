@@ -26,9 +26,18 @@ export const TENANT_SCOPE_VISIBILITIES: readonly Visibility[] = ["private", "tea
 
 export type Identity = { userId: string | null };
 
-/** A revoked membership is carried as a FACT on the input, never read from a clock —
- *  that is what keeps "revoked membership denies immediately" testable in a pure function. */
-export type Membership = { teamId: string; role: TeamRole; revokedAt?: string | null };
+/** `userId` is REQUIRED and is the row's owner: the decision function only ever
+ *  honours a membership whose `userId` matches the calling `identity.userId`. This
+ *  is load-bearing — `listMembers(session.db, session.userId, teamId)` (PR #514
+ *  diff line 286) returns every member of a team, i.e. OTHER users' rows too. A
+ *  caller must build `memberships` from `listTeams(session.db, session.userId)`
+ *  (PR #514 diff line 368), which is identity-scoped; but even if a caller passes
+ *  the wrong (team-wide) source by mistake, this module still only honours rows
+ *  that carry the caller's own `userId` — a foreign membership row can never grant
+ *  access. A revoked membership is carried as a FACT on the input, never read from
+ *  a clock — that is what keeps "revoked membership denies immediately" testable
+ *  in a pure function. */
+export type Membership = { userId: string; teamId: string; role: TeamRole; revokedAt?: string | null };
 
 /** No `resource_grants` table exists (see the doc's Nulls Printed section). A Grant is
  *  caller-supplied. */
@@ -58,7 +67,8 @@ export type DenyReason =
   | "no_membership";
 export type TenantScopeReason = AllowReason | DenyReason;
 
-/** Declaration order is load-bearing: the conformance table is ordered by it. */
+/** Declaration order is load-bearing: the conformance table is ordered by it,
+ *  and it mirrors the decision function's evaluation order below. */
 export const TENANT_SCOPE_REASONS: readonly TenantScopeReason[] = [
   "no_identity",
   "malformed_resource",
@@ -66,10 +76,10 @@ export const TENANT_SCOPE_REASONS: readonly TenantScopeReason[] = [
   "visibility_unrecognized",
   "owner_match",
   "explicit_grant",
+  "team_member_visible",
   "grant_revoked",
   "private_not_owner",
   "resource_has_no_team",
-  "team_member_visible",
   "membership_revoked",
   "wrong_team",
   "no_membership",
@@ -119,8 +129,12 @@ export function decideTenantScope(
   }
 
   const userId = identity.userId;
-  const safeMemberships = memberships ?? [];
   const safeGrants = grants ?? [];
+  // A membership row is only ever honoured for THIS identity. Whatever source
+  // the caller used (even a team-wide `listMembers` dump), a row whose
+  // `userId` does not match the caller can never contribute an ALLOW or a
+  // DENY here — it is simply invisible to this decision.
+  const ownMemberships = (memberships ?? []).filter((m) => m.userId === userId);
 
   // Row 5
   if (resource.ownerId === userId) {
@@ -135,7 +149,21 @@ export function decideTenantScope(
     return { allow: true, reason: "explicit_grant", via: "grant" };
   }
 
-  // Row 7
+  // Row 7 — an ACTIVE team membership allows a team-visible row. This is
+  // evaluated BEFORE the revoked-grant check (row 8, formerly row 7): a
+  // membership is a durable, independent grounds for access, and an
+  // unrelated one-off grant being revoked must never override it. See doc
+  // §3 ruling 4.
+  if (resource.visibility === "team" && isNonEmptyTrimmedString(resource.teamId)) {
+    const activeMembership = ownMemberships.find(
+      (m) => m.teamId === resource.teamId && !m.revokedAt,
+    );
+    if (activeMembership) {
+      return { allow: true, reason: "team_member_visible", via: "membership" };
+    }
+  }
+
+  // Row 8
   const revokedGrant = safeGrants.find(
     (g) => g.resourceId === resource.id && g.granteeUserId === userId && !!g.revokedAt,
   );
@@ -143,26 +171,18 @@ export function decideTenantScope(
     return { allow: false, reason: "grant_revoked" };
   }
 
-  // Row 8
+  // Row 9
   if (resource.visibility === "private") {
     return { allow: false, reason: "private_not_owner" };
   }
 
-  // Row 9
+  // Row 10
   if (!isNonEmptyTrimmedString(resource.teamId)) {
     return { allow: false, reason: "resource_has_no_team" };
   }
 
-  // Row 10
-  const activeMembership = safeMemberships.find(
-    (m) => m.teamId === resource.teamId && !m.revokedAt,
-  );
-  if (activeMembership) {
-    return { allow: true, reason: "team_member_visible", via: "membership" };
-  }
-
   // Row 11
-  const revokedMembership = safeMemberships.find(
+  const revokedMembership = ownMemberships.find(
     (m) => m.teamId === resource.teamId && !!m.revokedAt,
   );
   if (revokedMembership) {
@@ -170,7 +190,7 @@ export function decideTenantScope(
   }
 
   // Row 12
-  if (safeMemberships.length > 0) {
+  if (ownMemberships.length > 0) {
     return { allow: false, reason: "wrong_team" };
   }
 
@@ -246,6 +266,24 @@ export const TENANT_SCOPE_CONFORMANCE: readonly ConformanceCase[] = [
     expect: { allow: true, reason: "explicit_grant" },
   },
   {
+    id: "member-reads-team-row",
+    scenario: "A team member reads their team's row",
+    identity: { userId: "u1" },
+    memberships: [{ userId: "u1", teamId: "team-a", role: "member", revokedAt: null }],
+    resource: { id: "r10", ownerId: "u2", teamId: "team-a", visibility: "team" },
+    grants: [],
+    expect: { allow: true, reason: "team_member_visible" },
+  },
+  {
+    id: "revoked-grant-with-active-membership-allowed",
+    scenario: "A member reads the team row after an unrelated one-off grant to it was withdrawn",
+    identity: { userId: "u1" },
+    memberships: [{ userId: "u1", teamId: "team-a", role: "member", revokedAt: null }],
+    resource: { id: "r14", ownerId: "u2", teamId: "team-a", visibility: "team" },
+    grants: [{ resourceId: "r14", granteeUserId: "u1", revokedAt: "2026-01-01T00:00:00Z" }],
+    expect: { allow: true, reason: "team_member_visible" },
+  },
+  {
     id: "revoked-grant-denied",
     scenario: "That same person reads it after the share was withdrawn",
     identity: { userId: "u1" },
@@ -273,19 +311,10 @@ export const TENANT_SCOPE_CONFORMANCE: readonly ConformanceCase[] = [
     expect: { allow: false, reason: "resource_has_no_team" },
   },
   {
-    id: "member-reads-team-row",
-    scenario: "A team member reads their team's row",
-    identity: { userId: "u1" },
-    memberships: [{ teamId: "team-a", role: "member", revokedAt: null }],
-    resource: { id: "r10", ownerId: "u2", teamId: "team-a", visibility: "team" },
-    grants: [],
-    expect: { allow: true, reason: "team_member_visible" },
-  },
-  {
     id: "revoked-membership-denied",
     scenario: "That member reads it after being removed from the team",
     identity: { userId: "u1" },
-    memberships: [{ teamId: "team-a", role: "member", revokedAt: "2026-01-01T00:00:00Z" }],
+    memberships: [{ userId: "u1", teamId: "team-a", role: "member", revokedAt: "2026-01-01T00:00:00Z" }],
     resource: { id: "r11", ownerId: "u2", teamId: "team-a", visibility: "team" },
     grants: [],
     expect: { allow: false, reason: "membership_revoked" },
@@ -294,7 +323,7 @@ export const TENANT_SCOPE_CONFORMANCE: readonly ConformanceCase[] = [
     id: "different-team-denied",
     scenario: "A member of another team asks for this team's row",
     identity: { userId: "u1" },
-    memberships: [{ teamId: "team-b", role: "member", revokedAt: null }],
+    memberships: [{ userId: "u1", teamId: "team-b", role: "member", revokedAt: null }],
     resource: { id: "r12", ownerId: "u2", teamId: "team-a", visibility: "team" },
     grants: [],
     expect: { allow: false, reason: "wrong_team" },
@@ -305,6 +334,15 @@ export const TENANT_SCOPE_CONFORMANCE: readonly ConformanceCase[] = [
     identity: { userId: "u1" },
     memberships: [],
     resource: { id: "r13", ownerId: "u2", teamId: "team-a", visibility: "team" },
+    grants: [],
+    expect: { allow: false, reason: "no_membership" },
+  },
+  {
+    id: "foreign-membership-row-denied",
+    scenario: "A membership row belonging to someone else is mixed into the caller's own list",
+    identity: { userId: "u1" },
+    memberships: [{ userId: "u2", teamId: "team-a", role: "member", revokedAt: null }],
+    resource: { id: "r15", ownerId: "u3", teamId: "team-a", visibility: "team" },
     grants: [],
     expect: { allow: false, reason: "no_membership" },
   },
