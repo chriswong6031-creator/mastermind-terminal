@@ -157,12 +157,29 @@ describe("announceShellBrainSymbol / subscribeShellBrainSymbol (review round-4, 
 describe("SHELL_DEFAULT_BRAIN_SYMBOL cannot drift from AnalysisWorkspace's own default (review ruling, PR #490 MINOR: default symbol)", () => {
   // Before this fix, lib/shellBrainSymbol.ts and components/workspaces/AnalysisWorkspace.tsx
   // each declared their own `"NVDA"` literal — nothing would catch one changing without the
-  // other. Both now derive from lib/analysisSymbol.ts's ANALYSIS_DEFAULT_SYMBOL; this pins
-  // that single-source relationship two ways: a value check (the exported constant) and a
-  // source scan (AnalysisWorkspace.tsx's own DEFAULT_SYMBOL is a reference, not a re-declared
-  // literal), so a future edit that reintroduces a second literal fails here.
-  it("SHELL_DEFAULT_BRAIN_SYMBOL is exactly lib/analysisSymbol.ts's ANALYSIS_DEFAULT_SYMBOL", () => {
+  // other. Both now derive from lib/analysisSymbol.ts's ANALYSIS_DEFAULT_SYMBOL.
+  //
+  // Review round 6, MINOR 4: the value check below (`SHELL_DEFAULT_BRAIN_SYMBOL` `toBe`
+  // `ANALYSIS_DEFAULT_SYMBOL`) can never go red on its own — `SHELL_DEFAULT_BRAIN_SYMBOL` is a
+  // plain re-export (`export const SHELL_DEFAULT_BRAIN_SYMBOL = ANALYSIS_DEFAULT_SYMBOL;`), so
+  // the two names are the same value by construction; only re-introducing a second literal in
+  // shellBrainSymbol.ts's own source — which a value-equality check on the two constants, being
+  // identical either way, cannot see — would ever separate them. The two source-scan tests
+  // below are the actual guards, one per file, each pinning "derived by reference" over
+  // "re-declared as a literal" the same way AnalysisWorkspace.tsx's was already pinned.
+  it("SHELL_DEFAULT_BRAIN_SYMBOL is exactly lib/analysisSymbol.ts's ANALYSIS_DEFAULT_SYMBOL (documents intent; see the source-scan tests below for the real guard)", () => {
     expect(SHELL_DEFAULT_BRAIN_SYMBOL).toBe(ANALYSIS_DEFAULT_SYMBOL);
+  });
+
+  it("lib/shellBrainSymbol.ts's SHELL_DEFAULT_BRAIN_SYMBOL is derived from ANALYSIS_DEFAULT_SYMBOL, not a re-declared literal", () => {
+    const SHELL_BRAIN_SYMBOL_TS = readFileSync(join(__dirname, "..", "shellBrainSymbol.ts"), "utf8");
+    expect(SHELL_BRAIN_SYMBOL_TS).toMatch(
+      /import\s*\{[^}]*\bANALYSIS_DEFAULT_SYMBOL\b[^}]*\}\s*from\s*["']\.\/analysisSymbol["']/,
+    );
+    expect(SHELL_BRAIN_SYMBOL_TS).toMatch(
+      /export\s+const\s+SHELL_DEFAULT_BRAIN_SYMBOL\s*=\s*ANALYSIS_DEFAULT_SYMBOL\s*;/,
+    );
+    expect(SHELL_BRAIN_SYMBOL_TS).not.toMatch(/export\s+const\s+SHELL_DEFAULT_BRAIN_SYMBOL\s*=\s*["']NVDA["']/);
   });
 
   it("AnalysisWorkspace.tsx's DEFAULT_SYMBOL is derived from ANALYSIS_DEFAULT_SYMBOL, not a re-declared literal", () => {

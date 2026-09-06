@@ -14,9 +14,24 @@
 // running that suite locally; this is a standalone script run once per side of the comparison
 // and its output pasted into the PR body. Keep or delete after use (ruling's own words).
 //
+// Review round-6 addition: the round-5 artifact's BEFORE `.mobilebar` z-index read "1" at both
+// viewports, which a plain `grep -rn mobilebar --include=*.css` cannot explain (only two
+// declarations exist for a selector literally named `.mobilebar`: 30 and this PR's 95) — the
+// review called that unreconcilable. It is real: `app/observatory.css`'s `.obs-ambient > *`
+// resets every direct child's z-index to 1 (ambient-background layering), ties `.mobilebar`'s
+// own specificity exactly (one class each; `>` and `*` add none), and wins on origin/master by
+// coming later in source order — a rule a `mobilebar`-string grep cannot find because its
+// selector text never contains that string. This script now asks the browser directly, via the
+// CDP `CSS.getMatchedStylesForNode` cascade (not a text grep), which rules the browser actually
+// matched against `.mobilebar` and which one supplied the winning z-index, and records that list
+// in the JSON so the artifact explains its own number instead of asserting it.
+//
 // Usage: node e2e/tools/measure-analysis-mobilebar-stacking.mjs <port> <label> <outDir>
-//   <label> is a free-text tag ("BEFORE-origin-master" / "AFTER-f716d713a...") embedded in the
-//   output filenames and JSON so the two runs cannot be confused after the fact.
+//   <label> is a free-text tag ("BEFORE-origin-master" / "AFTER-this-pr") embedded in the output
+//   filenames and JSON so the two runs cannot be confused after the fact. Keep it commit-sha-free
+//   — the PR body states the exact head sha for AFTER; a label baked into a committed filename
+//   goes stale on the very next round's re-push (round-5's did: "AFTER-f716d713" outlived that
+//   commit).
 import { chromium } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -110,6 +125,25 @@ function rectsOverlap(a, b) {
   return a.rect.left < b.rect.right && a.rect.right > b.rect.left && a.rect.top < b.rect.bottom && a.rect.bottom > b.rect.top;
 }
 
+/**
+ * Ask the browser's own cascade resolver (CDP `CSS.getMatchedStylesForNode`) which rules it
+ * matched against `selector` and which of them set z-index, in cascade (source) order. This is
+ * strictly more authoritative than a source grep: it also surfaces rules that match the element
+ * through a compound selector (e.g. `.obs-ambient > *`) whose selector text never contains the
+ * element's own class name, so a text search for that class would miss it entirely.
+ */
+async function matchedZIndexRules(client, root, selector) {
+  const { nodeIds } = await client.send("DOM.querySelectorAll", { nodeId: root.nodeId, selector });
+  if (!nodeIds.length) return null;
+  const matched = await client.send("CSS.getMatchedStylesForNode", { nodeId: nodeIds[0] });
+  return (matched.matchedCSSRules || [])
+    .map((m) => {
+      const prop = (m.rule.style.cssProperties || []).find((p) => p.name === "z-index" && !p.disabled);
+      return prop ? { selector: m.rule.selectorList.text, zIndex: prop.value } : null;
+    })
+    .filter(Boolean);
+}
+
 const VIEWPORTS = [
   { name: "1440x900", width: 1440, height: 900 },
   { name: "390x844", width: 390, height: 844 },
@@ -126,6 +160,12 @@ for (const vp of VIEWPORTS) {
   await page.locator(".fin-pane").first().waitFor({ state: "attached", timeout: 30_000 });
   // Let layout settle (webfonts, one paint frame) before reading computed geometry.
   await page.waitForTimeout(500);
+
+  const cdp = await ctx.newCDPSession(page);
+  await cdp.send("DOM.enable");
+  await cdp.send("CSS.enable");
+  const { root } = await cdp.send("DOM.getDocument", { depth: -1, pierce: true });
+  const mobilebarZIndexCascade = await matchedZIndexRules(cdp, root, ".mobilebar");
 
   const mobilebar = await page.evaluate(readElement, ".mobilebar");
   const finPane = await page.evaluate(readElement, ".fin-pane.fin-pane--workspace");
@@ -148,6 +188,11 @@ for (const vp of VIEWPORTS) {
 
   results.viewports[vp.name] = {
     mobilebar,
+    // Every CSS rule the browser matched against `.mobilebar` that sets z-index, in cascade
+    // (source) order — the last entry whose `zIndex` equals `mobilebar.zIndex` above is the
+    // winner. Explains a computed value that a selector-text-only grep for "mobilebar" cannot
+    // (see the `.obs-ambient > *` rule this uncovers on origin/master).
+    mobilebarZIndexCascade,
     finPane,
     finHead,
     menuButton,

@@ -17,6 +17,7 @@ import { JSDOM } from "jsdom";
 
 const GLOBALS_CSS = readFileSync(join(__dirname, "..", "..", "app", "globals.css"), "utf8");
 const FIN_CSS = readFileSync(join(__dirname, "..", "..", "app", "fin.css"), "utf8");
+const OBSERVATORY_CSS = readFileSync(join(__dirname, "..", "..", "app", "observatory.css"), "utf8");
 const APP_SHELL_TSX = readFileSync(join(__dirname, "..", "..", "components", "chrome", "AppShell.tsx"), "utf8");
 
 // ── real-CSSOM helpers (review round-4, MAJOR 1 measurement fix) ──
@@ -75,7 +76,34 @@ function maxWidthPx(mediaConditions: string[]): number | null {
 
 const GLOBALS_RULES = flattenRules(parseStylesheet(GLOBALS_CSS));
 const FIN_RULES = flattenRules(parseStylesheet(FIN_CSS));
+const OBSERVATORY_RULES = flattenRules(parseStylesheet(OBSERVATORY_CSS));
 const ALL_RULES = [...GLOBALS_RULES, ...FIN_RULES];
+
+/**
+ * Minimal CSS specificity calculator for the plain selectors this file compares (no attribute
+ * selectors, no pseudo-elements beyond `::before`/`::after`, no `:is()`/`:where()`). Returns
+ * [id-count, class/attr/pseudo-class-count, element/pseudo-element-count] the same way the CSS
+ * cascade spec defines it, so two selectors' priority can be compared directly instead of
+ * guessed at from reading the source.
+ */
+function specificity(selector: string): [number, number, number] {
+  let ids = 0, classes = 0, elements = 0;
+  for (const part of selector.split(/\s+|>|\+|~/).filter(Boolean)) {
+    for (const token of part.match(/(#[\w-]+)|(\.[\w-]+)|(:{1,2}[\w-]+)|(^\*$)|([a-zA-Z][\w-]*)/g) || []) {
+      if (token.startsWith("#")) ids++;
+      else if (token.startsWith(".") || token.startsWith(":")) classes++;
+      else if (token !== "*") elements++;
+    }
+  }
+  return [ids, classes, elements];
+}
+
+function higherOrEqual(a: [number, number, number], b: [number, number, number]): boolean {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] > b[i];
+  }
+  return true; // exactly equal
+}
 
 describe("AppShell analysis-only mobilebar z-index scoping", () => {
   it("keeps the shared .mobilebar rule at its historical z-index (every non-analysis route)", () => {
@@ -168,5 +196,44 @@ describe("AppShell analysis-only fin-pane offset, parsed via real CSSOM (review 
       universalBorderBox,
       "global '*{box-sizing:border-box}' rule not found — the fin-pane offset assumes .mobilebar's safe-area padding-top is absorbed inside its declared height, not added on top of it",
     ).toBeTruthy();
+  });
+});
+
+describe(".analysis-shell .mobilebar really outranks the ambient-background reset (review round 6, MAJOR: BEFORE-artifact reconciliation)", () => {
+  // The round-5/6 real-browser measurement (terminal/e2e/tools/measure-analysis-mobilebar-
+  // stacking.mjs, artifacts in terminal/e2e/proof/mobilebar-stacking/) recorded `.mobilebar`'s
+  // BEFORE (origin/master) computed z-index as 1, not the 30 its own base rule above declares.
+  // That is real: app/observatory.css's `.obs-ambient > *{z-index:1}` resets every direct child
+  // of the ambient wrapper, ties `.mobilebar`'s specificity exactly, and wins on source order —
+  // a rule a plain `grep mobilebar` search can never find, since its selector text never
+  // contains that string. This pins the two CSS facts that make the whole chain true, so a
+  // future edit that quietly breaks either one (rather than the z-index numbers a text regex
+  // could still catch) fails here instead of only in a browser nobody happened to check.
+  const obsAmbientChildReset = OBSERVATORY_RULES.find(
+    (r) => r.selectorText === ".obs-ambient > *" && r.mediaConditions.length === 0,
+  );
+
+  it("app/observatory.css still declares the .obs-ambient > * z-index:1 reset this reasoning depends on", () => {
+    expect(obsAmbientChildReset, ".obs-ambient > * rule not found in app/observatory.css").toBeTruthy();
+    expect(obsAmbientChildReset!.style.getPropertyValue("z-index")).toBe("1");
+  });
+
+  it(".analysis-shell .mobilebar's specificity beats .obs-ambient > * outright (wins regardless of source order)", () => {
+    expect(obsAmbientChildReset).toBeTruthy();
+    const scopedRule = GLOBALS_RULES.find((r) => r.selectorText === ".analysis-shell .mobilebar");
+    expect(scopedRule, ".analysis-shell .mobilebar rule not found in globals.css").toBeTruthy();
+    const scoped = specificity(scopedRule!.selectorText);
+    const reset = specificity(obsAmbientChildReset!.selectorText);
+    expect(
+      higherOrEqual(scoped, reset) && JSON.stringify(scoped) !== JSON.stringify(reset),
+      `.analysis-shell .mobilebar specificity ${JSON.stringify(scoped)} must exceed .obs-ambient > * specificity ${JSON.stringify(reset)} — a tie or a loss would mean the analysis fix no longer reliably outranks the ambient reset`,
+    ).toBe(true);
+  });
+
+  it("documents (does not merely assume) that bare .mobilebar ties .obs-ambient > * on specificity — that tie is exactly why origin/master's computed value is 1, not 30", () => {
+    expect(obsAmbientChildReset).toBeTruthy();
+    const baseRule = GLOBALS_RULES.find((r) => r.selectorText === ".mobilebar" && r.mediaConditions.length === 0);
+    expect(baseRule).toBeTruthy();
+    expect(specificity(baseRule!.selectorText)).toEqual(specificity(obsAmbientChildReset!.selectorText));
   });
 });
