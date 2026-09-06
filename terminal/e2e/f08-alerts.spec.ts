@@ -91,3 +91,146 @@ test("ZH language renders ZH monitor copy", async ({ page }) => {
   await expect(page.locator('[data-monitor-state="never_ran"]')).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText("尚无记录").first()).toBeVisible();
 });
+
+// --- Visual evidence crops (spec §9) -------------------------------------------------
+// Deterministic fixture-driven crops for the PR body evidence matrix. Dark theme only
+// (the shell has no light branch yet — see spec §6/§9). Run selectively:
+//   npx playwright test e2e/f08-alerts.spec.ts -g "crop:"
+const PROOF_DIR = "e2e/proof/f08-alerts";
+
+const FIRED_ALERT = {
+  id: "a1", symbol: "NVDA", active: false, created_at: "2026-08-01T00:00:00Z",
+  condition: { type: "price", triggered: true },
+};
+const SENT_OUTBOX = [{
+  alert_id: "a1", fire_event_id: "f1", status: "sent", attempts: 1, last_error: null,
+  deliver_after: null, delivered_at: "2026-09-05T09:41:00Z", created_at: "2026-08-01T00:00:00Z",
+  payload: {
+    subject: "NVDA crossed your price line", summary_plain: "NVDA crossed your price line.",
+    ticker: "NVDA", condition_plain: "Crossed your price line",
+    evidence_url: "https://example.com/evidence/f1", fired_at: "2026-09-05T09:41:00Z",
+  },
+}];
+const FRESH_RUN = {
+  lane: "alerts_engine", run_id: "r1", started_at: new Date().toISOString(),
+  concluded_at: new Date().toISOString(), outcome: "success", lane_cadence_budget_s: 300,
+};
+const STALE_RUN = {
+  lane: "alerts_engine", run_id: "r0", started_at: "2020-01-01T00:00:00Z",
+  concluded_at: "2020-01-01T00:05:00Z", outcome: "success", lane_cadence_budget_s: 300,
+};
+
+async function crop(page: Page, width: number, name: string) {
+  await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+  await page.screenshot({ path: `${PROOF_DIR}/${name}.png`, fullPage: false });
+}
+
+for (const vp of [1440, 390] as const) {
+  test(`crop: ${vp}-en-calm`, async ({ page }) => {
+    await setLang(page, "en");
+    await installFixtures(page, {
+      alerts: [FIRED_ALERT], run: FRESH_RUN, runsState: "READ_OK",
+      lastSuccessAt: FRESH_RUN.concluded_at, outbox: SENT_OUTBOX, outboxState: "READ_OK",
+    });
+    await page.setViewportSize({ width: vp, height: vp === 390 ? 844 : 900 });
+    await page.goto("/alerts");
+    await expect(page.locator('[data-monitor-state="watching"]')).toBeVisible({ timeout: 45_000 });
+    await expect(page.locator('[data-delivery="sent"]').first()).toBeVisible();
+    await crop(page, vp, `${vp}-en-${vp === 1440 ? "fired-delivery" : "calm"}`);
+    if (vp === 1440) await crop(page, vp, `${vp}-en-calm`);
+  });
+
+  test(`crop: ${vp}-en-degraded`, async ({ page }) => {
+    await setLang(page, "en");
+    await installFixtures(page, {
+      alerts: [], run: STALE_RUN, runsState: "READ_OK", lastSuccessAt: STALE_RUN.concluded_at,
+    });
+    await page.setViewportSize({ width: vp, height: vp === 390 ? 844 : 900 });
+    await page.goto("/alerts");
+    await expect(page.locator('[data-monitor-state="degraded"]')).toBeVisible({ timeout: 45_000 });
+    await crop(page, vp, `${vp}-en-degraded`);
+  });
+
+  test(`crop: ${vp}-en-drillback`, async ({ page }) => {
+    await setLang(page, "en");
+    await installFixtures(page, {
+      alerts: [FIRED_ALERT], run: FRESH_RUN, runsState: "READ_OK",
+      lastSuccessAt: FRESH_RUN.concluded_at, outbox: SENT_OUTBOX, outboxState: "READ_OK",
+    });
+    await page.setViewportSize({ width: vp, height: vp === 390 ? 844 : 900 });
+    await page.goto("/alerts");
+    await page.locator('[data-delivery="sent"]').first().click();
+    await expect(page.locator('[data-alerts-state="drillback"]')).toBeVisible({ timeout: 45_000 });
+    await crop(page, vp, `${vp}-en-drillback`);
+  });
+
+  test(`crop: ${vp}-zh-calm`, async ({ page }) => {
+    await setLang(page, "zh");
+    await installFixtures(page, {
+      alerts: [FIRED_ALERT], run: FRESH_RUN, runsState: "READ_OK",
+      lastSuccessAt: FRESH_RUN.concluded_at, outbox: SENT_OUTBOX, outboxState: "READ_OK",
+    });
+    await page.setViewportSize({ width: vp, height: vp === 390 ? 844 : 900 });
+    await page.goto("/alerts");
+    await expect(page.locator('[data-monitor-state="watching"]')).toBeVisible({ timeout: 45_000 });
+    await crop(page, vp, `${vp}-zh-calm`);
+  });
+
+  test(`crop: ${vp}-zh-degraded`, async ({ page }) => {
+    await setLang(page, "zh");
+    await installFixtures(page, {
+      alerts: [], run: STALE_RUN, runsState: "READ_OK", lastSuccessAt: STALE_RUN.concluded_at,
+    });
+    await page.setViewportSize({ width: vp, height: vp === 390 ? 844 : 900 });
+    await page.goto("/alerts");
+    await expect(page.locator('[data-monitor-state="degraded"]')).toBeVisible({ timeout: 45_000 });
+    await crop(page, vp, `${vp}-zh-degraded`);
+  });
+
+  if (vp === 1440) {
+    test(`crop: ${vp}-zh-drillback`, async ({ page }) => {
+      await setLang(page, "zh");
+      await installFixtures(page, {
+        alerts: [FIRED_ALERT], run: FRESH_RUN, runsState: "READ_OK",
+        lastSuccessAt: FRESH_RUN.concluded_at, outbox: SENT_OUTBOX, outboxState: "READ_OK",
+      });
+      await page.setViewportSize({ width: vp, height: 900 });
+      await page.goto("/alerts");
+      await page.locator('[data-delivery="sent"]').first().click();
+      await expect(page.locator('[data-alerts-state="drillback"]')).toBeVisible({ timeout: 45_000 });
+      await crop(page, vp, `${vp}-zh-drillback`);
+    });
+
+    test(`crop: ${vp}-en-calm-empty`, async ({ page }) => {
+      await setLang(page, "en");
+      await installFixtures(page, {
+        alerts: [], run: FRESH_RUN, runsState: "READ_OK", lastSuccessAt: FRESH_RUN.concluded_at,
+      });
+      await page.setViewportSize({ width: vp, height: 900 });
+      await page.goto("/alerts");
+      await expect(page.locator('[data-alerts-state="calm-empty"]').first()).toBeVisible({ timeout: 45_000 });
+      await crop(page, vp, `${vp}-en-calm-empty`);
+    });
+
+    test(`crop: ${vp}-en-no-coverage`, async ({ page }) => {
+      await setLang(page, "en");
+      await installFixtures(page, {
+        alerts: [], run: { ...FRESH_RUN, unevaluable_n: 2 }, runsState: "READ_OK",
+        lastSuccessAt: FRESH_RUN.concluded_at,
+      });
+      await page.setViewportSize({ width: vp, height: 900 });
+      await page.goto("/alerts");
+      await expect(page.locator('[data-alerts-state="no-coverage"]').first()).toBeVisible({ timeout: 45_000 });
+      await crop(page, vp, `${vp}-en-no-coverage`);
+    });
+
+    test(`crop: ${vp}-en-unavailable`, async ({ page }) => {
+      await setLang(page, "en");
+      await installFixtures(page, { alertsStatus: 503, runsState: "READ_UNAVAILABLE" });
+      await page.setViewportSize({ width: vp, height: 900 });
+      await page.goto("/alerts");
+      await expect(page.locator('[data-alerts-state="unavailable"]').first()).toBeVisible({ timeout: 45_000 });
+      await crop(page, vp, `${vp}-en-unavailable`);
+    });
+  }
+}
