@@ -135,13 +135,14 @@ amendment, only a README edit.
   below as well as open pull requests — not something derived after the formula — precisely so a
   Meta-CEO B pre-reservation with no open pull request (like `0013`/`0014` were, before #513/#514
   opened) is never invisible to the next claimant.
-- **Release path.** A reservation is released — its number returned to the free pool for
-  Meta-CEO B to reassign — the moment its owning pull request closes without merging, or (for a
-  pre-reservation) the moment Meta-CEO B stands it down; the row is not removed. Its status
-  changes to `released` in place, replacing `reserved`, so the next claimant's `max()` does not
-  pin the number forever. `released` is a status this README defines to implement the release
-  path above; it is not one of the ruling's enumerated statuses. No number below has been
-  released.
+- **Release path.** A reservation is released — its owning claim stood down — the moment its
+  pull request closes without merging, or (for a pre-reservation) the moment Meta-CEO B stands it
+  down; the row is not removed. Its status changes to `released` in place, replacing `reserved`,
+  so the table stops reading it as an active claim. Because the formula fold-in above counts
+  every row in this table regardless of status, a released row's number keeps counting toward
+  `max()` like any other row — `released` marks the claim as abandoned, it does not free the
+  number for reissue. `released` is a status this README defines to implement the release path
+  above; it is not one of the ruling's enumerated statuses. No number below has been released.
 
 ### Reservations
 
@@ -157,7 +158,7 @@ pre-reservation) but no pull request carrying its file is open yet; **open PR** 
 request carrying the file for this number is open and not yet merged; **merged** — the file
 is on `master`; **applied** — an operator has run it against production and posted the
 readback. (**released** is an operating-note-only status — see "Release path" above — for a
-claim that was returned to the free pool; it is not one of the ruling's own status words and
+claim that was stood down; it is not one of the ruling's own status words and
 no row currently carries it.)
 
 Only `0011` has reached production: its corrective DDL was applied live on 2026-09-05 via the
