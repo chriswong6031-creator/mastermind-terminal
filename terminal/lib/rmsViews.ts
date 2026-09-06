@@ -37,6 +37,8 @@ export type ThesisRow = {
   title: string;
   subjectDisplay: string;
   subjectKey: string;
+  /** Composite owner|kind|key — matches CoverageRow.key so the Coverage lens filter can select a subject unambiguously. */
+  subjectGroupKey: string;
   lifecycleState: ThesisLifecycle;
   currentVersion: number;
   updatedAt: string;
@@ -59,9 +61,12 @@ export type ConditionState =
 
 /** Today the F11 monitor exposes no owner-scoped read boundary, so this returns
  *  "unavailable" for every thesis. When macro#6918 ships one, ONLY this function binds. */
-export function readConditionStates(ids: readonly string[]): Map<string, ConditionState> {
+export function readConditionStates(
+  ids: readonly string[],
+  reader?: (id: string) => ConditionState | undefined,
+): Map<string, ConditionState> {
   const map = new Map<string, ConditionState>();
-  for (const id of ids) map.set(id, { source: "unavailable" });
+  for (const id of ids) map.set(id, (reader && reader(id)) ?? { source: "unavailable" });
   return map;
 }
 
@@ -71,6 +76,7 @@ function toThesisRow(s: ThesisSummary, reason?: ReviewReason): ThesisRow {
     title: s.title,
     subjectDisplay: s.subject.display,
     subjectKey: s.subject.key,
+    subjectGroupKey: `${s.subject.owner}|${s.subject.kind}|${s.subject.key}`,
     lifecycleState: s.lifecycleState,
     currentVersion: s.currentVersion,
     updatedAt: s.updatedAt,

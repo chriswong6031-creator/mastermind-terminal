@@ -421,6 +421,7 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   const [hydratedDetails, setHydratedDetails] = useState<Map<string, ThesisDetail>>(new Map());
   const [hydrating, setHydrating] = useState(false);
   const [hydrationUnavailable, setHydrationUnavailable] = useState(false);
+  const [missingIds, setMissingIds] = useState<Set<string>>(new Set());
   const lensRefs = useRef<Partial<Record<RmsViewId, HTMLButtonElement | null>>>({});
   const detailRequest = useRef(0);
   const routeDiscardAuthorized = useRef(false);
@@ -557,6 +558,13 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
         for (const item of payload.theses as ThesisDetail[]) next.set(item.id, item);
         return next;
       });
+      if (Array.isArray(payload.missing) && payload.missing.length > 0) {
+        setMissingIds((prev) => {
+          const next = new Set(prev);
+          for (const id of payload.missing as string[]) next.add(id);
+          return next;
+        });
+      }
       setHydrationUnavailable(false);
     } catch {
       setHydrationUnavailable(true);
@@ -568,23 +576,23 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   useEffect(() => {
     const def = RMS_VIEWS.find((v) => v.id === view);
     if (!def?.requiresContent || theses.length === 0 || hydratedDetails.size > 0) return;
-    void hydrateBatch(selectHydrationIds(theses, new Set(hydratedDetails.keys())));
-  }, [view, theses, hydratedDetails, hydrateBatch]);
+    void hydrateBatch(selectHydrationIds(theses, new Set([...hydratedDetails.keys(), ...missingIds])));
+  }, [view, theses, hydratedDetails, missingIds, hydrateBatch]);
 
   const hydrateMore = useCallback(() => {
-    void hydrateBatch(selectHydrationIds(theses, new Set(hydratedDetails.keys())));
-  }, [theses, hydratedDetails, hydrateBatch]);
+    void hydrateBatch(selectHydrationIds(theses, new Set([...hydratedDetails.keys(), ...missingIds])));
+  }, [theses, hydratedDetails, missingIds, hydrateBatch]);
 
   const rms = RMS_COPY[lang];
   const activeViewDef: RmsViewDef = RMS_VIEWS.find((v) => v.id === view) ?? RMS_VIEWS[0];
   const detailListRows = useMemo(() => Array.from(hydratedDetails.values()), [hydratedDetails]);
-  const scope = useMemo(() => hydrationScope(theses, new Set(hydratedDetails.keys())), [theses, hydratedDetails]);
+  const scope = useMemo(() => hydrationScope(theses, new Set([...hydratedDetails.keys(), ...missingIds])), [theses, hydratedDetails, missingIds]);
   const conditions = useMemo(() => readConditionStates(theses.map((t) => t.id)), [theses]);
   const coverageViewRows = useMemo(() => coverageRows(theses), [theses]);
   const ideaViewRows = useMemo(() => ideaRows(theses), [theses]);
   const thesesViewRows = useMemo(() => {
     const rows = thesisRows(theses);
-    return subjectFilterKey ? rows.filter((r) => r.subjectKey === subjectFilterKey) : rows;
+    return subjectFilterKey ? rows.filter((r) => r.subjectGroupKey === subjectFilterKey) : rows;
   }, [theses, subjectFilterKey]);
   const reviewViewRows = useMemo(() => reviewRows(theses, new Date(), conditions), [theses, conditions]);
   const catalystViewRows = useMemo(() => catalystRows(detailListRows), [detailListRows]);
@@ -1108,17 +1116,21 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
               {listState === "ready" && (view === "ideas" || view === "theses" || view === "reviews") && (
                 (view === "ideas" ? ideaViewRows : view === "reviews" ? reviewViewRows : thesesViewRows).length === 0
                   ? <div className={styles.emptyLens} data-testid="rms-empty"><p>{rms.empty[view]}</p></div>
-                  : (view === "ideas" ? ideaViewRows : view === "reviews" ? reviewViewRows : thesesViewRows).map((row) => (
-                    <button key={row.id} type="button" disabled={carrierLocked} className={selectedId === row.id ? styles.selected : ""} onClick={() => beginDetailLoad(row.id)}>
-                      <span><b>{row.subjectKey}</b><i data-state={row.lifecycleState}>{statusLabel(row.lifecycleState, copy)}</i></span>
-                      <strong>{row.title}</strong><small>{copy.version} {row.currentVersion}</small>
-                      {row.reason && <em className={styles.rowReason}>{rms.reason[row.reason]}</em>}
-                    </button>
-                  ))
+                  : <div className={styles.thesisList}>
+                    {(view === "ideas" ? ideaViewRows : view === "reviews" ? reviewViewRows : thesesViewRows).map((row) => (
+                      <button key={row.id} type="button" disabled={carrierLocked} className={selectedId === row.id ? styles.selected : ""} onClick={() => beginDetailLoad(row.id)}>
+                        <span><b>{row.subjectKey}</b><i data-state={row.lifecycleState}>{statusLabel(row.lifecycleState, copy)}</i></span>
+                        <strong>{row.title}</strong><small>{copy.version} {row.currentVersion}</small>
+                        {row.reason && <em className={styles.rowReason}>{rms.reason[row.reason]}</em>}
+                      </button>
+                    ))}
+                  </div>
               )}
               {listState === "ready" && !hydrationUnavailable && (view === "catalysts" || view === "risks" || view === "notes") && (
                 (view === "catalysts" ? catalystViewRows : view === "risks" ? riskViewRows : noteViewRows).length === 0
-                  ? <div className={styles.emptyLens} data-testid="rms-empty"><p>{rms.empty[view]}</p></div>
+                  ? (hydrating && detailListRows.length === 0
+                    ? <p className={styles.muted} role="status">{copy.loading}</p>
+                    : <div className={styles.emptyLens} data-testid="rms-empty"><p>{rms.empty[view]}</p></div>)
                   : (view === "catalysts" ? catalystViewRows : view === "risks" ? riskViewRows : noteViewRows).map((row) => (
                     <article key={`${row.thesisId}-${row.index}`} className={styles.lineRow} data-testid="rms-line-row">
                       <p className={styles.lineText}>{row.text}</p>

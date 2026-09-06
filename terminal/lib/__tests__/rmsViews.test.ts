@@ -208,30 +208,83 @@ describe("rmsViews copy", () => {
   });
 });
 
+describe("coverage lens round trip", () => {
+  it("clicking a Coverage row's key selects the same subject's rows via subjectGroupKey (B1)", () => {
+    const summaries: ThesisSummary[] = [
+      {
+        id: "t1",
+        title: "Thesis 1",
+        subject: subject("NVDA", "Nvidia"),
+        lifecycleState: "active",
+        currentVersion: 1,
+        updatedAt: "2026-09-01T00:00:00.000Z",
+      },
+      {
+        id: "t2",
+        title: "Thesis 2",
+        subject: subject("NVDA", "Nvidia"),
+        lifecycleState: "active",
+        currentVersion: 2,
+        updatedAt: "2026-09-02T00:00:00.000Z",
+      },
+    ];
+    const coverage = coverageRows(summaries);
+    expect(coverage).toHaveLength(1);
+    const groupKey = coverage[0].key;
+    const rows = thesisRows(summaries).filter((r) => r.subjectGroupKey === groupKey);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.id).sort()).toEqual(["t1", "t2"]);
+  });
+});
+
+describe("condition read seam (B5)", () => {
+  it("readConditionStates threads an injected per-id reader through to reviewRows/conditionLine", () => {
+    const states = readConditionStates(["t1", "t2"], (id) =>
+      id === "t1" ? { source: "monitor", state: "window_closed", at: "2026-09-05T00:00:00.000Z" } : undefined,
+    );
+    expect(states.get("t1")).toEqual({ source: "monitor", state: "window_closed", at: "2026-09-05T00:00:00.000Z" });
+    expect(states.get("t2")).toEqual({ source: "unavailable" });
+
+    const summaries: ThesisSummary[] = [
+      {
+        id: "t1",
+        title: "Thesis 1",
+        subject: subject("NVDA", "Nvidia"),
+        lifecycleState: "active",
+        currentVersion: 1,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    const rows = reviewRows(summaries, NOW, states);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].reason).toBe("window_closed");
+    expect(conditionLine(states.get("t1")!, "en")).toBe("The window you were watching has closed");
+  });
+});
+
 describe("no new schema", () => {
   it("migrations directory is unchanged (frozen list)", () => {
     const dir = path.resolve(__dirname, "../../../supabase/migrations");
     const entries = fs.readdirSync(dir).sort();
     const expected = [
-      "0001_watchlists.sql",
-      "0002_watchlist_symbols.sql",
-      "0003_price_alerts.sql",
-      "0004_alert_deliveries.sql",
-      "0005_alert_channels.sql",
-      "0006_notifications.sql",
+      "0001_init.sql",
+      "0002_drawings.sql",
+      "0003_search_events.sql",
+      "0004_analytics.sql",
+      "0005_brain_threads.sql",
+      "0006_lock_is_pro.sql",
       "0007_portfolio_positions.sql",
-      "0008_portfolio_transactions.sql",
-      "0009_data_os_identity_bridge.sql",
-      "0010_stock_identity_map.sql",
-      "0011_evidence_records.sql",
+      "0008_chart_layouts_unique_name.sql",
+      "0009_watchlist_symbol_unique.sql",
+      "0010_search_event_stats.sql",
+      "0011_analytics_eid.sql",
       "0012_thesis_objects.sql",
       "README.md",
     ].sort();
-    // Tolerant: only assert 0012 is present and no rmsViews-authored migration exists;
-    // the exact historical list is enumerated for visibility, not a hard external contract.
-    expect(entries).toContain("0012_thesis_objects.sql");
-    expect(entries.filter((e) => e.includes("thesis_saved_views"))).toEqual([]);
-    void expected;
+    // Hard assertion: this packet is a filter layer over 0012, not a schema change.
+    // A new migration file (a 0013_*.sql, a renamed 0012, an added thesis_saved_views
+    // table) fails this test outright instead of silently passing.
+    expect(entries).toEqual(expected);
   });
 
   it("rmsViews.ts and route.ts contain no DDL or unexpected table access", () => {
