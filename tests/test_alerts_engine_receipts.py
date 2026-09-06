@@ -181,6 +181,12 @@ def test_fire_inserts_outbox_before_disarm(monkeypatch):
 
 
 def test_replayed_fire_over_same_vintage_inserts_nothing_new(monkeypatch):
+    """Unit-level: Supa.fire()'s own insert-then-conflict mechanics, given the SAME vintage
+    twice. This does not exercise Data.evaluation_vintage() — the vintage is a literal passed
+    in — so it cannot by itself prove the production vintage-derivation bugs (round-1 BLOCKER
+    1/2) are fixed; see test_h1_genuine_refire_after_rearm_reproduces_via_production_vintage and
+    test_evaluation_vintage_ignores_placeholder_ts_noise below for the end-to-end reproductions
+    (PR #513 review round 2, BLOCKER 3)."""
     fake = _FakeRest(tables_exist=True)
     _patch_http(monkeypatch, fake)
     supa = ae.Supa("https://x.example.co", "k")
@@ -286,11 +292,14 @@ def test_transport_error_does_not_raise_and_leaves_alert_armed(monkeypatch):
 
 
 def test_h1_genuine_refire_after_rearm_mints_two_distinct_events(monkeypatch):
-    """H1 / BLOCKER 1, Meta-CEO RULED: identity comes ONLY from (alert id, condition version,
-    evaluation vintage) — never from a prior-row lookup. A genuine second fire after a re-arm
-    runs at a NEW evaluation vintage (the data moved on between the two fires) and must mint a
-    NEW fire_event_id: two outbox rows, two disarm PATCHes, two distinct payload summaries —
-    never the silent-swallow the old 'reuse the pending row' heuristic produced."""
+    """Unit-level: given two DIFFERENT hand-chosen vintages, Supa.fire() mints two distinct
+    fire_event_ids and inserts two rows — i.e. mint_fire_event_id() is injective in its vintage
+    argument. This is real coverage of Supa.fire()'s mechanics, but the vintage here is a
+    literal, not derived by Data.evaluation_vintage() from any manifest/quote state, so on its
+    own it does NOT prove H1 (round-1 BLOCKER 1 — a day-stable vintage fallback silently
+    collapsing a genuine re-fire) is fixed; that was flagged in PR #513 review round 2 as
+    BLOCKER 3. See test_h1_genuine_refire_after_rearm_reproduces_via_production_vintage for the
+    end-to-end reproduction through the real vintage-derivation path."""
     fake = _FakeRest(tables_exist=True)
     _patch_http(monkeypatch, fake)
     supa = ae.Supa("https://x.example.co", "k")
@@ -307,10 +316,11 @@ def test_h1_genuine_refire_after_rearm_mints_two_distinct_events(monkeypatch):
 
 
 def test_crash_before_disarm_retry_over_same_vintage_reuses_the_event(monkeypatch):
-    """Crash-retry mirror (Meta-CEO RULED): a retry over the SAME evaluation vintage — the
-    process crashed between the outbox insert and the disarm PATCH, and the retry re-reads the
-    same on-disk data before anything refreshes — collapses onto the same id by construction. No
-    lookup is needed or performed; the outbox row's own status never matters to identity."""
+    """Unit-level: given the SAME hand-chosen vintage passed twice (modeling "the retry re-read
+    the same on-disk data before anything refreshed"), Supa.fire() collapses onto one row — the
+    insert/conflict mechanics, not Data.evaluation_vintage()'s derivation of that sameness from
+    real manifest/quote state (see test_evaluation_vintage_ignores_placeholder_ts_noise, which
+    exercises the derivation itself — PR #513 review round 2 BLOCKER 3)."""
     fake = _FakeRest(tables_exist=True)
     _patch_http(monkeypatch, fake)
     supa = ae.Supa("https://x.example.co", "k")
@@ -325,9 +335,13 @@ def test_crash_before_disarm_retry_over_same_vintage_reuses_the_event(monkeypatc
 
 
 def test_deferred_row_crash_retry_same_vintage_still_one_row(monkeypatch):
-    """BLOCKER 2, Meta-CEO RULED: once macro's drain has moved the row to 'deferred', a
-    crash-retry over the SAME vintage must still collapse onto that one row — the outbox row's
-    status (pending/deferred/sent/failed/suppressed) is irrelevant to identity."""
+    """Unit-level: once macro's drain has moved the row to 'deferred', a hand-chosen same-vintage
+    crash-retry must still collapse onto that one row — the outbox row's status
+    (pending/deferred/sent/failed/suppressed) is irrelevant to identity. As with the two tests
+    above, this exercises Supa.fire()'s mechanics given a fixed vintage, not the production
+    derivation of that vintage from real quote/manifest state — see
+    test_evaluation_vintage_ignores_placeholder_ts_noise for BLOCKER 2's end-to-end
+    reproduction (PR #513 review round 2 BLOCKER 3)."""
     fake = _FakeRest(tables_exist=True)
     _patch_http(monkeypatch, fake)
     supa = ae.Supa("https://x.example.co", "k")
@@ -482,3 +496,136 @@ def test_outcome_forced_partial_on_eod_price_fallback(tmp_path, monkeypatch):
     assert basis == "eod"
     assert data.used_eod_fallback is True
     assert data.eod_fallback_asof == "2026-09-04T21:00:00Z"
+
+
+# --- PR #513 review round 2: BLOCKER 1/2/3/5, MINOR 6 -----------------------------------------
+
+
+def test_h1_genuine_refire_after_rearm_reproduces_via_production_vintage(tmp_path, monkeypatch):
+    """BLOCKER 1 / BLOCKER 3, Meta-CEO RULED, end to end via run_once() — no hand-chosen
+    vintage anywhere. Reproduces the reviewer's measured PROBE1: the hub is down (EOD-only
+    reads), a price alert fires, the user re-arms it, and a genuine second fire happens 39
+    minutes later against the exact same on-disk manifest (nothing about the underlying EOD
+    price moved). The unfixed head's evaluation_vintage() fell back to the manifest's
+    per-symbol/build `asof`, which is stable for the whole build day — both runs mint the SAME
+    fire_event_id, and the second real fire's outbox insert silently no-ops (measured: 1 outbox
+    row for 2 disarms). The fixed ladder falls back to the run's OWN source_asof instead, which
+    differs between the two runs, so both real fires get their own row."""
+    (tmp_path / "manifest.json").write_text(json.dumps(
+        {"as_of": "2026-09-05T09:00:00Z",
+         "symbols": {"AAPL": {"last": 101.5, "asof": "2026-09-05T09:00:00Z"}}}
+    ))
+    alert = {"id": "a1", "user_id": "u1", "symbol": "AAPL", "active": True,
+              "condition": {"type": "price", "op": "above", "value": 100}}
+    fake = _FakeAlertsRest([alert])
+    _patch_http(monkeypatch, fake)
+    supa = ae.Supa("https://x.example.co", "k")
+
+    data1 = ae.Data(str(tmp_path), None)  # hub_port=None -> hub down, EOD-only, no live quote
+    r1 = ae.run_once(supa, data1, datetime(2026, 9, 5, 10, 0, tzinfo=timezone.utc), "r1")
+    assert r1["fired_n"] == 1
+    assert len(fake.outbox) == 1
+
+    # The user re-arms the SAME alert. Nothing about the underlying manifest/EOD data changed —
+    # this models "same day, same build" exactly as the reviewer's probe did.
+    fake.alerts["a1"]["active"] = True
+
+    data2 = ae.Data(str(tmp_path), None)
+    r2 = ae.run_once(supa, data2, datetime(2026, 9, 5, 10, 39, tzinfo=timezone.utc), "r2")
+    assert r2["fired_n"] == 1
+
+    assert len(fake.outbox) == 2, (
+        "the second genuine fire must not be swallowed by a day-stable manifest vintage"
+    )
+    assert fake.outbox[0]["fire_event_id"] != fake.outbox[1]["fire_event_id"]
+    disarms = [c for c in fake.calls if c[0] == "PATCH" and "/alerts?id=eq." in c[1]]
+    assert len(disarms) == 2
+
+
+def test_evaluation_vintage_ignores_placeholder_ts_noise(tmp_path):
+    """BLOCKER 2 / BLOCKER 3, Meta-CEO RULED — unit-level reproduction of the reviewer's
+    measured PROBE2, directly against Data.evaluation_vintage() (no Supa, no hand-chosen
+    vintage). The Quote Hub seeds a manifest/EOD placeholder while waiting for a first
+    current-session print: `regularSession="closed"`, `ts=Date.now()` at RESPONSE time (see
+    live_quote()'s own docstring) — so the SAME unrefreshed placeholder polled twice, 61 seconds
+    apart, carries two different `ts` values despite being identical data. The unfixed
+    evaluation_vintage() read that raw `ts` with none of live_quote()'s freshness guards, so it
+    minted two different vintages for the one unchanged placeholder (measured: 09:20Z vs 09:21Z,
+    2 outbox rows for a single real event). The fix reuses live_quote()'s own gates, which
+    reject `regularSession != "rth"` outright — a placeholder is recognized as "no live vintage"
+    (both reads answer None) rather than laundered into two distinct fake ones."""
+    (tmp_path / "manifest.json").write_text(json.dumps({"symbols": {"AAPL": {}}}))
+
+    def placeholder_at(poll_dt):
+        return {
+            "last": 101.0, "basis": "DELAYED_15M",
+            "marketSession": "rth", "regularSession": "closed",  # the placeholder tell
+            "regularSessionDate": "2026-09-08",
+            "ts": poll_dt.timestamp() * 1000,  # re-stamped to "now" on every poll
+        }
+
+    now1 = datetime(2026, 9, 8, 13, 30, 0, tzinfo=timezone.utc)  # Tuesday, inside RTH (9:30 ET)
+    data1 = ae.Data(str(tmp_path), None, now_fn=lambda: now1)
+    data1.quotes = {"AAPL": placeholder_at(now1)}
+    v1 = data1.evaluation_vintage("AAPL")
+
+    now2 = datetime(2026, 9, 8, 13, 31, 1, tzinfo=timezone.utc)  # 61s later, same placeholder
+    data2 = ae.Data(str(tmp_path), None, now_fn=lambda: now2)
+    data2.quotes = {"AAPL": placeholder_at(now2)}
+    v2 = data2.evaluation_vintage("AAPL")
+
+    assert v1 == v2 is None
+
+
+def test_insert_hard_error_logs_read_error_not_read_unavailable(monkeypatch, capsys):
+    """MAJOR 5, Meta-CEO RULED: a genuine hard failure on the outbox insert (5xx/401/400/
+    network — NOT a table-absent schema-cache miss) must print a typed READ_ERROR line, never
+    READ_UNAVAILABLE. That label means "table not applied yet — disarm proceeds anyway"; this
+    branch is the OPPOSITE disposition (fire() returns False, the alert stays armed). Before
+    this fix, `_classify()` mapped 503/599 to READ_UNAVAILABLE and insert_outbox printed that
+    label for the exact same statuses it treats as a hard 'error' outcome — one prefix covering
+    two opposite dispositions."""
+    fake = _FakeRest(tables_exist=True)
+    _patch_http(monkeypatch, fake)
+    orig_post = fake.post
+
+    def failing_post(url, body):
+        if "/alert_outbox" in url:
+            fake.calls.append(("POST", url, body))
+            return 599, None, "connection reset"
+        return orig_post(url, body)
+    fake.post = failing_post
+
+    supa = ae.Supa("https://x.example.co", "k")
+    alert = {"id": "a1", "user_id": "u1", "symbol": "AAPL",
+              "condition": {"type": "price", "op": "above", "value": 100}}
+    result = supa.fire(alert, 101, "price 101 above 100 (live)", vintage="2026-09-05T10:01Z")
+    assert result is False
+
+    out = capsys.readouterr().out
+    assert "READ_ERROR alert_outbox (insert)" in out
+    assert "READ_UNAVAILABLE" not in out
+
+
+def test_run_once_crash_in_active_alerts_fetch_still_writes_failure_receipt(tmp_path, monkeypatch):
+    """MINOR 6: a crash while FETCHING armed alerts — the first live network call the run makes,
+    and arguably the single most likely crash source — must still leave a terminal receipt row.
+    Before this fix the try/except only wrapped the evaluate/fire loop, so this crash left a
+    'started' row with every terminal field null forever, indistinguishable from a run that is
+    still in progress."""
+    (tmp_path / "manifest.json").write_text(json.dumps({"symbols": {}}))
+    fake = _FakeAlertsRest([])
+    _patch_http(monkeypatch, fake)
+    supa = ae.Supa("https://x.example.co", "k")
+
+    def boom():
+        raise RuntimeError("supabase read failed")
+    monkeypatch.setattr(supa, "active_alerts", boom)
+    data = ae.Data(str(tmp_path), None)
+
+    with pytest.raises(RuntimeError):
+        ae.run_once(supa, data, datetime(2026, 9, 5, 10, 0, tzinfo=timezone.utc), "r1")
+
+    assert fake.runs[0]["outcome"] == "failure"
+    assert fake.runs[0]["concluded_at"]
+    assert fake.runs[0]["error_class"] == "RuntimeError"

@@ -387,7 +387,15 @@ class Supa:
             log("READ_CONFLICT alert_outbox (insert) — already enqueued; proceeding to disarm")
             return "duplicate"
         if status >= 300:
-            log(f"{self._classify(status)} alert_outbox (insert) — {status}: {text[:200]}")
+            # Any other non-2xx here (5xx/401/400/network — the transport-blip synthetic 599
+            # included) is neither a schema-cache miss nor a duplicate-of-record. It must never
+            # print as READ_UNAVAILABLE: that label means "table not applied yet, disarm
+            # proceeds anyway" — the OPPOSITE disposition from this branch, which returns
+            # 'error' so fire() leaves the alert armed. _classify()'s 503/599->READ_UNAVAILABLE
+            # mapping is for the receipt tables (start_run/conclude_run), where no disarm
+            # decision rides on the label; reusing it here made the two opposite outcomes share
+            # one prefix (MAJOR 5, PR #513 review round 2). Always READ_ERROR.
+            log(f"READ_ERROR alert_outbox (insert) — {status}: {text[:200]}")
             return "error"
         return "inserted" if parsed else "duplicate"
 
@@ -423,11 +431,6 @@ class Data:
         self.quotes: dict[str, dict] = {}
         manifest = json.loads((self.dir / "manifest.json").read_text())
         self.symbols: dict[str, dict] = manifest.get("symbols") or {}
-        # The manifest build's own vintage stamp — the id contract's fallback data vintage for
-        # any condition type that has no per-symbol/live timestamp of its own (regime/rsi/opt_*,
-        # or a price read with no per-symbol "asof"). Stable across a crash-and-retry that
-        # re-reads the same on-disk file; changes only when the nightly pipeline republishes it.
-        self.manifest_as_of = manifest.get("as_of") or manifest.get("asof")
         # The typed live/eod signal data.last() already computes was being discarded. Track it
         # here so run_once() can force outcome='partial' and re-stamp source_asof to the fallback
         # vintage whenever ANY price read this run fell back to the persisted manifest EOD last
@@ -460,23 +463,35 @@ class Data:
     def evaluation_vintage(self, sym: str) -> str | None:
         """The data vintage backing this symbol's price read, ISO-8601 UTC at minute
         granularity — the F08 id contract's third input (frozen with macro's B-F08-1b drain).
-        A live quote's own tick timestamp when one is primed for this symbol (basis-independent
-        of whether last() ultimately used it — a fresher tick still describes 'what this run
-        saw'); otherwise the manifest's per-symbol asof, else the manifest build's own as_of.
-        Returns None when nothing is available at all — the caller falls back to the run's own
-        source_asof, per the frozen contract."""
-        q = self.quotes.get(sym)
-        if q and isinstance(q.get("last"), (int, float)):
-            observed_sec = (
-                float(q["asOfMs"]) / 1000 if _finite(q.get("asOfMs"))
-                else float(q["ts"]) if _finite(q.get("ts"))
-                else None
-            )
-            if observed_sec is not None:
-                return datetime.fromtimestamp(observed_sec, tz=timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
-        m = self.symbols.get(sym) or {}
-        per_symbol = _minute_vintage(m.get("asof")) if isinstance(m.get("asof"), str) else None
-        return per_symbol or _minute_vintage(self.manifest_as_of)
+
+        Meta-CEO ruling on PR #513 review round 2: the ladder is exactly TWO rungs — a
+        freshness-vetted live quote's own tick timestamp, or (falling through to None here)
+        the run's own source_asof, applied by the caller (run_once()). Deliberately NOT a third
+        rung through the manifest's per-symbol/build `asof` — that value is stable for the
+        WHOLE build day, so a genuine re-fire hours later after a re-arm (same day, no live
+        quote) minted the SAME fire_event_id as the first fire and the outbox insert silently
+        no-op'd (round-1 BLOCKER 1, reproduced end to end in
+        test_h1_genuine_refire_after_rearm_reproduces_via_production_vintage).
+
+        The live-quote rung reuses live_quote() rather than reading `asOfMs`/`ts` straight off
+        the raw quote object. Two reasons, both round-1 BLOCKER 2: (1) live_quote()'s own
+        docstring records that the Quote Hub seeds a manifest/EOD PLACEHOLDER with
+        `ts=Date.now()` and `regularSession="closed"` while waiting for a first current-session
+        print — a fresh transport timestamp there is not evidence of a fresh quote, so reading
+        it unguarded mints a new vintage on every poll even when the placeholder itself never
+        changes; (2) live_quote()'s session/date/age/lag gates are what make its `asof` a
+        genuine data-content vintage instead of wall-clock noise, so a real, unrefreshed tick
+        read twice (a fast crash-and-retry) collapses onto the same vintage by construction.
+        A live quote that fails those gates (including the placeholder case) is treated as "no
+        live vintage" and falls through to the run's source_asof, same as a symbol with no
+        quote at all — that fallback is necessarily wall-clock-based (there is no data-content
+        signal left to key on), which is the accepted trade-off the ruling's own ladder makes
+        in exchange for never again silently swallowing a genuine re-fire.
+        """
+        receipt = self.live_quote(sym)
+        if receipt is not None:
+            return _minute_vintage(receipt["asof"])
+        return None
 
     def live_quote(self, sym: str) -> dict | None:
         """Return a current-session Quote-Hub spot receipt or fail closed.
@@ -1359,21 +1374,27 @@ def run_once(
 
     An alert whose outbox insert hard-errors is left ARMED (never disarmed) and counted as
     unevaluable so the next run re-evaluates and retries it — see Supa.fire()/insert_outbox.
+
+    MINOR 6 (PR #513 review round 2): the try/except that writes the failure receipt wraps the
+    active_alerts() fetch too, not just the evaluate/fire loop — a crash on THAT read (arguably
+    the single most likely crash source: it is the first live network call the run makes) used
+    to leave a 'started' row with every terminal field null forever, indistinguishable from a
+    run that is still in progress.
     """
     run_started_at = now.isoformat(timespec="seconds")
     run_source_asof = _minute_vintage(run_started_at) or run_started_at
     run_receipted = supa.start_run(lane, run_id, run_started_at, None, 300)
 
-    alerts = supa.active_alerts()
-    if not alerts:
-        log("no armed alerts — nothing to do")
-        if run_receipted:
-            supa.conclude_run(lane, run_id, datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                               "success", 0, 0, 0, None)
-        return {"outcome": "success", "evaluated_n": 0, "fired_n": 0, "unevaluable_n": 0,
-                "error_class": None, "source_asof": None}
-
     try:
+        alerts = supa.active_alerts()
+        if not alerts:
+            log("no armed alerts — nothing to do")
+            if run_receipted:
+                supa.conclude_run(lane, run_id, datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                   "success", 0, 0, 0, None)
+            return {"outcome": "success", "evaluated_n": 0, "fired_n": 0, "unevaluable_n": 0,
+                    "error_class": None, "source_asof": None}
+
         price_syms = {
             str(a.get("symbol") or "").upper()
             for a in alerts
