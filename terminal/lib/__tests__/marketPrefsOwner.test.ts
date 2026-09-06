@@ -371,8 +371,8 @@ describe("delivery is serialized, acknowledged, and retryable", () => {
 
     // One follow-up carrying the CURRENT value of everything edited — never an older, smaller
     // blob. The shared language is a top-level ATOMIC (E6) AND is dual-written into the legacy
-    // `prefs` nested blob (macro's writer has not migrated off it yet — accountPrefs.ts's FLIP
-    // CONDITION note).
+    // `prefs` nested blob (harmless — macro's own reader/writer has already migrated to the
+    // atomics; see accountPrefs.ts's FLIP CONDITION note).
     expect(updates).toHaveLength(2);
     expect(updates[1]).toEqual({
       terminal: { start_tf: "D", updown: "east" },
@@ -402,6 +402,41 @@ describe("delivery is serialized, acknowledged, and retryable", () => {
     // every later unrelated write forever — the failure mode this test used to pin as correct.
     expect(updates).toHaveLength(2);
     expect(updates[1]).toEqual({ terminal: { start_tf: "W", updown: "east" } });
+  });
+
+  it("evicts the legacy prefs blob delivered through the PENDING-hydrate path too — a LATER unrelated edit re-sends nothing (round-3 review MAJOR 1)", async () => {
+    vi.useFakeTimers();
+    try {
+      getUser = async () => { throw new Error("offline"); };
+      __loadOwner(OWNER_A);
+      await vi.advanceTimersByTimeAsync(0);   // the initial read fails; a retry is scheduled
+
+      // Edited BEFORE the account read ever answered — held in `pendingMetaPrefs`, a different
+      // code path than the M3 test above, which only covers an edit made AFTER hydrate already
+      // answered once. The atomic half needs no merge base and ships immediately.
+      persistMetaPrefs({ theme: "dark", lang: "zh" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(updates).toEqual([{ theme: "dark", lang: "zh" }]);
+
+      // The retried read now answers. `hydrate()` itself flushes the held legacy half
+      // (`pendingMetaPrefs`) as `{ prefs: ... }` — THAT delivery must also be queued one-shot,
+      // or `prefs` never leaves `desired` once acked and rides along on every later unrelated
+      // write forever, exactly the bug M3 fixed for the already-acknowledged path.
+      getUser = async () => userWith(UUID_A, { terminal: { start_tf: "W" } });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(updates).toEqual([
+        { theme: "dark", lang: "zh" },
+        { prefs: { theme: "dark", lang: "zh" } },
+      ]);
+
+      persistUpDown("east");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(updates).toHaveLength(3);
+      expect(updates[2]).toEqual({ terminal: { start_tf: "W", updown: "east" } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("delivers an intent held through a FAILED hydrate once a retried read answers", async () => {

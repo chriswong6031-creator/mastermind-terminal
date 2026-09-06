@@ -30,12 +30,15 @@ import {
 //   theme / theme_auto / lang                      — the SHARED appearance/language prefs, as
 //                                                     independently mergeable TOP-LEVEL atomics.
 //                                                     DUAL-WRITTEN into the legacy nested `prefs`
-//                                                     blob too (macro's writer has not migrated
-//                                                     off it yet), which reads back as the
-//                                                     PREFERRED value per field until it does —
-//                                                     see lib/accountPrefs.ts's FLIP CONDITION
-//                                                     note for why and what to delete once macro
-//                                                     migrates.
+//                                                     blob too, but macro's OWN reader/writer has
+//                                                     ALREADY migrated to the atomics (macro
+//                                                     `origin/main` — `templates/theme.js`,
+//                                                     `_savePrefToServer` writes only the top-
+//                                                     level keys; `_sharedPref` reads atomic-first
+//                                                     with the nested blob as a read-only
+//                                                     fallback). The atomic is therefore the
+//                                                     PREFERRED value per field — see
+//                                                     lib/accountPrefs.ts's FLIP CONDITION note.
 //
 // ONE `auth.getUser()` hydrates all of them. Adding a second read for a second field would
 // double the auth round-trip on every page load, and the two answers could disagree mid-flight.
@@ -317,7 +320,13 @@ function hydrate(next: string) {
       rawMetaPrefs = { ...metaObject(meta, "prefs"), ...(pendingMetaPrefs || {}) };
       baseLoaded = true;
       if (pendingTerminal) { pump?.queue({ terminal: rawTerminal }); pendingTerminal = null; }
-      if (pendingMetaPrefs) { pump?.queue({ prefs: rawMetaPrefs }); pendingMetaPrefs = null; }
+      // "prefs" must be one-shot HERE too, not just in persistMetaPrefs's own already-loaded
+      // send path (M3) — this is the OTHER place a legacy `prefs` delivery can originate (an
+      // edit made before the account read ever answered, held in `pendingMetaPrefs`, flushed by
+      // hydrate() itself once the retried read comes back). Without it, `prefs` never leaves
+      // the pump's `desired` map once acked and rides along on every later unrelated write
+      // forever — the exact M3 bug, reachable through this second path (round-3 review MAJOR 1).
+      if (pendingMetaPrefs) { pump?.queue({ prefs: rawMetaPrefs }, { oneShot: ["prefs"] }); pendingMetaPrefs = null; }
 
       // Apply the account's chart prefs to this device. The account wins over the local copy:
       // that is the entire point of syncing them, and the local copy is only ever a cache of the
@@ -326,8 +335,9 @@ function hydrate(next: string) {
       if (tm.start_tf) writeStartTf(tm.start_tf);
       if (tm.updown && tm.updown !== readUpDown()) applyUpDown(tm.updown);
 
-      // Legacy `prefs.*` wins per field, v2 atomics fill in the rest (readSharedPrefs; see the
-      // FLIP CONDITION note in lib/accountPrefs.ts). An edit made while this read was in flight
+      // v2 atomics win per field, legacy `prefs.*` fills in only where the atomic is absent or
+      // invalid (readSharedPrefs; see the FLIP CONDITION note in lib/accountPrefs.ts — macro's
+      // own reader/writer is already atomic-first). An edit made while this read was in flight
       // is newer than the answer, so it stays on top rather than being reverted.
       metaPrefs = { ...readSharedPrefs(meta), ...metaPrefs };
       // Language is the macro dashboard's field; applying it here is what makes a language picked
@@ -476,10 +486,10 @@ export function persistMetaPrefs(patch: MetaPrefs) {
   if (!isAccountOwner(owner)) return;
   const oneShot = Object.keys(atoms);
 
-  if (!Object.keys(legacy).length) {
-    if (oneShot.length) pump?.queue(atoms, { oneShot });
-    return;
-  }
+  // `atoms` and `legacy` are built from the SAME per-field validity predicates
+  // (sharedPrefsPatch / legacyPrefsPatch in accountPrefs.ts), so they are always populated for
+  // exactly the same set of fields — either both empty (already returned above) or both
+  // non-empty. There is no reachable "atomic-only" case to special-case here.
   rawMetaPrefs = { ...rawMetaPrefs, ...legacy };
   if (!baseLoaded) {
     pendingMetaPrefs = { ...(pendingMetaPrefs || {}), ...legacy };
