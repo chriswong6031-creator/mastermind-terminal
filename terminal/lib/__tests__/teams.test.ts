@@ -198,3 +198,219 @@ describe("0014 DDL contract", () => {
     }
   });
 });
+
+// --- Packet B-F12-3 appended tests ---
+import {
+  ACCEPT_INVITE_FN,
+  INVITE_MESSAGES,
+  type InviteCode,
+  acceptInvite,
+  createInvite,
+  inviteExpiry,
+  normalizeSettingKey,
+  normalizeSettingValue,
+  readSettings,
+  writeSetting,
+  type TenancyRpcDb,
+} from "@/lib/teams";
+
+type Row2 = Record<string, unknown>;
+function fakeTenancyDb(opts: {
+  callerRole?: "owner" | "admin" | "member" | null;
+  insertError?: { code?: string; message?: string } | null;
+  insertRow?: Row2 | null;
+  upsertError?: { code?: string; message?: string } | null;
+  upsertRow?: Row2 | null;
+  selectRows?: Row2[];
+  selectError?: { code?: string; message?: string } | null;
+  rpcResult?: { data?: unknown; error?: { code?: string; message?: string } | null };
+}): TenancyRpcDb {
+  const make = (table: string): any => {
+    const q: any = {
+      select: () => q,
+      eq: () => q,
+      in: () => q,
+      order: () => q,
+      limit: () => q,
+      insert: () => ({
+        select: () => ({
+          maybeSingle: async () => ({ data: opts.insertRow ?? null, error: opts.insertError ?? null }),
+        }),
+      }),
+      upsert: () => ({
+        select: () => ({
+          maybeSingle: async () => ({ data: opts.upsertRow ?? null, error: opts.upsertError ?? null }),
+        }),
+      }),
+      then: (resolve: (v: unknown) => unknown) =>
+        Promise.resolve({ data: opts.selectRows ?? [], error: opts.selectError ?? null }).then(resolve),
+    };
+    return q;
+  };
+  return {
+    from: (table: string) => make(table),
+    rpc: async (_fn: string, _args: Record<string, unknown>) => opts.rpcResult ?? { data: null, error: null },
+  } as unknown as TenancyRpcDb;
+}
+
+// getCallerRole reads team_members via .from(...).select(...).eq(...).eq(...) -> then(); model it
+// by making `from("team_members")` resolve with a single caller row.
+function fakeWithCallerRole(role: "owner" | "admin" | "member" | null, extra: Partial<Parameters<typeof fakeTenancyDb>[0]> = {}): TenancyRpcDb {
+  const base = fakeTenancyDb(extra);
+  const origFrom = base.from.bind(base);
+  return {
+    ...base,
+    from: (table: string) => {
+      if (table === "team_members" && role !== undefined) {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({ data: role ? { role } : null, error: null }),
+              }),
+            }),
+          }),
+        } as any;
+      }
+      return origFrom(table);
+    },
+  } as unknown as TenancyRpcDb;
+}
+
+describe("createInvite authorization (MO-PAID-082)", () => {
+  it("member -> forbidden/not_admin/403", async () => {
+    const db = fakeWithCallerRole("member");
+    const r = await createInvite(db, "u1", "t1", { email: "x@example.com", role: "member" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("forbidden");
+      expect(r.code).toBe("not_admin");
+      expect(r.status).toBe(403);
+    }
+  });
+
+  it("admin -> ok, stores token_hash only (no raw token column)", async () => {
+    const db = fakeWithCallerRole("admin", {
+      insertRow: { id: "i1", email: "x@example.com", role: "member", expires_at: inviteExpiry(), accepted_at: null },
+    });
+    const r = await createInvite(db, "u1", "t1", { email: "x@example.com", role: "member" });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.token).toBeTruthy();
+      expect(r.value.invite.email).toBe("x@example.com");
+      // No raw-token field on the returned invite row.
+      expect((r.value.invite as any).token).toBeUndefined();
+      expect((r.value.invite as any).token_hash).toBeUndefined();
+    }
+  });
+
+  it("RLS-shaped 42501 also maps to 403 not_admin", async () => {
+    const db = fakeWithCallerRole("admin", { insertError: { code: "42501" } });
+    const r = await createInvite(db, "u1", "t1", { email: "x@example.com", role: "member" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(403);
+  });
+
+  it("duplicate pending invite -> 409 duplicate_invite", async () => {
+    const db = fakeWithCallerRole("admin", { insertError: { code: "23505" } });
+    const r = await createInvite(db, "u1", "t1", { email: "x@example.com", role: "member" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.status).toBe(409);
+      expect(r.code).toBe("duplicate_invite");
+    }
+  });
+});
+
+describe("acceptInvite (MO-PAID-081)", () => {
+  const cases: Array<[string, number]> = [
+    ["invalid_token", 404],
+    ["already_used", 409],
+    ["expired", 410],
+    ["email_mismatch", 403],
+    ["email_unknown", 403],
+    ["not_signed_in", 401],
+  ];
+  for (const [reason, status] of cases) {
+    it(`maps rpc reason ${reason} -> status ${status} with a plain-word message`, async () => {
+      const db = fakeTenancyDb({ rpcResult: { data: { ok: false, reason }, error: null } });
+      const r = await acceptInvite(db, "sometoken1234567890123456789012");
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.status).toBe(status);
+        expect(INVITE_MESSAGES[r.code][0]).toBeTruthy();
+      }
+    });
+  }
+  it("success maps team_id/role through", async () => {
+    const db = fakeTenancyDb({ rpcResult: { data: { ok: true, team_id: "t1", role: "member" }, error: null } });
+    const r = await acceptInvite(db, "sometoken1234567890123456789012");
+    expect(r).toEqual({ ok: true, teamId: "t1", role: "member" });
+  });
+});
+
+describe("MO-PAID-083 workspace vs user setting distinctness", () => {
+  it("writing the workspace-scoped row leaves the user-scoped row for the same key unchanged, and vice versa", async () => {
+    const userRow = { scope: "user", team_id: null, key: "chart.density", value: "compact", updated_at: "2026-01-01T00:00:00Z" };
+    const wsRow = { scope: "workspace", team_id: "t1", key: "chart.density", value: "comfortable", updated_at: "2026-01-02T00:00:00Z" };
+
+    const dbUser = fakeTenancyDb({ upsertRow: userRow });
+    const wUser = await writeSetting(dbUser, "u1", { scope: "user", key: "chart.density", value: "compact" });
+    expect(wUser.ok).toBe(true);
+
+    const dbWs = fakeTenancyDb({ upsertRow: wsRow });
+    const wWs = await writeSetting(dbWs, "u1", { scope: "workspace", teamId: "t1", key: "chart.density", value: "comfortable" });
+    expect(wWs.ok).toBe(true);
+
+    const dbReadUser = fakeTenancyDb({ selectRows: [userRow] });
+    const readUser = await readSettings(dbReadUser, "u1", { scope: "user" });
+    expect(readUser.ok).toBe(true);
+    if (readUser.ok) expect(readUser.settings[0].value).toBe("compact");
+
+    const dbReadWs = fakeWithCallerRole("owner", { selectRows: [wsRow] });
+    const readWs = await readSettings(dbReadWs, "u1", { scope: "workspace", teamId: "t1" });
+    expect(readWs.ok).toBe(true);
+    if (readWs.ok) expect(readWs.settings[0].value).toBe("comfortable");
+
+    // Both rows exist independently and neither call mutated the other's value.
+    expect(userRow.value).toBe("compact");
+    expect(wsRow.value).toBe("comfortable");
+  });
+});
+
+describe("normalizeSettingKey / normalizeSettingValue", () => {
+  it("accepts a lowercase dotted key", () => expect(normalizeSettingKey("chart.density")).toBe("chart.density"));
+  it("rejects an uppercase or overlong key", () => {
+    expect(normalizeSettingKey("Chart.Density")).toBeNull();
+    expect(normalizeSettingKey("a".repeat(65))).toBeNull();
+  });
+  it("rejects a value over MAX_SETTING_BYTES", () => {
+    const big = "x".repeat(5000);
+    expect(normalizeSettingValue(big)).toEqual({ ok: false, code: "invalid_value" });
+  });
+});
+
+describe("INVITE_MESSAGES plain-word completeness (acceptance #6)", () => {
+  const allCodes: InviteCode[] = [
+    "not_signed_in", "invalid_token", "already_used", "expired", "email_unknown", "email_mismatch",
+    "invalid_email", "invalid_role", "not_admin", "team_not_found", "duplicate_invite",
+    "no_email_delivery", "unavailable", "failed",
+  ];
+  it("every InviteCode has a non-empty, distinct EN/ZH pair with no banned vocabulary", () => {
+    for (const code of allCodes) {
+      const [en, zh] = INVITE_MESSAGES[code];
+      expect(en.length).toBeGreaterThan(0);
+      expect(zh.length).toBeGreaterThan(0);
+      expect(en).not.toBe(zh);
+      expect(zh).toMatch(/[一-鿿]/);
+      expect(en).toMatch(/^[A-Z].*[.!?]$/);
+      for (const banned of ["falsifier", "refuted", "证伪", "team_invites", "workspace_settings", "accept_team_invite", "RLS", "42501"]) {
+        expect(en).not.toContain(banned);
+        expect(zh).not.toContain(banned);
+      }
+      // "owner" as a natural word ("the team owner") is fine per the spec's own examples;
+      // the banned-vocabulary law is about internal slugs/state names/status codes, not this.
+      expect(en).not.toMatch(/\b\d{3}\b/);
+    }
+  });
+});

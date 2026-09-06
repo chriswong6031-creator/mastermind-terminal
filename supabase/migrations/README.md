@@ -86,3 +86,7 @@ to apply **everything** from `0001`. That is survivable only because every file 
 in this estate, because nothing here records that it already was.
 
 `0011`–`0013` were claimed by pull requests that had not merged when `0014` was reserved (#502 claims `0011`), so this packet took `0014` rather than a contested prefix; `tests/test_migration_ledger.py` is the only enforcement of prefix uniqueness (§ Version prefixes must be unique).
+
+| Migration | Objects created | Status |
+|---|---|---|
+| `0015_team_roles_invitations.sql` | `accept_team_invite(text)` RPC, `workspace_settings` table + 4 policies | not applied |
