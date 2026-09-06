@@ -654,6 +654,116 @@ describe("toolbar invocation deadline ownership", () => {
     expect(clickCount).toBe(2);
   }, 10_000);
 
+  it("keeps total elapsed wall time inside the shared deadline even though MAJOR-1's fix now spends up to two settle waits per attempt (review minor 2)", async () => {
+    // MAJOR-1's fix added a second `waitForSettledToolbar` per attempt — a before-click snapshot
+    // AND an after-click snapshot — so one attempt can now spend up to 2x TOOLBAR_SETTLE_WAIT_MS
+    // plus one TOOLBAR_EFFECT_SETTLE_MS observation window before the retry decision, instead of
+    // the pre-fix 1x. Nothing in the suite measured whether this can push the whole invocation
+    // past the caller-owned deadline. The before-click wait settles instantly (so the scenario
+    // actually reaches the new after-click wait, the position under test); the after-click wait
+    // then mocks real Playwright's own behavior when a condition never turns true — it blocks for
+    // its granted `timeout` and rejects — and this asserts the actual wall-clock spend never
+    // exceeds the owned budget by more than negligible dispatch/scheduler overhead.
+    const visibility = (visible: boolean) => ({ isVisible: async () => visible, isEnabled: async () => visible });
+    const settledSnapshot = { mode: "full" as const, revision: 5, settled: true, overflowOpen: false, backVisible: false };
+    const control = {
+      click: async () => {},
+      // Never converges: forces every observation window to consume its full allotted time.
+      getAttribute: async () => "off",
+      isVisible: async () => true,
+    } as unknown as Locator;
+    let waitCall = 0;
+    const page = {
+      isClosed: () => false,
+      waitForFunction: (
+        _fn: unknown,
+        _arg: unknown,
+        opts: { timeout: number },
+      ) => {
+        waitCall += 1;
+        if (waitCall === 1) {
+          // Before-click snapshot: settles instantly so the after-click wait is actually reached.
+          return Promise.resolve({ jsonValue: async () => settledSnapshot, dispose: async () => {} });
+        }
+        // After-click snapshot (and any later attempt): never settles — consumes its own full
+        // granted window before rejecting, exactly like a real hung Playwright condition.
+        return new Promise((_resolve, reject) => {
+          setTimeout(() => reject(new Error("simulated: never settles within its granted window")), opts.timeout);
+        });
+      },
+      getByTestId: () => visibility(true),
+      locator: (selector: string) => {
+        if (selector === ".chart-tabs") {
+          return { first: () => ({ evaluate: async () => ({ mode: null, revision: null, settled: false, overflowOpen: false, backVisible: false }) }) };
+        }
+        if (selector === '[data-toolbar-action="sync"]') return control;
+        return visibility(false);
+      },
+    } as unknown as Page;
+
+    const budgetMs = 2_000;
+    const intent: ToolbarIntent = { deadline: Date.now() + budgetMs };
+    const startedAt = Date.now();
+    await expect(toggleToolbarSync(page, intent)).rejects.toThrow(/^TOOLBAR_/);
+    const elapsedMs = Date.now() - startedAt;
+
+    // Generous overhead allowance for scheduler/microtask jitter, but this must stay far short of
+    // a second full budget window — that would mean the fix silently re-grants time beyond the
+    // caller's owned deadline instead of sharing it.
+    expect(elapsedMs).toBeLessThan(budgetMs + 400);
+  }, 10_000);
+
+  it("classifies a post-click settle failure with budget still remaining as TOOLBAR_NOT_SETTLED, not a generic action-failed/budget-exhausted code (review minor 3)", async () => {
+    // MAJOR-1's fix routes the post-click "after" snapshot through `waitForSettledToolbar`, so a
+    // never-settles failure in THAT position now throws via `recoverSettledToolbarOrFail`
+    // (TOOLBAR_NOT_SETTLED/TOOLBAR_BUDGET_EXHAUSTED) instead of falling through to
+    // `failToolbarActionUnlessDone` -> `classifyToolbarActionFailure`
+    // (TOOLBAR_ACTION_FAILED/TOOLBAR_BUDGET_EXHAUSTED) as it did before the fix. No test pinned the
+    // receipt TYPE for this specific (post-click) position. Here the after-wait fails for a reason
+    // unrelated to time exhaustion (an evaluation error) while the shared deadline still has ample
+    // remaining budget, so the receipt must be classified TOOLBAR_NOT_SETTLED, never
+    // TOOLBAR_BUDGET_EXHAUSTED or TOOLBAR_ACTION_FAILED.
+    const visibility = (visible: boolean) => ({ isVisible: async () => visible, isEnabled: async () => visible });
+    const beforeSnapshot = { mode: "full" as const, revision: 5, settled: true, overflowOpen: false, backVisible: false };
+    // What the direct `.chart-tabs` read reports when `recoverSettledToolbarOrFail` falls back to
+    // it after the after-wait's `waitForFunction` throws: caught genuinely unsettled.
+    const unsettledFailureRead = { mode: "full" as const, revision: 5, settled: false, overflowOpen: false, backVisible: false };
+    let clickCount = 0;
+    let waitCall = 0;
+    const control = {
+      click: async () => { clickCount += 1; },
+      getAttribute: async () => "off",
+      isVisible: async () => true,
+    } as unknown as Locator;
+    const page = {
+      isClosed: () => false,
+      waitForFunction: async () => {
+        waitCall += 1;
+        if (waitCall === 1) {
+          // Before-click snapshot: settles immediately with plenty of budget left.
+          return { jsonValue: async () => beforeSnapshot, dispose: async () => {} };
+        }
+        // After-click snapshot: fails immediately (e.g. a genuine evaluation error), well before
+        // its own granted timeout would have elapsed, so the shared deadline still has ample time
+        // left — this must NOT be misclassified as budget exhaustion.
+        throw new Error("simulated: settle read failed with time still remaining");
+      },
+      getByTestId: () => visibility(true),
+      locator: (selector: string) => {
+        if (selector === ".chart-tabs") {
+          return { first: () => ({ evaluate: async () => unsettledFailureRead }) };
+        }
+        if (selector === '[data-toolbar-action="sync"]') return control;
+        return visibility(false);
+      },
+    } as unknown as Page;
+
+    // Generous remaining budget so the failure is unambiguously NOT budget exhaustion.
+    const intent: ToolbarIntent = { deadline: Date.now() + 8_000 };
+    await expect(toggleToolbarSync(page, intent)).rejects.toThrow(/^TOOLBAR_NOT_SETTLED /);
+    expect(clickCount).toBe(1);
+  }, 10_000);
+
   it("never lends the future reservation to the current action or its effect observation", () => {
     expect(allocateToolbarStage(7_759, 4_000)).toEqual({
       currentMs: 3_759,
