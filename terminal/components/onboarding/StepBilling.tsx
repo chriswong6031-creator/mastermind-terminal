@@ -319,8 +319,12 @@ function PaymentForm({
       // Round 2 review (MINOR-3) — classifySubscribeAttempt returns {kind:"unknown"} unconditionally
       // for phase:"exception" (see its own guard), so a bare `if (outcome.kind === "unknown")` could
       // never be false — but silently doing nothing is the wrong failure mode on a money screen: a
-      // future classifier change would leave the form busy with no message. This switch is
-      // exhaustive over every SubscribeOutcome kind so that can never happen silently.
+      // future classifier change would leave the form busy with no message. This switch lists every
+      // SubscribeOutcome case by hand so a future new case is caught by eye at review time — it is
+      // NOT compiler-checked exhaustiveness (no `default` arm asserting `outcome.kind` as `never`),
+      // so an added case with no arm here would still compile. `setBusy(false)` two lines below the
+      // switch runs unconditionally for every case (it is not itself inside the switch), so no
+      // branch above needs to set it individually.
       switch (outcome.kind) {
         case "unknown":
           setErr(t("obBillErrUnknown"));
