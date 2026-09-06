@@ -380,10 +380,15 @@ export async function clickOnceAndObserve(
   if (!execution.ok) return { done: false, budgetExhausted: true };
   if (page.isClosed()) return { done: false, budgetExhausted: false };
   const futureStages = Math.max(0, remainingStages - 1);
+  // Must reserve at least what the NEXT executeToolbarStage(futureStages, ...) call will itself
+  // demand as its minimumPlanMs, or a real (non-zero) inter-stage delay can consume exactly the
+  // TOOLBAR_STAGE_OVERHEAD_RESERVE_MS this formula used to omit, exhausting the budget for the
+  // continuation AFTER this stage's action already took effect (M1, mastermindx-3 2026-09-04).
   const reserveAfterMs = futureStages === 0
     ? 0
-    : (futureStages - 1)
-      * (TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS + TOOLBAR_STAGE_OVERHEAD_RESERVE_MS)
+    : TOOLBAR_STAGE_OVERHEAD_RESERVE_MS
+      + (futureStages - 1)
+        * (TOOLBAR_FOLLOWUP_ACTION_RESERVE_MS + TOOLBAR_STAGE_OVERHEAD_RESERVE_MS)
       + 1;
   if (await observeToolbarEffect(observed, intent.deadline, reserveAfterMs, nowMs)) {
     return { done: true, budgetExhausted: false };

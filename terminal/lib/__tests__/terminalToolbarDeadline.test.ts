@@ -28,14 +28,28 @@ describe("toolbar invocation deadline ownership", () => {
     ];
     const toolbarCallbacks = testCallbacks.filter((match) =>
       /\b(?:openLayoutMenu|saveLayout|chooseToolbarSplit|toggleToolbarSync)\(/.test(match[2]));
-    const callbackFirstLines = toolbarCallbacks.map((match) => match[2].split("\n")[0].trim());
+    // The arming statement need not be the literal first line: a test may carry leading comments
+    // and/or a `test.setTimeout(...)` override (both must still precede arming, and arming must
+    // still precede the first toolbar action call) without re-introducing a false clock — see
+    // M2/B1: a literal-first-line rule would force arming before test.setTimeout, capturing the
+    // stale 30s default deadline instead of the test's real budget.
+    const armingStatement = "const toolbarBound = createLayoutToolbarBound(testInfo);";
+    const toolbarActionPattern = /\b(?:openLayoutMenu|saveLayout|chooseToolbarSplit|toggleToolbarSync)\(/;
+    const callbacksArmedInOrder = toolbarCallbacks.every((match) => {
+      const body = match[2];
+      const armIndex = body.indexOf(armingStatement);
+      if (armIndex === -1) return false;
+      const setTimeoutMatch = /test\.setTimeout\(/.exec(body);
+      if (setTimeoutMatch && setTimeoutMatch.index > armIndex) return false;
+      const actionMatch = toolbarActionPattern.exec(body);
+      if (!actionMatch) return false;
+      return armIndex < actionMatch.index;
+    });
     const toolbarOpenCalls = source.match(/openLayoutMenu\(page(?:, [^)]+(?:\([^)]*\))?)?\)/g) ?? [];
     const saveCalls = source.split("\n").filter((line) => line.includes("await saveLayout(page,"));
 
     expect(toolbarCallbacks.length).toBeGreaterThan(0);
-    expect(callbackFirstLines).toEqual(
-      callbackFirstLines.map(() => "const toolbarBound = createLayoutToolbarBound(testInfo);"),
-    );
+    expect(callbacksArmedInOrder).toBe(true);
     expect(source).toContain("bound: ToolbarTestBound");
     expect(source).not.toContain("intent?: ToolbarIntent");
     expect(toolbarOpenCalls.length).toBeGreaterThan(0);
