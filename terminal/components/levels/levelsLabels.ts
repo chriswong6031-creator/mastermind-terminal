@@ -23,7 +23,7 @@ export const ROLE_LABELS: Record<Role, { en: string; zh: string }> = {
   put_wall:  { en: "Floor",     zh: "下方支撑" },
   flip:      { en: "Flip",      zh: "多空翻转位" },
   cluster:   { en: "Cluster",   zh: "密集区" },
-  counter:   { en: "Backstop",  zh: "后备支撑" },
+  counter:   { en: "Backstop",  zh: "后备位" },
   void:      { en: "Void",      zh: "真空区" },
   trapdoor:  { en: "Trapdoor",  zh: "下跌缺口位" },
   launchpad: { en: "Launchpad", zh: "上涨启动位" },
@@ -52,10 +52,13 @@ export function roleLabel(role: string, lang: "en" | "zh"): string {
   return text;
 }
 
-export const STACK_LABELS = { en: "Stack", zh: "堆叠" } as const;
+export const STACK_LABELS = { en: "Stack", zh: "堆叠区" } as const;
 export const STACK_GLYPH = "⊕";
 
 export function stackLabel(lang: "en" | "zh"): string {
-  const text = lang === "zh" ? STACK_LABELS.zh : STACK_LABELS.en;
-  return text || (lang === "zh" ? UNCLASSIFIED.zh : UNCLASSIFIED.en);
+  return lang === "zh" ? STACK_LABELS.zh : STACK_LABELS.en;
+}
+
+export function notPresentLabel(lang: "en" | "zh"): string {
+  return lang === "zh" ? "未出现" : "not present";
 }

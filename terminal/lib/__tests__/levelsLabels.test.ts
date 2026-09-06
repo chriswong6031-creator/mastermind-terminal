@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ALL_ROLES,
   ROLE_LABELS,
+  notPresentLabel,
   roleLabel,
   stackLabel,
 } from "@/components/levels/levelsLabels";
@@ -41,5 +42,20 @@ describe("stackLabel", () => {
     expect(stackLabel("zh").trim().length).toBeGreaterThan(0);
     expect(stackLabel("en")).not.toBe("stack");
     expect(stackLabel("zh")).not.toBe("stack");
+  });
+});
+
+describe("ZH register", () => {
+  it("uses direction-neutral Backstop and Stack zone wording", () => {
+    expect(ROLE_LABELS.counter.zh).toBe("后备位");
+    expect(roleLabel("counter", "zh")).toBe("后备位");
+    expect(stackLabel("zh")).toBe("堆叠区");
+  });
+});
+
+describe("notPresentLabel", () => {
+  it("is bilingual and never a raw key", () => {
+    expect(notPresentLabel("en")).toBe("not present");
+    expect(notPresentLabel("zh")).toBe("未出现");
   });
 });

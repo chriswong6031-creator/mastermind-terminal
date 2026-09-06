@@ -34,6 +34,7 @@ import { trackSearch } from "@/lib/searchTrack";
 import {
   ROLE_GLYPH,
   STACK_GLYPH,
+  notPresentLabel,
   roleLabel,
   stackLabel,
   type Role,
@@ -86,7 +87,6 @@ interface LevelsPayload {
     note?: string;
   } | null;
 }
-
 
 // The order named nodes sit in the side rail (matches the engine emission order,
 // most-magnetic first). Voids are ranges and get their own band overlay.
@@ -512,7 +512,7 @@ export function LevelsView() {
                   <span style={{ ...RAIL_GLYPH, color: c }}>{ROLE_GLYPH[role]}</span>
                   <span style={RAIL_LABEL}>{roleLabel(role, lang)}</span>
                   <span style={{ ...RAIL_STRIKE, color: present ? "var(--text)" : "var(--text-dim)" }}>
-                    {present ? fmtStrike(node!.strike) : "not present"}
+                    {present ? fmtStrike(node!.strike) : notPresentLabel(lang)}
                   </span>
                 </button>
               );

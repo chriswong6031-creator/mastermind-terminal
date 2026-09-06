@@ -2648,7 +2648,7 @@ export default function OptionsHubView({
                               <td>
                                 <span style={{ display: "flex", gap: 4, justifyContent: "flex-end", flexWrap: "wrap" }}>
                                   {e.zerodte && <span className="flow-flag-chip">{lang === "zh" ? "当日" : "0DTE"}</span>}
-                                  {e.vol_gt_oi && <span className="flow-flag-chip">{volAboveOi(lang)}</span>}
+                                  {e.vol_gt_oi && <span className="flow-flag-chip is-long">{volAboveOi(lang)}</span>}
                                   {e.repeated && <span className="flow-flag-chip">{lang === "zh" ? "重复" : "repeat"}</span>}
                                   {e.swept && <span className="flow-flag-chip" style={{ color: "var(--warn)", borderColor: "color-mix(in srgb, var(--warn) 40%, transparent)" }}>{lang === "zh" ? "扫单" : "swept"}</span>}
                                   {oiConfSet.has(`${e.root}|${e.right}|${e.exp}|${e.strike}`) && (
