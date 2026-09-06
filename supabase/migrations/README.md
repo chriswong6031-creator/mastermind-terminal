@@ -86,7 +86,7 @@ to apply **everything** from `0001`. That is survivable only because every file 
 **Keep it that way.** A migration that is not safe to re-run is a migration that cannot be applied
 in this estate, because nothing here records that it already was.
 
-`0011`–`0013` were claimed by pull requests that had not merged when `0014` was reserved (#502 claims `0011`), so this packet took `0014` rather than a contested prefix; `tests/test_migration_ledger.py` is the only enforcement of prefix uniqueness (§ Version prefixes must be unique).
+`0011`–`0013` were reserved/contested by pull requests that had not merged when `0014` was reserved, so this packet took `0014` rather than a contested prefix. By the time this packet rebased onto `master`, one of those contenders (#502) had actually merged as `0012_thesis_objects.sql` (see the table above) — not `0011` as first assumed — so the number that ultimately landed from that set was `0012`. `tests/test_migration_ledger.py` is the only enforcement of prefix uniqueness (§ Version prefixes must be unique).
 
 | Migration | Objects created | Status |
 |---|---|---|

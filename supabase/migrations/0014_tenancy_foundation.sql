@@ -83,9 +83,13 @@ create policy teams_insert_self   on public.teams        for insert to authentic
 drop policy if exists tm_select_member on public.team_members;
 create policy tm_select_member    on public.team_members for select to authenticated using (public.is_team_member(team_id));
 -- Owner invariant (ruling r2, round 4): exactly one owner row exists per team, and it is written
--- ONLY by the creator-becomes-owner trigger (handle_new_team, SECURITY DEFINER — it bypasses RLS
--- entirely, since its owning role carries BYPASSRLS, so this WITH CHECK never has to special-case
--- it). No policy below ever lets an authenticated caller write 'owner' into this table again: an
+-- ONLY by the creator-becomes-owner trigger (handle_new_team, SECURITY DEFINER). Its INSERT is not
+-- blocked by tm_insert_admin below because this table never sets `force row level security` — a
+-- table's owning role is exempt from its own RLS policies by default (BYPASSRLS is unrelated and
+-- not required for this to work), so this WITH CHECK never has to special-case it. If a later
+-- operator act ever adds `force row level security` to this table, the founding-owner insert would
+-- need an explicit bootstrap policy (see PR body Deviations). No policy below ever lets an
+-- authenticated caller write 'owner' into this table again: an
 -- admin cannot INSERT a fresh owner row for another account (WITH CHECK excludes 'owner' here),
 -- and no UPDATE can turn an existing row into 'owner' (tm_update_admin's WITH CHECK below also
 -- excludes it). Ownership transfer is not available in this version.
