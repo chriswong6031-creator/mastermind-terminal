@@ -41,6 +41,39 @@ function installWindow() {
   return { frames, emitted };
 }
 
+/** A fake window with NO `requestAnimationFrame` at all, to exercise the `setTimeout` fallback. */
+function installWindowWithoutRAF() {
+  const timeouts: Array<() => void> = [];
+  const emitted: EmittedEvent[] = [];
+  const fakeWindow = {
+    setTimeout: (callback: (...args: unknown[]) => void) => {
+      timeouts.push(() => callback(0));
+      return timeouts.length;
+    },
+    clearTimeout: () => {},
+    dispatchEvent: (event: { type: string; detail: unknown }) => {
+      emitted.push({ type: event.type, detail: event.detail });
+      return true;
+    },
+  };
+  class FakeCustomEvent<T> {
+    constructor(readonly type: string, readonly init: { detail: T }) {}
+    get detail() { return this.init.detail; }
+  }
+  vi.stubGlobal("window", fakeWindow);
+  vi.stubGlobal("CustomEvent", FakeCustomEvent);
+  return { timeouts, emitted };
+}
+
+function drainTimeouts(timeouts: Array<() => void>, limit = 128): void {
+  let iterations = 0;
+  while (timeouts.length && iterations < limit) {
+    timeouts.shift()!();
+    iterations += 1;
+  }
+  if (timeouts.length) throw new Error(`render continuation exceeded ${limit} timeouts`);
+}
+
 function drainFrames(frames: FrameRequestCallback[], limit = 128): void {
   let frame = 0;
   while (frames.length && frame < limit) {
@@ -216,6 +249,132 @@ describe("Terminal visual-ready bounded render completion", () => {
     expect(detailsFor(emitted, TERMINAL_VISUAL_READY_DIAGNOSTIC_EVENT)).toEqual([]);
     pending.reevaluate();
     expect(frames).toHaveLength(0);
+  });
+
+  it("swallows a throwing isCurrent call and permanently cancels the generation", () => {
+    const { frames, emitted } = installWindow();
+    let calls = 0;
+
+    const pending = announceTerminalVisualReady("COST", "data", {
+      timeframe: "3D",
+      generation: 42,
+      isCurrent: () => {
+        calls += 1;
+        if (calls === 1) return true;
+        throw new Error("isCurrent boom");
+      },
+      isReady: () => true,
+      renderVisuals: () => {},
+      isRendered: () => false,
+    });
+
+    expect(() => drainFrames(frames)).not.toThrow();
+    expect(detailsFor(emitted, TERMINAL_VISUAL_READY_EVENT)).toEqual([]);
+    expect(detailsFor(emitted, TERMINAL_VISUAL_READY_DIAGNOSTIC_EVENT)).toEqual([]);
+
+    pending.reevaluate();
+    expect(frames).toHaveLength(0);
+  });
+
+  it("swallows a throwing isReady call and waits for owner reevaluation instead of crashing", () => {
+    const { frames, emitted } = installWindow();
+    let throwReady = true;
+    let renderChecks = 0;
+
+    const pending = announceTerminalVisualReady("COST", "data", {
+      timeframe: "D",
+      generation: 43,
+      isCurrent: () => true,
+      isReady: () => {
+        if (throwReady) throw new Error("isReady boom");
+        return true;
+      },
+      renderVisuals: () => {},
+      isRendered: () => {
+        renderChecks += 1;
+        return true;
+      },
+    });
+
+    expect(frames).toHaveLength(0);
+    expect(renderChecks).toBe(0);
+    expect(detailsFor(emitted, TERMINAL_VISUAL_READY_EVENT)).toEqual([]);
+
+    throwReady = false;
+    pending.reevaluate();
+    expect(() => drainFrames(frames)).not.toThrow();
+    expect(detailsFor(emitted, TERMINAL_VISUAL_READY_EVENT)).toHaveLength(1);
+  });
+
+  it("swallows a throwing renderVisuals call and keeps retrying until success", () => {
+    const { frames, emitted } = installWindow();
+    let renderChecks = 0;
+    let projections = 0;
+
+    announceTerminalVisualReady("COST", "data", {
+      timeframe: "3D",
+      generation: 40,
+      isCurrent: () => true,
+      isReady: () => true,
+      renderVisuals: () => {
+        projections += 1;
+        throw new Error("renderVisuals boom");
+      },
+      isRendered: () => {
+        renderChecks += 1;
+        return renderChecks >= 3;
+      },
+    });
+
+    expect(() => drainFrames(frames)).not.toThrow();
+    expect(projections).toBeGreaterThan(0);
+    expect(detailsFor(emitted, TERMINAL_VISUAL_READY_EVENT)).toHaveLength(1);
+    expect(detailsFor(emitted, TERMINAL_VISUAL_READY_DIAGNOSTIC_EVENT)).toEqual([]);
+  });
+
+  it("swallows a throwing isRendered call and treats it as not-yet-rendered", () => {
+    const { frames, emitted } = installWindow();
+    let calls = 0;
+
+    announceTerminalVisualReady("COST", "data", {
+      timeframe: "3D",
+      generation: 41,
+      isCurrent: () => true,
+      isReady: () => true,
+      renderVisuals: () => {},
+      isRendered: () => {
+        calls += 1;
+        throw new Error("isRendered boom");
+      },
+    });
+
+    expect(() => drainFrames(frames)).not.toThrow();
+    expect(calls).toBe(64);
+    expect(detailsFor(emitted, TERMINAL_VISUAL_READY_EVENT)).toEqual([]);
+    const diagnostics = detailsFor(emitted, TERMINAL_VISUAL_READY_DIAGNOSTIC_EVENT);
+    expect(diagnostics).toHaveLength(1);
+  });
+
+  it("falls back to window.setTimeout scheduling when requestAnimationFrame is unavailable", () => {
+    const { timeouts, emitted } = installWindowWithoutRAF();
+    let renderChecks = 0;
+
+    announceTerminalVisualReady("COST", "data", {
+      timeframe: "D",
+      generation: 44,
+      isCurrent: () => true,
+      isReady: () => true,
+      renderVisuals: () => {},
+      isRendered: () => {
+        renderChecks += 1;
+        return renderChecks >= 2;
+      },
+    });
+
+    expect(timeouts.length).toBeGreaterThan(0);
+    expect(() => drainTimeouts(timeouts)).not.toThrow();
+    expect(renderChecks).toBe(2);
+    expect(detailsFor(emitted, TERMINAL_VISUAL_READY_EVENT)).toHaveLength(1);
   });
 
   it("rejects elapsed-time semantic authority and pins the finite render budget", () => {

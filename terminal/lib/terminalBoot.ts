@@ -127,11 +127,14 @@ export type TerminalVisualReadyAnnouncement = {
  *
  * Once semantic owners are current, LWC pane creation, ResizeObserver layout, SVG/DOM projection,
  * and coordinate-map paint can span substantially more than the former eight-frame allowance on the
- * shipped default multi-pane workspace. Continue through a finite, generation-bound paint budget,
+ * shipped default multi-pane workspace. Continue through a finite, chain-bound paint budget,
  * re-projecting after each failed coordinate check and exiting immediately on success. At 60 Hz the
  * 64-check ceiling is roughly one second; a throttled browser receives the same finite number of real
  * paint opportunities rather than a wall-clock guess. Exhaustion emits a typed diagnostic and never
- * claims ready.
+ * claims ready. The budget is per render chain, not a single closed count for the whole generation:
+ * an owner-driven reevaluate() (a semantic withdrawal followed by resumed authority) resets the
+ * counter, so a generation that re-enters semantic waiting mid-flight gets a fresh 64 checks rather
+ * than inheriting whatever was left of the prior chain's count.
  */
 const TERMINAL_RENDER_MAX_ATTEMPTS = 64;
 
