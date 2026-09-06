@@ -22,6 +22,7 @@ import {
 import { SUITE_DEFS } from "@/lib/suites/registry";
 import { useGateEntitlement } from "@/lib/entitlementStore";
 import { useShellIdentity } from "@/components/chrome/AppShell";
+import { ALERTS_CHANGED_EVENT } from "@/lib/alertsView";
 
 type Alert = { id: string; symbol: string; condition: any; active: boolean; created_at: string };
 
@@ -295,6 +296,17 @@ export default function AlertsView({ email, panelOnly, listOnly }: { email: stri
     return () => { alive = false; guard.alive = false; clearTimeout(gateTimer.current); };
   }, [loadAlerts]);
 
+  // /alerts composes TWO independent instances of this component (the cockpit's inline create
+  // form, panelOnly, and the separate existing-alerts management panel, listOnly) — a create
+  // here does not, on its own, make the OTHER instance's list re-read. Re-read on the shared
+  // signal either one fires after a successful create/re-arm/delete (major: "see it in the
+  // list" required a manual page reload without this).
+  useEffect(() => {
+    const onChanged = () => { void loadAlerts(); };
+    window.addEventListener(ALERTS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(ALERTS_CHANGED_EVENT, onChanged);
+  }, [loadAlerts]);
+
   // The condition the CURRENT form would POST (drives the preview + create()).
   const optCondition = buildOptCondition(optKind, optRoot, optParams);
   const marketWideOpt = isMarketWideOptKind(optKind);
@@ -382,7 +394,7 @@ export default function AlertsView({ email, panelOnly, listOnly }: { email: stri
       }
       const r = await fetch("/api/alerts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, condition }) });
       const d = await r.json().catch(() => ({}));
-      if (d.alert) { setAlerts((a) => [d.alert, ...a]); setVal(""); }
+      if (d.alert) { setAlerts((a) => [d.alert, ...a]); setVal(""); window.dispatchEvent(new Event(ALERTS_CHANGED_EVENT)); }
       else setErr(d.error || t("couldNotCreateAlert"));
     } catch {
       setErr(t("alertNetErr"));
@@ -394,7 +406,7 @@ export default function AlertsView({ email, panelOnly, listOnly }: { email: stri
     try {
       const r = await fetch("/api/alerts", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
       const d = await r.json().catch(() => ({}));
-      if (d.alert) setAlerts((a) => a.map((x) => (x.id === id ? d.alert : x)));
+      if (d.alert) { setAlerts((a) => a.map((x) => (x.id === id ? d.alert : x))); window.dispatchEvent(new Event(ALERTS_CHANGED_EVENT)); }
       else setErr(d.error || t("couldNotRearm"));
     } catch {
       setErr(t("couldNotRearm"));
@@ -407,6 +419,7 @@ export default function AlertsView({ email, panelOnly, listOnly }: { email: stri
     try {
       const r = await fetch(`/api/alerts?id=${id}`, { method: "DELETE" });
       if (!r.ok) throw new Error();
+      window.dispatchEvent(new Event(ALERTS_CHANGED_EVENT));
     } catch {
       // re-insert ONLY the failed item (functional update preserves any concurrent deletes)
       if (removed) setAlerts((a) => (a.some((x) => x.id === removed.id) ? a : [removed, ...a]));

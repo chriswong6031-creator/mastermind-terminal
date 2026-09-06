@@ -94,6 +94,69 @@ test("ZH language renders ZH monitor copy", async ({ page }) => {
   await expect(page.getByText("尚无记录").first()).toBeVisible();
 });
 
+test("a zero-alert user gets calm copy, never 'cannot read'", async ({ page }) => {
+  // Blocker: a successful read with zero rows (READ_OK_ZERO) is a count of 0, not an unknown —
+  // this must render the calm "you are not watching anything yet" copy, never "cannot read".
+  await setLang(page, "en");
+  await installFixtures(page, {
+    alerts: [], run: { lane: "alerts_engine", run_id: "r1", started_at: new Date().toISOString(), concluded_at: new Date().toISOString(), outcome: "success", lane_cadence_budget_s: 300 },
+    runsState: "READ_OK", lastSuccessAt: new Date().toISOString(),
+  });
+  await page.goto("/alerts");
+  await expect(page.locator('[data-monitor-state="watching"]')).toBeVisible({ timeout: 45_000 });
+  await expect(dataState(page, "calm-empty")).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByText("You are not watching anything yet.")).toBeVisible();
+  await expect(page.getByText("cannot read")).toHaveCount(0);
+});
+
+test("create an alert through the real form, see it in the list, and delete it", async ({ page }) => {
+  // Blocker: the create/manage surface must actually work end-to-end on the composed page —
+  // the cockpit's inline create form is a SEPARATE component instance from the existing-alerts
+  // management panel below it, so this also proves the cross-instance refresh (major: "see it
+  // in the list" required a manual reload without it).
+  await setLang(page, "en");
+  let stored: Array<{ id: string; symbol: string; active: boolean; created_at: string; condition: unknown }> = [];
+  await page.route("**/data/manifest.json**", (route) => route.fulfill({ json: MANIFEST }));
+  await page.route("**/api/alerts", async (route) => {
+    const req = route.request();
+    if (req.method() === "POST") {
+      const body = JSON.parse(req.postData() || "{}");
+      const created = { id: "created-1", symbol: body.symbol, active: true, created_at: new Date().toISOString(), condition: body.condition };
+      stored = [created, ...stored];
+      return route.fulfill({ json: { alert: created } });
+    }
+    if (req.method() === "DELETE") {
+      const id = new URL(req.url()).searchParams.get("id");
+      stored = stored.filter((a) => a.id !== id);
+      return route.fulfill({ json: { ok: true, deleted: true } });
+    }
+    return route.fulfill({ json: { alerts: stored } });
+  });
+  await page.route("**/api/alerts/receipts", async (route) => route.fulfill({
+    json: { run: null, runs_state: "READ_OK_ZERO", last_success_at: null, outbox: [], outbox_state: "READ_OK_ZERO" },
+  }));
+  await page.goto("/alerts");
+
+  // Step 1: starts with none — the existing-alerts panel's own honest empty copy.
+  await expect(page.getByText("No alerts yet", { exact: false })).toBeVisible({ timeout: 45_000 });
+
+  // Step 2: create through the REAL form (default symbol NVDA, default condition needs no
+  // value field) — never a direct API call standing in for the UI.
+  await page.getByRole("button", { name: "Create alert" }).click();
+
+  // Step 3: see it in the list (the separate management-panel instance), with visible text.
+  const row = page.locator(".arow", { hasText: "NVDA" });
+  await expect(row).toBeVisible({ timeout: 45_000 });
+  await expect(row.getByText("Golden Oracle flips to BUY")).toBeVisible();
+
+  // Step 4: delete it (two-step confirm), asserting the visible confirmation prompt too.
+  await row.locator(".icbtn").click();
+  await expect(row.getByText("Delete this alert?", { exact: false })).toBeVisible({ timeout: 45_000 });
+  await row.locator(".arow-confirm .btn-danger").click();
+  await expect(row).toHaveCount(0);
+  await expect(page.getByText("No alerts yet", { exact: false })).toBeVisible({ timeout: 45_000 });
+});
+
 // --- Visual evidence crops (spec §9) -------------------------------------------------
 // Deterministic fixture-driven crops for the PR body evidence matrix. Dark theme only
 // (the shell has no light branch yet — see spec §6/§9). Run selectively:
@@ -129,7 +192,10 @@ const STALE_RUN = {
 
 async function crop(page: Page, width: number, name: string) {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
-  await page.screenshot({ path: `${PROOF_DIR}/${name}.png`, fullPage: false });
+  // Full-page, not viewport-only: the evidence matrix must show the cockpit AND the existing
+  // management panel (pause/re-arm/delete affordances) below it — a viewport crop leaves the
+  // management panel "below the frame" and unproven (blocker: zero visual evidence of it).
+  await page.screenshot({ path: `${PROOF_DIR}/${name}.png`, fullPage: true });
 }
 
 for (const vp of [1440, 390] as const) {

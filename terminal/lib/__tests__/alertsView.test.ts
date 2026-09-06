@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import path from "path";
 import {
-  buildAlertsView, monitorFor, foldOutbox, deliveryFor, ALERTS_COPY, copy,
+  buildAlertsView, monitorFor, foldOutbox, deliveryFor, ALERTS_COPY, copy, conditionText,
   type RunReceipt, type OutboxRow, type Alert,
 } from "../alertsView";
 
@@ -197,6 +197,70 @@ describe("coverage null vocabulary", () => {
     expect(noCoverage.coverage.count).toBeNull();
     expect(zero.coverage.state).toBe("READ_OK");
     expect(zero.coverage.count).toBe(0);
+  });
+  // Blocker: a successful read that FOUND zero rows (READ_OK_ZERO) is just as much "the read
+  // succeeded" as READ_OK with rows — it must never render "cannot read" for a brand-new,
+  // zero-alert user (RED before the fix: count stayed null, only READ_OK counted).
+  it("READ_OK_ZERO is a successful read with count 0, never null", () => {
+    const zeroEver = buildAlertsView({
+      alerts: [], alertsState: "READ_OK_ZERO", run: baseRun(), lastSuccessAt: "2026-09-05T11:59:00Z",
+      runsState: "READ_OK", outbox: [], outboxState: "READ_OK_ZERO", now: NOW,
+    });
+    expect(zeroEver.coverage.state).toBe("READ_OK_ZERO");
+    expect(zeroEver.coverage.count).toBe(0);
+  });
+});
+
+describe("re-arm keeps the fired alert's activity visible — RED-first proof of major 4", () => {
+  it("a receipt existing at all IS the fired fact, independent of the alert's current active flag", () => {
+    // Re-armed: `active` is back to true and the engine has cleared `condition.triggered`
+    // (app/api/alerts/route.ts PATCH), exactly what re-arm does in production — yet the
+    // receipt (outbox row) for the earlier fire still exists and must still surface.
+    const rearmed = alert({ id: "a1", active: true, condition: { type: "price" } });
+    const folded = foldOutbox([outboxRow({ alert_id: "a1", status: "sent" })]);
+    const d = deliveryFor(rearmed, "READ_OK", folded);
+    expect(d.fired).toBe(true);
+    expect(d.delivery).toBe("sent");
+  });
+  it("buildAlertsView keeps the row after re-arm, not gated on !active", () => {
+    const rearmed = alert({ id: "a1", active: true, condition: { type: "price" } });
+    const view = buildAlertsView({
+      alerts: [rearmed], alertsState: "READ_OK",
+      run: baseRun(), lastSuccessAt: "2026-09-05T11:59:00Z", runsState: "READ_OK",
+      outbox: [outboxRow({ alert_id: "a1", status: "sent" })], outboxState: "READ_OK", now: NOW,
+    });
+    expect(view.rows.map((r) => r.alertId)).toEqual(["a1"]);
+  });
+  it("receipts unavailable falls back to condition.triggered, never a fabricated confirmation", () => {
+    const stillFired = alert({ id: "a1", active: false, condition: { type: "price", triggered: firedEvidence() } });
+    const d = deliveryFor(stillFired, "READ_UNAVAILABLE", new Map());
+    expect(d.fired).toBe(true);
+    expect(d.delivery).toBe("unconfirmed");
+  });
+});
+
+describe("conditionText — no raw condition slugs (major 3)", () => {
+  it("never returns a bare type slug for an unrecognized type", () => {
+    expect(conditionText({ type: "opt_totally_unknown" }, "NVDA", "en")).not.toBe("opt_totally_unknown");
+    expect(conditionText({ type: "opt_totally_unknown" }, "NVDA", "en")).toBe("Condition");
+  });
+  it("describes a price condition in words: symbol + plain operator + threshold", () => {
+    const text = conditionText({ type: "price", op: "above", value: 100 }, "NVDA", "en");
+    expect(text).toContain("NVDA");
+    expect(text).toContain("above");
+    expect(text).toContain("100");
+    expect(text).not.toBe("price");
+  });
+  it("every engine-emitted condition type has a plain-language key", () => {
+    // ingest/alerts_engine.py's type set, kept in sync by hand (grep alerts_engine.py "type").
+    const engineTypes = ["signal", "regime", "price", "rsi", "opt_gamma_flip", "opt_wall_touch", "opt_premium_burst", "opt_0dte_spike", "opt_surface_pocket", "opt_wall_migration", "opt_sign_fragile", "opt_opex_concentration"];
+    for (const t of engineTypes) {
+      expect(ALERTS_COPY[`condition.${t}`], `condition.${t}`).toBeTruthy();
+    }
+  });
+  it("null/missing condition never throws and never renders a slug", () => {
+    expect(conditionText(null, undefined, "en")).toBe("Condition");
+    expect(conditionText({}, undefined, "zh")).toBe("条件");
   });
 });
 

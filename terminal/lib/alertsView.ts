@@ -11,6 +11,13 @@ export type ResolutionState = "open" | "resolved" | "armed" | "paused";
 export const LANE = "alerts_engine";
 export const CALM_GRACE_S = 120; // budget (300) + grace = 420s
 
+// Fired when this page's create/re-arm/delete actions succeed, so every AlertsView instance
+// mounted on the same page (the cockpit's inline create form and the separate existing-alerts
+// management panel are two independent component instances with two independent `alerts`
+// states) re-reads the list instead of only the instance that made the write. Same-tab only —
+// this is a same-page composition wire, never cross-tab sync.
+export const ALERTS_CHANGED_EVENT = "mm:alerts-changed";
+
 export interface RunReceipt {
   lane: string;
   run_id: string;
@@ -129,11 +136,6 @@ export function deliveryFor(
   outboxState: ReadState,
   folded: Map<string, { row: OutboxRow; folded: number }>,
 ): { delivery: DeliveryState; foldedRows: number; outboxRow: OutboxRow | null; fired: boolean } {
-  // `fired` is the ONLY gate for whether this alert has a delivery leg at all — an alert that
-  // has never fired must never appear in the delivery timeline (it has no delivery outcome to
-  // report, honest or otherwise). See buildAlertsView's row filter below.
-  const fired = !alert.active && isTriggered(alert.condition?.triggered);
-  if (outboxState === "READ_UNAVAILABLE") return { delivery: "unconfirmed", foldedRows: 0, outboxRow: null, fired };
   // An alert can have MULTIPLE fire events (re-armed, fired again), each its own folded group —
   // pick the newest one by created_at, never whichever the Map happens to iterate first. A plain
   // `.find()` here was caller-order dependent (only correct because the route sorts descending),
@@ -142,14 +144,29 @@ export function deliveryFor(
   const match = matches.length
     ? matches.reduce((newest, cur) => (Date.parse(cur.row.created_at) > Date.parse(newest.row.created_at) ? cur : newest))
     : undefined;
+  if (outboxState === "READ_UNAVAILABLE") {
+    // No receipt table to consult at all (e.g. migration 0013 not yet applied). The only
+    // remaining signal is the alert's own `condition.triggered` stamp — but re-arming an alert
+    // (app/api/alerts/route.ts PATCH) DELETES that stamp, so this fallback can under-report a
+    // re-armed alert's earlier fire. That is the honest limit of "receipts unavailable", never a
+    // fabricated confirmation, and is why `delivery` here is always "unconfirmed".
+    return { delivery: "unconfirmed", foldedRows: 0, outboxRow: null, fired: isTriggered(alert.condition?.triggered) };
+  }
   if (!match) {
-    return { delivery: "pending", foldedRows: 0, outboxRow: null, fired };
+    // Receipts ARE readable but none exist for this alert yet (fired and awaiting its outbox
+    // row, or fired-then-immediately-rearmed before one was ever created).
+    return { delivery: "pending", foldedRows: 0, outboxRow: null, fired: isTriggered(alert.condition?.triggered) };
   }
   const row = match.row;
   const status = row.status as string;
   const delivery: DeliveryState =
     status === "sent" && row.delivered_at == null ? "pending" : (KNOWN_DELIVERY[status] ?? "unconfirmed");
-  return { delivery, foldedRows: match.folded, outboxRow: row, fired };
+  // A receipt existing at all IS the fired fact — independent of the alert's CURRENT `active`
+  // flag, which only reflects whether it has since been re-armed. Gating `fired` on
+  // `!alert.active` made a fired alert's own delivery outcome vanish from the timeline the
+  // instant it was re-armed (major: recent activity derived from `!alert.active`, not from the
+  // receipt that is the actual source of truth for "this fired and here is what happened").
+  return { delivery, foldedRows: match.folded, outboxRow: row, fired: true };
 }
 
 export function buildAlertsView(input: {
@@ -166,10 +183,11 @@ export function buildAlertsView(input: {
   const monitor = monitorFor(input.run, input.runsState, input.now);
   const folded = foldOutbox(input.outbox ?? []);
   const alerts = input.alerts ?? [];
-  // Only alerts that have actually FIRED get a delivery-timeline row — an alert that is
-  // still armed and has never fired has no delivery outcome and must not render one (blocker:
-  // every alert with no outbox row was previously resolving to "pending", claiming a
-  // delivery leg for events that never happened).
+  // Only alerts that have actually FIRED get a delivery-timeline row — an alert that has never
+  // fired has no delivery outcome and must not render one. "Fired" is decided in deliveryFor by
+  // receipt existence (or, absent readable receipts, condition.triggered), never by the alert's
+  // current `active` flag — an alert stays in the timeline after re-arm as long as its receipt
+  // still exists (major: recent activity derived from `!alert.active`).
   const rows: AlertRowView[] = alerts
     .map((a) => ({ a, d: deliveryFor(a, input.outboxState, folded) }))
     .filter(({ d }) => d.fired)
@@ -188,7 +206,10 @@ export function buildAlertsView(input: {
     lastSuccessState: input.lastSuccessState ?? "READ_UNAVAILABLE",
     coverage: {
       state: input.alertsState,
-      count: input.alertsState === "READ_OK" ? alerts.length : null,
+      // A successful read with zero rows IS a count of 0, not an unknown — READ_OK_ZERO is
+      // just as much "the read succeeded" as READ_OK with rows (blocker: a zero-alert user's
+      // successful, empty read rendered "cannot read" instead of an honest 0).
+      count: input.alertsState === "READ_OK" || input.alertsState === "READ_OK_ZERO" ? alerts.length : null,
     },
     // Distinct from `coverage.count` (which is an honest null, not a number, when coverage
     // is degraded) — this is the "how many symbols could we not evaluate" fact for the
@@ -218,6 +239,7 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
   "delivery.suppressed": ["Not sent — your settings", "未发送 —— 按你的设置"],
   "delivery.unconfirmed": ["Cannot confirm", "无法确认"],
   "empty.calm": ["No alerts since you were last here. We are still watching {n} conditions for you.", "自上次访问以来没有新警报，仍在为你监控 {n} 项条件。"],
+  "empty.calm.zero": ["You are not watching anything yet.", "你还没有设置任何监控。"],
   "empty.calm.action": ["Add a watch", "添加监控"],
   "degraded.body": ["We kept your conditions, but we cannot promise they were checked. The last successful check was {t}.", "你的条件仍在，但我们无法保证已被检查。上次成功检查是 {t}。"],
   "degraded.action": ["Check again", "重新检查"],
@@ -236,6 +258,25 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
   "receipt.lastError": ["Last error", "最近错误"],
   "receipt.deliverAfter": ["Held until", "延迟至"],
   "ceiling": ["Context and decision support — not advice.", "仅供参考与决策支持，非投资建议。"],
+  // condition.<type> — plain-language fallback labels for every condition type the evaluator
+  // (ingest/alerts_engine.py) and the suite/options lanes can emit. Used only when no
+  // fired-event payload (`condition_plain`) is available; never a raw type slug ("price",
+  // "opt_gamma_flip", ...) rendered straight to a user (major: raw condition slugs).
+  "condition.signal": ["Signal condition", "信号条件"],
+  "condition.regime": ["Trend regime condition", "趋势状态条件"],
+  "condition.price": ["Price crosses a level", "价格触及设定水平"],
+  "condition.rsi": ["RSI condition", "相对强弱指数条件"],
+  "condition.suite_event": ["Signal-suite event", "信号套件事件"],
+  "condition.suite_sequence": ["Signal-suite sequence", "信号套件序列"],
+  "condition.opt_gamma_flip": ["Options gamma-flip level", "期权伽马翻转水平"],
+  "condition.opt_wall_touch": ["Options wall touch", "期权墙触及"],
+  "condition.opt_wall_migration": ["Options wall migration", "期权墙迁移"],
+  "condition.opt_sign_fragile": ["Options gamma sign fragile", "期权伽马符号脆弱"],
+  "condition.opt_opex_concentration": ["Options expiry concentration", "期权到期集中度"],
+  "condition.opt_premium_burst": ["Options premium burst", "期权权利金激增"],
+  "condition.opt_0dte_spike": ["Same-day-expiry options spike", "当日到期期权异动"],
+  "condition.opt_surface_pocket": ["Options surface pocket", "期权曲面异常点"],
+  "condition.unknown": ["Condition", "条件"],
 };
 
 export function copy(key: string, lang: "en" | "zh", vars?: Record<string, string | number>): string {
@@ -243,4 +284,26 @@ export function copy(key: string, lang: "en" | "zh", vars?: Record<string, strin
   let text = pair ? pair[lang === "zh" ? 1 : 0] : key;
   if (vars) for (const [k, v] of Object.entries(vars)) text = text.split(`{${k}}`).join(String(v));
   return text;
+}
+
+/**
+ * Plain-language description of an alert's condition, for the drillback detail view when no
+ * fired-event payload (`condition_plain`) is available. Never returns a raw type slug (major:
+ * raw condition slugs) — an unrecognized type falls back to the honest generic "Condition".
+ * For a price condition with a known operator/threshold, describes it in words: symbol + plain
+ * operator + threshold (e.g. "NVDA price above 200" / "NVDA 价格高于 200").
+ */
+export function conditionText(
+  condition: { type?: string; op?: string; value?: number } | null | undefined,
+  symbol: string | undefined,
+  lang: "en" | "zh",
+): string {
+  if (!condition || typeof condition.type !== "string") return copy("condition.unknown", lang);
+  if (condition.type === "price" && (condition.op === "above" || condition.op === "below") && typeof condition.value === "number") {
+    const sym = symbol ? `${symbol} ` : "";
+    if (lang === "zh") return `${sym}价格${condition.op === "above" ? "高于" : "低于"} ${condition.value}`;
+    return `${sym}price ${condition.op} ${condition.value}`;
+  }
+  const key = `condition.${condition.type}`;
+  return ALERTS_COPY[key] ? copy(key, lang) : copy("condition.unknown", lang);
 }

@@ -43,6 +43,12 @@
   font: 500 var(--fs-body, 13px)/1.5 var(--font-ui); color: var(--muted); max-width: 52ch;
 }
 .emptyAction { margin-top: 8px; }
+/* Touch floor. Precedent: @media (pointer:coarse){.pf-act{min-height:44px}} — globals.css:1281.
+   .btn's base height (globals.css:144) is 38px; every empty/degraded module's one action must
+   still meet a 44px hit target on a touch device. */
+@media (pointer: coarse) {
+  .emptyAction { min-height: 44px; padding: 0 18px; }
+}
 
 .ceiling { color: var(--muted); font-size: var(--fs-label); margin-top: 6px; }
 

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, type ReactNode } from "react";
 import s from "./alerts.module.css";
 import AnswerLine from "./AnswerLine";
 import AlertTimeline, { type TimelineRow } from "./AlertTimeline";
@@ -8,7 +8,8 @@ import CouldNotWatch from "./CouldNotWatch";
 import AlertDetail, { type AlertDetailData } from "./AlertDetail";
 import { NewAlertPanel } from "@/components/AlertsView";
 import {
-  buildAlertsView, copy, type Alert, type ReadState, type RunReceipt, type OutboxRow,
+  buildAlertsView, conditionText, copy, ALERTS_CHANGED_EVENT,
+  type Alert, type ReadState, type RunReceipt, type OutboxRow,
 } from "@/lib/alertsView";
 import { useLang } from "@/lib/i18n";
 
@@ -23,7 +24,7 @@ const UNAVAILABLE_RECEIPTS: ReceiptsResp = {
   last_success_state: "READ_UNAVAILABLE", outbox_state: "READ_UNAVAILABLE",
 };
 
-export default function AlertsCockpit({ email }: { email: string }) {
+export default function AlertsCockpit({ email, children }: { email: string; children?: ReactNode }) {
   const { lang } = useLang();
   const L = lang === "zh" ? "zh" : "en";
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
@@ -52,6 +53,17 @@ export default function AlertsCockpit({ email }: { email: string }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // The create form (NewAlertPanel below) and the separate existing-alerts management panel
+  // (passed in as `children`, see page.tsx) are two independent AlertsView instances with two
+  // independent `alerts` states — creating/re-arming/deleting there does not, on its own,
+  // refresh this component's OWN read. Re-read whenever either one reports a change (major:
+  // "see it in the list" required a page reload without this).
+  useEffect(() => {
+    const onChanged = () => { void load(); };
+    window.addEventListener(ALERTS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(ALERTS_CHANGED_EVENT, onChanged);
+  }, [load]);
 
   // `alertsState` (the raw /api/alerts read) is passed straight through — never overloaded with
   // the evaluator's "some symbols unpriced" signal. READ_NO_COVERAGE is not a real output of this
@@ -85,7 +97,7 @@ export default function AlertsCockpit({ email }: { email: string }) {
     const alert = alerts?.find((a) => a.id === openId);
     if (!row || !alert) return null;
     return {
-      conditionText: row.outboxRow?.payload?.condition_plain || alert.condition?.type || "",
+      conditionText: row.outboxRow?.payload?.condition_plain || conditionText(alert.condition, alert.symbol, L),
       // Holding resolution is by ticker only — there is no portfolio/position join yet (F08 V2
       // owns true holding-coverage mapping). `null` means the ticker itself could not be
       // established, in which case the honest answer is "not covered", never a guess.
@@ -158,13 +170,13 @@ export default function AlertsCockpit({ email }: { email: string }) {
       )}
       {view.monitor === "watching" && !listUnavailable && timelineRows.length === 0 && (
         <div className={s.module} data-alerts-module="calm-empty">
-          <p className={s.calmBody}>{copy("empty.calm", L, { n: view.coverage.count ?? 0 })}</p>
+          <p className={s.calmBody}>{(view.coverage.count ?? 0) === 0 ? copy("empty.calm.zero", L) : copy("empty.calm", L, { n: view.coverage.count ?? 0 })}</p>
           <button type="button" className={`btn ${s.emptyAction}`} onClick={scrollToAddWatch}>{copy("empty.calm.action", L)}</button>
         </div>
       )}
       <AlertTimeline rows={timelineRows} lang={L} onOpen={setOpenId} spineState={dataState} />
       <WatchingList
-        rows={(alerts || []).filter((a) => a.active).map((a) => ({ id: a.id, symbol: a.symbol || "—", label: a.condition?.type || "", state: "armed" as const }))}
+        rows={(alerts || []).filter((a) => a.active).map((a) => ({ id: a.id, symbol: a.symbol || "—", label: conditionText(a.condition, a.symbol, L), state: "armed" as const }))}
         unavailable={listUnavailable}
         lang={L}
       />
@@ -172,6 +184,12 @@ export default function AlertsCockpit({ email }: { email: string }) {
         <NewAlertPanel email={email} />
       </div>
       <CouldNotWatch count={view.noCoverageCount ?? 0} lang={L} />
+      {/* The existing-alerts management panel (pause/re-arm/delete affordances) renders as a
+          plain child HERE, inside this component's own single <main className="main2"><div
+          className="pg"> — never as a second, sibling main2/pg on the page (that produced two
+          disconnected page compositions) and never wrapped in an extra .pg of its own (a nested
+          scroll container broke the deterministic e2e). See page.tsx for what is passed in. */}
+      {children}
       {detail && <AlertDetail data={detail} lang={L} onClose={() => setOpenId(null)} />}
     </div></main>
   );
