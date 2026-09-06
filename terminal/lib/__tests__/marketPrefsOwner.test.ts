@@ -376,6 +376,26 @@ describe("delivery is serialized, acknowledged, and retryable", () => {
     expect(__marketPrefsSnapshot().sync.phase).toBe("saved");
   });
 
+  it("evicts an acknowledged shared atomic — a LATER unrelated edit never re-sends it", async () => {
+    getUser = async () => userWith(UUID_A, { terminal: { start_tf: "W", updown: "west" } });
+    __loadOwner(OWNER_A);
+    await settle();
+    updates.length = 0;
+
+    updateResult = async () => ({ error: null });
+    persistMetaPrefs({ lang: "zh" });
+    await settle();
+    expect(updates).toEqual([{ lang: "zh" }]);
+
+    persistUpDown("east");
+    await settle();
+
+    // The shared atomic was already acknowledged — an edit that never touched it must not
+    // re-send a stale value and clobber whatever the OTHER product wrote in the meantime.
+    expect(updates).toHaveLength(2);
+    expect(updates[1]).toEqual({ terminal: { start_tf: "W", updown: "east" } });
+  });
+
   it("delivers an intent held through a FAILED hydrate once a retried read answers", async () => {
     vi.useFakeTimers();
     try {

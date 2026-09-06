@@ -437,7 +437,7 @@ export function persistMetaPrefs(patch: MetaPrefs) {
   metaPrefs = { ...metaPrefs, ...patch };
   publish();
   if (!isAccountOwner(owner)) return;
-  pump?.queue(atoms);
+  pump?.queue(atoms, { oneShot: Object.keys(atoms) });
 }
 
 /** Record the account language. Call i18n's `setLang` (or `applyLang`) separately to switch the UI. */
