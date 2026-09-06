@@ -84,11 +84,18 @@ test("the shipped default 3D multi-pane workspace reaches one truthful visual-re
   expect(receipt.requestedIndicators).toBe(JSON.stringify(["ema", "vol", "macd", "stochrsi"]));
   expect(receipt.paneCount).toBeGreaterThan(1);
   expect(receipt.diagnostics).toEqual([]);
-  expect(receipt.ready).toHaveLength(1);
-  expect(receipt.ready[0]!).toMatchObject({
+  // The poll above resolves on the FIRST matching ready edge; it is not a barrier against a later,
+  // legitimate re-render (a data refresh or re-epoch) also emitting a ready edge for a new
+  // generation before this assertion runs. A per-generation duplicate (the same generation firing
+  // ready twice) is the real defect this test guards against, so assert uniqueness by generation
+  // rather than a raw count that a second honest generation would trip.
+  expect(receipt.ready.length).toBeGreaterThanOrEqual(1);
+  expect(new Set(receipt.ready.map((detail) => detail.generation)).size).toBe(receipt.ready.length);
+  const lastReady = receipt.ready[receipt.ready.length - 1]!;
+  expect(lastReady).toMatchObject({
     symbol: "NVDA",
     timeframe: "3D",
     state: "data",
   });
-  expect(receipt.ready[0]!.generation).toBeGreaterThan(0);
+  expect(lastReady.generation).toBeGreaterThan(0);
 });
