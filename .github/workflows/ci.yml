@@ -7,6 +7,11 @@ on:
   # this same proof explicitly on the refreshed branch.
   workflow_dispatch:
 
+# Candidate code receives only the repository read authority needed by checkout.
+# Privileged merge reconciliation remains isolated in merge-on-green.yml.
+permissions:
+  contents: read
+
 # A newer head makes every queued/running proof for the older head unusable. Drop
 # it immediately instead of spending the account-wide hosted-runner quota on a
 # SHA that can no longer merge.
@@ -193,9 +198,12 @@ jobs:
       #   jsonschema     — tests/test_seasonal_regime.py. NOT optional: it is guarded by an
       #                    importorskip, so omitting it turns a real assertion into a silent
       #                    SKIP and the job goes green having tested nothing there.
-      # requirements.txt additionally carries fastapi/uvicorn/pyyaml, which nothing under
-      # tests/ imports — installing them would only slow the job down.
-      - run: pip install numpy pandas pyarrow jsonschema pytest
+      #   pyyaml         — tests/test_merge_on_green.py parses this very file's own YAML to
+      #                    check the candidate-CI permission guard, so a raw text/regex match
+      #                    can't misread a comment or a `run:` shell block as a real job key.
+      # requirements.txt additionally carries fastapi/uvicorn, which nothing under tests/
+      # imports — installing them would only slow the job down.
+      - run: pip install numpy pandas pyarrow jsonschema pyyaml pytest
       # Run as `python -m pytest` from the repo root: that is what puts the root on sys.path,
       # which is how `import ingest.…` / `import signal_layer.…` resolve (there is no
       # conftest.py and no installed package).
