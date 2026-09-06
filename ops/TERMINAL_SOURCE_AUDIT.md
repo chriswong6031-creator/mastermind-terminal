@@ -91,6 +91,8 @@ An allowance applies to the exact path and its descendants. Keep allowances narr
 
 `sensitive: true` records only the existence and classification of the allowance root. The audit does not read or hash allowed content, and no file content is ever included in a receipt.
 
+If an allowance path is also tracked in the accepted Git tree, the audit never reads or hashes that tracked path to decide whether it drifted. It blocks with `ALLOWANCE_SHADOWS_TRACKED_PATH` instead, for every allowance regardless of `sensitive`, so an overlapping allowance can never silently suppress a tracked-file comparison. Fix the overlap in the policy (narrow the allowance or move the tracked path) rather than treating this as a normal drift finding.
+
 ## Receipt
 
 The receipt schema is `mastermind.terminal.source_audit_receipt.v1`. It includes:
@@ -134,6 +136,7 @@ Representative codes include:
 - `TRACKED_SPECIAL_FILE`
 - `IGNORED_IMPLEMENTATION_CANDIDATE`
 - `IGNORE_CLASSIFICATION_FAILED`
+- `ALLOWANCE_SHADOWS_TRACKED_PATH`
 
 Finding codes are evidence states, not cleanup instructions. Reconciliation belongs in the canonical GitHub carrier and must preserve unexplained production state until it is classified.
 

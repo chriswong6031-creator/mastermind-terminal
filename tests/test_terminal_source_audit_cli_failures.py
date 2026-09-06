@@ -6,6 +6,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,31 @@ import ops.terminal_audit.cli as audit_cli
 import ops.terminal_audit.git_ops as audit_git_ops
 from ops.terminal_audit.model import EXIT_INPUT_ERROR
 from ops.terminal_source_audit import EXIT_UNKNOWN_STOP, audit_source
+
+
+def bind_unix_socket_at(path: Path) -> socket.socket:
+    """Bind an AF_UNIX socket and relocate it to `path`.
+
+    `bind()` fails with "AF_UNIX path too long" once the target exceeds the
+    platform's short `sun_path` limit (~104-108 bytes), which pytest's
+    `tmp_path` fixtures routinely exceed. Bind at a short path under `/tmp`
+    instead and rename the resulting socket file into place — renaming a
+    bound Unix socket does not affect the already-bound listening
+    descriptor.
+    """
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    short_dir = tempfile.mkdtemp(dir="/tmp")
+    short_path = os.path.join(short_dir, "s")
+    try:
+        server.bind(short_path)
+        os.rename(short_path, path)
+    finally:
+        try:
+            os.rmdir(short_dir)
+        except OSError:
+            pass
+    return server
 
 
 def git(repo: Path, *args: str) -> str:
@@ -200,8 +226,7 @@ def test_deployment_marker_socket_is_invalid_without_content_read(
     assert isinstance(marker, Path)
 
     marker.unlink()
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(str(marker))
+    server = bind_unix_socket_at(marker)
     try:
         receipt, exit_code = audit_source(
             canonical_repo=repo,

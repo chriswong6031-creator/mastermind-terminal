@@ -1,17 +1,45 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
 import socket
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
 
+import ops.terminal_audit.compare as audit_compare
 from ops.terminal_audit.cli import main as audit_cli_main
 from ops.terminal_audit.model import EXIT_INPUT_ERROR
 from ops.terminal_source_audit import EXIT_CLEAN, EXIT_UNKNOWN_STOP, audit_source
+
+
+def bind_unix_socket_at(path: Path) -> socket.socket:
+    """Bind an AF_UNIX socket and relocate it to `path`.
+
+    `bind()` fails with "AF_UNIX path too long" once the target exceeds the
+    platform's short `sun_path` limit (~104-108 bytes), which pytest's
+    `tmp_path` fixtures routinely exceed. Bind at a short path under `/tmp`
+    instead and rename the resulting socket file into place — renaming a
+    bound Unix socket does not affect the already-bound listening
+    descriptor.
+    """
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    short_dir = tempfile.mkdtemp(dir="/tmp")
+    short_path = os.path.join(short_dir, "s")
+    try:
+        server.bind(short_path)
+        os.rename(short_path, path)
+    finally:
+        try:
+            os.rmdir(short_dir)
+        except OSError:
+            pass
+    return server
 
 
 def git(repo: Path, *args: str) -> str:
@@ -254,8 +282,7 @@ def test_special_host_file_fails_closed_without_content_read(
     live = source_fixture["live"]
     assert isinstance(live, Path)
     socket_path = live / "runtime.sock"
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(str(socket_path))
+    server = bind_unix_socket_at(socket_path)
     try:
         receipt, exit_code = run(source_fixture)
     finally:
@@ -320,3 +347,134 @@ def test_repository_fsmonitor_command_is_disabled_during_audit(
     assert exit_code == EXIT_CLEAN
     assert receipt["status"] == "CLEAN"
     assert not sentinel.exists()
+
+
+def test_sensitive_allowance_shadowing_a_tracked_path_is_never_opened(
+    source_fixture: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    policy = source_fixture["policy"]
+    assert isinstance(policy, dict)
+    policy["mappings"][0]["allowances"].append(
+        {
+            "path": "app.py",
+            "classification": "host_local_secret_config",
+            "sensitive": True,
+        }
+    )
+
+    real_live_blob = audit_compare.live_blob
+
+    def _must_never_read_app_py(path: Path) -> tuple[str, str, int]:
+        if path.name == "app.py":
+            raise AssertionError(
+                "a tracked path shadowed by a sensitive allowance must never be "
+                "opened or hashed"
+            )
+        return real_live_blob(path)
+
+    monkeypatch.setattr(audit_compare, "live_blob", _must_never_read_app_py)
+
+    receipt, exit_code = run(source_fixture)
+
+    assert exit_code == EXIT_UNKNOWN_STOP
+    codes = finding_codes(receipt)
+    assert "ALLOWANCE_SHADOWS_TRACKED_PATH" in codes
+    assert not any(code.startswith("TRACKED_") for code in codes)
+    shadow = next(
+        item for item in receipt["findings"] if item["code"] == "ALLOWANCE_SHADOWS_TRACKED_PATH"
+    )
+    assert shadow["path"] == "app.py"
+    assert shadow["sensitive"] is True
+    assert shadow["allowance_path"] == "app.py"
+
+
+def test_non_sensitive_allowance_shadowing_a_tracked_path_still_blocks(
+    source_fixture: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    policy = source_fixture["policy"]
+    assert isinstance(policy, dict)
+    policy["mappings"][0]["allowances"].append(
+        {"path": "app.py", "classification": "generated_build_artifact"}
+    )
+
+    real_live_blob = audit_compare.live_blob
+
+    def _must_never_read_app_py(path: Path) -> tuple[str, str, int]:
+        if path.name == "app.py":
+            raise AssertionError(
+                "a tracked path shadowed by any allowance must never be opened or hashed"
+            )
+        return real_live_blob(path)
+
+    monkeypatch.setattr(audit_compare, "live_blob", _must_never_read_app_py)
+
+    receipt, exit_code = run(source_fixture)
+
+    assert exit_code == EXIT_UNKNOWN_STOP
+    shadow = next(
+        item
+        for item in receipt["findings"]
+        if item["code"] == "ALLOWANCE_SHADOWS_TRACKED_PATH"
+    )
+    assert shadow["sensitive"] is False
+
+
+def test_accepted_ref_unknown_blocks_without_ancestry_check(
+    source_fixture: dict[str, object],
+) -> None:
+    policy = source_fixture["policy"]
+    assert isinstance(policy, dict)
+    policy["accepted_ref"] = "refs/remotes/origin/does-not-exist"
+
+    receipt, exit_code = run(source_fixture)
+
+    assert exit_code == EXIT_UNKNOWN_STOP
+    assert finding_codes(receipt) == ["ACCEPTED_REF_UNKNOWN"]
+    assert receipt["accepted_ref"]["sha"] is None
+    assert receipt["accepted_ref"]["contains_sha"] is False
+
+
+def test_live_path_unreadable_subdirectory_blocks_without_hashing(
+    source_fixture: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = source_fixture["live"]
+    assert isinstance(live, Path)
+    restricted = live / "restricted"
+    restricted.mkdir()
+    (restricted / "secret.txt").write_text("classified\n", encoding="utf-8")
+
+    real_scandir = os.scandir
+
+    def failing_scandir(path: object = "."):
+        if Path(os.fspath(path)) == restricted:
+            raise PermissionError(errno.EACCES, "synthetic permission denial", str(restricted))
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", failing_scandir)
+
+    receipt, exit_code = run(source_fixture)
+
+    assert exit_code == EXIT_UNKNOWN_STOP
+    assert "LIVE_PATH_UNREADABLE" in finding_codes(receipt)
+    unreadable = next(
+        item for item in receipt["findings"] if item["code"] == "LIVE_PATH_UNREADABLE"
+    )
+    assert unreadable["path"] == "restricted"
+    assert unreadable["errno"] == errno.EACCES
+
+
+def test_marker_suppressed_when_its_live_root_is_missing(
+    source_fixture: dict[str, object],
+) -> None:
+    live = source_fixture["live"]
+    assert isinstance(live, Path)
+    shutil.rmtree(live)
+
+    receipt, exit_code = run(source_fixture)
+
+    assert exit_code == EXIT_UNKNOWN_STOP
+    assert receipt["deployment"]["marker_state"] == "UNAVAILABLE"
+    assert receipt["deployment"]["sha"] is None
+    codes = finding_codes(receipt)
+    assert "LIVE_PATH_MISSING" in codes
+    assert not any(code.startswith("DEPLOYMENT_MARKER") for code in codes)

@@ -242,6 +242,27 @@ def audit_mapping(
 
     tracked_paths = {entry.relative_path for entry in entries}
     for entry in entries:
+        shadowing_allowance = _allowance_for(entry.relative_path, mapping.allowances)
+        if shadowing_allowance is not None:
+            # A policy allowance covers a path that is also tracked at the
+            # accepted SHA. Never read or hash it to decide whether it drifted
+            # (that would defeat a `sensitive` allowance and silently read
+            # content the operator marked unsafe to open) and never silently
+            # skip it either (that would be fail-open). Block instead so a
+            # human resolves the overlap.
+            findings.append(
+                finding(
+                    "ALLOWANCE_SHADOWS_TRACKED_PATH",
+                    "A policy allowance covers a path that is also tracked at the "
+                    "accepted SHA; the audit blocks instead of reading or hashing it.",
+                    mapping=mapping.name,
+                    path=entry.relative_path,
+                    allowance_path=shadowing_allowance.path,
+                    allowance_classification=shadowing_allowance.classification,
+                    sensitive=shadowing_allowance.sensitive,
+                )
+            )
+            continue
         findings.extend(
             _compare_tracked_entry(
                 mapping,
