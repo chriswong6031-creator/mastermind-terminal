@@ -14,9 +14,9 @@ import {
   ALL_MARKETS, DEFAULT_PREFS, type FollowId, type MarketId, type MarketPrefs,
 } from "@/lib/markets";
 import {
-  applyUpDown, isStartTf, legacyPrefsPatch, metaObject, readLang, readSharedPrefs, readTerminalMeta,
-  readUpDown, sharedPrefsPatch, DEFAULT_TERMINAL_PREFS, type LangId, type MetaPrefs,
-  type TerminalPrefs, type UpDown,
+  applyUpDown, isStartTf, legacyPrefsPatch, metaObject, readLang, readMetaPrefs, readSharedPrefs,
+  readTerminalMeta, readUpDown, sharedPrefsPatch, DEFAULT_TERMINAL_PREFS, type LangId,
+  type MetaPrefs, type TerminalPrefs, type UpDown,
 } from "@/lib/accountPrefs";
 
 // Client-side read/write of EVERY account preference, stored in Supabase `user_metadata` — the
@@ -326,8 +326,9 @@ function hydrate(next: string) {
       if (tm.start_tf) writeStartTf(tm.start_tf);
       if (tm.updown && tm.updown !== readUpDown()) applyUpDown(tm.updown);
 
-      // v2 atomics win per field, legacy `prefs.*` fills the rest. An edit made while this read
-      // was in flight is newer than the answer, so it stays on top rather than being reverted.
+      // Legacy `prefs.*` wins per field, v2 atomics fill in the rest (readSharedPrefs; see the
+      // FLIP CONDITION note in lib/accountPrefs.ts). An edit made while this read was in flight
+      // is newer than the answer, so it stays on top rather than being reverted.
       metaPrefs = { ...readSharedPrefs(meta), ...metaPrefs };
       // Language is the macro dashboard's field; applying it here is what makes a language picked
       // over there arrive here. Only when it actually differs — applyLang dispatches an event
@@ -346,6 +347,7 @@ function hydrate(next: string) {
       if (!marketsDirty) state = readLocal(next) ?? { ...DEFAULT_PREFS, enabled: [...ALL_MARKETS] };
       terminal = localTerminal();
       rawTerminal = {};
+      rawMetaPrefs = {};   // symmetric with rawTerminal above — both merge bases are unknown again
       // The UI stops waiting, but the merge base is still unknown, so `baseLoaded` stays false
       // and a nested-blob write keeps holding as an intent. Held edits are NOT discarded: an
       // intent to change a preference does not stop being the user's intent because one read
@@ -458,7 +460,11 @@ export function persistMetaPrefs(patch: MetaPrefs) {
   const atoms = sharedPrefsPatch(patch);
   const legacy = legacyPrefsPatch(patch);
   if (!Object.keys(atoms).length && !Object.keys(legacy).length) return;
-  metaPrefs = { ...metaPrefs, ...patch };
+  // Sanitize before publishing: `atoms`/`legacy` above already dropped anything invalid, but an
+  // untyped/cast caller can still hand `patch` a junk value alongside a valid one, and that junk
+  // must not reach subscribers just because ONE field in the same call was legitimate — published
+  // state must never diverge from what was actually persisted.
+  metaPrefs = { ...metaPrefs, ...readMetaPrefs(patch) };
   publish();
   if (!isAccountOwner(owner)) return;
   const oneShot = Object.keys(atoms);

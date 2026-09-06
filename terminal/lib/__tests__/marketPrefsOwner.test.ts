@@ -45,6 +45,7 @@ vi.mock("@/lib/supabase/client", () => ({
 vi.mock("@/lib/i18n", () => ({ applyLang: vi.fn() }));
 
 import { ownerKeyFor, GUEST_OWNER, accountIdentity } from "@/lib/accountIdentity";
+import type { MetaPrefs } from "@/lib/accountPrefs";
 import {
   __loadOwner, __marketPrefsInternals, __marketPrefsSnapshot, __resetMarketPrefsStore,
   __subscribeMarketPrefs, currentOwnerToken, ownerTokenIsCurrent, persistStartTf, persistUpDown,
@@ -594,5 +595,40 @@ describe("a shared preference edit dual-writes into the legacy `prefs` blob too 
     await settle();
     persistMetaPrefs({ lang: "zh" });
     expect(updates).toEqual([]);
+  });
+});
+
+describe("persistMetaPrefs sanitizes what it PUBLISHES, not just what it sends (round-2 review minor)", () => {
+  it("never publishes an invalid value even when the caller's patch is a junk cast", async () => {
+    getUser = async () => userWith(UUID_A, { prefs: { theme: "dark" } });
+    __loadOwner(OWNER_A);
+    await settle();
+
+    // `theme` is invalid, `lang` is valid — the previous code (`{ ...metaPrefs, ...patch }`,
+    // no sanitizer) published BOTH, including the junk one, even though only `lang` made it
+    // into either written representation. Published state must never claim a value that was
+    // never actually persisted.
+    persistMetaPrefs({ theme: "purple", lang: "zh" } as unknown as MetaPrefs);
+    await settle();
+
+    expect(__marketPrefsSnapshot().metaPrefs).toEqual({ theme: "dark", lang: "zh" });
+    expect(updates).toEqual([{ lang: "zh", prefs: { theme: "dark", lang: "zh" } }]);
+  });
+});
+
+describe("a failed hydrate resets BOTH merge bases, not just rawTerminal (round-2 review nit)", () => {
+  it("clears rawMetaPrefs alongside rawTerminal, even after an in-flight edit populated it", async () => {
+    getUser = async () => { throw new Error("offline"); };
+    __loadOwner(OWNER_A);
+    // An edit made WHILE the read is still out mutates rawMetaPrefs unconditionally (it merges
+    // the patch in before checking baseLoaded), so this is the reachable non-empty case — not
+    // merely the module's already-empty initial value.
+    persistMetaPrefs({ lang: "zh" });
+    expect(__marketPrefsInternals().rawMetaPrefs).toEqual({ lang: "zh" });
+
+    await settle();   // the read now resolves — as a failure
+
+    expect(__marketPrefsInternals().rawTerminal).toEqual({});
+    expect(__marketPrefsInternals().rawMetaPrefs).toEqual({});
   });
 });
