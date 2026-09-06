@@ -83,7 +83,7 @@ def bootstrap(conn: "psycopg.Connection") -> None:
         )
         cur.execute(
             "create or replace function auth.uid() returns uuid language sql stable as $$"
-            " select nullif(current_setting('request.jwt.claims', true), '')::jsonb->>'sub' $$"
+            " select (nullif(current_setting('request.jwt.claims', true), '')::jsonb->>'sub')::uuid $$"
         )
         for role in ("anon", "authenticated", "service_role"):
             cur.execute(f"do $$ begin create role {role}; exception when duplicate_object then null; end $$;")
