@@ -47,16 +47,16 @@ export default function BrainWidget({
     // cannot keep querying an unmounted component's stale ref. This ALREADY
     // reassigns `MM_BRAIN_CFG.symbol` fresh on every mount (not just the first) via
     // `handoffMastermindBrainSymbol`, so — unlike the three callbacks below — `symbol` needed no
-    // further change for the mount->unmount->remount bug (reviewer ruling M6).
+    // further change for the mount->unmount->remount bug.
     handoffMastermindBrainSymbol(active);
   }, [active]);
-  // Reviewer ruling M6(a): `onCommand`/`onAnnotate`/`onAuthRequired` used to be bound ONLY inside
-  // the mount-once install effect below, closing over THIS instance's refs. On a
-  // mount -> unmount -> remount cycle (e.g. toggling the Brain dock off then on — freeze §7's own
-  // new capability) the install effect's guard (`w.MMBrain?.mounted` / the existing `<script>` tag)
-  // makes it a no-op on the second mount, so the document-level singleton kept calling BACK INTO
-  // THE FIRST, NOW-UNMOUNTED INSTANCE's refs forever — a silent W1-C regression once the dock could
-  // actually be toggled. Each callback now gets its own write-through effect, shaped exactly like
+  // `onCommand`/`onAnnotate`/`onAuthRequired` used to be bound ONLY inside the mount-once
+  // install effect below, closing over THIS instance's refs. On a mount -> unmount -> remount
+  // cycle (e.g. toggling the Brain dock off then on) the install effect's guard (`w.MMBrain` /
+  // the existing `<script>` tag) makes it a no-op on the second mount, so the document-level
+  // singleton kept calling BACK INTO THE FIRST, NOW-UNMOUNTED INSTANCE's refs forever — a
+  // silent W1-C regression once the dock could actually be toggled. Each callback now gets its
+  // own write-through effect, shaped exactly like
   // the existing `getAiContext` one below: it re-seeds the singleton's key on EVERY mount/prop
   // change (once `MM_BRAIN_CFG` exists — the install effect seeds the very first value), and
   // relinquishes on cleanup ONLY if the singleton still holds THIS instance's own closure (so an
@@ -116,19 +116,28 @@ export default function BrainWidget({
   // and the widget itself is a singleton — any existing host owns this document already,
   // even when a test/older bundle does not expose the newer `mounted` marker. Appending a
   // second script in that state races and can replace the live host after consumers bind it.
+  //
+  // These are two SEPARATE gates, not one: an existing `w.MMBrain` says "do not append a
+  // second <script> — a host already owns this document", but it does NOT say "MM_BRAIN_CFG
+  // already exists". A host that predates this component's own bookkeeping (an older bundle,
+  // or a test/document that stubs `window.MMBrain` without ever setting `MM_BRAIN_CFG`) would
+  // otherwise skip CFG creation entirely — and every rebinding effect above no-ops on its own
+  // `if (!w.MM_BRAIN_CFG) return;` guard, so symbol/onCommand/onAnnotate/onAuthRequired/
+  // getAiContext would never get bound at all. Seed CFG whenever it is missing; only the
+  // script-append is gated on an existing host.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const w = window as unknown as MastermindBrainHost;
-    if (w.MMBrain) return;
-    if (document.querySelector(`script[src="${SCRIPT_SRC}"]`)) return;
+    const hostAlreadyMounted = Boolean(w.MMBrain);
+    if (w.MM_BRAIN_CFG) return; // CFG already seeded by an earlier mount — nothing to do here
 
     w.MM_BRAIN_CFG = {
       // This config's anchor:'top' asks the production mm_brain.js bundle for no docked
       // launcher; this repo renders no launcher chrome of its own either way (confirmed:
       // no "launcher" or MMBrain.toggle call exists outside this file and the external
-      // script). Review round 2, MAJOR 6: the /analysis proof screenshots (e2e/proof/
-      // rctx-analysis/*) show a floating circular launcher anyway — that element is drawn
-      // by the external mm_brain.js script itself, which does not honor this anchor
+      // script). The /analysis proof screenshots (e2e/proof/rctx-analysis/*) show a
+      // floating circular launcher anyway — that element is drawn by the external
+      // mm_brain.js script itself, which does not honor this anchor
       // setting the way TerminalShell's usage assumed. The intended entry point is a
       // host-driven window.MMBrain.open()/.toggle() call from an attach/open affordance
       // elsewhere in the page, but the external script also renders its own floating
@@ -145,6 +154,10 @@ export default function BrainWidget({
       // calls it.
       getAiContext: () => getAiContextRef.current?.(),
     };
+
+    // CFG is seeded either way (above); only the <script> append is gated on an existing
+    // host — a second script tag in that state races and can replace the live one.
+    if (hostAlreadyMounted || document.querySelector(`script[src="${SCRIPT_SRC}"]`)) return;
 
     const s = document.createElement("script");
     s.src = SCRIPT_SRC;

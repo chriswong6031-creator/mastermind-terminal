@@ -208,3 +208,58 @@ describe("useShellBrainSymbol re-hands-off on a route-originated announce, throu
     expect(w.MM_BRAIN_CFG).toBeUndefined();
   });
 });
+
+// Reviewer minor (PR #490): the install effect's guard was narrowed from
+// `if (w.MMBrain?.mounted) return;` to `if (w.MMBrain) return;` so an older host (or a test
+// environment) without the `mounted` marker is still recognized as "already owns this
+// document". That narrowing has a real gap: in the state "MMBrain present, MM_BRAIN_CFG
+// absent", the OLD guard returned before CFG ever got seeded, and every rebinding effect
+// above no-ops on its own `if (!w.MM_BRAIN_CFG) return;` — so symbol/onCommand/onAnnotate/
+// onAuthRequired/getAiContext were never bound at all. None of the suites above constructs
+// that exact state (they only ever delete both `MMBrain` and `MM_BRAIN_CFG`, or let a normal
+// mount set both together).
+describe("BrainWidget seeds MM_BRAIN_CFG even when window.MMBrain already exists without it (reviewer minor)", () => {
+  let container: HTMLDivElement;
+  let root: Root | undefined;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    const w = window as unknown as MastermindBrainHost & Record<string, unknown>;
+    delete w.MM_BRAIN_CFG;
+    delete w.__MM_BRAIN_ACTIVE_SYMBOL__;
+    document.querySelectorAll('script[src*="mm_brain.js"]').forEach((el) => el.remove());
+    // The exact state the reviewer named: an existing host with no `mounted` marker (an
+    // older bundle, or a stub) and, critically, no MM_BRAIN_CFG of its own yet.
+    w.MMBrain = {} as MastermindBrainHost["MMBrain"];
+  });
+
+  afterEach(() => {
+    act(() => {
+      root?.unmount();
+    });
+    root = undefined;
+    container.remove();
+    const w = window as unknown as MastermindBrainHost & Record<string, unknown>;
+    delete w.MMBrain;
+    delete w.MM_BRAIN_CFG;
+  });
+
+  it("still wires cfg.symbol() and never appends a second <script> when MMBrain predates MM_BRAIN_CFG", () => {
+    const w = window as unknown as MastermindBrainHost;
+    expect(w.MMBrain, "test setup: MMBrain must already be present before mount").toBeTruthy();
+    expect(w.MM_BRAIN_CFG, "test setup: MM_BRAIN_CFG must be absent before mount").toBeUndefined();
+
+    act(() => {
+      root = createRoot(container);
+      root!.render(React.createElement(BrainWidget, { active: "NVDA", onCommand: noop, onAnnotate: noop }));
+    });
+
+    // The gap this test pins: without the fix, CFG is never created in this state, so
+    // cfg.symbol() (and every other callback) stays permanently unbound.
+    expect(w.MM_BRAIN_CFG?.symbol?.(), "MM_BRAIN_CFG.symbol was never wired").toBe("NVDA");
+    expect(w.MM_BRAIN_CFG?.onCommand, "MM_BRAIN_CFG.onCommand was never wired").toBeTruthy();
+    // The existing-host behavior this fix must NOT regress: no second script tag appended.
+    expect(document.querySelectorAll('script[src*="mm_brain.js"]').length).toBe(0);
+  });
+});

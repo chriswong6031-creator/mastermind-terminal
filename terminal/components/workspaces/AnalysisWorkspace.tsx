@@ -45,8 +45,7 @@ import { announceShellBrainSymbol } from "@/lib/shellBrainSymbol";
 const FIN_PAGES = new Set<FinPage>(FIN_PAGE_LIST);
 // Sourced from lib/analysisSymbol.ts (not redeclared here) so lib/shellBrainSymbol.ts's
 // shell-side fallback (SHELL_DEFAULT_BRAIN_SYMBOL) can share the exact same constant instead
-// of duplicating the literal in a second file, where it could silently drift out of sync
-// (review ruling, PR #490 MINOR: default symbol).
+// of duplicating the literal in a second file, where it could silently drift out of sync.
 const DEFAULT_SYMBOL = ANALYSIS_DEFAULT_SYMBOL;
 const DEFAULT_PAGE: FinPage = "overview";
 /**
@@ -99,9 +98,9 @@ export default function AnalysisWorkspace({ initialSymbol, initialPage }: Analys
   }, []);
 
   // ── symbol change → rewrite ?symbol= shallowly, and tell AppShell's Brain host ──
-  // (review round-4, MAJOR 1): `writeParam` uses `history.replaceState`, which fires no
-  // Next.js navigation and no native DOM event, so AppShell's shell-level resolver would
-  // otherwise never learn the user switched company on the same /analysis visit.
+  // `writeParam` uses `history.replaceState`, which fires no Next.js navigation and no
+  // native DOM event, so AppShell's shell-level resolver would otherwise never learn the
+  // user switched company on the same /analysis visit.
   // `announceShellBrainSymbol` is the one channel that reaches it — see lib/shellBrainSymbol.ts.
   useEffect(() => {
     if (invalidSymbol) return;

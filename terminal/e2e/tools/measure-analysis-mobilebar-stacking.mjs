@@ -1,5 +1,5 @@
 // One-off measurement for PR #490 MAJOR-1 (review ruling): the round-3/round-4 stacking fix
-// (.analysis-shell .mobilebar{z-index:95} + the .fin-pane--workspace{top:52px} offset,
+// (.analysis-route .mobilebar{z-index:95} + the .fin-pane--workspace{top:52px} offset,
 // app/globals.css) was asserted only through a source-level CSSOM test
 // (lib/__tests__/appShellAnalysisZIndex.test.ts) — never through an actual rendered page. This
 // script is the "before vs after" real-browser measurement the ruling asks for: computed

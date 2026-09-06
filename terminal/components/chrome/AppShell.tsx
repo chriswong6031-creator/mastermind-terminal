@@ -88,13 +88,13 @@ export default function AppShell({
   const title = hit ? t(hit[1], hit[2]) : t("flow", "Options");
   const { fromMacro, macroHref } = useFromMacro();
   const onBack = useCallback(() => backToMacro(macroHref), [macroHref]);
-  // Review ruling (MAJOR 2): resolved on /analysis entry — never "" — so a cold load through
-  // the external floating launcher (which never calls the in-app "attach exact source"
-  // handoff) still has a real symbol the first time it reads window.MM_BRAIN_CFG. Round-4
-  // fix: a plain useMemo([path]) never re-ran on a same-route symbol switch, because
-  // AnalysisWorkspace rewrites `?symbol=` with `history.replaceState` — no Next.js navigation,
-  // no re-render trigger. useShellBrainSymbol re-resolves on /analysis entry AND stays live
-  // afterward via announceShellBrainSymbol/subscribeShellBrainSymbol (see lib/shellBrainSymbol.ts).
+  // Resolved on /analysis entry — never "" — so a cold load through the external floating
+  // launcher (which never calls the in-app "attach exact source" handoff) still has a real
+  // symbol the first time it reads window.MM_BRAIN_CFG. A plain useMemo([path]) cannot do
+  // this alone: it never re-runs on a same-route symbol switch, because AnalysisWorkspace
+  // rewrites `?symbol=` with `history.replaceState` — no Next.js navigation, no re-render
+  // trigger. useShellBrainSymbol re-resolves on /analysis entry AND stays live afterward via
+  // announceShellBrainSymbol/subscribeShellBrainSymbol (see lib/shellBrainSymbol.ts).
   const brainSymbol = useShellBrainSymbol(path.startsWith("/analysis"));
   // Memoized on the two primitives, so a shell re-render hands children the SAME identity
   // object — an owner-scoped store keys on the owner string either way, but a stable identity
@@ -108,11 +108,20 @@ export default function AppShell({
           can call useOnboarding() directly — Billing's "choose a plan" and the
           guest path both hand off to the signup sheet. */}
       <SettingsProvider identity={identity}>
-      {/* `analysis-shell` scopes the .mobilebar z-index override in globals.css to this one
+      {/* `analysis-route` scopes the .mobilebar z-index override in globals.css to this one
           route: only /analysis can show the fixed full-screen Company Intelligence overlay
           (.fin-pane--workspace) that would otherwise cover the hamburger below 861px. Every
-          other AppShell route keeps the shared chrome's historical z-index unchanged. */}
-      <div className={`app2 obs obs-ambient${path.startsWith("/analysis") ? " analysis-shell" : ""}`}>
+          other AppShell route keeps the shared chrome's historical z-index unchanged.
+          Deliberately NOT named `analysis-shell`: AnalysisWorkspace's own inner wrapper
+          already carries that exact class (`main2 ws-shell analysis-shell`, scoped by
+          app/company-intelligence.css's `.analysis-shell{display:flex;flex-direction:column;
+          overflow:hidden}`), and this outer .app2 root is a different element entirely — a
+          shared name here would let that inner-only rule also match THIS div (same
+          specificity, source order decides), replacing .app2's own `display:grid` grid
+          template with a flex column site-wide on /analysis. See app/globals.css's comment
+          above `.analysis-route .mobilebar` for how that exact collision broke this shell's
+          desktop layout before this class was renamed. */}
+      <div className={`app2 obs obs-ambient${path.startsWith("/analysis") ? " analysis-route" : ""}`}>
         <MobileNav email={email} fromMacro={fromMacro} onBack={onBack} />
         <header className="topbar">
           {fromMacro ? <DashboardBackButton onClick={onBack} /> : <BrandLockup />}
