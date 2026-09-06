@@ -8,8 +8,6 @@ export type MonitorState = "watching" | "degraded" | "never_ran" | "unknown";
 export type DeliveryState = "sent" | "failed" | "deferred" | "pending" | "suppressed" | "unconfirmed";
 export type ResolutionState = "open" | "resolved" | "armed" | "paused";
 
-export const ALERT_ACTIONS = ["open", "evidence", "rearm", "delete"] as const;
-export type AlertAction = (typeof ALERT_ACTIONS)[number];
 export const LANE = "alerts_engine";
 export const CALM_GRACE_S = 120; // budget (300) + grace = 420s
 
@@ -46,10 +44,15 @@ export interface OutboxRow {
   };
 }
 
+// The evaluator (ingest/alerts_engine.py Supa.fire) stamps `triggered` as an OBJECT — {at, value,
+// note} — never a bare boolean. `true` is kept as an accepted shape too (fixtures/back-compat),
+// but the object shape is the one production alerts actually carry; see deliveryFor's `fired` gate.
+export type TriggeredEvidence = { at: string; value?: number; note?: string };
+
 export interface Alert {
   id: string;
   active: boolean;
-  condition: { type: string; triggered?: boolean; [k: string]: unknown };
+  condition: { type: string; triggered?: TriggeredEvidence | boolean; [k: string]: unknown };
   symbol?: string;
   created_at: string;
 }
@@ -57,7 +60,9 @@ export interface Alert {
 export interface AlertsView {
   monitor: MonitorState;
   lastAttemptAt: string | null;
+  lastAttemptState: ReadState;
   lastSuccessAt: string | null;
+  lastSuccessState: ReadState;
   coverage: { state: ReadState; count: number | null };
   noCoverageCount: number | null;
   rows: AlertRowView[];
@@ -104,11 +109,20 @@ export function foldOutbox(outbox: OutboxRow[]): Map<string, { row: OutboxRow; f
 
 // Statuses this surface can render, mapped onto mailer.STATUSES (freeze §8: no parallel
 // enum). `skipped_no_smtp` is a terminal non-delivery (config problem, never retried) and
-// must never masquerade as "pending" / in-flight.
+// must never masquerade as "pending" / in-flight. An unrecognized mailer status is an HONEST
+// unknown, never a fabricated negative verdict — it maps to "unconfirmed", not "failed".
 const KNOWN_DELIVERY: Record<string, DeliveryState> = {
   sent: "sent", failed: "failed", deferred: "deferred", pending: "pending",
   suppressed: "suppressed", skipped_no_smtp: "suppressed", queued: "pending",
 };
+
+/** True only for the production evidence shape the evaluator actually stamps (an object with a
+ * string `at`), or the plain-boolean shape kept for fixtures/back-compat. Anything else (absent,
+ * false, malformed) is honestly "not fired". */
+function isTriggered(triggered: Alert["condition"]["triggered"]): boolean {
+  if (triggered === true) return true;
+  return typeof triggered === "object" && triggered !== null && typeof triggered.at === "string";
+}
 
 export function deliveryFor(
   alert: Alert,
@@ -118,7 +132,7 @@ export function deliveryFor(
   // `fired` is the ONLY gate for whether this alert has a delivery leg at all — an alert that
   // has never fired must never appear in the delivery timeline (it has no delivery outcome to
   // report, honest or otherwise). See buildAlertsView's row filter below.
-  const fired = !alert.active && alert.condition?.triggered === true;
+  const fired = !alert.active && isTriggered(alert.condition?.triggered);
   if (outboxState === "READ_UNAVAILABLE") return { delivery: "unconfirmed", foldedRows: 0, outboxRow: null, fired };
   const match = [...folded.values()].find((v) => v.row.alert_id === alert.id);
   if (!match) {
@@ -127,7 +141,7 @@ export function deliveryFor(
   const row = match.row;
   const status = row.status as string;
   const delivery: DeliveryState =
-    status === "sent" && row.delivered_at == null ? "pending" : (KNOWN_DELIVERY[status] ?? "failed");
+    status === "sent" && row.delivered_at == null ? "pending" : (KNOWN_DELIVERY[status] ?? "unconfirmed");
   return { delivery, foldedRows: match.folded, outboxRow: row, fired };
 }
 
@@ -136,6 +150,7 @@ export function buildAlertsView(input: {
   alertsState: ReadState;
   run: RunReceipt | null;
   lastSuccessAt: string | null;
+  lastSuccessState?: ReadState;
   runsState: ReadState;
   outbox: OutboxRow[] | null;
   outboxState: ReadState;
@@ -161,7 +176,9 @@ export function buildAlertsView(input: {
   return {
     monitor,
     lastAttemptAt: input.run?.started_at ?? null,
+    lastAttemptState: input.runsState,
     lastSuccessAt: input.lastSuccessAt,
+    lastSuccessState: input.lastSuccessState ?? "READ_UNAVAILABLE",
     coverage: {
       state: input.alertsState,
       count: input.alertsState === "READ_OK" ? alerts.length : null,
@@ -197,6 +214,10 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
   "degraded.body": ["We kept your conditions, but we cannot promise they were checked. The last successful check was {t}.", "你的条件仍在，但我们无法保证已被检查。上次成功检查是 {t}。"],
   "degraded.action": ["Check again", "重新检查"],
   "neverRan.body": ["We have not recorded a check yet. New conditions start being checked within about five minutes.", "我们尚未记录到任何检查。新建条件通常在约五分钟内开始检查。"],
+  "neverRan.action": ["Check again", "重新检查"],
+  "outage.body": ["We cannot confirm monitoring right now. Try again in a few minutes.", "我们暂时无法确认监控状态，请几分钟后再试。"],
+  "outage.action": ["Retry", "重试"],
+  "listUnavailable.body": ["We could not confirm your alert list just now. Try again in a few minutes.", "我们刚才无法确认你的警报列表，请几分钟后再试。"],
   "noCoverage.body": ["We cannot read prices for {n} of your symbols, so those conditions were not checked.", "有 {n} 个代码我们读不到价格，这些条件未被检查。"],
   "folded.note": ["Duplicate rows folded ({n})", "已合并重复记录（{n}）"],
   "resolution.armed": ["Armed — still watching", "已启用 —— 仍在监控"],
@@ -212,6 +233,6 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
 export function copy(key: string, lang: "en" | "zh", vars?: Record<string, string | number>): string {
   const pair = ALERTS_COPY[key];
   let text = pair ? pair[lang === "zh" ? 1 : 0] : key;
-  if (vars) for (const [k, v] of Object.entries(vars)) text = text.replace(`{${k}}`, String(v));
+  if (vars) for (const [k, v] of Object.entries(vars)) text = text.split(`{${k}}`).join(String(v));
   return text;
 }

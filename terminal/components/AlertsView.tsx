@@ -142,7 +142,7 @@ export function _resetAlertPrefill(): void {
   pendingPrefill = null;
 }
 
-export default function AlertsView({ email }: { email: string }) {
+export default function AlertsView({ email, panelOnly }: { email: string; panelOnly?: boolean }) {
   const t = useT();
   const { lang } = useLang();
   const fmtDate = (iso: string) => {
@@ -441,9 +441,7 @@ export default function AlertsView({ email }: { email: string }) {
     </select>
   );
 
-  return (
-    <main className="main2"><div className="pg">
-        <div className="pg-head"><h2>{t("signalRegimeAlerts")}</h2><span className="sub">{t("alertsSub")}</span></div>
+  const newAlertPanel = (
         <div className="panel">
           <div className="ph">{t("newAlert")}</div>
           <div className="alert-form">
@@ -584,6 +582,15 @@ export default function AlertsView({ email }: { email: string }) {
             </div>
           )}
         </div>
+  );
+  if (panelOnly) {
+    return newAlertPanel;
+  }
+
+  return (
+    <main className="main2"><div className="pg">
+        <div className="pg-head"><h2>{t("signalRegimeAlerts")}</h2><span className="sub">{t("alertsSub")}</span></div>
+        {newAlertPanel}
         <div className="panel">
           {/* The count is a claim about the inventory — it must not print "0 total" over a
               read that never landed. The re-read control is always present when signed in: a
@@ -681,4 +688,12 @@ export default function AlertsView({ email }: { email: string }) {
       )}
     </main>
   );
+}
+
+// D1 extraction (frozen-spec-flagged deviation): the create-alert panel as a
+// standalone export for AlertsCockpit's L1-3 'Add a watch' module. Zero behaviour
+// change — same component, same hooks/state, panelOnly just narrows the render to
+// the create panel alone.
+export function NewAlertPanel({ email }: { email: string }) {
+  return <AlertsView email={email} panelOnly />;
 }
