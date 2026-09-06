@@ -36,6 +36,13 @@ describe("monitorFor — calm requires proof-of-run", () => {
   });
 });
 
+// The evaluator (ingest/alerts_engine.py Supa.fire) always stamps `triggered` as this shape —
+// {at, value, note} — never a bare boolean. Every "fired" fixture below uses it so these tests
+// actually exercise the production shape, not a fictional one a boolean-only predicate would pass.
+const firedEvidence = (over: Partial<{ at: string; value: number; note: string }> = {}) => ({
+  at: "2026-09-05T11:58:30Z", value: 42, note: "crossed", ...over,
+});
+
 describe("buildAlertsView row filter — RED-first proof of blocker 1", () => {
   it("a never-fired (armed) alert produces ZERO delivery-timeline rows", () => {
     const armed = alert({ id: "a-armed", active: true, condition: { type: "price", triggered: false } });
@@ -47,7 +54,7 @@ describe("buildAlertsView row filter — RED-first proof of blocker 1", () => {
     expect(view.rows.length).toBe(0);
   });
   it("a fired alert with no outbox row DOES produce a row, resolved pending", () => {
-    const fired = alert({ id: "a-fired", active: false, condition: { type: "price", triggered: true } });
+    const fired = alert({ id: "a-fired", active: false, condition: { type: "price", triggered: firedEvidence() } });
     const view = buildAlertsView({
       alerts: [fired], alertsState: "READ_OK",
       run: baseRun(), lastSuccessAt: "2026-09-05T11:59:00Z", runsState: "READ_OK",
@@ -58,13 +65,25 @@ describe("buildAlertsView row filter — RED-first proof of blocker 1", () => {
   });
   it("a mix of armed + fired alerts only surfaces the fired one", () => {
     const armed = alert({ id: "a-armed", active: true, condition: { type: "price", triggered: false } });
-    const fired = alert({ id: "a-fired", active: false, condition: { type: "price", triggered: true } });
+    const fired = alert({ id: "a-fired", active: false, condition: { type: "price", triggered: firedEvidence() } });
     const view = buildAlertsView({
       alerts: [armed, fired], alertsState: "READ_OK",
       run: baseRun(), lastSuccessAt: "2026-09-05T11:59:00Z", runsState: "READ_OK",
       outbox: [], outboxState: "READ_OK_ZERO", now: NOW,
     });
     expect(view.rows.map((r) => r.alertId)).toEqual(["a-fired"]);
+  });
+  // RED-first proof that the fix actually matches the evaluator's real shape: a boolean-only
+  // predicate (`condition.triggered === true`) would see this object and call it unfired,
+  // permanently hiding every real production alert from the delivery timeline (blocker 1).
+  it("the evaluator's real object-shaped `triggered` counts as fired, not just a bare `true`", () => {
+    const fired = alert({ id: "a-real-shape", active: false, condition: { type: "price", op: "above", value: 100, triggered: firedEvidence({ note: "NVDA crossed 100" }) } });
+    const view = buildAlertsView({
+      alerts: [fired], alertsState: "READ_OK",
+      run: baseRun(), lastSuccessAt: "2026-09-05T11:59:00Z", runsState: "READ_OK",
+      outbox: [], outboxState: "READ_OK_ZERO", now: NOW,
+    });
+    expect(view.rows.length).toBe(1);
   });
 });
 
@@ -107,14 +126,19 @@ const outboxRow = (over: Partial<OutboxRow> = {}): OutboxRow => ({
   last_error: null, deliver_after: null, delivered_at: "2026-09-05T11:59:30Z",
   created_at: "2026-09-05T11:59:30Z", payload: {}, ...over,
 });
+// Default fixture uses the PRODUCTION object shape — see firedEvidence() above.
 const alert = (over: Partial<Alert> = {}): Alert => ({
-  id: "a1", active: false, condition: { type: "price", triggered: true }, created_at: "2026-09-01T00:00:00Z", ...over,
+  id: "a1", active: false, condition: { type: "price", triggered: firedEvidence() }, created_at: "2026-09-01T00:00:00Z", ...over,
 });
 
 describe("delivery law", () => {
   it("fired alert with no outbox row -> pending, never delivered", () => {
     const d = deliveryFor(alert(), "READ_OK", new Map());
     expect(d.delivery).toBe("pending");
+    expect(d.fired).toBe(true);
+  });
+  it("the plain-boolean `triggered: true` shape is also accepted (back-compat)", () => {
+    const d = deliveryFor(alert({ condition: { type: "price", triggered: true } }), "READ_OK", new Map());
     expect(d.fired).toBe(true);
   });
   it("armed (never-fired) alert is never mistaken for fired", () => {
@@ -145,6 +169,17 @@ describe("delivery law", () => {
     ]);
     const d = deliveryFor(alert(), "READ_OK", folded);
     expect(d.foldedRows).toBe(1);
+  });
+  // minor: two DISTINCT fire events for the same alert (re-armed, fired again) must resolve to
+  // the newest one by created_at, regardless of which order the caller's outbox rows arrive in —
+  // a plain Map .find() was only correct because the route happens to sort descending.
+  it("two fire events for one alert resolve to the newest, in either arrival order", () => {
+    const older = outboxRow({ fire_event_id: "e-old", status: "sent", created_at: "2026-09-01T00:00:00Z" });
+    const newer = outboxRow({ fire_event_id: "e-new", status: "failed", created_at: "2026-09-05T00:00:00Z" });
+    const forward = deliveryFor(alert(), "READ_OK", foldOutbox([older, newer]));
+    const reverse = deliveryFor(alert(), "READ_OK", foldOutbox([newer, older]));
+    expect(forward.delivery).toBe("failed");
+    expect(reverse.delivery).toBe("failed");
   });
 });
 

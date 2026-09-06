@@ -134,7 +134,14 @@ export function deliveryFor(
   // report, honest or otherwise). See buildAlertsView's row filter below.
   const fired = !alert.active && isTriggered(alert.condition?.triggered);
   if (outboxState === "READ_UNAVAILABLE") return { delivery: "unconfirmed", foldedRows: 0, outboxRow: null, fired };
-  const match = [...folded.values()].find((v) => v.row.alert_id === alert.id);
+  // An alert can have MULTIPLE fire events (re-armed, fired again), each its own folded group —
+  // pick the newest one by created_at, never whichever the Map happens to iterate first. A plain
+  // `.find()` here was caller-order dependent (only correct because the route sorts descending),
+  // which is not a purity guarantee this module can make about its own input.
+  const matches = [...folded.values()].filter((v) => v.row.alert_id === alert.id);
+  const match = matches.length
+    ? matches.reduce((newest, cur) => (Date.parse(cur.row.created_at) > Date.parse(newest.row.created_at) ? cur : newest))
+    : undefined;
   if (!match) {
     return { delivery: "pending", foldedRows: 0, outboxRow: null, fired };
   }

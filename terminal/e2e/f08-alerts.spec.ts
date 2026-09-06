@@ -76,7 +76,9 @@ test("outage state renders unavailable, never a lie about zero", async ({ page }
 test("fired alert with no outbox row renders pending, never delivered", async ({ page }) => {
   await setLang(page, "en");
   await installFixtures(page, {
-    alerts: [{ id: "a1", symbol: "NVDA", active: false, created_at: "2026-08-01T00:00:00Z", condition: { type: "price", triggered: true } }],
+    // Production shape: the evaluator (ingest/alerts_engine.py Supa.fire) stamps `triggered` as
+    // an object, never a bare boolean — this fixture must exercise that real shape (blocker 1).
+    alerts: [{ id: "a1", symbol: "NVDA", active: false, created_at: "2026-08-01T00:00:00Z", condition: { type: "price", triggered: { at: "2026-09-05T09:41:00Z", value: 100, note: "crossed" } } }],
     run: { lane: "alerts_engine", run_id: "r1", started_at: new Date().toISOString(), concluded_at: new Date().toISOString(), outcome: "success", lane_cadence_budget_s: 300 },
     runsState: "READ_OK", lastSuccessAt: new Date().toISOString(), outbox: [], outboxState: "READ_OK_ZERO",
   });
@@ -100,7 +102,8 @@ const PROOF_DIR = "e2e/proof/f08-alerts";
 
 const FIRED_ALERT = {
   id: "a1", symbol: "NVDA", active: false, created_at: "2026-08-01T00:00:00Z",
-  condition: { type: "price", triggered: true },
+  // Production shape (see the "fired alert" test above) — never the bare-boolean shape alone.
+  condition: { type: "price", triggered: { at: "2026-09-05T09:41:00Z", value: 100, note: "crossed" } },
 };
 const SENT_OUTBOX = [{
   alert_id: "a1", fire_event_id: "f1", status: "sent", attempts: 1, last_error: null,

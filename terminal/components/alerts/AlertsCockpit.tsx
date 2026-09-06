@@ -128,7 +128,7 @@ export default function AlertsCockpit({ email }: { email: string }) {
   }, []);
 
   return (
-    <main className="main2"><div className="pg" data-alerts-state={dataState} data-email={email}>
+    <main className="main2"><div className="pg" data-alerts-state={dataState}>
       <AnswerLine
         monitor={view.monitor} lastAttemptAt={view.lastAttemptAt} lastAttemptState={view.lastAttemptState}
         lastSuccessAt={view.lastSuccessAt} lastSuccessState={view.lastSuccessState}
