@@ -103,9 +103,18 @@
   width: 0%;
   transition: width var(--t-slow, 320ms) var(--ease-out, cubic-bezier(.22,1,.36,1));
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.10);
+  /* Default/overflow slot color — every covered segment gets an explicit data-slot below. */
+  background: var(--cat-6, #5c6272);
 }
 
-.segMounted { /* width applied via inline style after mount */ }
+/* Categorical ramp for covered segments, cycled by `data-slot` (0-4). Deliberately NEUTRAL
+   category colors — none of these is a direction/signal token (never --up/--down/--warn/
+   --flow-buy/--flow-sell/--signal): this readout describes portfolio SHAPE, never a call. */
+.seg[data-slot="0"] { background: var(--cat-1, #4d82ff); }
+.seg[data-slot="1"] { background: var(--cat-2, #7c6df2); }
+.seg[data-slot="2"] { background: var(--cat-3, #22b8b0); }
+.seg[data-slot="3"] { background: var(--cat-4, #d98a3d); }
+.seg[data-slot="4"] { background: var(--cat-5, #b23fae); }
 
 .segUncovered {
   background-color: var(--panel-3, #1f222b);
@@ -137,7 +146,14 @@
   height: 8px;
   border-radius: 2px;
   flex-shrink: 0;
+  background: var(--panel-3, #1f222b);
 }
+
+.legendSwatch[data-slot="0"] { background: var(--cat-1, #4d82ff); }
+.legendSwatch[data-slot="1"] { background: var(--cat-2, #7c6df2); }
+.legendSwatch[data-slot="2"] { background: var(--cat-3, #22b8b0); }
+.legendSwatch[data-slot="3"] { background: var(--cat-4, #d98a3d); }
+.legendSwatch[data-slot="4"] { background: var(--cat-5, #b23fae); }
 
 .legendLabel {
   flex: 1 1 auto;

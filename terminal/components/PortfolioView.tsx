@@ -448,15 +448,18 @@ export default function PortfolioView(
  *  apply) — each segment is a plain div with a genuinely data-dependent inline `width`, the only
  *  inline style this surface uses. Uncovered segments render as a hatched neutral material, never
  *  a color with direction semantics (never --up/--down/--warn). */
-function Bar({ rows }: { rows: { key: string; label: { en: string; zh: string }; weightPct: number; covered: boolean }[] }) {
-  const ariaLabel = rows.map((r) => `${r.label.en} ${r.weightPct}%`).join(", ");
+type LegendRow = { key: string; label: { en: string; zh: string }; weightPct: number; covered: boolean };
+
+function Bar({ rows, lang }: { rows: LegendRow[]; lang: Lang }) {
+  const ariaLabel = rows.map((r) => `${lang === "zh" ? r.label.zh : r.label.en} ${r.weightPct}%`).join(", ");
   return (
     <div className={s.bar} role="img" aria-label={ariaLabel}>
-      {rows.map((r) => (
+      {rows.map((r, i) => (
         <div
           key={r.key}
           aria-hidden="true"
           data-covered={r.covered ? "true" : "false"}
+          data-slot={r.covered ? i % 5 : undefined}
           className={`${s.seg} ${r.covered ? "" : s.segUncovered}`}
           style={{ width: `${r.weightPct}%` }}
         />
@@ -465,25 +468,27 @@ function Bar({ rows }: { rows: { key: string; label: { en: string; zh: string };
   );
 }
 
-function Legend({ rows, colors }: { rows: { key: string; label: { en: string; zh: string }; weightPct: number; covered: boolean }[]; lang: Lang; colors: string[] }) {
+/* Color is a MATERIAL decision and lives in governed CSS (PortfolioRisk.module.css), keyed off
+   the `data-slot` index cycled here — never a categorical color literal authored in JS, and
+   never a direction/signal token (never --up/--down/--warn/--flow-buy/--flow-sell/--signal):
+   this readout describes portfolio SHAPE, never a call. */
+function Legend({ rows, lang }: { rows: LegendRow[]; lang: Lang }) {
   return (
     <div className={s.legend}>
       {rows.map((r, i) => (
         <div key={r.key} className={s.legendRow}>
           <span
             className={s.legendSwatch}
+            data-slot={r.covered ? i % 5 : undefined}
             aria-hidden="true"
-            style={{ background: r.covered ? colors[i % colors.length] : "var(--panel-3, #1f222b)" }}
           />
-          <span className={s.legendLabel}>{r.label.en}</span>
+          <span className={s.legendLabel}>{lang === "zh" ? r.label.zh : r.label.en}</span>
           <span className={s.legendPct}>{r.weightPct}%</span>
         </div>
       ))}
     </div>
   );
 }
-
-const RAMP = ["var(--brand-2)", "var(--flow-buy)", "var(--signal)", "var(--ai)", "var(--text-3, #5c6272)"];
 
 function PortfolioRiskReadout({ risk, lang }: { risk: PortfolioRisk; lang: Lang }) {
   const c = riskCopy(risk);
@@ -514,8 +519,8 @@ function PortfolioRiskReadout({ risk, lang }: { risk: PortfolioRisk; lang: Lang 
             ? <>
               <b className={s.hero}>{pick(c.cards[0].value)}</b>
               <p className={s.sub}>{pick(c.cards[0].sub)}</p>
-              <Bar rows={c.legend[0]} />
-              <Legend rows={c.legend[0]} lang={lang} colors={RAMP} />
+              <Bar rows={c.legend[0]} lang={lang} />
+              <Legend rows={c.legend[0]} lang={lang} />
             </>
             : <p className={s.unread}>{pick(c.cards[0].unread)}</p>}
         </article>
@@ -525,8 +530,8 @@ function PortfolioRiskReadout({ risk, lang }: { risk: PortfolioRisk; lang: Lang 
           <p className={s.q}>{pick(c.cards[1].question)}</p>
           {c.legend[1].length
             ? <>
-              <Bar rows={c.legend[1]} />
-              <Legend rows={c.legend[1]} lang={lang} colors={RAMP} />
+              <Bar rows={c.legend[1]} lang={lang} />
+              <Legend rows={c.legend[1]} lang={lang} />
             </>
             : <p className={s.unread}>{pick(c.cards[1].unread)}</p>}
         </article>
@@ -536,8 +541,8 @@ function PortfolioRiskReadout({ risk, lang }: { risk: PortfolioRisk; lang: Lang 
           <p className={s.q}>{pick(c.cards[2].question)}</p>
           {c.legend[2].length
             ? <>
-              <Bar rows={c.legend[2]} />
-              <Legend rows={c.legend[2]} lang={lang} colors={RAMP} />
+              <Bar rows={c.legend[2]} lang={lang} />
+              <Legend rows={c.legend[2]} lang={lang} />
             </>
             : <p className={s.unread}>{pick(c.cards[2].unread)}</p>}
         </article>

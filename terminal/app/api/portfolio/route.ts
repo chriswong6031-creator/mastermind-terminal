@@ -78,16 +78,30 @@ async function fetchArtifact(ticker: string): Promise<ArtifactState> {
       next: { revalidate: 900 },
     } as RequestInit);
     if (res.status === 404) return { kind: "missing" };
-    if (!res.ok) return { kind: "unreadable" };
+    // The regwall answers an anonymous fan-out with a REAL HTTP 401 (measured live,
+    // 2026-09-06: `x-regwall: deny` + a `{"locked":true,...}` body) — never a 200. `res.ok`
+    // is therefore false for the locked case, so the locked check must run BEFORE the
+    // `!res.ok` short-circuit and must recognize 401 itself, not only a body flag a 401
+    // response happens to carry.
     const body = await res.json().catch(() => null);
+    const bodyLocked = !!body && typeof body === "object" && (body as { locked?: unknown }).locked === true;
+    if (res.status === 401 || res.headers.get("x-regwall") === "deny" || bodyLocked) {
+      return { kind: "locked" };
+    }
+    if (!res.ok) return { kind: "unreadable" };
     if (!body || typeof body !== "object") return { kind: "unreadable" };
-    if ((body as { locked?: unknown }).locked === true) return { kind: "locked" };
     const personality = (body as { personality?: { market_cap?: unknown } }).personality;
     const sector = typeof (body as { sector?: unknown }).sector === "string" ? (body as { sector: string }).sector : null;
     const marketCap = typeof personality?.market_cap === "number" && Number.isFinite(personality.market_cap)
       ? personality.market_cap : null;
-    const thin = (body as { thinly_traded?: unknown }).thinly_traded;
-    const thinlyTraded = typeof thin === "boolean" ? thin : null;
+    // Liquidity: NO field named `thinly_traded` (or any liquidity flag) exists on the macro
+    // per-ticker artifact today (verified: zero hits for thinly_traded/thin_liquidity/
+    // liquidity_flag/is_thin across scripts/, engine/, site/ on origin/main, and the
+    // fixture stockdata sample carries no such key). Reading a fabricated field name would
+    // silently pass review while never being true in production, so this stays an honest,
+    // permanent null until a real macro artifact field exists to read — printed as the
+    // `no_thickness` gap on every sized position (see portfolioRisk.ts), never hidden.
+    const thinlyTraded: boolean | null = null;
     return { kind: "read", facts: { ticker, sector, marketCap, thinlyTraded } };
   } catch {
     return { kind: "unreadable" };
