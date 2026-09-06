@@ -126,7 +126,7 @@ function ContextCard({ context, state }: { context: CompanyThemeExposure; state:
               <span className={`ci-theme-qualifier ${item.mapping_qualifier}`} aria-hidden>{item.mapping_qualifier === "direct" ? "D" : item.mapping_qualifier === "proxy" ? "P" : "C"}</span>
               <div>
                 <strong>{pick(zh, item.name_en, item.name_zh)}</strong>
-                <span style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, minWidth: 0 }}>
+                <span className="ci-theme-meta-row">
                   <small>{qualifier(item, zh)}</small>
                   <details>
                     <summary>{pick(zh, TECHNICAL_DETAILS_SUMMARY.en, TECHNICAL_DETAILS_SUMMARY.zh)}</summary>

@@ -44,6 +44,25 @@ describe("company intelligence call-site labels", () => {
 
   it("drops basket_id from the theme-card glance line", () => {
     expect(themeCard).not.toContain("{item.basket_id} ·");
+    expect(themeCard).toContain("<details");
+    const needle = "item.basket_id";
+    let from = 0;
+    let found = 0;
+    while (true) {
+      const idx = themeCard.indexOf(needle, from);
+      if (idx < 0) break;
+      const jsx = idx > 0 && themeCard[idx - 1] === "{";
+      const template = idx > 1 && themeCard[idx - 2] === "$";
+      if (jsx && !template) {
+        const open = themeCard.lastIndexOf("<details", idx);
+        const close = open >= 0 ? themeCard.indexOf("</details>", open) : -1;
+        expect(open).toBeGreaterThanOrEqual(0);
+        expect(close).toBeGreaterThan(idx);
+        found += 1;
+      }
+      from = idx + needle.length;
+    }
+    expect(found).toBeGreaterThan(0);
   });
 
   it("glosses 龙虎榜 as Dragon-Tiger on StockAnalysis", () => {
