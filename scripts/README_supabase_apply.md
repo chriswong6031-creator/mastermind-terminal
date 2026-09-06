@@ -64,36 +64,47 @@ A Supabase Management PAT expires roughly 30 days after it is minted
 
 ## 6. Transaction-wrapped files
 
-A file that opens with `begin;` and closes with `commit;` (e.g. `0014`) is sent
-to the Management API as a **single POST**, wrapper intact — splitting it into
-per-statement POSTs would put `begin;` and `commit;` in different HTTP
-requests (and therefore different sessions), silently evaporating the
-transaction and risking a half-migrated database on a mid-file failure while
-the tool has already reported the earlier statements "applied". A file with no
-wrapper (e.g. `0013`) is sent one statement at a time, numbered as it goes.
+A file that opens with `begin;` and closes with `commit;` (e.g. `0014`) is
+still sent to the Management API **one statement at a time, same as any other
+file** — `--apply` never wraps multiple statements into a single POST. The
+Management API splits the query body on `;` on its own, so a single POST was
+never actually one transaction either way, and sending the whole file as one
+request would also make a mid-file failure unreportable (there would be no
+way to say which statement inside it failed). `apply_mode` in the receipt
+always reads `statement-at-a-time`; it never claims an atomicity the tool
+does not provide. The `begin;`/`commit;` wrapper itself is still sent as
+ordinary statements — it is a no-op against a connection that only ever sees
+one statement per request, and it costs nothing to leave in the file.
 
 ## 7. Worked example (`0013_alert_runs_outbox.sql`-shaped file)
+
+Real captured output, this PR's own fixture, `--dry-run`:
 
 ```
 $ python3 scripts/supabase_apply.py supabase/migrations/0013_alert_runs_outbox.sql --dry-run
 supabase_apply -- supabase/migrations/0013_alert_runs_outbox.sql
 project: fsldfzlxyavsuwqbceod    mode: dry-run
-sha256:  9f2c...
+sha256:  01d9fcd4f57b9f988c867336f02c7ba1944312617e76d3664c610a7a6c18a151
 guards:  re-runnable OK · down block OK · readback block OK
-apply mode if run: statement-at-a-time (no begin;/commit; wrapper in this file)
+apply mode if run: statement-at-a-time
 
-statements that WOULD run (4):
-  [01] create table if not exists public.alert_runs ( id bigint …
-  [02] create unique index if not exists alert_runs_id_key …
-  [03] do $$ begin create policy alert_runs_read …
-  …
+statements that WOULD run (3):
+  [01] create table if not exists public.alert_runs ( id bigint generated always as identity primary key, c
+  [02] create unique index if not exists alert_runs_id_key on public.alert_runs (id)
+  [03] do $$ begin create policy alert_runs_read on public.alert_runs for select using (true); exception wh
+
 readback query that WOULD run (3 statements):
   [01] select c.relname from pg_class c where c.relname = 'alert_runs'
-  …
+  [02] select c.relname from pg_class c where c.relname = 'alert_runs_id_key'
+  [03] select polname from pg_policy where polname = 'alert_runs_read'
+
 objects this file should create (3): table alert_runs · index alert_runs_id_key · policy alert_runs_read
 
 no network call was made.
 ```
+
+Note statement `[03]` keeps its `do $$ begin … end $$;` wrapper intact byte
+for byte — the scanner is dollar-quote-aware end to end.
 
 See the PR body for a real transcript run against files on disk, including the
 `0010_search_event_stats.sql` refusal (it has no `-- down:`/`-- readback:`
