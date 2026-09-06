@@ -22,10 +22,10 @@ export default function UnsupportedAnalysisRoute({ reason }: { reason: string })
   const copy = COPY[lang];
   return (
     <main className="main2 ws-shell" style={{ display: "grid", placeItems: "center", padding: 24 }}>
-      <section role="status" style={{ maxWidth: 560, padding: 28, border: "1px solid var(--border)", borderRadius: 12 }}>
-        <p style={{ color: "var(--text-muted)", margin: "0 0 8px" }}>{copy.eyebrow}</p>
+      <section role="status" style={{ maxWidth: 560, padding: 28, border: "1px solid var(--line)", borderRadius: 12 }}>
+        <p style={{ color: "var(--muted)", margin: "0 0 8px" }}>{copy.eyebrow}</p>
         <h1 style={{ fontSize: 24, margin: "0 0 10px" }}>{copy.title}</h1>
-        <p style={{ color: "var(--text-muted)", margin: "0 0 14px" }}>{copy.body}</p>
+        <p style={{ color: "var(--muted)", margin: "0 0 14px" }}>{copy.body}</p>
         <a href="/analysis">{copy.return}</a>
         <span hidden>{reason}</span>
       </section>

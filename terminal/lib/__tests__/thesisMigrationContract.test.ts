@@ -6,6 +6,16 @@ const migrationPath = path.resolve(__dirname, "../../../supabase/migrations/0012
 const sql = readFileSync(migrationPath, "utf8");
 const flat = sql.replace(/--[^\n]*/g, " ").replace(/\s+/g, " ").toLowerCase();
 
+// The "-- down:" and "-- readback:" blocks are documented manual SQL (comment lines, never
+// executed), so `flat` above — which strips every `--` comment to build the up-migration
+// contract — cannot see them at all. That made a rename of a table/function/policy/index in
+// the "up" block silently desync from a since-stale down/readback comment with nothing to
+// fail. These two lower-cased, comment-marker-stripped slices let the contract test actually
+// read that documented SQL text (not run it — there is no live database here) and catch that
+// class of drift.
+const downBlock = (sql.split(/^-- down:$/m)[1] ?? "").split(/^-- readback:$/m)[0].toLowerCase();
+const readbackBlock = (sql.split(/^-- readback:$/m)[1] ?? "").toLowerCase();
+
 describe("0012 thesis persistence contract", () => {
   it("owns exactly one head table, one immutable lineage table, and their required identities", () => {
     expect([...flat.matchAll(/create table if not exists public\.([a-z_]+)/g)].map((match) => match[1]))
@@ -140,5 +150,36 @@ describe("0012 thesis persistence contract", () => {
     expect(flat).toContain("v_content - 'revision_note'");
     expect(lifecycleFence).toBeGreaterThan(currentRead);
     expect(lifecycleFence).toBeLessThan(versionInsert);
+  });
+
+  it("has non-empty down and readback blocks that name every object the up-migration creates", () => {
+    // Regression coverage for the reviewed gap: these blocks are comment-only manual SQL, so
+    // nothing runs them — a renamed table/function/policy/index in the up-migration could drift
+    // out of sync with a stale down/readback comment and no automated check would notice.
+    expect(downBlock.length).toBeGreaterThan(50);
+    expect(readbackBlock.length).toBeGreaterThan(50);
+
+    const objects = ["theses", "thesis_versions",
+      "apply_thesis_version_v1", "read_current_thesis_versions_v1",
+      "theses_select_own", "thesis_versions_select_own",
+      "theses_owner_updated_idx", "theses_owner_subject_idx", "thesis_versions_owner_thesis_idx"];
+    for (const name of objects) {
+      expect(downBlock, `down block never mentions "${name}"`).toContain(name);
+    }
+    // The readback block verifies post-apply state; it checks the two tables and both functions
+    // by name (policies/indexes are read back implicitly via pg_policies/pg_class, not by name).
+    for (const name of ["theses", "thesis_versions", "apply_thesis_version_v1", "read_current_thesis_versions_v1"]) {
+      expect(readbackBlock, `readback block never mentions "${name}"`).toContain(name);
+    }
+
+    // The down block must actually DROP each function/table it names, not merely mention it.
+    expect(downBlock).toMatch(/drop function if exists public\.apply_thesis_version_v1/);
+    expect(downBlock).toMatch(/drop function if exists public\.read_current_thesis_versions_v1/);
+    expect(downBlock).toMatch(/drop table if exists public\.thesis_versions/);
+    expect(downBlock).toMatch(/drop table if exists public\.theses/);
+    // Table drops must be ordered child-before-parent (thesis_versions has a composite FK onto
+    // theses), or a real run of this documented SQL would fail on the foreign key.
+    expect(downBlock.indexOf("drop table if exists public.thesis_versions"))
+      .toBeLessThan(downBlock.indexOf("drop table if exists public.theses"));
   });
 });
