@@ -50,6 +50,7 @@ and have been.** Application status, re-censused 2026-08-21:
 | `0009_watchlist_symbol_unique.sql` | `wls_watchlist_symbol` | **yes** — applied 2026-08-19 |
 | `0010_search_event_stats.sql` | `search_event_stats()` + `search_events_created_at` | **yes** — applied 2026-08-21 |
 | `0012_thesis_objects.sql` | `theses`, `thesis_versions` + `apply_thesis_version_v1()`/`read_current_thesis_versions_v1()` | no — not yet applied |
+| `0013_alert_runs_outbox.sql` | `alert_runs`, `alert_outbox` tables + RLS (Market Ontology F08 packet B-F08-2) | reserved -> merged; **not applied — awaiting readback receipt** |
 
 `0009` was applied two days before `0008`. The numbering records *when the DDL entered the repo*,
 not when an operator ran it — so **never infer application status from file order.** Ask the
