@@ -5,7 +5,7 @@ import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-
 import { useLang, useT } from "@/lib/i18n";
 import type { PlanKey, Period } from "./types";
 import { perMonth, annualBilled, firstInvoiceTotal, TRIAL_DAYS } from "./plans";
-import { parseSubscribeReceipt } from "@/lib/billingReceipt";
+import { parseSubscribeReceipt, classifySubscribeAttempt } from "@/lib/billingReceipt";
 
 // Tier hue CSS var per plan key — mirrors onboarding.css tokens.
 const HUE: Record<PlanKey, string> = {
@@ -284,14 +284,6 @@ function PaymentForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ setup_intent_id: setupIntent.id, tier, interval: period }),
       });
-      // Fix round 1 (MAJOR-2) — the card is already attached at this point, so a generic "checkout
-      // failed" is the wrong cause for the one status the gateway uses to mean "you already have
-      // this": route it to the same landing as the init-phase 409, with no error string at all.
-      if (res.status === 409) { onAlreadyActive(); return; }
-      // Any OTHER non-2xx: the charge attempt's outcome is genuinely unknown (it may have created
-      // the subscription and then failed to answer) — say that honestly rather than repeating the
-      // malformed-2xx copy, which asserts "you have not been charged".
-      if (!res.ok) { setErr(t("obBillErrUnknown")); setBusy(false); return; }
       // D7 — fail closed. This used to accept ANY 2xx: it parsed whatever arrived, took trial_end
       // if it happened to be a number, and called onTrialStarted() unconditionally, so
       // `HTTP 200 {}` was enough to tell a user their paid trial had started (and StepDone then
@@ -300,13 +292,28 @@ function PaymentForm({
       // Fix round 1 (BLOCKER-1) — a receipt is EITHER a trial OR a genuine no-trial "active"
       // purchase (essential, plans.yml trial_days: 0 -> Stripe answers status:"active",
       // trial_end:null). Only a receipt that fails BOTH shapes is refused.
-      const data = await res.json().catch(() => null);
-      const receipt = parseSubscribeReceipt(data);
-      if (!receipt) { setErr(t("obBillErrIncomplete")); setBusy(false); return; }
-      if (receipt.kind === "trial") { onTrialStarted(receipt.trialEnd); return; }
+      const data = res.ok ? await res.json().catch(() => null) : null;
+      const receipt = res.ok ? parseSubscribeReceipt(data) : null;
+      // Round 2 review (MAJOR-1 + MINOR-1) — every outcome funnels through one classifier so the
+      // routing decision is pinned by a unit test rather than read off these branches. "already" is
+      // the explicit 409 landing (fix round 1, MAJOR-2) — the card is already attached, so a
+      // generic "checkout failed" would be the wrong cause. "unknown" covers any other non-2xx, a
+      // 2xx whose body didn't parse, and a 2xx that parsed but matched neither successful shape —
+      // none of these can support "you have not been charged", which is what obBillErrIncomplete
+      // used to assert here.
+      const outcome = classifySubscribeAttempt({ phase: "response", status: res.status, ok: res.ok, receipt });
+      if (outcome.kind === "already") { onAlreadyActive(); return; }
+      if (outcome.kind === "unknown") { setErr(t("obBillErrUnknown")); setBusy(false); return; }
+      if (outcome.kind === "trial") { onTrialStarted(outcome.trialEnd); return; }
       onPurchaseActive();
     } catch {
-      setErr(t("obBillErr"));
+      // Round 2 review (MINOR-1) — this exception fires strictly AFTER the POST above was
+      // dispatched (a network drop or timeout while awaiting/reading the response), so the charge's
+      // outcome is genuinely unknown — never a proof nothing happened. A failure BEFORE any request
+      // to our own gateway is sent (the Stripe confirmSetup step above, outside this try) keeps the
+      // honest not-charged copy (obBillErr) instead.
+      const outcome = classifySubscribeAttempt({ phase: "exception" });
+      if (outcome.kind === "unknown") setErr(t("obBillErrUnknown"));
       setBusy(false);
     }
   }

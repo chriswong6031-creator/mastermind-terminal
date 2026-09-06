@@ -19,7 +19,10 @@
  * no-trial success as first-class outcomes.
  */
 import { describe, it, expect } from "vitest";
-import { parseSubscribeReceipt, isPlausibleTrialEnd, sanitizeStashTrial } from "@/lib/billingReceipt";
+import {
+  parseSubscribeReceipt, isPlausibleTrialEnd, sanitizeStashTrial,
+  classifySubscribeAttempt, selectDoneBillingLine, type SubscribeReceipt,
+} from "@/lib/billingReceipt";
 
 const VALID = {
   status: "trialing",
@@ -161,5 +164,83 @@ describe("D7 — trial_end must be a plausible DATE, not merely a number", () =>
   it("accepts the plausible window's edges", () => {
     expect(parseSubscribeReceipt({ ...VALID, trial_end: 1_577_836_800 })).not.toBeNull();  // 2020-01-01
     expect(parseSubscribeReceipt({ ...VALID, trial_end: 4_102_444_800 })).not.toBeNull();  // 2100-01-01
+  });
+});
+
+// ── Round 2 review — MAJOR-1 + MINOR-1 + MINOR-2 ──────────────────────────────────────────────
+//
+// MAJOR-1: the fail-closed refusal branch used to assert a money fact it could not know — an
+// unparseable-or-no-receipt 2xx rendered obBillErrIncomplete, "You have not been charged". That is
+// the exact assertion obBillErrUnknown exists to avoid on the non-2xx branch (fix round 1,
+// MAJOR-2). classifySubscribeAttempt is the single place StepBilling now asks "what happened", so
+// this is pinned once, at the source of truth, rather than by reading JSX branches.
+//
+// MINOR-1: a network/timeout exception thrown AFTER the POST to /complete was dispatched carries
+// the identical uncertainty — the request may have reached the gateway and created the
+// subscription before the response leg failed. Only a failure BEFORE any request is sent (the
+// earlier Stripe confirmSetup step, untouched here) may keep the honest "not charged" copy.
+describe("MAJOR-1 (round 2) — an unparseable/no-receipt 2xx is UNKNOWN, never 'not charged'", () => {
+  it("a 2xx whose body parses into neither receipt shape is UNKNOWN", () => {
+    expect(classifySubscribeAttempt({ phase: "response", status: 200, ok: true, receipt: null }))
+      .toEqual({ kind: "unknown" });
+  });
+
+  it("a 2xx whose body failed to parse at all (data === null) is UNKNOWN", () => {
+    // Mirrors `res.json().catch(() => null)` — the caller passes `receipt: null` identically to
+    // the no-receipt-shape case above; both are "cannot prove anything happened".
+    expect(classifySubscribeAttempt({ phase: "response", status: 200, ok: true, receipt: null }))
+      .not.toEqual({ kind: "incomplete" }); // there is no such outcome any more
+  });
+
+  it("the explicit 409 landing stays its own outcome, distinct from unknown", () => {
+    expect(classifySubscribeAttempt({ phase: "response", status: 409, ok: false, receipt: null }))
+      .toEqual({ kind: "already" });
+  });
+
+  it("any other non-2xx is unknown (fix round 1, MAJOR-2 — unchanged)", () => {
+    expect(classifySubscribeAttempt({ phase: "response", status: 500, ok: false, receipt: null }))
+      .toEqual({ kind: "unknown" });
+  });
+
+  it("a verified trial receipt still resolves to trial, carrying the epoch through", () => {
+    const trial: SubscribeReceipt = { kind: "trial", subscriptionId: "sub_x", trialEnd: 1_787_000_000 };
+    expect(classifySubscribeAttempt({ phase: "response", status: 200, ok: true, receipt: trial }))
+      .toEqual({ kind: "trial", trialEnd: 1_787_000_000 });
+  });
+
+  it("a verified no-trial active receipt still resolves to active", () => {
+    const active: SubscribeReceipt = { kind: "active", subscriptionId: "sub_y" };
+    expect(classifySubscribeAttempt({ phase: "response", status: 200, ok: true, receipt: active }))
+      .toEqual({ kind: "active" });
+  });
+});
+
+describe("MINOR-1 — a post-dispatch exception is UNKNOWN, never 'not charged'", () => {
+  it("an exception thrown after the POST was dispatched routes to unknown", () => {
+    expect(classifySubscribeAttempt({ phase: "exception" })).toEqual({ kind: "unknown" });
+  });
+});
+
+describe("MINOR-2 — the plan-active confirmation renders regardless of confirmPending", () => {
+  it("a genuine no-trial purchase is confirmed even while confirmPending (unconfirmed email) is true", () => {
+    expect(selectDoneBillingLine({ trialActive: false, planActivated: true, confirmPending: true }))
+      .toBe("planActive");
+  });
+
+  it("planActivated with confirmPending false still confirms (unchanged case)", () => {
+    expect(selectDoneBillingLine({ trialActive: false, planActivated: true, confirmPending: false }))
+      .toBe("planActive");
+  });
+
+  it("trialActive still wins over planActivated when somehow both are true", () => {
+    expect(selectDoneBillingLine({ trialActive: true, planActivated: true, confirmPending: false }))
+      .toBe("trial");
+  });
+
+  it("the generic 'ready' line stays gated on confirmPending — it never claims 'all set' early", () => {
+    expect(selectDoneBillingLine({ trialActive: false, planActivated: false, confirmPending: true }))
+      .toBeNull();
+    expect(selectDoneBillingLine({ trialActive: false, planActivated: false, confirmPending: false }))
+      .toBe("ready");
   });
 });

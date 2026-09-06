@@ -101,3 +101,73 @@ export function sanitizeStashTrial(
   const plausibleEnd = trialEnd !== null && isPlausibleTrialEnd(trialEnd) ? trialEnd : null;
   return { trialActive: trialActive === true && plausibleEnd !== null, trialEnd: plausibleEnd };
 }
+
+/**
+ * Round 2 review — MAJOR-1 + MINOR-1.
+ *
+ * `StepBilling`'s submit handler used to route TWO genuinely different situations through the same
+ * "you have not been charged" copy (`obBillErrIncomplete`):
+ *
+ *   - a 2xx response whose body doesn't parse into either successful receipt shape (MAJOR-1) — the
+ *     gateway accepted the request, so a subscription may well have been created; this consumer
+ *     simply cannot prove it either way.
+ *   - an exception thrown while awaiting/reading the response to a POST that was already sent
+ *     (MINOR-1) — a network drop or timeout AFTER dispatch carries the identical uncertainty.
+ *
+ * Both are the same "we don't know" class the non-2xx branch already routes to `obBillErrUnknown`
+ * (fix round 1, MAJOR-2) — asserting "not charged" here would repeat the exact defect that branch
+ * exists to avoid. Only a failure BEFORE any request to our own gateway is sent (the earlier Stripe
+ * confirmSetup step, untouched — it runs before this function is ever called) may keep the honest
+ * not-charged copy.
+ *
+ * `classifySubscribeAttempt` is the one place that decision is made, so it can be pinned by a unit
+ * test instead of read off JSX branches.
+ */
+export type SubscribeAttempt =
+  | { phase: "response"; status: number; ok: boolean; receipt: SubscribeReceipt | null }
+  | { phase: "exception" };
+
+export type SubscribeOutcome =
+  | { kind: "already" }
+  | { kind: "trial"; trialEnd: number }
+  | { kind: "active" }
+  | { kind: "unknown" };
+
+export function classifySubscribeAttempt(attempt: SubscribeAttempt): SubscribeOutcome {
+  if (attempt.phase === "exception") return { kind: "unknown" };
+  // The explicit "already subscribed" landing (fix round 1, MAJOR-2) — the card is already
+  // attached, so this gets its own no-error landing, never a generic failure message.
+  if (attempt.status === 409) return { kind: "already" };
+  // Any other non-2xx, OR a 2xx whose body failed to parse, OR a 2xx that parsed but matched
+  // neither successful shape: none of these can support a claim about money either way.
+  if (!attempt.ok) return { kind: "unknown" };
+  if (!attempt.receipt) return { kind: "unknown" };
+  if (attempt.receipt.kind === "trial") return { kind: "trial", trialEnd: attempt.receipt.trialEnd };
+  return { kind: "active" };
+}
+
+/**
+ * Round 2 review — MINOR-2.
+ *
+ * `StepDone`'s purchase confirmation (`obDonePlanActive`) used to be suppressed whenever
+ * `confirmPending` was true, while the trial confirmation line was not — so a charged no-trial
+ * purchase by a user who hadn't yet confirmed their email reached Done with NO purchase
+ * confirmation at all, only the "confirm your email" line.
+ *
+ * `planActivated` can only ever be set true by `billingPurchaseActive()` (OnboardingSheet), which
+ * only fires once `classifySubscribeAttempt` above has resolved a completed POST to `{kind:
+ * "active"}` — so, unlike the generic "ready" line (which must never claim "you're all set" while
+ * confirmation is outstanding), it is trustworthy regardless of `confirmPending`.
+ */
+export type DoneBillingLine = "trial" | "planActive" | "ready" | null;
+
+export function selectDoneBillingLine(opts: {
+  trialActive: boolean;
+  planActivated?: boolean;
+  confirmPending: boolean;
+}): DoneBillingLine {
+  if (opts.trialActive) return "trial";
+  if (opts.planActivated) return "planActive";
+  if (opts.confirmPending) return null;
+  return "ready";
+}

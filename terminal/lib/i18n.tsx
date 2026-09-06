@@ -1821,13 +1821,10 @@ export const LEX: Record<string, [string, string]> = {
   obBillLoading: ["Preparing secure checkout…", "正在准备安全结账…"],
   obBillRetry: ["Try again", "重试"],
   obBillErr: ["We couldn't set up checkout. Please try again.", "无法准备结账，请重试。"],
-  // D7 — the gateway answered 2xx with a body that does not prove a subscription started. On a
-  // money surface that is a FAILURE, not a success: the user stays on Billing with a retry, and is
-  // told plainly that nothing was charged.
-  obBillErrIncomplete: [
-    "We couldn't confirm your subscription started. You have not been charged — please try again.",
-    "我们无法确认订阅是否已开始。尚未向你扣款——请重试。",
-  ],
+  // Round 2 review (MAJOR-1 + MINOR-1) — a 2xx response that doesn't prove a subscription started
+  // (unparseable body, or a body matching neither successful receipt shape), and a network/timeout
+  // exception AFTER the POST to /complete was dispatched, both land here rather than on a copy that
+  // asserts "you have not been charged" — this consumer genuinely cannot prove that either way.
   // Fix round 1 (MAJOR-2) — the card was already attached and /complete answered a non-2xx that is
   // NOT the explicit "already subscribed" 409 (that gets onAlreadyActive() + no error string
   // instead). We genuinely do not know whether the charge landed, so this names the real

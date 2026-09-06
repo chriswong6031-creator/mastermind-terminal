@@ -1,5 +1,6 @@
 "use client";
 import { useLang, useT } from "@/lib/i18n";
+import { selectDoneBillingLine } from "@/lib/billingReceipt";
 import type { PlanKey } from "./types";
 
 export interface StepDoneProps {
@@ -47,6 +48,11 @@ export default function StepDone({ firstName, email, confirmPending, trialActive
     : t("obDoneTitle");
 
   const tierName = plan === "essential" ? t("obPlanInsider") : plan === "pro" ? t("obPlanPro") : "";
+  // Round 2 review (MINOR-2): planActivated can only be set true by a completed purchase POST
+  // (OnboardingSheet's billingPurchaseActive), so — unlike the generic "ready" line below — it is
+  // trustworthy even while confirmPending (unconfirmed email) is still true. See
+  // lib/billingReceipt.ts's selectDoneBillingLine for the full rationale.
+  const doneLine = selectDoneBillingLine({ trialActive, planActivated, confirmPending });
 
   return (
     <div className="ob-fade">
@@ -61,7 +67,7 @@ export default function StepDone({ firstName, email, confirmPending, trialActive
               {t("obDoneConfirm").replace("{email}", email || "your inbox")}
             </p>
           )}
-          {trialActive && (
+          {doneLine === "trial" && (
             <p className="ob-done-line">
               {trialEnd != null && isUpcoming(trialEnd, Date.now())
                 ? t("obDoneTrial")
@@ -75,11 +81,12 @@ export default function StepDone({ firstName, email, confirmPending, trialActive
           )}
           {/* Fix round 1 (BLOCKER-1): a genuine no-trial purchase (e.g. essential) — charged,
               plan live, no trial to claim. Distinct from the generic "desk is set" line so the
-              screen actually confirms the purchase. */}
-          {!confirmPending && !trialActive && planActivated && (
+              screen actually confirms the purchase. Round 2 (MINOR-2): shown regardless of
+              confirmPending — see selectDoneBillingLine. */}
+          {doneLine === "planActive" && (
             <p className="ob-done-line">{t("obDonePlanActive").replace("{tier}", tierName)}</p>
           )}
-          {!confirmPending && !trialActive && !planActivated && (
+          {doneLine === "ready" && (
             <p className="ob-done-line">{t("obDoneReady")}</p>
           )}
           {/* D5 — quiet, honest, and not a blocker: the account is ready either way, but the flow
