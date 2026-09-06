@@ -484,7 +484,7 @@ export default function IndicatorsModal({
           <span className="imod-copy">
             <span className="imod-titleline">
               <strong>{entry.label}</strong>
-              <span className={`im-tier im-tier-${SUITE_TIER_LABEL[entry.tier]}`}>{planTierLabel(entry.tier, lang)}</span>
+              <span className={`im-tier im-tier-${SUITE_TIER_LABEL[entry.tier]}`}>{planTierLabel(entry.tier, t, lang)}</span>
             </span>
             <span className="imod-crumb">
               {suiteLabel}<span aria-hidden="true"> / </span>{surfaceLabel}
@@ -734,7 +734,7 @@ export default function IndicatorsModal({
                 <span className="ipreset-copy">
                   <span className="ipreset-title">
                     <strong>{label}</strong>
-                    <span className={`im-tier im-tier-${SUITE_TIER_LABEL[top]}`}>{planTierLabel(top, lang)}</span>
+                    <span className={`im-tier im-tier-${SUITE_TIER_LABEL[top]}`}>{planTierLabel(top, t, lang)}</span>
                     {added && (
                       <small className={`ipreset-status${current ? "" : " custom"}`}>
                         {current
@@ -758,7 +758,7 @@ export default function IndicatorsModal({
                     >
                       <div className="ipreset-profile-top">
                         <span>{String(index + 1).padStart(2, "0")}</span>
-                        <small className={`im-tier im-tier-${SUITE_TIER_LABEL[preset.minTier]}`}>{planTierLabel(preset.minTier, lang)}</small>
+                        <small className={`im-tier im-tier-${SUITE_TIER_LABEL[preset.minTier]}`}>{planTierLabel(preset.minTier, t, lang)}</small>
                       </div>
                       <strong>{lang === "zh" ? preset.name.zh : preset.name.en}</strong>
                       <p>{lang === "zh" ? preset.description.zh : preset.description.en}</p>

@@ -18,10 +18,10 @@ export function regimeLabel(
 export const TRUST_TIER_LABEL = {
   "event-edge": ["Event edge", "事件驱动"],
   technical: ["Technical", "技术面"],
-  context: ["Context", "背景"],
+  context: ["Context", "背景因素"],
   reversal: ["Reversal", "反转"],
   screen: ["Screen", "筛选"],
-  validated: ["Reviewed", "已复核"],
+  validated: ["Passed checks", "已通过检验"],
 } as const;
 
 export type TrustTier = keyof typeof TRUST_TIER_LABEL;
@@ -34,20 +34,14 @@ export function trustTierLabel(value: string | null | undefined, lang: PlainLang
 }
 
 export const MACRO_DURATION_ZH: Record<string, string> = {
-  "Long-duration": "长久期",
-  "Short-duration": "短久期",
   "Duration-neutral": "久期中性",
 };
 
 export const MACRO_REGIME_ZH: Record<string, string> = {
-  "rate headwind": "利率逆风",
-  "rate tailwind": "利率顺风",
   "rate-neutral": "利率中性",
 };
 
 export const MACRO_INFLATION_ZH: Record<string, string> = {
-  "Inflation hedge": "通胀对冲",
-  "Negative inflation beta": "通胀负相关",
   "Inflation-neutral": "通胀中性",
 };
 
@@ -60,18 +54,23 @@ export function macroChipLabel(
   return en;
 }
 
-export const PLAN_TIER_LABEL = {
-  free: ["Free", "免费版"],
-  essential: ["Essential", "Essential"],
-  pro: ["Pro", "Pro"],
+/** Onboarding LEX keys — `essential` displays as Essential via `obPlanInsider`. */
+export const PLAN_TIER_TKEY = {
+  free: "obPlanFree",
+  essential: "obPlanInsider",
+  pro: "obPlanPro",
 } as const;
 
-export type PlanTier = keyof typeof PLAN_TIER_LABEL;
+export type PlanTier = keyof typeof PLAN_TIER_TKEY;
 
-export function planTierLabel(value: string, lang: PlainLang): string {
-  const pair = PLAN_TIER_LABEL[value as PlanTier];
-  if (!pair) return notClassified(lang);
-  return lang === "zh" ? pair[1] : pair[0];
+export function planTierLabel(
+  value: string,
+  t: (key: string, fallback?: string) => string,
+  lang: PlainLang,
+): string {
+  const tkey = (PLAN_TIER_TKEY as Record<string, string>)[value];
+  if (!tkey) return notClassified(lang);
+  return t(tkey, "") || notClassified(lang);
 }
 
 export const CLASSIC_INDICATOR_CATEGORIES = [
