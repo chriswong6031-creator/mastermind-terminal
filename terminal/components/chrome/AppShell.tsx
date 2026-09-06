@@ -99,7 +99,11 @@ export default function AppShell({
           can call useOnboarding() directly — Billing's "choose a plan" and the
           guest path both hand off to the signup sheet. */}
       <SettingsProvider identity={identity}>
-      <div className="app2 obs obs-ambient">
+      {/* `analysis-shell` scopes the .mobilebar z-index override in globals.css to this one
+          route: only /analysis can show the fixed full-screen Company Intelligence overlay
+          (.fin-pane--workspace) that would otherwise cover the hamburger below 861px. Every
+          other AppShell route keeps the shared chrome's historical z-index unchanged. */}
+      <div className={`app2 obs obs-ambient${path.startsWith("/analysis") ? " analysis-shell" : ""}`}>
         <MobileNav email={email} fromMacro={fromMacro} onBack={onBack} />
         <header className="topbar">
           {fromMacro ? <DashboardBackButton onClick={onBack} /> : <BrandLockup />}

@@ -2350,11 +2350,21 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .app.fs .chart-body{height:auto;flex:1}
 
 /* ===== mobile top bar + symbol bar + drawer (hidden on desktop) ===== */
-/* z-index:95 (not the historical 30): must outrank .fin-pane's fixed full-screen overlay
- * (z-index:90, app/fin.css) so the hamburger stays hit-testable at <=860px while a workspace
- * pane (e.g. Company Intelligence) is open full-screen underneath it — see terminal/e2e/
- * company-intelligence-rctx.spec.ts "Menu" click. Still below every app-modal scrim (100+). */
-.mobilebar{display:none;position:relative;align-items:center;height:52px;padding:0 8px;border-bottom:1px solid var(--line);background:var(--bg);gap:2px;flex:none;z-index:95}
+.mobilebar{display:none;position:relative;align-items:center;height:52px;padding:0 8px;border-bottom:1px solid var(--line);background:var(--bg);gap:2px;flex:none;z-index:30}
+/* Analysis-shell-only override (review ruling: scope, don't move the shared chrome rule).
+ * Only the Analysis workspace's `.fin-pane--workspace` (Company Intelligence, app/fin.css)
+ * falls back to the fixed full-screen `.fin-pane{z-index:90}` at <=860px, covering the
+ * shared `.mobilebar` (z-index:30) and making the hamburger unclickable — see terminal/e2e/
+ * company-intelligence-rctx.spec.ts "Menu" click. `.analysis-shell` is the app2 root class
+ * AppShell applies only on /analysis (components/chrome/AppShell.tsx), so every other
+ * workspace (Discover/Options/Scripts/Alerts/Portfolio/Admin) keeps the historical z-index:30
+ * chrome — this does not change shared nav geometry, only raises it where the one colliding
+ * overlay exists. Still below every app-modal scrim (100+).
+ * Measured before/after at 390x844 (mobile): before, a real "Menu" button click while the
+ * Company Intelligence pane was open dispatched to `.fin-pane` (button not hit-testable,
+ * spec's `.click()` timed out); after, the same click opens `.m-drawer` as expected — see
+ * PR #490 for the before/after proof. */
+.analysis-shell .mobilebar{z-index:95}
 .m-ic{width:38px;height:38px;border-radius:var(--r-md);display:grid;place-items:center;color:var(--text-2)}
 .m-ic:active,.m-ic:hover{background:var(--panel-2);color:var(--text)}.m-ic svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.9}
 /* prominent mobile "back to dashboard" pill (left slot when the user came from macro) */
