@@ -111,7 +111,15 @@ export function subscribe(f: string, sub: Subscriber): () => void {
   // Late subscriber: hand over the frame we already hold so it renders at once — no
   // first-paint wait, and no upstream read of its own. This is the replay the old
   // per-connection `await loadFlowFresh(f)` was paying for on every single connection.
-  if (p.lastFrame) sub(p.lastFrame);
+  if (p.lastFrame) {
+    sub(p.lastFrame);
+  } else if (!p.inFlight) {
+    // Cold or previously-failed producer: nothing to replay. Kick a read so THIS subscriber
+    // still gets a first paint on recovery rather than waiting up to a full POLL_MS cadence —
+    // the overlap guard in refresh() makes this free when a read is already in flight (e.g.
+    // the creation-time kick above), so it can never stack a second upstream call.
+    void refresh(f, p);
+  }
   return () => detach(f, sub);
 }
 

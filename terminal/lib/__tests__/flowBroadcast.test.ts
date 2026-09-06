@@ -95,6 +95,60 @@ describe("flow broadcaster — one producer per feed key", () => {
     u1(); u2();
   });
 
+  it("kicks a fresh read for a late subscriber when the producer is cold — no wait for a full cadence", async () => {
+    // The producer's own creation-time read rejects (upstream down at t=0), so lastFrame
+    // stays null. A second subscriber joining before the next 15s tick must not be starved
+    // until POLL_MS — it should trigger its own kick, gated by the same overlap guard.
+    let releaseFirst: (() => void) | null = null;
+    loadFlowFresh.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { releaseFirst = () => reject(new Error("down")); }),
+    );
+
+    const first = collector();
+    const u1 = subscribe("feed", first.sink);
+    await settle();
+    expect(loadFlowFresh).toHaveBeenCalledTimes(1);
+    releaseFirst!();
+    await settle();
+    expect(first.frames).toHaveLength(0);
+
+    // Second subscriber joins a cold producer (no lastFrame). Upstream has recovered.
+    loadFlowFresh.mockImplementation(async () => payload({ asof: "T1", v: 1 }));
+    const late = collector();
+    const u2 = subscribe("feed", late.sink);
+    await settle();
+
+    // The kick fired — a second upstream read, well before the 15s cadence — and BOTH
+    // subscribers now hold the recovered frame instead of the late one waiting on POLL_MS.
+    expect(loadFlowFresh).toHaveBeenCalledTimes(2);
+    expect(late.frames).toHaveLength(1);
+    expect(first.frames).toHaveLength(1);
+
+    u1(); u2();
+  });
+
+  it("does not stack a second read when a late subscriber joins while the creation-time read is still in flight", async () => {
+    let release: (v: unknown) => void = () => {};
+    loadFlowFresh.mockImplementation(() => new Promise((r) => { release = r; }));
+
+    const first = collector();
+    const u1 = subscribe("feed", first.sink);
+    // Join before the creation-time read has resolved — producer is cold AND inFlight.
+    const late = collector();
+    const u2 = subscribe("feed", late.sink);
+    await settle();
+
+    // Overlap guard: still exactly one upstream call, not two.
+    expect(loadFlowFresh).toHaveBeenCalledTimes(1);
+
+    release(payload({ asof: "T1", v: 1 }));
+    await settle();
+    expect(first.frames).toHaveLength(1);
+    expect(late.frames).toHaveLength(1);
+
+    u1(); u2();
+  });
+
   it("keys producers by feed key, so distinct keys still read independently", async () => {
     loadFlowFresh.mockImplementation(async (f: string) => payload({ asof: "T1", f }));
 
