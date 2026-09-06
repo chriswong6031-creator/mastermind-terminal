@@ -41,7 +41,7 @@ export default function AlertDetail({ data, lang, onClose }: { data: AlertDetail
   };
   return (
     <div className={s.detailScrim} onClick={onClose}>
-    <div className={s.detail} data-alerts-state="drillback" role="dialog" aria-modal="true" aria-label={lang === "zh" ? "警报详情" : "Alert detail"} onClick={(e) => e.stopPropagation()}>
+    <div className={s.detail} data-cockpit-state="drillback" role="dialog" aria-modal="true" aria-label={lang === "zh" ? "警报详情" : "Alert detail"} onClick={(e) => e.stopPropagation()}>
       <button type="button" className={s.detailClose} onClick={onClose}>{lang === "zh" ? "关闭" : "Close"}</button>
       <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "条件" : "Condition"}</span><span>{data.conditionText}</span></div>
       <div className={s.detailFact}>

@@ -626,6 +626,12 @@ export default function AlertsView({ email, panelOnly, listOnly }: { email: stri
               >{reloading ? "…" : "↻"}</button>
             )}
           </div>
+          {/* `err` is also set by rearm()/del() below, which live in THIS panel — the create-flow
+              error span sits in `newAlertPanel`, a component chunk `listOnly` never renders (see
+              the `if (listOnly)` return above), so a rearm/delete failure had nowhere to display
+              and CI's own e2e/alerts-failure-states.spec.ts:117 caught it (the row was correctly
+              restored, but the "delete failed" message never appeared anywhere on the page). */}
+          {err && <span className="alert-err" style={{ color: "var(--danger)", fontSize: 12.5, display: "block", padding: "0 15px" }}>{err}</span>}
           {!loaded && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>{t("loadingAlerts")}</div>}
           {/* Signed out: say so plainly. "No alerts yet" would be a lie — we cannot see theirs. */}
           {loaded && signedOut && (

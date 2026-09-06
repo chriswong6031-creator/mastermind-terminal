@@ -23,7 +23,7 @@ export default function AlertTimeline({
         <span>{lang === "zh" ? "近期活动" : "Recent activity"}</span>
         {rows.length > 0 && <span className={s.moduleCount}>{rows.length} {lang === "zh" ? "条" : "shown"}</span>}
       </div>
-      <div className={s.spine} data-alerts-state={spineState}>
+      <div className={s.spine} data-cockpit-state={spineState}>
         {rows.map((r) => (
           <div
             key={r.id} className={s.row} role="button" tabIndex={0} data-delivery={r.delivery}

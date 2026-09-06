@@ -137,7 +137,7 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
   // (major: B1 calm-zero copy was reachable only under monitor==="watching").
   const zeroAlerts = view.emptyAction === "add_watch" && !listUnavailable;
 
-  // One state per screen: the spine's `data-alerts-state` and the rendered explanatory module
+  // One state per screen: the spine's `data-cockpit-state` and the rendered explanatory module
   // below must always agree on which fact is being reported. Degraded (the engine's own run
   // health) outranks no-coverage (which symbols could be priced) because an unevaluable-symbol
   // count sourced from a STALE run cannot be trusted more than the staleness itself (minor: the
@@ -162,7 +162,15 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
   }, []);
 
   return (
-    <main className="main2"><div className="pg" data-alerts-state={dataState}>
+    // `data-cockpit-state` (never `data-alerts-state`) — the existing-alerts management panel
+    // (AlertsView.tsx, mounted below as `children`) already owns `data-alerts-state` for ITS
+    // OWN facts ("unavailable"/"stale"/"empty"), predating this cockpit. Composing both on one
+    // page under the SAME attribute name made `[data-alerts-state="unavailable"]` match two
+    // unrelated elements at once — a real Playwright strict-mode violation that broke every
+    // test in the pre-existing e2e/alerts-failure-states.spec.ts (CI red on this PR's head,
+    // 2026-09-06). A distinct attribute name for the cockpit's OWN spine state keeps the two
+    // vocabularies from colliding on a page that legitimately renders both.
+    <main className="main2"><div className="pg" data-cockpit-state={dataState}>
       <AnswerLine
         monitor={view.monitor} lastAttemptAt={view.lastAttemptAt} lastAttemptState={view.lastAttemptState}
         lastSuccessAt={view.lastSuccessAt} lastSuccessState={view.lastSuccessState}
@@ -185,6 +193,13 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
       {!listUnavailable && view.monitor !== "unknown" && zeroAlerts && (
         <div className={s.module} data-alerts-module="calm-empty">
           <p className={s.calmBody}>{copy("empty.calm.zero", L)}</p>
+          {/* META-CEO ruling (round-2, B1 reach): calm-zero outranks never_ran/degraded so this
+              module is reachable from a brand-new account, but engine health must not go silent
+              — exactly one extra line, never the fuller never_ran/degraded paragraph (this
+              account has nothing to monitor yet either way, so "Check again" would be moot). */}
+          {(view.monitor === "never_ran" || view.monitor === "degraded") && (
+            <p className={s.calmBody}>{copy(view.monitor === "never_ran" ? "empty.calm.zero.neverRan" : "empty.calm.zero.degraded", L)}</p>
+          )}
           <button type="button" className={`btn btn-primary ${s.emptyAction}`} onClick={scrollToAddWatch}>{copy("empty.calm.action", L)}</button>
         </div>
       )}

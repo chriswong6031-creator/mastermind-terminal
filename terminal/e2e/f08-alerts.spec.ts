@@ -40,7 +40,7 @@ async function installFixtures(page: Page, opts: {
   }));
 }
 
-const dataState = (page: Page, name: string) => page.locator(`[data-alerts-state="${name}"]`).first();
+const dataState = (page: Page, name: string) => page.locator(`[data-cockpit-state="${name}"]`).first();
 
 test("calm requires a recent successful run receipt", async ({ page }) => {
   await setLang(page, "en");
@@ -125,6 +125,32 @@ test("a zero-alert user with a stale/never-ran engine still gets calm copy, neve
   await expect(dataState(page, "calm-empty")).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText("You are not watching anything yet.")).toBeVisible();
   await expect(page.getByText("Check again")).toHaveCount(0);
+  // META-CEO ruling (round-2, B1 reach): calm-zero must not go silent about engine health —
+  // exactly one extra line, distinct from the fuller degraded.body paragraph (which stays
+  // unreachable here since the zero-alert case wins).
+  await expect(page.getByText("Last check did not complete.")).toBeVisible();
+});
+
+test("a zero-alert user with a never-ran engine gets the calm copy plus one honest line, never silence about engine health", async ({ page }) => {
+  await setLang(page, "en");
+  await installFixtures(page, { alerts: [], runsState: "READ_OK_ZERO" });
+  await page.goto("/alerts");
+  await expect(page.locator('[data-monitor-state="never_ran"]')).toBeVisible({ timeout: 45_000 });
+  await expect(dataState(page, "calm-empty")).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByText("You are not watching anything yet.")).toBeVisible();
+  await expect(page.getByText("We have not checked yet.")).toBeVisible();
+});
+
+test("ZH zero-alert + degraded engine renders the ZH one-line honesty addendum", async ({ page }) => {
+  await setLang(page, "zh");
+  await installFixtures(page, {
+    alerts: [],
+    run: { lane: "alerts_engine", run_id: "r0", started_at: "2020-01-01T00:00:00Z", concluded_at: "2020-01-01T00:05:00Z", outcome: "success", lane_cadence_budget_s: 300 },
+    runsState: "READ_OK", lastSuccessAt: "2020-01-01T00:05:00Z",
+  });
+  await page.goto("/alerts");
+  await expect(page.locator('[data-monitor-state="degraded"]')).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByText("上次检查未完成。")).toBeVisible();
 });
 
 test("create an alert through the real form, see it in the list, and delete it", async ({ page }) => {
@@ -280,7 +306,7 @@ for (const vp of [1440, 390] as const) {
     await page.setViewportSize({ width: vp, height: vp === 390 ? 844 : 900 });
     await page.goto("/alerts");
     await page.locator('[data-delivery="sent"]').first().click();
-    await expect(page.locator('[data-alerts-state="drillback"]')).toBeVisible({ timeout: 45_000 });
+    await expect(page.locator('[data-cockpit-state="drillback"]')).toBeVisible({ timeout: 45_000 });
     await crop(page, vp, `${vp}-en-drillback`);
   });
 
@@ -321,7 +347,7 @@ for (const vp of [1440, 390] as const) {
       await page.setViewportSize({ width: vp, height: 900 });
       await page.goto("/alerts");
       await page.locator('[data-delivery="sent"]').first().click();
-      await expect(page.locator('[data-alerts-state="drillback"]')).toBeVisible({ timeout: 45_000 });
+      await expect(page.locator('[data-cockpit-state="drillback"]')).toBeVisible({ timeout: 45_000 });
       await crop(page, vp, `${vp}-zh-drillback`);
     });
 
@@ -332,7 +358,7 @@ for (const vp of [1440, 390] as const) {
       });
       await page.setViewportSize({ width: vp, height: 900 });
       await page.goto("/alerts");
-      await expect(page.locator('[data-alerts-state="calm-empty"]').first()).toBeVisible({ timeout: 45_000 });
+      await expect(page.locator('[data-cockpit-state="calm-empty"]').first()).toBeVisible({ timeout: 45_000 });
       await crop(page, vp, `${vp}-en-calm-empty`);
     });
 
@@ -347,7 +373,7 @@ for (const vp of [1440, 390] as const) {
       });
       await page.setViewportSize({ width: vp, height: 900 });
       await page.goto("/alerts");
-      await expect(page.locator('[data-alerts-state="no-coverage"]').first()).toBeVisible({ timeout: 45_000 });
+      await expect(page.locator('[data-cockpit-state="no-coverage"]').first()).toBeVisible({ timeout: 45_000 });
       await crop(page, vp, `${vp}-en-no-coverage`);
     });
 
@@ -356,7 +382,7 @@ for (const vp of [1440, 390] as const) {
       await installFixtures(page, { alertsStatus: 503, runsState: "READ_UNAVAILABLE" });
       await page.setViewportSize({ width: vp, height: 900 });
       await page.goto("/alerts");
-      await expect(page.locator('[data-alerts-state="unavailable"]').first()).toBeVisible({ timeout: 45_000 });
+      await expect(page.locator('[data-cockpit-state="unavailable"]').first()).toBeVisible({ timeout: 45_000 });
       await crop(page, vp, `${vp}-en-unavailable`);
     });
   }

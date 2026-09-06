@@ -8,7 +8,7 @@ import { copy } from "@/lib/alertsView";
 export default function CouldNotWatch({ count, lang }: { count: number; lang: "en" | "zh" }) {
   if (count <= 0) return null;
   return (
-    <div className={s.module} data-alerts-state="no-coverage">
+    <div className={s.module} data-cockpit-state="no-coverage">
       <div className={s.moduleHead}>
         <span>{lang === "zh" ? "今天未能监控的内容" : "What we could not watch today"}</span>
         <span className={s.moduleCount}>{count} {lang === "zh" ? "个来源" : "sources"}</span>

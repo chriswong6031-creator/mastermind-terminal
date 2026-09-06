@@ -245,6 +245,12 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
   "empty.calm": ["No recent activity. We are still watching {n} conditions for you.", "近期没有活动，仍在为你监控 {n} 项条件。"],
   "empty.calm.zero": ["You are not watching anything yet.", "你还没有设置任何监控。"],
   "empty.calm.action": ["Add a watch", "添加监控"],
+  // META-CEO ruling (round-2, B1 reach): the calm-zero module wins over never_ran/degraded so a
+  // brand-new zero-alert account never sees "Check again" — but it must not go SILENT about
+  // engine health either. One extra line, never the fuller never_ran/degraded paragraph (this
+  // account has nothing to monitor yet either way).
+  "empty.calm.zero.neverRan": ["We have not checked yet.", "我们还没有检查过。"],
+  "empty.calm.zero.degraded": ["Last check did not complete.", "上次检查未完成。"],
   "degraded.body": ["We kept your conditions, but we cannot promise they were checked. The last successful check was {t}.", "你的条件仍在，但我们无法保证已被检查。上次成功检查是 {t}。"],
   "degraded.action": ["Check again", "重新检查"],
   "neverRan.body": ["We have not recorded a check yet. New conditions start being checked within about five minutes.", "我们尚未记录到任何检查。新建条件通常在约五分钟内开始检查。"],
