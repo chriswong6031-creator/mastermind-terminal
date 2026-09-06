@@ -498,21 +498,50 @@ def test_dotenv_parser_reads_quoted_and_exported_values_and_ignores_comments(tmp
 def test_pat_never_appears_in_curl_argv_or_in_stdout(tmp_path, capsys):
     calls = []
 
-    def fake_subprocess_run(argv, input=None, capture_output=True, text=True):
-        calls.append((argv, input))
+    def fake_subprocess_run(argv, **kwargs):
+        calls.append((argv, kwargs))
         class R:
             stdout = "[]\n200"
             stderr = ""
             returncode = 0
         return R()
 
-    runner = CurlRunner("ref123", "sbp_super_secret_token", runner=fake_subprocess_run)
+    token = "sbp_super_secret_token"
+    runner = CurlRunner("ref123", token, runner=fake_subprocess_run)
     runner("select 1")
-    argv, stdin = calls[0]
-    assert "sbp_super_secret_token" not in argv
-    assert "sbp_super_secret_token" in stdin
+    argv, kwargs = calls[0]
+    # review-#516 round-3 MAJOR 2: `token not in argv` is ELEMENT-WISE list
+    # membership -- it can never fail for a leak embedded INSIDE one longer
+    # argv element (e.g. an extra "-H X-Leak: Bearer <token>" header).
+    # MEASURED: adding that header to CurlRunner's own argv left the old
+    # assertion `1 passed`. A substring check over every element is required.
+    assert not any(token in a for a in argv)
+    # The token IS expected in kwargs["input"] -- that is the `--config -`
+    # stdin channel curl reads its Authorization header from, precisely so
+    # the token never has to appear in argv. Every OTHER string-valued kwarg
+    # passed to the runner must not carry it either.
+    assert token in kwargs["input"]
+    for key, value in kwargs.items():
+        if key == "input":
+            continue
+        if isinstance(value, str):
+            assert token not in value
     captured = capsys.readouterr()
-    assert "sbp_super_secret_token" not in captured.out
+    assert token not in captured.out
+
+
+def test_pat_element_wise_argv_check_would_have_missed_a_leaked_header_substring_check_catches_it():
+    # Positive control for the fix above: reproduce the reviewer's mutation
+    # (an extra "-H X-Leak: Bearer <token>" argv element) directly against a
+    # captured argv list. The OLD check (`token not in argv`) still "passes"
+    # against it -- the NEW check (`not any(token in a for a in argv)`)
+    # correctly fails, proving the fix actually catches the leak the old
+    # check could not.
+    token = "sbp_super_secret_token"
+    argv = ["curl", "-H", f"X-Leak: Bearer {token}", "--data-binary", "@x.json"]
+    assert token not in argv  # the OLD (broken) check: still "passes" here
+    with pytest.raises(AssertionError):
+        assert not any(token in a for a in argv)  # the NEW check: correctly fails
 
 
 def test_transport_is_curl_not_urllib():
@@ -534,13 +563,19 @@ def test_transport_is_curl_not_urllib():
 
 
 def test_dry_run_makes_zero_calls(tmp_path, capsys, monkeypatch):
-    # review-#516 round-2 MAJOR 3: the frozen rule ((b) "--dry-run makes NO
-    # network call") names the acceptance test explicitly ("test asserts
-    # subprocess/curl is never invoked") -- the pre-fix version of this test
-    # only checked rc==0 and a printed string, which passes even if run_dry
-    # secretly shelled out. Patch subprocess.run itself to explode if called
-    # so this test would fail (not silently pass) against any future run_dry
-    # change that adds a real network call.
+    # review-#516 round-2 MAJOR 3 / round-3 MAJOR 1: the frozen rule ((b)
+    # "--dry-run makes NO network call") names the acceptance test explicitly
+    # ("test asserts subprocess/curl is never invoked"). Patching
+    # `subprocess.run` alone used to be INERT: CurlRunner bound
+    # `runner=subprocess.run` as a default argument evaluated once at import
+    # time, so a CurlRunner built with no explicit `runner=` (the real
+    # code path -- see main()) never picked up the patch. MEASURED (mutation):
+    # a `CurlRunner(...)("select 1")` call inserted at the top of run_dry made
+    # a LIVE call to api.supabase.com instead of raising here. The source fix
+    # (CurlRunner.__call__ now resolves `self.runner or subprocess.run` at
+    # CALL time) makes the patch reach an unmodified CurlRunner; this test
+    # both exercises the dry-run contract AND proves, with a positive
+    # control in the same test, that the patch is actually live.
     def _boom(*_a, **_kw):
         raise AssertionError("--dry-run must never invoke subprocess/curl")
 
@@ -551,6 +586,21 @@ def test_dry_run_makes_zero_calls(tmp_path, capsys, monkeypatch):
     assert rc == 0
     captured = capsys.readouterr()
     assert "no network call was made." in captured.out
+
+    # Positive control: the SAME patch must fire when run_apply is invoked
+    # with a real CurlRunner -- constructed with NO runner= override, i.e.
+    # exactly the code path that used to be inert. If the source fix above
+    # were reverted (or absent), run_apply's first pre-readback call would
+    # instead reach the real api.supabase.com and this assertion would never
+    # see the AssertionError -- proving the spy is live, not decorative.
+    live_runner = CurlRunner("ref123", "tok")
+    with pytest.raises(AssertionError, match="dry-run must never invoke subprocess/curl"):
+        run_apply(
+            f,
+            runner=live_runner,
+            receipt_path=tmp_path / "positive_control_receipt.json",
+            project_ref="ref123",
+        )
 
 
 def test_every_migration_on_disk_passes_the_guard_or_is_legacy():
@@ -645,6 +695,59 @@ def test_pre_readback_undefined_table_error_is_still_swallowed(tmp_path):
     assert receipt["status"] == "failed_readback"
 
 
+def test_pre_readback_stale_project_ref_404_is_not_swallowed_as_missing_relation(tmp_path):
+    # review-#516 round-3 MINOR 1: a stale/wrong --project-ref 404s on the
+    # very first pre-readback call with a message like "Project ref123 does
+    # not exist" -- the old bare "does not exist" substring match swallowed
+    # that as "expected before a create" and let the apply proceed against
+    # the wrong project. _is_missing_relation_error must require the
+    # SQLSTATE (42P01) or actual relation/table/index/policy wording.
+    f = tmp_path / "0013_widget.sql"
+    f.write_text(FIXTURE_READBACK_DOES_NOT_NAME_THE_OBJECT)
+
+    class StaleProjectRefApi:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, sql):
+            self.calls.append(sql)
+            raise ApiError(404, '{"message": "Project ref123 does not exist"}')
+
+    fake = StaleProjectRefApi()
+    receipt_path = tmp_path / "receipt.json"
+    rc = run_apply(f, runner=fake, receipt_path=receipt_path, project_ref="ref123")
+    assert rc == 5
+    assert len(fake.calls) == 1  # never proceeded past the first pre-readback call
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["status"] == "failed"
+    assert "does not exist" in receipt["error"]
+
+
+def test_dry_run_honours_an_explicit_project_ref_override_like_apply_does(monkeypatch, tmp_path, capsys):
+    # review-#516 round-3 MINOR 3: main() used to call
+    # `run_dry(args.path, allow_legacy=...)` with no --project-ref at all, so
+    # the dry-run "project:" line ignored an explicit operator override even
+    # though --apply validates the same override via resolve_credentials()
+    # (main():867). run_dry now honours it the same way: a matching override
+    # is shown, a conflicting one is refused (same stale-.env guard as
+    # --apply), never silently ignored.
+    monkeypatch.setenv("SUPABASE_ACCESS_TOKEN", "sbp_test_token")
+    monkeypatch.setenv("SUPABASE_PROJECT_REF", "realref")
+    f = tmp_path / "0013_alert_runs_outbox.sql"
+    f.write_text(FIXTURE_0013)
+
+    rc = run_dry(f, project_ref="realref")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "project: realref" in out
+
+    rc2 = run_dry(f, project_ref="wrongref")
+    assert rc2 == 3
+    out2 = capsys.readouterr().out
+    assert "does not match the resolved ref" in out2
+    assert "no network call was made." in out2
+
+
 FIXTURE_LEGACY_NO_READBACK = """
 create table if not exists public.legacy_thing (id int);
 """
@@ -711,6 +814,10 @@ def test_pat_never_appears_in_receipt_or_in_curl_stderr_on_api_error(tmp_path, c
     assert token not in receipt_text
     captured = capsys.readouterr()
     assert token not in captured.out
+    # review-#516 round-3 MINOR 2: frozen rule (a) names a stderr grep
+    # explicitly ("test greps the receipt and captured stderr for the
+    # token"); no test previously read captured.err at all.
+    assert token not in captured.err
 
 
 def test_allow_legacy_still_refuses_a_non_idempotent_non_legacy_file(tmp_path):

@@ -74,12 +74,16 @@ def _is_missing_relation_error(exc: "ApiError") -> bool:
     that is nothing but an error string.
     """
     body = (exc.body or "").lower()
-    return (
-        '"code":"42p01"' in body
-        or '"code": "42p01"' in body
-        or "does not exist" in body
-        or "undefined_table" in body
-    )
+    if '"code":"42p01"' in body or '"code": "42p01"' in body or "undefined_table" in body:
+        return True
+    # A message-only match must still name the SPECIFIC failure this guard
+    # exists for -- an undefined relation/table/index/policy -- never a bare
+    # "does not exist". A stale/wrong --project-ref 404s with a message like
+    # "Project ref123 does not exist", and that must fail the run, not be
+    # swallowed as "expected before a create" (review-#516 round-3 MINOR 1).
+    if "does not exist" in body and re.search(r"\b(relation|table|index|policy)\b", body):
+        return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -414,11 +418,18 @@ class CurlRunner:
         project_ref: str,
         token: str,
         timeout: int = 120,
-        runner: Callable[..., "subprocess.CompletedProcess"] = subprocess.run,
+        runner: Optional[Callable[..., "subprocess.CompletedProcess"]] = None,
     ) -> None:
         self.project_ref = project_ref
         self.token = token
         self.timeout = timeout
+        # `runner` is resolved at CALL time (see __call__), never bound here
+        # as a default-argument value -- a default of `subprocess.run` is
+        # evaluated ONCE, at import time, so a test that does
+        # `monkeypatch.setattr(subprocess, "run", fake)` after that point can
+        # never reach a CurlRunner constructed with no explicit `runner=`
+        # (review-#516 round-3 MAJOR 1, measured: a mutant call inserted into
+        # run_dry made a live network call and the patched spy never fired).
         self.runner = runner
 
     def __call__(self, sql: str) -> Any:
@@ -438,7 +449,12 @@ class CurlRunner:
                 "--config", "-",
             ]
             stdin_config = f'header = "Authorization: Bearer {self.token}"\n'
-            proc = self.runner(argv, input=stdin_config, capture_output=True, text=True)
+            # Looked up fresh on every call -- `self.runner or subprocess.run`
+            # reads the `subprocess` module's CURRENT `run` attribute, so a
+            # test-time monkeypatch of `subprocess.run` is honoured even when
+            # no explicit `runner=` was passed to the constructor.
+            run_fn = self.runner or subprocess.run
+            proc = run_fn(argv, input=stdin_config, capture_output=True, text=True)
             # Redact the token out of anything the child process handed back
             # BEFORE it can reach an ApiError message -- ApiError.body flows
             # straight into the receipt's "error" field (the PR's own proof
@@ -579,7 +595,7 @@ def _guard(text: str, statements: list[str], *, allow_legacy: bool, path) -> lis
     raise MigrationError("; ".join(findings))
 
 
-def run_dry(path: Path, *, allow_legacy: bool = False, out=None) -> int:
+def run_dry(path: Path, *, allow_legacy: bool = False, project_ref: Optional[str] = None, out=None) -> int:
     if out is None:
         out = sys.stdout
     text = path.read_text()
@@ -588,9 +604,17 @@ def run_dry(path: Path, *, allow_legacy: bool = False, out=None) -> int:
 
     print(f"supabase_apply -- {path}", file=out)
     try:
-        token, ref = resolve_credentials()
-    except SystemExit4:
-        ref = "<unresolved: no credentials -- dry-run does not need them>"
+        token, ref = resolve_credentials(project_ref)
+    except SystemExit4 as exc:
+        # An explicit --project-ref that CONFLICTS with the resolved .env/env
+        # ref is the same stale-ref guard --apply enforces -- refuse loudly
+        # instead of printing the override with no complaint (review-#516
+        # round-3 MINOR 3: dry-run used to drop --project-ref entirely).
+        if project_ref and "does not match the resolved ref" in exc.message:
+            print(f"guards:  REFUSED -- {exc.message}", file=out)
+            print("no network call was made.", file=out)
+            return 3
+        ref = project_ref or "<unresolved: no credentials -- dry-run does not need them>"
     print(f"project: {ref}    mode: dry-run", file=out)
     print(f"sha256:  {digest}", file=out)
 
@@ -861,7 +885,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
 
     if args.dry_run:
-        return run_dry(args.path, allow_legacy=args.allow_legacy)
+        return run_dry(args.path, allow_legacy=args.allow_legacy, project_ref=args.project_ref)
 
     try:
         token, ref = resolve_credentials(args.project_ref)
