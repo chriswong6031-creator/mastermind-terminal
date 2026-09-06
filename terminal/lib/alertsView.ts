@@ -238,7 +238,11 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
   "delivery.failed": ["Could not send", "发送失败"],
   "delivery.suppressed": ["Not sent — your settings", "未发送 —— 按你的设置"],
   "delivery.unconfirmed": ["Cannot confirm", "无法确认"],
-  "empty.calm": ["No alerts since you were last here. We are still watching {n} conditions for you.", "自上次访问以来没有新警报，仍在为你监控 {n} 项条件。"],
+  // Never claims a last-visit timestamp this surface does not track (major: "since you were
+  // last here" was an unsupported claim — AlertTimeline's own "Recent activity" header makes no
+  // such claim, and this copy shipped the exact claim the module documents itself as unable to
+  // support).
+  "empty.calm": ["No recent activity. We are still watching {n} conditions for you.", "近期没有活动，仍在为你监控 {n} 项条件。"],
   "empty.calm.zero": ["You are not watching anything yet.", "你还没有设置任何监控。"],
   "empty.calm.action": ["Add a watch", "添加监控"],
   "degraded.body": ["We kept your conditions, but we cannot promise they were checked. The last successful check was {t}.", "你的条件仍在，但我们无法保证已被检查。上次成功检查是 {t}。"],

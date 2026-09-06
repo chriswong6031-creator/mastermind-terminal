@@ -86,7 +86,10 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
     return {
       id: r.alertId, time: t,
       subject: r.outboxRow?.payload?.ticker || alert?.symbol || "—",
-      verdict: r.outboxRow?.payload?.condition_plain || (L === "zh" ? "条件" : "Condition"),
+      // Minor: a fired-event payload's own plain-language description wins when present; the
+      // fallback must describe the actual condition (conditionText), never the content-free
+      // literal "Condition"/"条件" this used to render for every row lacking a payload.
+      verdict: r.outboxRow?.payload?.condition_plain || conditionText(alert?.condition, alert?.symbol, L),
       delivery: r.delivery, foldedRows: r.foldedRows,
     };
   });
@@ -127,13 +130,32 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
   // never a fabricated calm zero (blocker: nulls printed as zero).
   const listUnavailable = alertsState === "READ_UNAVAILABLE";
 
+  // A successful read that found zero alerts is a definitive, known-good fact — there is nothing
+  // to monitor, so the engine's own run health (fresh/stale/never-ran) is moot for THIS user. This
+  // must outrank never-ran/degraded so a brand-new zero-alert account (the account most likely to
+  // have no fresh run receipt yet) still gets the calm "add a watch" copy, never "Check again"
+  // (major: B1 calm-zero copy was reachable only under monitor==="watching").
+  const zeroAlerts = view.emptyAction === "add_watch" && !listUnavailable;
+
+  // One state per screen: the spine's `data-alerts-state` and the rendered explanatory module
+  // below must always agree on which fact is being reported. Degraded (the engine's own run
+  // health) outranks no-coverage (which symbols could be priced) because an unevaluable-symbol
+  // count sourced from a STALE run cannot be trusted more than the staleness itself (minor: the
+  // two used to disagree — spine said "no-coverage" while the visible paragraph said "degraded").
   const dataState: "unavailable" | "never-ran" | "no-coverage" | "degraded" | "calm-empty" | "calm" =
     view.monitor === "unknown" ? "unavailable"
     : listUnavailable ? "unavailable"
+    : zeroAlerts ? "calm-empty"
     : view.monitor === "never_ran" ? "never-ran"
-    : (view.noCoverageCount ?? 0) > 0 ? "no-coverage"
     : view.monitor === "degraded" ? "degraded"
+    : (view.noCoverageCount ?? 0) > 0 ? "no-coverage"
     : timelineRows.length === 0 ? "calm-empty" : "calm";
+
+  // Same precedence, expressed as booleans so each module's own render condition can never
+  // disagree with `dataState` above (that disagreement — a "no-coverage" spine next to a visible
+  // "degraded" paragraph — was minor: read-state overloading).
+  const showNeverRan = dataState === "never-ran";
+  const showDegraded = dataState === "degraded";
 
   const scrollToAddWatch = useCallback(() => {
     document.getElementById("alerts-manage")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -147,31 +169,41 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
         coverageCount={view.coverage.count} lang={L}
       />
       {/* Every empty/degraded module below is exactly one calm paragraph + exactly one wired
-          action. Priority order: an outright outage (monitor unknown, or the list read itself
-          unavailable) always wins over the calmer "degraded"/"never ran" readings, because it is
-          the least certain thing we can honestly say. */}
+          action, in a real button variant (btn-primary for a constructive action, btn-ghost for
+          a recovery retry — never a bare `.btn` with only margin, which rendered as unstyled text
+          at button metrics with no visible border or background). Priority order: an outright
+          outage (monitor unknown, or the list read itself unavailable) always wins over the
+          calmer "zero alerts"/"degraded"/"never ran" readings, because it is the least certain
+          thing we can honestly say; a known-zero alert list then wins over engine-health readings
+          because there is nothing to monitor either way (major: B1). */}
       {(view.monitor === "unknown" || listUnavailable) && (
         <div className={s.module} data-alerts-module="outage">
           <p className={s.calmBody}>{copy(view.monitor === "unknown" ? "outage.body" : "listUnavailable.body", L)}</p>
-          <button type="button" className={`btn ${s.emptyAction}`} onClick={load}>{copy("outage.action", L)}</button>
+          <button type="button" className={`btn btn-ghost ${s.emptyAction}`} onClick={load}>{copy("outage.action", L)}</button>
         </div>
       )}
-      {view.monitor !== "unknown" && !listUnavailable && view.monitor === "never_ran" && (
+      {!listUnavailable && view.monitor !== "unknown" && zeroAlerts && (
+        <div className={s.module} data-alerts-module="calm-empty">
+          <p className={s.calmBody}>{copy("empty.calm.zero", L)}</p>
+          <button type="button" className={`btn btn-primary ${s.emptyAction}`} onClick={scrollToAddWatch}>{copy("empty.calm.action", L)}</button>
+        </div>
+      )}
+      {showNeverRan && (
         <div className={s.module} data-alerts-module="never-ran">
           <p className={s.neverRanBody}>{copy("neverRan.body", L)}</p>
-          <button type="button" className={`btn ${s.emptyAction}`} onClick={load}>{copy("neverRan.action", L)}</button>
+          <button type="button" className={`btn btn-ghost ${s.emptyAction}`} onClick={load}>{copy("neverRan.action", L)}</button>
         </div>
       )}
-      {view.monitor !== "unknown" && !listUnavailable && view.monitor === "degraded" && (
+      {showDegraded && (
         <div className={s.module} data-alerts-module="degraded">
           <p className={s.degradedBody}>{copy("degraded.body", L, { t: view.lastSuccessAt ? new Date(view.lastSuccessAt).toLocaleTimeString(L === "zh" ? "zh-CN" : "en-US") : copy(view.lastSuccessState === "READ_UNAVAILABLE" ? "null.cannotRead" : "null.notRecorded", L) })}</p>
-          <button type="button" className={`btn ${s.emptyAction}`} onClick={load}>{copy("degraded.action", L)}</button>
+          <button type="button" className={`btn btn-ghost ${s.emptyAction}`} onClick={load}>{copy("degraded.action", L)}</button>
         </div>
       )}
-      {view.monitor === "watching" && !listUnavailable && timelineRows.length === 0 && (
+      {dataState === "calm-empty" && !zeroAlerts && (
         <div className={s.module} data-alerts-module="calm-empty">
-          <p className={s.calmBody}>{(view.coverage.count ?? 0) === 0 ? copy("empty.calm.zero", L) : copy("empty.calm", L, { n: view.coverage.count ?? 0 })}</p>
-          <button type="button" className={`btn ${s.emptyAction}`} onClick={scrollToAddWatch}>{copy("empty.calm.action", L)}</button>
+          <p className={s.calmBody}>{copy("empty.calm", L, { n: view.coverage.count ?? 0 })}</p>
+          <button type="button" className={`btn btn-ghost ${s.emptyAction}`} onClick={scrollToAddWatch}>{copy("empty.calm.action", L)}</button>
         </div>
       )}
       <AlertTimeline rows={timelineRows} lang={L} onOpen={setOpenId} spineState={dataState} />

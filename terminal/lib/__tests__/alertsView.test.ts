@@ -36,6 +36,41 @@ describe("monitorFor — calm requires proof-of-run", () => {
   });
 });
 
+describe("buildAlertsView emptyAction — RED-first proof of major 2 (calm-zero unreachable)", () => {
+  // A zero-alert account is the account MOST LIKELY to have no fresh run receipt yet — the fix
+  // must make `emptyAction: "add_watch"` reachable independent of monitor (watching/degraded/
+  // never_ran/unknown), never gated behind "the engine happens to be healthy right now".
+  const zeroInput = (over: Partial<Parameters<typeof buildAlertsView>[0]> = {}) => ({
+    alerts: [], alertsState: "READ_OK_ZERO" as const, run: null,
+    lastSuccessAt: null, runsState: "READ_OK_ZERO" as const,
+    outbox: [], outboxState: "READ_OK_ZERO" as const, now: NOW, ...over,
+  });
+  it("never_ran monitor + zero alerts -> emptyAction add_watch", () => {
+    const v = buildAlertsView(zeroInput());
+    expect(v.monitor).toBe("never_ran");
+    expect(v.emptyAction).toBe("add_watch");
+  });
+  it("degraded monitor + zero alerts -> STILL add_watch, never check_again", () => {
+    const v = buildAlertsView(zeroInput({ run: baseRun({ concluded_at: "2020-01-01T00:00:00Z" }), runsState: "READ_OK" }));
+    expect(v.monitor).toBe("degraded");
+    expect(v.emptyAction).toBe("add_watch");
+  });
+  it("watching monitor + zero alerts -> add_watch (unchanged happy path)", () => {
+    const v = buildAlertsView(zeroInput({ run: baseRun(), runsState: "READ_OK" }));
+    expect(v.monitor).toBe("watching");
+    expect(v.emptyAction).toBe("add_watch");
+  });
+  it("non-zero alerts + degraded monitor -> check_again, never add_watch", () => {
+    const v = buildAlertsView({
+      alerts: [{ id: "a1", active: true, created_at: "2026-01-01T00:00:00Z", condition: { type: "price" } }],
+      alertsState: "READ_OK", run: baseRun({ concluded_at: "2020-01-01T00:00:00Z" }), runsState: "READ_OK",
+      lastSuccessAt: "2020-01-01T00:00:00Z", outbox: [], outboxState: "READ_OK_ZERO", now: NOW,
+    });
+    expect(v.monitor).toBe("degraded");
+    expect(v.emptyAction).toBe("check_again");
+  });
+});
+
 // The evaluator (ingest/alerts_engine.py Supa.fire) always stamps `triggered` as this shape —
 // {at, value, note} — never a bare boolean. Every "fired" fixture below uses it so these tests
 // actually exercise the production shape, not a fictional one a boolean-only predicate would pass.

@@ -109,6 +109,24 @@ test("a zero-alert user gets calm copy, never 'cannot read'", async ({ page }) =
   await expect(page.getByText("cannot read")).toHaveCount(0);
 });
 
+test("a zero-alert user with a stale/never-ran engine still gets calm copy, never 'Check again'", async ({ page }) => {
+  // Major: buildAlertsView's emptyAction was computed correctly but nothing consumed it — the
+  // calm-zero module was gated on monitor==="watching", so the account MOST LIKELY to have no
+  // fresh run receipt yet (a brand-new zero-alert account) saw "Check again" instead of the calm
+  // "You are not watching anything yet." + "Add a watch" copy this was written for.
+  await setLang(page, "en");
+  await installFixtures(page, {
+    alerts: [],
+    run: { lane: "alerts_engine", run_id: "r0", started_at: "2020-01-01T00:00:00Z", concluded_at: "2020-01-01T00:05:00Z", outcome: "success", lane_cadence_budget_s: 300 },
+    runsState: "READ_OK", lastSuccessAt: "2020-01-01T00:05:00Z", // stale — monitor would be "degraded"
+  });
+  await page.goto("/alerts");
+  await expect(page.locator('[data-monitor-state="degraded"]')).toBeVisible({ timeout: 45_000 });
+  await expect(dataState(page, "calm-empty")).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByText("You are not watching anything yet.")).toBeVisible();
+  await expect(page.getByText("Check again")).toHaveCount(0);
+});
+
 test("create an alert through the real form, see it in the list, and delete it", async ({ page }) => {
   // Blocker: the create/manage surface must actually work end-to-end on the composed page —
   // the cockpit's inline create form is a SEPARATE component instance from the existing-alerts
@@ -194,7 +212,19 @@ async function crop(page: Page, width: number, name: string) {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
   // Full-page, not viewport-only: the evidence matrix must show the cockpit AND the existing
   // management panel (pause/re-arm/delete affordances) below it — a viewport crop leaves the
-  // management panel "below the frame" and unproven (blocker: zero visual evidence of it).
+  // management panel "below the frame" and unproven (blocker: zero visual evidence of it). BUT
+  // the page's own scrollable region is `.pg` (overflow-y:auto inside a 100vh desktop grid —
+  // app/globals.css `.app2{height:100vh}` / `.pg{overflow-y:auto}`), not the document — so
+  // Playwright's `fullPage` (which measures document.documentElement, never an inner scroll
+  // container) silently produces a viewport-sized image whenever `.pg`'s OWN content exceeds its
+  // box, with no error. Assert there is nothing left below the fold before trusting the capture,
+  // so a future regression that makes a fixture's content taller than the viewport FAILS the
+  // test instead of silently shipping another clipped "full-page" crop.
+  const overflow = await page.evaluate(() => {
+    const pg = document.querySelector(".pg") as HTMLElement | null;
+    return (pg?.scrollHeight ?? 0) - (pg?.clientHeight ?? 0);
+  });
+  expect(overflow, `${name}: .pg content is ${overflow}px taller than its box — fullPage would clip it`).toBeLessThanOrEqual(2);
   await page.screenshot({ path: `${PROOF_DIR}/${name}.png`, fullPage: true });
 }
 
@@ -229,11 +259,15 @@ for (const vp of [1440, 390] as const) {
   test(`crop: ${vp}-en-degraded`, async ({ page }) => {
     await setLang(page, "en");
     await installFixtures(page, {
-      alerts: [], run: STALE_RUN, runsState: "READ_OK", lastSuccessAt: STALE_RUN.concluded_at,
+      // A NON-empty alerts list: a zero-alert account now shows the calm-zero copy regardless of
+      // engine health (major: B1), so a degraded crop needs a real watched alert to actually
+      // render the degraded module rather than being pre-empted by the zero-alert case.
+      alerts: [WATCHING_ALERT], run: STALE_RUN, runsState: "READ_OK", lastSuccessAt: STALE_RUN.concluded_at,
     });
     await page.setViewportSize({ width: vp, height: vp === 390 ? 844 : 900 });
     await page.goto("/alerts");
     await expect(page.locator('[data-monitor-state="degraded"]')).toBeVisible({ timeout: 45_000 });
+    await expect(page.locator('[data-alerts-module="degraded"]')).toBeVisible({ timeout: 45_000 });
     await crop(page, vp, `${vp}-en-degraded`);
   });
 
@@ -265,11 +299,15 @@ for (const vp of [1440, 390] as const) {
   test(`crop: ${vp}-zh-degraded`, async ({ page }) => {
     await setLang(page, "zh");
     await installFixtures(page, {
-      alerts: [], run: STALE_RUN, runsState: "READ_OK", lastSuccessAt: STALE_RUN.concluded_at,
+      // A NON-empty alerts list: a zero-alert account now shows the calm-zero copy regardless of
+      // engine health (major: B1), so a degraded crop needs a real watched alert to actually
+      // render the degraded module rather than being pre-empted by the zero-alert case.
+      alerts: [WATCHING_ALERT], run: STALE_RUN, runsState: "READ_OK", lastSuccessAt: STALE_RUN.concluded_at,
     });
     await page.setViewportSize({ width: vp, height: vp === 390 ? 844 : 900 });
     await page.goto("/alerts");
     await expect(page.locator('[data-monitor-state="degraded"]')).toBeVisible({ timeout: 45_000 });
+    await expect(page.locator('[data-alerts-module="degraded"]')).toBeVisible({ timeout: 45_000 });
     await crop(page, vp, `${vp}-zh-degraded`);
   });
 
@@ -301,7 +339,10 @@ for (const vp of [1440, 390] as const) {
     test(`crop: ${vp}-en-no-coverage`, async ({ page }) => {
       await setLang(page, "en");
       await installFixtures(page, {
-        alerts: [], run: { ...FRESH_RUN, unevaluable_n: 2 }, runsState: "READ_OK",
+        // Non-empty alerts list, same reason as the degraded crop above: a zero-alert account
+        // now shows calm-zero copy first (major: B1), so this needs a real watched alert to
+        // actually reach the no-coverage module.
+        alerts: [WATCHING_ALERT], run: { ...FRESH_RUN, unevaluable_n: 2 }, runsState: "READ_OK",
         lastSuccessAt: FRESH_RUN.concluded_at,
       });
       await page.setViewportSize({ width: vp, height: 900 });
