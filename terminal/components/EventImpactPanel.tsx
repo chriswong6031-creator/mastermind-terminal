@@ -51,6 +51,14 @@ const COPY: Record<string, [string, string]> = {
   ],
   eiShowAll: ["Show all {n} events", "显示全部 {n} 个事件"],
   eiRetry: ["Try again", "重试"],
+  eiUnauthenticated: [
+    "Sign in to see what's coming for your positions.",
+    "登录后即可查看你持仓将面临的事件。",
+  ],
+  eiStale: [
+    "The calendar source had a temporary outage; showing the last successful read instead of a fresh one.",
+    "宏观日历来源暂时不可用；以下为最近一次成功读取的数据，非最新。",
+  ],
 };
 
 function fill(template: string, vars: Record<string, string | number>): string {
@@ -90,8 +98,19 @@ export default function EventImpactPanel({ positions, holdingsUnreadable }: Even
     setBusy(true);
     try {
       const res = await fetch("/api/event-impact", { cache: "no-store" });
-      const body = (await res.json()) as EventImpactRead;
-      setRead(body);
+      if (res.ok) {
+        const body = (await res.json()) as EventImpactRead;
+        setRead(body);
+        return;
+      }
+      // A non-2xx response (401 unauthenticated, 429 rate-limited, 5xx) must never render as a
+      // silently blank panel (MAJOR: route/UI honesty parity). 401's body IS a typed
+      // EventImpactRead already; anything else is disclosed as a typed "can't read" state.
+      if (res.status === 401) {
+        setRead({ state: "unauthenticated" });
+        return;
+      }
+      setRead({ state: "calendar_unreadable", detail: `http_${res.status}` });
     } catch {
       setRead({ state: "calendar_unreadable", detail: "network" });
     } finally {
@@ -141,6 +160,12 @@ export default function EventImpactPanel({ positions, holdingsUnreadable }: Even
           <button type="button" className={s.more} onClick={retry} disabled={busy}>
             {c("eiRetry")}
           </button>
+        </p>
+      )}
+
+      {read.state === "unauthenticated" && (
+        <p className={s.cannotRead} role="status" data-testid="event-impact-unauthenticated">
+          {c("eiUnauthenticated")}
         </p>
       )}
 
@@ -205,6 +230,11 @@ export default function EventImpactPanel({ positions, holdingsUnreadable }: Even
 
       {(read.state === "ok" || read.state === "no_events") && (
         <>
+          {read.stale && (
+            <p className={s.disclosure} data-testid="event-impact-stale" role="status">
+              {c("eiStale")}
+            </p>
+          )}
           <p className={s.disclosure}>{presentUnjoinable(read.unjoinable, lang)}</p>
           <p className={s.disclosure}>{fill(c("eiSourceLine"), { asof: read.asof || "—" })}</p>
         </>

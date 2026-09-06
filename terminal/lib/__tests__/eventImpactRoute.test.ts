@@ -134,4 +134,34 @@ describe("event-impact route", () => {
     expect(first.status).toBe(200);
     expect((await first.json()).stale).toBeUndefined();
   });
+
+  it("7. stale-through-outage is disclosed, never served silently as fresh (MAJOR)", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockResolvedValueOnce(okCtx());
+      const { GET } = await import("@/app/api/event-impact/route");
+      const first = await GET(new Request("http://x/api/event-impact"));
+      expect((await first.json()).stale).toBeUndefined();
+
+      // Advance past the 900_000ms TTL so the next call is a genuine cache-miss window,
+      // then fail the upstream fetch: the cached artifact must still be served, but flagged.
+      vi.advanceTimersByTime(900_001);
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 500 }));
+      const second = await GET(new Request("http://x/api/event-impact"));
+      expect(second.status).toBe(200);
+      const body = await second.json();
+      expect(body.stale).toBe(true);
+      expect(body.state === "ok" || body.state === "no_events").toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("8. a 401 body matches the typed EventImpactRead 'unauthenticated' state (MAJOR: UI parity)", async () => {
+    mockSession = null;
+    const { GET } = await import("@/app/api/event-impact/route");
+    const res = await GET(new Request("http://x/api/event-impact"));
+    const body = await res.json();
+    expect(body).toEqual({ state: "unauthenticated" });
+  });
 });

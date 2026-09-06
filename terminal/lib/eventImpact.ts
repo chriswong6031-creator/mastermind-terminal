@@ -55,11 +55,17 @@ export type EventImpactRead =
   | { readonly state: "holdings_unreadable" }
   | { readonly state: "calendar_unreadable"; readonly detail: string }
   | { readonly state: "no_holdings" }
+  // The route's own auth check (401) — carried through so a signed-out fetch never
+  // renders as a silently blank panel (MAJOR: route/UI honesty parity).
+  | { readonly state: "unauthenticated" }
   | {
       readonly state: "no_events";
       readonly asof: string;
       readonly heldTickers: number;
       readonly unjoinable: readonly UnjoinableSource[];
+      // Set only when the route served a cached artifact past its TTL because the
+      // upstream fetch failed — never served silently as fresh (MAJOR: stale-through-outage).
+      readonly stale?: boolean;
     }
   | {
       readonly state: "ok";
@@ -67,6 +73,7 @@ export type EventImpactRead =
       readonly heldTickers: number;
       readonly events: readonly EventTouch[];
       readonly unjoinable: readonly UnjoinableSource[];
+      readonly stale?: boolean;
     };
 
 export const NOT_STATED: Readonly<Record<Lang, string>> = {
