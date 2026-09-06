@@ -3,6 +3,9 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from scripts.merge_on_green import (
     ARM_LABEL,
@@ -212,7 +215,12 @@ def test_newer_trusted_pending_supersedes_green_even_when_wrong_app_is_newest():
     assert REQUIRED_CHECKS[0] in verdict.detail
 
 
-JOB_LEVEL_PERMISSIONS = re.compile(r"(?m)^[ \t]+permissions:")
+# A raw text/regex scan over the workflow's source cannot tell a real YAML
+# `permissions:` key from the same word inside a shell heredoc or a comment,
+# and it forbids ever reflowing the top-level block or adding an unrelated
+# top-level key elsewhere in the file (reviewer minors #2/#3 on PR #487: the
+# guard must reason about the parsed document, not its bytes).
+JOB_LEVEL_PERMISSIONS_TEXT_ONLY = re.compile(r"(?m)^[ \t]+permissions:")
 
 
 def ci_workflow_text() -> str:
@@ -221,28 +229,59 @@ def ci_workflow_text() -> str:
     ).read_text(encoding="utf-8")
 
 
-def test_candidate_ci_explicitly_pins_read_only_contents_permission():
-    workflow = ci_workflow_text()
-    pre_jobs, separator, _ = workflow.partition("\njobs:\n")
+def ci_workflow() -> dict[str, Any]:
+    return yaml.safe_load(ci_workflow_text())
 
-    assert separator, "ci.yml must retain one top-level jobs mapping"
-    assert "\npermissions:\n  contents: read\n" in pre_jobs
-    assert workflow.count("\npermissions:\n") == 1
-    # That count only matches a column-0 key, so an indented job-level block is
-    # invisible to it. No candidate job may widen the top-level read-only grant.
-    assert JOB_LEVEL_PERMISSIONS.search(workflow) is None
+
+def job_level_permissions(workflow: dict[str, Any]) -> dict[str, Any]:
+    """Map of job name -> its own `permissions:` value, for every job that
+    declares one. Parses the real document, so comments, shell text inside a
+    `run:` block, and formatting cannot produce a false positive or a false
+    negative."""
+    jobs = workflow.get("jobs") or {}
+    return {
+        name: job["permissions"]
+        for name, job in jobs.items()
+        if isinstance(job, dict) and "permissions" in job
+    }
+
+
+def test_a_text_only_regex_guard_misfires_on_a_comment_or_shell_block():
+    # Demonstrates the defect the semantic checks below replace: the raw-text
+    # guard flags a job step whose `run:` shell text merely contains the word
+    # "permissions:" at non-zero indent, even though no real YAML key exists.
+    decorated = (
+        "name: CI\npermissions:\n  contents: read\njobs:\n"
+        "  hub:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - run: |\n          cat <<'EOF'\n          permissions:\n"
+        "            contents: write\n          EOF\n"
+    )
+    assert yaml.safe_load(decorated)["jobs"]["hub"] is not None
+    assert JOB_LEVEL_PERMISSIONS_TEXT_ONLY.search(decorated) is not None
+    assert job_level_permissions(yaml.safe_load(decorated)) == {}
+
+
+def test_candidate_ci_explicitly_pins_read_only_contents_permission():
+    workflow = ci_workflow()
+
+    # Semantic parse, not byte position: reformatting this block or adding an
+    # unrelated top-level key elsewhere in the file cannot defeat the check.
+    assert workflow.get("permissions") == {"contents": "read"}
+    # No candidate job may widen the top-level read-only grant.
+    assert job_level_permissions(workflow) == {}
 
 
 def test_job_level_permission_elevation_is_rejected_by_the_candidate_ci_guard():
     # The guard must kill the forbidden mutation, not merely pass on today's file.
-    head, separator, jobs = ci_workflow_text().partition("\njobs:\n")
-    assert separator, "ci.yml must retain one top-level jobs mapping"
-    elevated = f"{head}{separator}  probe:\n    permissions:\n      contents: write\n{jobs}"
+    workflow = ci_workflow()
+    elevated = dict(workflow)
+    elevated["jobs"] = dict(workflow["jobs"])
+    elevated["jobs"]["probe"] = {
+        "runs-on": "ubuntu-latest",
+        "permissions": {"contents": "write"},
+    }
 
-    # The pre-existing column-0 count is blind to the elevation ...
-    assert elevated.count("\npermissions:\n") == 1
-    # ... the indent-aware guard is not.
-    assert JOB_LEVEL_PERMISSIONS.search(elevated) is not None
+    assert job_level_permissions(elevated) == {"probe": {"contents": "write"}}
 
 
 def test_green_current_head_is_sha_pinned_merged_and_deleted():
