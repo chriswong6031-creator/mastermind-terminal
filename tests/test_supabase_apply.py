@@ -31,6 +31,7 @@ from scripts.supabase_apply import (
     migration_version,
     missing_after,
     readback_statements,
+    readback_statements_detailed,
     run_apply,
     run_dry,
     split_statements,
@@ -939,14 +940,29 @@ def test_readback_statements_for_0012_thesis_objects_yields_four_select_statemen
 def test_dry_run_for_0012_readback_lists_clean_statements_with_prose_excluded(tmp_path, capsys):
     # Meta-CEO B ruling r2, requirement (3): --dry-run output must list the
     # parsed readback statements so an operator can see prose was excluded.
+    #
+    # Ruling r3 updates this test's own expectation: the block's own header
+    # paragraph (blank-line-separated from every select in this real file)
+    # is now reported via a `note: excluded` line instead of being silently
+    # absorbed -- the pre-r3 code discarded a prose paragraph inside an
+    # otherwise-kept ';'-chunk without ever recording it, the same
+    # visibility gap ruling r3's per-paragraph resolution closes for every
+    # shape, not just the ones that happened to land in an all-prose
+    # ';'-chunk. What must never happen is the header text landing inside
+    # one of the four NUMBERED statement lines.
     f = tmp_path / "0012_thesis_objects.sql"
     f.write_text(FIXTURE_0012_READBACK_BLOCK)
     rc = run_dry(f)
     assert rc == 0
     out = capsys.readouterr().out
     assert "readback query that WOULD run (4 statements):" in out
-    assert "post-apply verification" not in out.lower()
     assert "select relname, relrowsecurity" in out
+    readback_section = out.split("readback query that WOULD run (4 statements):", 1)[1]
+    numbered_lines = [ln for ln in readback_section.splitlines() if ln.strip().startswith("[0")]
+    assert len(numbered_lines) == 4
+    assert not any("post-apply verification" in ln.lower() for ln in numbered_lines)
+    assert "note: excluded" in readback_section
+    assert "post-apply verification" in readback_section.lower()
 
 
 # --- Regression tests: round-2 review (this round) on top of ruling r2 -----
@@ -979,6 +995,35 @@ def test_readback_statements_drops_a_keyword_less_prose_chunk_entirely():
     # relname = 't'"] -- the bare prose chunk survived as a "statement" and
     # would have been sent to the Management API (review-#516 MAJOR 1).
     stmts = readback_statements(FIXTURE_PROSE_ONLY_READBACK_HEADER)
+    assert stmts == ["select 1 from pg_class where relname = 't'"]
+    assert not any("post-apply verification" in s.lower() for s in stmts)
+
+
+FIXTURE_PROSE_HEADER_ADJACENT_TO_STATEMENT = """
+create table if not exists public.t (id bigint generated always as identity primary key);
+
+-- down:
+-- drop table if exists public.t;
+
+-- readback:
+-- Post-apply verification, run these manually against the target DB:
+-- select 1 from pg_class where relname = 't';
+"""
+
+
+def test_readback_statements_header_adjacent_to_statement_keeps_the_statement():
+    # Meta-CEO B ruling r3 minor: review-#516 round-2 MINOR 2 named the
+    # exact gap this closes -- the MAJOR-1 fixture above used an embedded
+    # ';' separator (the header text itself contains a ';'), which never
+    # actually exercised the split-on-';'-before-prose-check bug: the ';'
+    # inside the old header text ("verification; run ...") gave
+    # split_statements() an early break that isolated the header from the
+    # statement by accident, well before _drop_leading_prose() ever ran.
+    # This fixture is deliberately the HEADER-ADJACENT form instead: no ';'
+    # inside the header, no blank line between the header and the
+    # statement -- the exact shape of the BLOCKER (review-#516 round-2
+    # BLOCKER, the 19:2xZ production incident).
+    stmts = readback_statements(FIXTURE_PROSE_HEADER_ADJACENT_TO_STATEMENT)
     assert stmts == ["select 1 from pg_class where relname = 't'"]
     assert not any("post-apply verification" in s.lower() for s in stmts)
 
@@ -1188,3 +1233,150 @@ def test_main_wires_project_ref_through_dry_run_and_apply(monkeypatch, tmp_path,
     ])
     assert rc4 == 4
     assert len(calls) == calls_before
+
+
+# --- Regression tests: Meta-CEO B ruling r3 (review-#516 round-2 -> r3) ----
+#
+# Round-2 review on head d50b5b14 found: (BLOCKER) a readback query sharing
+# its ';'-delimited chunk with the block's own prose header, with no blank
+# line between them, was silently deleted whole -- the header-and-statement
+# chunk failed the all-or-nothing "does the chunk's first line start with a
+# keyword" gate, so the real `select` underneath the header never reached
+# the endpoint or the operator (the 19:2xZ production incident). (MAJOR) the
+# widened keyword list re-opened the prose-glued-to-SQL bug: a header whose
+# first word happens to also be a SQL keyword ("Set of checks to run after
+# apply:") was KEPT and glued onto the statement below it. Ruling r3 fixes
+# both by deciding prose vs SQL per PARAGRAPH, line-by-line, with a
+# colon-terminated heading checked and dropped BEFORE the keyword check --
+# and only splitting on ';' after that per-paragraph resolution, never
+# before.
+
+_R3_HEADERS = [
+    "Set of checks to run after apply:",
+    "Copy each query into psql:",
+    "Show these to the operator:",
+    "Call the DBA before running:",
+]
+
+
+def test_readback_header_glued_to_a_statement_is_dropped_the_statement_survives():
+    # RED-FIRST at head d50b5b14 (review-#516 round-2 BLOCKER + MAJOR): each
+    # of these headers is immediately adjacent to the readback statement --
+    # no ';', no blank line between them -- exactly the shape that shipped
+    # broken. Every header must be dropped and the real statement must
+    # survive intact, not be glued to the header and not be deleted with
+    # it.
+    for header in _R3_HEADERS:
+        text = f"""
+create table if not exists public.t (id bigint generated always as identity primary key);
+
+-- down:
+-- drop table if exists public.t;
+
+-- readback:
+-- {header}
+-- select 1 from pg_class
+"""
+        stmts = readback_statements(text)
+        assert stmts == ["select 1 from pg_class"], (header, stmts)
+
+
+def test_readback_statements_for_0012_thesis_objects_from_disk_yields_four_selects():
+    # Meta-CEO B ruling r3, acceptance test: feed the LITERAL on-disk
+    # supabase/migrations/0012_thesis_objects.sql (as it stands on
+    # origin/master -- this PR does not touch migrations) rather than a
+    # hand-transcribed fixture, so a future transcription drift can never
+    # mask a regression here.
+    text = Path("supabase/migrations/0012_thesis_objects.sql").read_text()
+    stmts = readback_statements(text)
+    assert len(stmts) == 4
+    for s in stmts:
+        assert s.strip().lower().startswith("select"), repr(s)
+    assert not any("post-apply verification" in s.lower() for s in stmts)
+
+
+def test_readback_refresh_materialized_view_with_data_is_kept_whole():
+    # Ruling r3 acceptance test: "with" is a listed keyword (a bare CTE can
+    # start a statement), but it must never be mistaken for a fresh
+    # statement boundary when it occurs mid-statement as the "with data"
+    # tail of `refresh materialized view ... with data` -- the paragraph's
+    # OWN first line already starts with the keyword "refresh", so the
+    # whole paragraph is kept unchanged.
+    text = """
+create table if not exists public.mv_src (id bigint generated always as identity primary key);
+
+-- down:
+-- drop table if exists public.mv_src;
+
+-- readback:
+-- refresh materialized view public.x with data;
+"""
+    stmts = readback_statements(text)
+    assert stmts == ["refresh materialized view public.x with data"]
+
+
+def test_readback_nested_comment_annotation_line_is_dropped():
+    # Ruling r3 acceptance test: a nested "--   -- expect ..." annotation
+    # line (already a convention in 0012_thesis_objects.sql) must never
+    # survive into a statement even when checked directly against the
+    # paragraph processor's own rule (a), independent of extract_block()'s
+    # separate nested-comment handling.
+    text = """
+create table if not exists public.t (id bigint generated always as identity primary key);
+
+-- down:
+-- drop table if exists public.t;
+
+-- readback:
+-- select 1 from pg_class where relname = 't'
+--   -- expect one row
+"""
+    stmts = readback_statements(text)
+    assert stmts == ["select 1 from pg_class where relname = 't'"]
+    assert not any("expect" in s.lower() for s in stmts)
+
+
+def test_idempotency_findings_does_not_flag_a_down_block_whose_header_is_adjacent_to_the_drop():
+    # Review-#516 round-2 MINOR 3: idempotency_findings() runs the same
+    # block-statement split on the `-- down:` block. Before ruling r3, a
+    # down block whose header shared a paragraph with the real `drop`
+    # statement (no blank line) was falsely flagged as prose-only --
+    # fail-closed refusal of a perfectly valid, idempotent migration.
+    text = """
+create table if not exists public.t (id bigint generated always as identity primary key);
+
+-- down:
+-- Run this to undo:
+-- drop table if exists public.t;
+
+-- readback:
+-- select 1 from pg_class where relname = 't';
+"""
+    findings = idempotency_findings(text, split_statements(text))
+    assert not any("reads as prose" in f for f in findings)
+
+
+def test_apply_receipt_carries_readback_excluded_matching_the_dry_run_list(tmp_path):
+    # Ruling r3 minor 1: --apply used to discard the excluded-prose list
+    # that readback_statements_detailed() already computes -- only
+    # --dry-run ever showed an operator that a readback line was excluded.
+    # The applied receipt (the PR's own proof artifact) must carry the same
+    # list under `readback_excluded`.
+    f = tmp_path / "0099_header_adjacent.sql"
+    f.write_text(FIXTURE_PROSE_ONLY_READBACK_HEADER)
+    _rb, expected_dropped = readback_statements_detailed(FIXTURE_PROSE_ONLY_READBACK_HEADER)
+    assert expected_dropped, "fixture must actually exclude something for this test to mean anything"
+
+    fake = FakeApi()
+    receipt_path = tmp_path / "receipt.json"
+    # rc is not asserted here -- FakeApi's canned empty rows do not satisfy
+    # missing_after()'s object check, which is orthogonal to this test. What
+    # matters is that whatever receipt gets written along the way carries
+    # readback_excluded, matching --dry-run's own excluded list.
+    run_apply(
+        f, runner=fake, receipt_path=receipt_path, project_ref="ref123",
+        accept_unverifiable=True,
+    )
+    receipt = json.loads(receipt_path.read_text())
+    assert "readback_excluded" in receipt
+    assert receipt["readback_excluded"] == expected_dropped

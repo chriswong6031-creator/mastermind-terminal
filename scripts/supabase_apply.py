@@ -292,79 +292,106 @@ def extract_block(text: str, anchor: str) -> Optional[str]:
 
 
 _STATEMENT_KEYWORD_RE = re.compile(
-    r"(?im)^[ \t]*("
+    r"(?i)^[ \t]*("
     r"select|with|explain|insert|update|delete|drop|alter|create|revoke|"
-    r"grant|begin|commit|do|table|values|show|set|comment|refresh|"
-    r"truncate|call|merge|analyze|vacuum|copy|prepare|execute"
+    r"grant|begin|commit|rollback|do|refresh|truncate|vacuum|analyze|set|"
+    r"show|copy|call|values|table|comment|merge|execute|prepare|reset|lock"
     r")\b"
 )
 
 
-def _first_content_line(text: str) -> str:
-    for line in text.splitlines():
-        if line.strip():
-            return line
-    return ""
+def _process_paragraph(para: str) -> Optional[str]:
+    """Decide whether one blank-line-delimited paragraph of a `-- readback:`/
+    `-- down:` block is SQL, prose, or a mix of both -- and if it is a mix,
+    return only the SQL part.
 
+    Meta-CEO B ruling r3 (review-#516 round-2 BLOCKER + MAJOR): prose vs SQL
+    is NOT decided by a paragraph's first word alone. Rules, in order,
+    applied line-by-line to a paragraph (already stripped of its enclosing
+    `-- ` comment marker by extract_block()):
 
-def _drop_leading_prose(stmt: str) -> Optional[str]:
-    """Drop leading prose paragraphs that precede the first SQL statement.
+      (a) a line that still begins with '--' is a (nested) comment: drop it
+          and keep scanning the same paragraph.
+      (b) a line whose last non-space character is ':' is a prose HEADING
+          (e.g. "Set of checks to run after apply:", or "Post-apply
+          verification (...):"): drop it, and drop every following line of
+          THIS paragraph until the first line whose first token is a SQL
+          keyword -- a header sharing its paragraph with a real statement
+          (no blank line between them) must not take that statement down
+          with it. This is the BLOCKER fix: the previous ';'-first,
+          whole-chunk-or-nothing gate deleted a readback query that shared
+          its ';'-delimited chunk with the header above it (the 19:2xZ
+          production incident: `syntax error at or near "Post"` on the very
+          first --apply of 0012).
+      (c) the paragraph's first REMAINING line (after (a)/(b) drops) must
+          begin with a keyword from the FULL SQL keyword list -- checking
+          only the bare first word let ordinary English headers that happen
+          to start with a SQL keyword ("Set of checks to run after apply:")
+          match and get glued onto the statement below them (the MAJOR: the
+          widened keyword list re-opened this). A heading is caught by (b)
+          before this check ever runs, so (c) only fires on genuine
+          non-heading prose (e.g. "Manual cleanup required, no automated
+          undo.") -- that disqualifies the WHOLE paragraph, which is then
+          prose and is dropped entirely, never sent to the endpoint.
 
-    A `-- readback:`/`-- down:` block's own descriptive header line (e.g.
-    "Post-apply verification (run manually against the target database):"
-    in 0012_thesis_objects.sql) is human-facing prose, not SQL -- but once
-    extract_block() has stripped the block's own single layer of `-- `
-    comment marking, that line carries no comment marker of its own and was
-    glued straight onto the statement that follows it (the parser sent
-    "Post-apply verification ...\\n\\nselect ..." as one statement, which the
-    Management API rejected with `syntax error at or near "Post"` on the
-    very first --apply of 0012 -- the production incident this fix answers,
-    Meta-CEO B ruling r2).
+    (d) -- splitting the survivors on ';' into individual statements --
+    happens in the caller, `_block_statements`, only AFTER this function has
+    run on every paragraph; never before. Splitting on ';' first (the
+    pre-r3 order) is what let a header and a real statement end up sharing
+    ONE all-or-nothing chunk in the first place.
 
-    A "paragraph" is a run of lines inside the chunk with no blank line in
-    it. Only a paragraph's OWN first content line is checked against the
-    keyword list -- a keyword occurring later, inside a real multi-line
-    statement (e.g. the "with data" continuation of a bare
-    "refresh materialized view ... with data" statement), must never be
-    treated as a new statement start: searching anywhere in the chunk
-    instead of a paragraph's own head silently truncated the head off a
-    legitimate multi-line statement (round-2 review MAJOR 2). Anything
-    before the first keyword-led paragraph is prose and is dropped a whole
-    paragraph at a time.
-
-    Returns the statement text from the first keyword-led paragraph
-    onward, or ``None`` when NO paragraph in the chunk starts with a
-    recognized keyword -- the whole chunk is then prose, not a statement,
-    and the caller must drop it rather than send it to the endpoint
-    unchanged (round-2 review MAJOR 1 -- a keyword-less chunk used to be
-    passed through as-is).
+    Returns the paragraph's SQL text (verbatim, ';' still unsplit), or
+    ``None`` when the whole paragraph is prose.
     """
-    paragraphs = re.split(r"\n[ \t]*\n", stmt)
-    for i, para in enumerate(paragraphs):
-        if _STATEMENT_KEYWORD_RE.match(_first_content_line(para)):
-            return "\n\n".join(paragraphs[i:]).strip()
+    lines = para.split("\n")
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+        if stripped.startswith("--"):
+            i += 1
+            continue
+        if stripped.endswith(":"):
+            i += 1
+            while i < n and not _STATEMENT_KEYWORD_RE.match(lines[i]):
+                i += 1
+            continue
+        if _STATEMENT_KEYWORD_RE.match(line):
+            return "\n".join(lines[i:])
+        return None
     return None
 
 
 def _block_statements(block: str) -> tuple[list[str], list[str]]:
     """Split a `-- readback:`/`-- down:` block into statements.
 
-    Returns (kept, dropped): `kept` is every chunk with its leading prose
-    paragraphs removed (see _drop_leading_prose); `dropped` is the raw
-    (pre-strip) text of every chunk that was ALL prose -- no paragraph in it
-    started with a recognized keyword -- so callers can report what was
-    excluded instead of silently reducing the statement count (round-2
-    review MINOR 1).
+    Paragraphs (blank-line-delimited chunks of the RAW block) are resolved
+    into SQL-or-prose one at a time by `_process_paragraph` (rules (a)-(c))
+    BEFORE any ';' split -- rule (d) says the ';' split (via
+    `split_statements`) happens only after, on the combined survivors, so a
+    statement's OWN internal ';' terminators are unaffected by paragraph
+    boundaries and a header sharing a paragraph with a statement no longer
+    drags that statement down with it (Meta-CEO B ruling r3).
+
+    Returns (kept, dropped): `kept` is every parsed statement; `dropped` is
+    the raw (pre-strip) text of every paragraph that was ALL prose, so
+    callers can report what was excluded instead of silently reducing the
+    statement count (round-2 review MINOR 1).
     """
-    raw = split_statements(strip_sql_comments(block))
-    kept: list[str] = []
+    paragraphs = re.split(r"\n[ \t]*\n", block)
+    kept_texts: list[str] = []
     dropped: list[str] = []
-    for s in raw:
-        cleaned = _drop_leading_prose(s)
+    for para in paragraphs:
+        if not para.strip():
+            continue
+        cleaned = _process_paragraph(para)
         if cleaned is None:
-            dropped.append(s)
+            dropped.append(para.strip())
         else:
-            kept.append(cleaned)
+            kept_texts.append(cleaned)
+    combined = "\n\n".join(kept_texts).strip()
+    kept = split_statements(strip_sql_comments(combined)) if combined else []
     return kept, dropped
 
 
@@ -644,7 +671,7 @@ def build_receipt(**kw) -> dict:
     keys = [
         "file", "sha256", "pre", "post", "applied_at", "statements_n", "status",
         "project_ref", "apply_mode", "expected_objects", "missing_after",
-        "failed_statement_index", "error", "tool_version",
+        "failed_statement_index", "error", "tool_version", "readback_excluded",
     ]
     receipt = {k: kw.get(k) for k in keys}
     receipt["tool_version"] = TOOL_VERSION
@@ -840,11 +867,11 @@ def run_apply(
 
     mode = apply_mode(statements)
     try:
-        rb_statements = readback_statements(text)
+        rb_statements, rb_dropped = readback_statements_detailed(text)
     except MigrationError:
         # Only reachable when --allow-legacy waived a missing `-- readback:`
         # block for a 0001-0010 file -- _guard already refused otherwise.
-        rb_statements = None
+        rb_statements, rb_dropped = None, []
     expected = expected_objects(statements) if rb_statements is not None else []
 
     def _receipt(**kw) -> dict:
@@ -852,6 +879,13 @@ def run_apply(
             file=str(path), sha256=digest,
             applied_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             statements_n=len(statements), project_ref=project_ref, apply_mode=mode,
+            # Meta-CEO B ruling r3 minor: --apply used to discard the
+            # excluded-prose list that readback_statements_detailed()
+            # already computes, so an operator reading the receipt (the
+            # PR's own proof artifact) could not see that a readback line
+            # was excluded -- only --dry-run printed it. Same list, same
+            # wording, now on the receipt too.
+            readback_excluded=list(rb_dropped),
         )
         base.update(kw)
         return build_receipt(**base)
