@@ -98,10 +98,19 @@ export function readMetaPrefs(blob: unknown): MetaPrefs {
 // the one field with no existing home — it is a browser-side presentation flag (macro computes
 // the theme from local time when it is set) and no server route writes it.
 //
-// Readers prefer the atomic and fall back to the legacy nested value PER FIELD (not per blob),
+// Readers prefer the LEGACY nested value and fall back to the atomic PER FIELD (not per blob),
 // so an account that has only ever had `prefs` still reads correctly, and one where a single
-// field has been migrated reads the new value for that field and the legacy value for the rest.
-// Neither product writes the nested blob any more; it survives as a read-only fallback.
+// field has been migrated reads that field from wherever it was last written.
+//
+// FLIP CONDITION (read this before changing the priority back): legacy wins for as long as the
+// macro dashboard's own preference writer (`lib/user_prefs.py` there) still writes ONLY the
+// nested `prefs` blob and never the atomics. The paired macro-side change that moves it to the
+// atomic keys does not exist yet (tracked as this PR's own follow-up — see the PR body). Until
+// it ships, Terminal DUAL-WRITES every change to both places (`sharedPrefsPatch` for the
+// atomics, `legacyPrefsPatch` for the nested blob) and reads must prefer whichever place macro
+// is still authoritative for — the nested blob — or a macro write on a Terminal-touched account
+// would go invisible to Terminal the moment the atomic looked "present". Once macro migrates,
+// flip this back to atomic-wins and delete the nested write and `legacyPrefsPatch`.
 
 /** Top-level, independently mergeable. Written by BOTH products; read with a legacy fallback. */
 export const SHARED_THEME_KEY = "theme";
@@ -109,19 +118,22 @@ export const SHARED_THEME_AUTO_KEY = "theme_auto";
 export const SHARED_LANG_KEY = "lang";
 
 /**
- * The effective shared preferences: the v2 atomic where present, else the legacy `prefs.*`
- * sibling. Resolved field by field — a half-migrated account is the normal state during the
- * cross-product rollout, not an edge case.
+ * The effective shared preferences: the legacy `prefs.*` value where present, else the v2
+ * atomic sibling. Resolved field by field — a half-migrated account is the normal state during
+ * the cross-product rollout, not an edge case. See the FLIP CONDITION note above: this priority
+ * is intentionally the opposite of "prefer the new format" until macro's writer migrates.
  */
 export function readSharedPrefs(meta: unknown): MetaPrefs {
   const m = (meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {}) as Record<string, unknown>;
   const legacy = readMetaPrefs(m.prefs);
   const out: MetaPrefs = {};
-  const theme = isThemeId(m[SHARED_THEME_KEY]) ? (m[SHARED_THEME_KEY] as ThemeId) : legacy.theme;
-  const themeAuto = m[SHARED_THEME_AUTO_KEY] === "1" || m[SHARED_THEME_AUTO_KEY] === "0"
-    ? (m[SHARED_THEME_AUTO_KEY] as "1" | "0")
-    : legacy.themeAuto;
-  const lang = isLangId(m[SHARED_LANG_KEY]) ? (m[SHARED_LANG_KEY] as LangId) : legacy.lang;
+  const theme = legacy.theme ?? (isThemeId(m[SHARED_THEME_KEY]) ? (m[SHARED_THEME_KEY] as ThemeId) : undefined);
+  const themeAuto = legacy.themeAuto ?? (
+    m[SHARED_THEME_AUTO_KEY] === "1" || m[SHARED_THEME_AUTO_KEY] === "0"
+      ? (m[SHARED_THEME_AUTO_KEY] as "1" | "0")
+      : undefined
+  );
+  const lang = legacy.lang ?? (isLangId(m[SHARED_LANG_KEY]) ? (m[SHARED_LANG_KEY] as LangId) : undefined);
   if (theme) out.theme = theme;
   if (themeAuto) out.themeAuto = themeAuto;
   if (lang) out.lang = lang;
@@ -138,6 +150,21 @@ export function sharedPrefsPatch(patch: MetaPrefs): Record<string, unknown> {
   if (patch.theme !== undefined && isThemeId(patch.theme)) out[SHARED_THEME_KEY] = patch.theme;
   if (patch.themeAuto === "1" || patch.themeAuto === "0") out[SHARED_THEME_AUTO_KEY] = patch.themeAuto;
   if (patch.lang !== undefined && isLangId(patch.lang)) out[SHARED_LANG_KEY] = patch.lang;
+  return out;
+}
+
+/**
+ * The SAME patch, shaped for the legacy nested `prefs` blob instead of the top-level atomics
+ * (`themeAuto`, camelCase, matching `readMetaPrefs`) — the DUAL-WRITE half of E6. Only the
+ * fields the caller actually changed appear; the caller merges this into the last-known nested
+ * blob (`metaObject`'s copy) before sending, exactly as the pre-existing `terminal` blob does,
+ * so a partial patch here can never delete a macro-written sibling field.
+ */
+export function legacyPrefsPatch(patch: MetaPrefs): Partial<MetaPrefs> {
+  const out: Partial<MetaPrefs> = {};
+  if (patch.theme !== undefined && isThemeId(patch.theme)) out.theme = patch.theme;
+  if (patch.themeAuto === "1" || patch.themeAuto === "0") out.themeAuto = patch.themeAuto;
+  if (patch.lang !== undefined && isLangId(patch.lang)) out.lang = patch.lang;
   return out;
 }
 

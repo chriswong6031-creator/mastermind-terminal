@@ -10,8 +10,9 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
-  metaObject, readTerminalMeta, readMetaPrefs, readSharedPrefs, readUpDown, readLang, applyUpDown,
-  sharedPrefsPatch, isLangId, isThemeId, isUpDown, isStartTf, DEFAULT_UPDOWN, UPDOWN_KEY,
+  legacyPrefsPatch, metaObject, readTerminalMeta, readMetaPrefs, readSharedPrefs, readUpDown,
+  readLang, applyUpDown, sharedPrefsPatch, isLangId, isThemeId, isUpDown, isStartTf,
+  DEFAULT_UPDOWN, UPDOWN_KEY,
 } from "@/lib/accountPrefs";
 
 describe("metaObject — the merge base", () => {
@@ -163,20 +164,24 @@ describe("readUpDown / applyUpDown", () => {
 //   4. Terminal sends { theme: dark, lang: zh }
 //   5. Macro's newer Light choice is gone.
 //
-// The repair removes the shared container: each field is its own top-level key, and top-level
-// keys MERGE. These cases pin both halves — the per-field read precedence, and the restraint of
-// the writer.
+// The repair removes the shared container as the thing Terminal RACES on: each field is also a
+// top-level key, and top-level keys MERGE. But macro's own writer has not migrated to those
+// atomics yet — it still only ever writes the nested blob — so a Terminal reader that preferred
+// the atomic the moment one existed would go BLIND to every macro write on an account Terminal
+// had touched. These cases pin the CURRENT (legacy-wins) priority, the write-side restraint, and
+// the dual-write that keeps the nested blob current for macro to keep reading. See
+// lib/accountPrefs.ts's FLIP CONDITION note for when (and how) this priority reverses.
 
-describe("readSharedPrefs — v2 atomics with a PER-FIELD legacy fallback", () => {
-  it("prefers the atomic over the legacy sibling", () => {
+describe("readSharedPrefs — legacy blob wins, v2 atomic is the fallback (FLIP CONDITION pending)", () => {
+  it("prefers the legacy sibling over the atomic — macro is still the nested blob's only writer", () => {
     expect(readSharedPrefs({
       theme: "light", theme_auto: "1", lang: "zh",
       prefs: { theme: "dark", themeAuto: "0", lang: "en" },
-    })).toEqual({ theme: "light", themeAuto: "1", lang: "zh" });
+    })).toEqual({ theme: "dark", themeAuto: "0", lang: "en" });
   });
 
   it("falls back FIELD BY FIELD — a half-migrated account is the normal rollout state", () => {
-    expect(readSharedPrefs({ lang: "zh", prefs: { theme: "light", themeAuto: "1", lang: "en" } }))
+    expect(readSharedPrefs({ lang: "zh", prefs: { theme: "light", themeAuto: "1" } }))
       .toEqual({ theme: "light", themeAuto: "1", lang: "zh" });
   });
 
@@ -189,8 +194,8 @@ describe("readSharedPrefs — v2 atomics with a PER-FIELD legacy fallback", () =
     expect(readSharedPrefs({ theme: "dark", lang: "en" })).toEqual({ theme: "dark", lang: "en" });
   });
 
-  it("ignores a junk atomic and uses the legacy value rather than dropping the preference", () => {
-    expect(readSharedPrefs({ theme: "midnight", lang: "fr", prefs: { theme: "light", lang: "zh" } }))
+  it("ignores a junk legacy value and uses the atomic rather than dropping the preference", () => {
+    expect(readSharedPrefs({ theme: "light", lang: "zh", prefs: { theme: "midnight", lang: "fr" } }))
       .toEqual({ theme: "light", lang: "zh" });
   });
 
@@ -199,16 +204,24 @@ describe("readSharedPrefs — v2 atomics with a PER-FIELD legacy fallback", () =
     expect(readSharedPrefs(null)).toEqual({});
     expect(readSharedPrefs({ prefs: "nonsense" })).toEqual({});
   });
+
+  it("a macro-only edit made AFTER Terminal last touched the account is not hidden", () => {
+    // This is the exact failure M1 exists to prevent: Terminal wrote the atomics once, then
+    // macro (which only ever writes the nested blob) changed the theme. An atomic-wins reader
+    // would show Terminal's stale value forever; legacy-wins shows macro's newer one.
+    const account = { theme: "dark", lang: "en", prefs: { theme: "light", lang: "en" } };
+    expect(readSharedPrefs(account)).toEqual({ theme: "light", lang: "en" });
+  });
 });
 
-describe("sharedPrefsPatch — write ONLY what changed", () => {
+describe("sharedPrefsPatch — write ONLY what changed, as the v2 atomics", () => {
   it("emits just the field the user touched, so a language change carries no theme", () => {
     expect(sharedPrefsPatch({ lang: "zh" })).toEqual({ lang: "zh" });
     expect(sharedPrefsPatch({ theme: "light", themeAuto: "0" }))
       .toEqual({ theme: "light", theme_auto: "0" });
   });
 
-  it("never emits the nested blob — that container is the bug", () => {
+  it("never emits the nested blob shape — that is legacyPrefsPatch's job", () => {
     expect(Object.keys(sharedPrefsPatch({ theme: "dark", lang: "en" }))).not.toContain("prefs");
   });
 
@@ -216,13 +229,48 @@ describe("sharedPrefsPatch — write ONLY what changed", () => {
     expect(sharedPrefsPatch({ theme: "midnight" as never, lang: "fr" as never })).toEqual({});
     expect(sharedPrefsPatch({ themeAuto: "yes" as never })).toEqual({});
   });
+});
 
-  it("survives the exact sequence that used to lose Macro's update", () => {
-    // Terminal holds a stale snapshot and changes ONLY the language.
+describe("legacyPrefsPatch — the SAME patch, shaped for the dual-written nested blob", () => {
+  it("mirrors sharedPrefsPatch's fields but keeps the nested blob's camelCase names", () => {
+    expect(legacyPrefsPatch({ lang: "zh" })).toEqual({ lang: "zh" });
+    expect(legacyPrefsPatch({ theme: "light", themeAuto: "0" }))
+      .toEqual({ theme: "light", themeAuto: "0" });
+  });
+
+  it("drops invalid values, exactly like sharedPrefsPatch", () => {
+    expect(legacyPrefsPatch({ theme: "midnight" as never, lang: "fr" as never })).toEqual({});
+    expect(legacyPrefsPatch({ themeAuto: "yes" as never })).toEqual({});
+  });
+
+  it("emits only the touched fields — the caller spreads this over the last-known blob, never replaces it", () => {
+    expect(Object.keys(legacyPrefsPatch({ lang: "zh" }))).toEqual(["lang"]);
+  });
+});
+
+describe("the dual write round-trips through BOTH representations", () => {
+  it("an atomic-ONLY write (no dual write) is invisible once the legacy sibling already exists — this is exactly why the write must be dual", () => {
+    // If Terminal wrote ONLY the atomic, the account's existing `prefs.lang` would keep winning
+    // forever and the user's edit would never take effect. This pins the failure mode M1 covers.
     const terminalWrite = sharedPrefsPatch({ lang: "zh" });
-    // Macro's newer theme is a SEPARATE top-level key, so `updateUser`'s top-level merge keeps it.
-    const account = { theme: "light", lang: "en", prefs: { theme: "dark", lang: "en" } };
+    const account = { theme: "light", lang: "en", prefs: { theme: "light", lang: "en" } };
     const merged = { ...account, ...terminalWrite };
+    expect(readSharedPrefs(merged)).toEqual({ theme: "light", lang: "en" }); // NOT "zh"
+  });
+
+  it("the SAME edit, dual-written, takes effect immediately", () => {
+    const terminalWrite = sharedPrefsPatch({ lang: "zh" });
+    const legacyWrite = legacyPrefsPatch({ lang: "zh" });
+    // Macro's newer theme is a SEPARATE top-level key AND a separate nested sibling, so both
+    // merges keep it untouched.
+    const account = { theme: "light", lang: "en", prefs: { theme: "light", lang: "en" } };
+    const merged = { ...account, ...terminalWrite, prefs: { ...account.prefs, ...legacyWrite } };
     expect(readSharedPrefs(merged)).toEqual({ theme: "light", lang: "zh" });
+  });
+
+  it("a Terminal legacy write reads back correctly once merged into the account's nested blob", () => {
+    const legacyWrite = legacyPrefsPatch({ lang: "zh" });
+    const account = { prefs: { theme: "dark", lang: "en", ...legacyWrite } };
+    expect(readSharedPrefs(account)).toEqual({ theme: "dark", lang: "zh" });
   });
 });

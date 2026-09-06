@@ -259,16 +259,18 @@ describe("a read that did not land is not an empty account", () => {
     expect(updates).toEqual([]);
   });
 
-  it("delivers a SHARED preference immediately — an atomic needs no merge base at all", async () => {
+  it("delivers a SHARED preference's atomic half immediately even with no merge base", async () => {
     getUser = async () => { throw new Error("offline"); };
     __loadOwner(OWNER_A);
     await settle();
 
-    // The nested `terminal` blob is held (above); `lang` is a top-level atomic that
+    // The nested `terminal` blob is held (above), and so is the legacy `prefs` half of this
+    // dual write (below) — both need a merge base. `lang`'s ATOMIC half is a top-level key that
     // `updateUser` MERGES, so there is nothing it could clobber and nothing to wait for.
     persistMetaPrefs({ lang: "zh" });
     await settle();
     expect(updates).toEqual([{ lang: "zh" }]);
+    expect(__marketPrefsInternals().pendingMetaPrefs).toEqual({ lang: "zh" });
   });
 
   it("refuses an answer for a DIFFERENT account than the shell resolved", async () => {
@@ -367,11 +369,14 @@ describe("delivery is serialized, acknowledged, and retryable", () => {
     await settle();
 
     // One follow-up carrying the CURRENT value of everything edited — never an older, smaller
-    // blob. The shared language is a top-level ATOMIC (E6), not a nested sibling.
+    // blob. The shared language is a top-level ATOMIC (E6) AND is dual-written into the legacy
+    // `prefs` nested blob (macro's writer has not migrated off it yet — accountPrefs.ts's FLIP
+    // CONDITION note).
     expect(updates).toHaveLength(2);
     expect(updates[1]).toEqual({
       terminal: { start_tf: "D", updown: "east" },
       lang: "zh",
+      prefs: { lang: "zh" },
     });
     expect(__marketPrefsSnapshot().sync.phase).toBe("saved");
   });
@@ -385,15 +390,20 @@ describe("delivery is serialized, acknowledged, and retryable", () => {
     updateResult = async () => ({ error: null });
     persistMetaPrefs({ lang: "zh" });
     await settle();
-    expect(updates).toEqual([{ lang: "zh" }]);
+    expect(updates).toEqual([{ lang: "zh", prefs: { lang: "zh" } }]);
 
     persistUpDown("east");
     await settle();
 
-    // The shared atomic was already acknowledged — an edit that never touched it must not
-    // re-send a stale value and clobber whatever the OTHER product wrote in the meantime.
+    // The shared ATOMIC was already acknowledged and is a one-shot key — an edit that never
+    // touched it must not re-send a stale value. The legacy `prefs` blob is NOT one-shot (same
+    // always-resend contract as `terminal`, since a nested blob has no "already delivered, drop
+    // it" state — the account's copy must always carry every sibling field).
     expect(updates).toHaveLength(2);
-    expect(updates[1]).toEqual({ terminal: { start_tf: "W", updown: "east" } });
+    expect(updates[1]).toEqual({
+      prefs: { lang: "zh" },
+      terminal: { start_tf: "W", updown: "east" },
+    });
   });
 
   it("delivers an intent held through a FAILED hydrate once a retried read answers", async () => {
@@ -521,5 +531,68 @@ describe("an in-flight hydrate cannot answer over a newer local edit", () => {
     await settle();
 
     expect(__marketPrefsSnapshot().prefs.enabled).toEqual(["cn", "crypto"]);
+  });
+});
+
+// ── E6 dual-write: a shared preference edit lands in BOTH representations (M1) ───────────
+//
+// Macro's own preference writer has not migrated to the v2 atomics yet — it still only writes
+// the legacy nested `prefs` blob. Shipping Terminal's atomic-only write (and an atomic-wins
+// read) would make every macro write invisible to Terminal the moment an account's atomic
+// existed. Until macro migrates, Terminal writes BOTH representations and reads prefer the
+// legacy one — see lib/accountPrefs.ts's FLIP CONDITION note.
+
+describe("a shared preference edit dual-writes into the legacy `prefs` blob too (E6 flip condition)", () => {
+  it("merges the change into the account's OWN nested blob rather than replacing it", async () => {
+    getUser = async () => userWith(UUID_A, { prefs: { theme: "dark", themeAuto: "1" } });
+    __loadOwner(OWNER_A);
+    await settle();
+    updates.length = 0;
+
+    persistMetaPrefs({ lang: "zh" });
+    await settle();
+
+    // theme / themeAuto are macro's own siblings on the nested blob — a write that forgot them
+    // would delete them the moment `updateUser` replaced the object wholesale.
+    expect(updates).toEqual([{ lang: "zh", prefs: { theme: "dark", themeAuto: "1", lang: "zh" } }]);
+  });
+
+  it("holds the legacy half until the merge base loads, then delivers it merged — never as a partial blob", async () => {
+    vi.useFakeTimers();
+    try {
+      getUser = async () => { throw new Error("offline"); };
+      __loadOwner(OWNER_A);
+      await vi.advanceTimersByTimeAsync(0);
+
+      persistMetaPrefs({ lang: "zh" });                      // atomic ships now; legacy half held
+      expect(updates).toEqual([{ lang: "zh" }]);
+      expect(__marketPrefsInternals().pendingMetaPrefs).toEqual({ lang: "zh" });
+
+      // The account comes back holding a sibling field the held edit must not delete.
+      getUser = async () => userWith(UUID_A, { prefs: { theme: "dark" } });
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(updates).toEqual([{ lang: "zh" }, { prefs: { theme: "dark", lang: "zh" } }]);
+      expect(__marketPrefsInternals().pendingMetaPrefs).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads back LEGACY-first once hydrated, even after Terminal's own atomic write", async () => {
+    // The account already has a macro-written nested theme; Terminal has never touched this
+    // field. metaPrefs must reflect the nested blob, not merely "whatever the atomic key says".
+    getUser = async () => userWith(UUID_A, { theme: "dark", prefs: { theme: "light", lang: "en" } });
+    __loadOwner(OWNER_A);
+    await settle();
+
+    expect(__marketPrefsSnapshot().metaPrefs).toEqual({ theme: "light", lang: "en" });
+  });
+
+  it("never dual-writes for a guest, same as the atomic half", async () => {
+    __loadOwner(GUEST_OWNER);
+    await settle();
+    persistMetaPrefs({ lang: "zh" });
+    expect(updates).toEqual([]);
   });
 });
