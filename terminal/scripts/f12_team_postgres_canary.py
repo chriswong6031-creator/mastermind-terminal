@@ -173,8 +173,10 @@ def main() -> int:
     proof.check("rpc:accept_cannot_mint_owner", owner_count == 1, f"owner_count={owner_count}")
 
     # workspace_settings cross-tenant isolation (acceptance #3)
+    d_owner = str(uuid.uuid4())
     with admin.cursor() as cur:
-        cur.execute("insert into public.teams (id, name, created_by) values (gen_random_uuid(),'Team B', %s) returning id", (uuid.uuid4(),))
+        cur.execute("insert into auth.users (id, email) values (%s, 'owner@b.example')", (d_owner,))
+        cur.execute("insert into public.teams (id, name, created_by) values (gen_random_uuid(),'Team B', %s) returning id", (d_owner,))
         team_b = cur.fetchone()[0]
         cur.execute("insert into public.workspace_settings (scope, team_id, user_id, key, value) values ('workspace', %s, %s, 'k', '\"vb\"'::jsonb)", (team_b, a_owner))
 
