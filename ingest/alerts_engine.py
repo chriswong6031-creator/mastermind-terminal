@@ -92,6 +92,12 @@ DEFAULT_ENV = "/opt/terminal/terminal/.env.local"
 DEFAULT_DATA = "/opt/terminal/terminal/public/data"
 DEFAULT_FLOW_BACKEND = "http://127.0.0.1:8000"
 DEFAULT_FLOW_R2 = "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev"
+# Meta-CEO ruling (PR #513 review round 5, MINOR-1): the one real lane this file runs, and the
+# real cadence it runs on (see the module docstring: "Runs every 5 minutes"). main() passes both
+# explicitly to run_once() rather than relying on the function's own defaults, so the receipt's
+# lane_cadence_budget_s is plumbed from a named, documented source instead of an implicit match.
+ALERTS_LANE = "alerts_engine"
+ALERTS_LANE_CADENCE_S = 300
 FLOW_USER_AGENT = "mastermind-alerts/1.0"
 FLOW_ROOT_RE = re.compile(r"^[A-Z0-9]{1,10}(?:[.-][A-Z0-9]{1,4})?$")
 FLOW_STAMP_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
@@ -218,8 +224,12 @@ def _minute_vintage(value: str | None) -> str | None:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
 
 
-_OPT_WALL_SIDE_EN = {"call": "call wall", "put": "put wall"}
-_OPT_WALL_SIDE_ZH = {"call": "看涨期权阻力位", "put": "看跌期权支撑位"}
+# Meta-CEO ruling (PR #513 review round 5, MAJOR-1): plain everyday words, never the internal
+# "gamma wall" name — a resistance/support level is the plain-language equivalent a retail user
+# already recognizes (DEC-CHAIRMAN-FRONTEND-PLAIN-LANGUAGE-LAW-2026-09-06 binds every
+# user-facing string, and this dict feeds the delivered outbox payload).
+_OPT_WALL_SIDE_EN = {"call": "resistance level", "put": "support level"}
+_OPT_WALL_SIDE_ZH = {"call": "阻力位", "put": "支撑位"}
 
 
 def _plain_root(cond: dict, symbol: str) -> str:
@@ -230,75 +240,88 @@ def _condition_plain_en(cond: dict, symbol: str) -> str:
     """Plain-English description of what the alert WATCHES FOR — the condition, never the
     fired result (Meta-CEO ruling, PR #513 review round 4, MAJOR-3). Built from the STRUCTURED
     condition dict alone: no basis tags, no raw ISO timestamps, no internal slugs — those stay
-    in the engine's own log lines and never reach a delivered payload."""
+    in the engine's own log lines and never reach a delivered payload.
+
+    Meta-CEO ruling (PR #513 review round 5, MAJOR-1): every branch — including the opt_* ones
+    — uses plain everyday words, never an internal study/indicator name (no "RSI(14)"), a raw
+    Greek-letter options term (no "gamma"), or an internal leg/slug abbreviation (no
+    "net-put"/"net-call"). "bullish"/"bearish"/"resistance level"/"support level" are the plain
+    vocabulary this file already uses elsewhere (the regime branch below) — every reader already
+    recognizes them, unlike the internal names they replace
+    (DEC-CHAIRMAN-FRONTEND-PLAIN-LANGUAGE-LAW-2026-09-06 binds every user-facing string)."""
     ctype = cond.get("type")
     sym = symbol or "the symbol"
     if ctype == "price":
         op_word = "rises above" if cond.get("op") == "above" else "falls below"
         return f"{sym} {op_word} {cond.get('value')}"
     if ctype == "rsi":
-        return f"{sym}'s RSI(14) falls below {cond.get('value')}"
+        return f"{sym} drops into oversold territory, below {cond.get('value')}"
     if ctype == "regime":
         return f"{sym} turns bullish"
     if ctype == "signal":
         return f"{sym} gets a buy signal" if cond.get("target") == "BUY" else f"{sym} gets a sell signal"
     root = _plain_root(cond, sym)
     if ctype == "opt_gamma_flip":
-        return f"{root} crosses its gamma-flip level"
+        return f"{root} crosses a key options level that can amplify its price swings"
     if ctype == "opt_wall_touch":
         wall = _OPT_WALL_SIDE_EN["put" if cond.get("wall") == "put" else "call"]
         return f"{root} nears its {wall}"
     if ctype == "opt_premium_burst":
-        leg = "net-put" if cond.get("leg") == "npp" else "net-call"
-        return f"{root} {leg} premium moves at an unusual pace"
+        bias = "bearish" if cond.get("leg") == "npp" else "bullish"
+        return f"{root} sees an unusually large burst of {bias} options bets"
     if ctype == "opt_0dte_spike":
-        return f"{root} same-day options make up an unusual share of tracked premium"
+        return f"{root} sees a surge in trading of options expiring today"
     if ctype == "opt_wall_migration":
         wall = _OPT_WALL_SIDE_EN["put" if cond.get("wall") == "put" else "call"]
-        return f"{root}'s {wall} moves to a new level"
+        return f"{root}'s {wall} shifts to a new price"
     if ctype == "opt_sign_fragile":
-        return f"{root}'s options positioning becomes direction-fragile"
+        return f"options traders are losing conviction on which way {root} will move"
     if ctype == "opt_opex_concentration":
-        return f"{root}'s nearest expiry holds an outsized share of open gamma"
+        return f"a large share of {root}'s options activity is concentrated in the nearest expiration date"
     if ctype == "opt_surface_pocket":
-        return f"{root} shows an unusually active options strike"
+        return f"{root} shows an unusual cluster of options activity at one price level"
     return f"{sym} condition is met"
 
 
 def _condition_plain_zh(cond: dict, symbol: str) -> str:
     """Simplified-Chinese sibling of _condition_plain_en — same rule: describes the condition,
-    built from the structured dict, never the fired result or internal jargon."""
+    built from the structured dict, never the fired result or internal jargon.
+
+    Meta-CEO ruling (PR #513 review round 5, MAJOR-1): every internal term is TRANSLATED into
+    plain Chinese, never left as a bare Latin/English fragment inside the Chinese sentence (no
+    untranslated "gamma", no untranslated "RSI(14)") — a mixed-language sentence fails the plain-
+    language law exactly as an untranslated jargon term does in English."""
     ctype = cond.get("type")
     sym = symbol or "该标的"
     if ctype == "price":
         op_word = "涨破" if cond.get("op") == "above" else "跌破"
         return f"{sym}{op_word}{cond.get('value')}"
     if ctype == "rsi":
-        return f"{sym}的RSI(14)跌破{cond.get('value')}"
+        return f"{sym}跌入超卖区间，低于{cond.get('value')}"
     if ctype == "regime":
         return f"{sym}转为多头"
     if ctype == "signal":
         return f"{sym}出现买入信号" if cond.get("target") == "BUY" else f"{sym}出现卖出信号"
     root = _plain_root(cond, sym)
     if ctype == "opt_gamma_flip":
-        return f"{root}突破其gamma翻转位"
+        return f"{root}突破一个可能放大其价格波动的关键期权水平"
     if ctype == "opt_wall_touch":
         wall = _OPT_WALL_SIDE_ZH["put" if cond.get("wall") == "put" else "call"]
         return f"{root}接近其{wall}"
     if ctype == "opt_premium_burst":
-        leg = "净看跌" if cond.get("leg") == "npp" else "净看涨"
-        return f"{root}{leg}期权保费异常加速变动"
+        bias = "看跌" if cond.get("leg") == "npp" else "看涨"
+        return f"{root}出现异常大量的{bias}期权押注"
     if ctype == "opt_0dte_spike":
-        return f"{root}当日到期期权占已追踪保费的比例异常偏高"
+        return f"{root}今日到期期权的交易量大幅上升"
     if ctype == "opt_wall_migration":
         wall = _OPT_WALL_SIDE_ZH["put" if cond.get("wall") == "put" else "call"]
-        return f"{root}的{wall}发生迁移"
+        return f"{root}的{wall}变为新的价位"
     if ctype == "opt_sign_fragile":
-        return f"{root}的期权持仓方向性变得脆弱"
+        return f"期权交易者对{root}接下来的走势看法出现分歧"
     if ctype == "opt_opex_concentration":
-        return f"{root}最近到期日持有异常高比例的未平仓gamma"
+        return f"{root}的期权交易高度集中在最近的到期日"
     if ctype == "opt_surface_pocket":
-        return f"{root}的期权行权价出现异常活跃点"
+        return f"{root}在某一价位出现异常集中的期权交易"
     return f"{sym}条件已触发"
 
 
@@ -360,6 +383,15 @@ class Supa:
             "ticker": ticker,
             "condition_plain": condition_plain,
             "condition_plain_zh": condition_plain_zh,
+            # Meta-CEO ruling (PR #513 review round 5, MAJOR-2): condition_plain/summary_plain
+            # deliberately describe the CONDITION, never the fired result, so two fires of the
+            # same condition at different observed readings share the same plain text (see
+            # test_h1_genuine_refire_after_rearm_mints_two_distinct_events). But the observed
+            # reading must still reach the delivery queue SOMEWHERE, or a delivered alert can
+            # never say what actually printed — `value` is that raw observed reading, additive
+            # to the payload dict, so a consumer (macro's drain today, this file's own log lines
+            # already) can render it without it ever leaking into condition_plain's wording.
+            "value": value,
             # /alerts is a real route (app/(shell)/alerts/page.tsx) — the query string was
             # removed because AlertsView does not read an "id" param yet, so it deep-linked
             # nowhere; this still lands the user on the page that lists their fired alert.
@@ -1542,6 +1574,11 @@ def run_once(
             if run_receipted:
                 supa.conclude_run(lane, run_id, datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                    "success", 0, 0, 0, None)
+            elif dry_run:
+                # MINOR-3, Meta-CEO ruling (round 5): dry_run gates the WRITE, never the receipt
+                # itself becoming unobservable — log what conclude_run would have recorded.
+                log("[dry-run] conclude_run lane=%s run_id=%s outcome=success evaluated_n=0 "
+                    "fired_n=0 unevaluable_n=0 (no write)" % (lane, run_id))
             return {"outcome": "success", "evaluated_n": 0, "fired_n": 0, "unevaluable_n": 0,
                     "error_class": None, "source_asof": None}
 
@@ -1632,6 +1669,9 @@ def run_once(
             # whose purpose is proof-of-run.
             supa.conclude_run(lane, run_id, datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                "failure", None, None, None, type(e).__name__)
+        elif dry_run:
+            log("[dry-run] conclude_run lane=%s run_id=%s outcome=failure evaluated_n=None "
+                "fired_n=None unevaluable_n=None error_class=%s (no write)" % (lane, run_id, type(e).__name__))
         log(f"FATAL: run crashed before completion: {e}")
         raise
     # evaluated_n and unevaluable_n must reconcile against len(alerts): a SKIP (hit is None), a
@@ -1652,6 +1692,13 @@ def run_once(
         supa.conclude_run(lane, run_id, datetime.now(timezone.utc).isoformat(timespec="seconds"),
                            outcome, evaluated_n, fired, unevaluable_n,
                            error_class, source_asof=fallback_asof)
+    elif dry_run:
+        # MINOR-3, Meta-CEO ruling (round 5): the dry-run receipt is logged, never silently
+        # dropped — this is the same outcome/evaluated_n/fired_n/unevaluable_n a real conclude_run
+        # write would have recorded.
+        log("[dry-run] conclude_run lane=%s run_id=%s outcome=%s evaluated_n=%s fired_n=%s "
+            "unevaluable_n=%s error_class=%s (no write)"
+            % (lane, run_id, outcome, evaluated_n, fired, unevaluable_n, error_class))
     # MINOR-3 (round 4): log the receipt's own unevaluable_n, not the skipped-only subcount —
     # unevaluable_n is what the receipt table actually records as "could not be evaluated".
     log(f"done: {len(alerts)} armed, {fired} fired, {unevaluable_n} unevaluable")
@@ -1681,10 +1728,12 @@ def main() -> int:
     data = Data(args.data_dir, env.get("HUB_PORT", "3100"))
     run_once(
         supa, data, datetime.now(timezone.utc), uuid.uuid4().hex,
+        lane=ALERTS_LANE,
         flow_backend=env.get("FLOW_API_BASE") or DEFAULT_FLOW_BACKEND,
         flow_r2=env.get("FLOW_R2_BASE") or DEFAULT_FLOW_R2,
         flow_fixtures=args.flow_fixtures,
         dry_run=args.dry_run,
+        lane_cadence_budget_s=ALERTS_LANE_CADENCE_S,
     )
     return 0
 

@@ -206,12 +206,20 @@ def test_replayed_fire_over_same_vintage_inserts_nothing_new(monkeypatch, tmp_pa
     vintage is derived via Data.evaluation_vintage() against a real, UNCHANGED on-disk
     manifest, so a crash-retry re-reading the same data collapses onto the same vintage by
     construction (production behavior), rather than asserting only Supa.fire()'s insert/conflict
-    mechanics given a hand-picked literal."""
+    mechanics given a hand-picked literal.
+
+    MINOR-2, Meta-CEO ruling (round 5): the `len(fake.outbox) == 1` assertion below is only
+    genuine RED-first coverage of the collapse if `vintage` is actually a real, non-None data
+    vintage — on the OLD engine (round 3's wall-clock-only ladder, no manifest rung)
+    evaluation_vintage() silently returned None here, and two None-vintage fires ALSO collapse
+    to one row, satisfying the assertion vacuously without ever exercising the real collapse.
+    Pin the vintage's own value first (mirrors test_fire_inserts_outbox_before_disarm above)."""
     (tmp_path / "manifest.json").write_text(json.dumps(
         {"as_of": "2026-09-05T09:00:00Z", "symbols": {"AAPL": {"asof": "2026-09-05T09:00:00Z"}}}
     ))
     data = ae.Data(str(tmp_path), None)
     vintage = data.evaluation_vintage("AAPL")
+    assert vintage == "2026-09-05T09:00Z"
 
     fake = _FakeRest(tables_exist=True)
     _patch_http(monkeypatch, fake)
@@ -614,6 +622,27 @@ def test_evaluation_vintage_ignores_placeholder_ts_noise(tmp_path):
     assert v1 == v2 is None
 
 
+def test_evaluation_vintage_rung_b_falls_back_on_a_production_shaped_manifest(tmp_path):
+    """MINOR-4, Meta-CEO ruling (round 5): every other rung-(b) test in this file hand-writes a
+    manifest whose per-symbol entry carries a synthetic `asof` key — no producer under ingest/
+    actually writes that shape. terminal/public/data/manifest.json (the real, in-repo manifest)
+    has a build-level `as_of` and per-symbol entries carrying only display fields
+    (name/last/chg/hi52/.../regimeBull), never a per-symbol `asof`. This pins that rung (b)
+    correctly falls back to the manifest's build-level `as_of` — not that it silently returns
+    None — against that PRODUCTION shape, not a synthetic one."""
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "as_of": "2026-06-26",
+        "source": "eod-build",
+        "symbols": {
+            "AAPL": {"name": "Apple Inc", "last": 200.1, "chg": -0.5, "hi52": 260.1,
+                       "lo52": 150.0, "regimeBull": True},
+        },
+    }))
+    data = ae.Data(str(tmp_path), None)
+    assert "asof" not in data.symbols["AAPL"]  # confirms the shape carries no per-symbol asof
+    assert data.evaluation_vintage("AAPL") == "2026-06-26T00:00Z"
+
+
 def test_insert_hard_error_logs_read_error_not_read_unavailable(monkeypatch, capsys):
     """MAJOR 5, Meta-CEO RULED: a genuine hard failure on the outbox insert (5xx/401/400/
     network — NOT a table-absent schema-cache miss) must print a typed READ_ERROR line, never
@@ -741,11 +770,16 @@ def test_no_data_vintage_leaves_alert_unevaluable_no_fire_no_disarm(tmp_path, mo
     assert fake.alerts["a1"]["active"] is True
 
 
-def test_dry_run_writes_nothing_to_supabase(tmp_path, monkeypatch):
+def test_dry_run_writes_nothing_to_supabase(tmp_path, monkeypatch, capsys):
     """MAJOR-1, Meta-CEO ruling: --dry-run must make ZERO writes to Supabase. start_run/
     conclude_run are gated on `not dry_run` (the receipt is logged instead); the per-alert
     fire()/update_condition writes were already gated. Only the read-only active_alerts() GET
-    may still happen."""
+    may still happen.
+
+    MINOR-3, Meta-CEO ruling (round 5): the conclude_run receipt (outcome/evaluated_n/fired_n/
+    unevaluable_n) must be LOGGED, not silently dropped, when dry_run skips the real write —
+    round 4 logged only the start_run line, leaving the run's actual outcome unobservable in a
+    dry run."""
     (tmp_path / "manifest.json").write_text(json.dumps(
         {"as_of": "2026-09-05T09:00:00Z", "symbols": {"AAPL": {"asof": "2026-09-05T09:00:00Z"}}}
     ))
@@ -764,6 +798,11 @@ def test_dry_run_writes_nothing_to_supabase(tmp_path, monkeypatch):
     writes = [c for c in fake.calls if c[0] in ("POST", "PATCH")]
     assert writes == [], f"dry_run made a Supabase write: {writes}"
     assert fake.alerts["a1"]["active"] is True  # never disarmed
+    out = capsys.readouterr().out
+    assert "[dry-run] start_run" in out
+    assert "[dry-run] conclude_run" in out
+    assert "outcome=success" in out
+    assert "fired_n=1" in out
 
 
 def test_condition_transient_keys_excludes_every_evaluator_state_key():
@@ -801,6 +840,75 @@ def test_outbox_payload_condition_plain_describes_condition_not_result(monkeypat
     for key in ("subject_zh", "summary_plain_zh", "condition_plain_zh"):
         assert key in payload and payload[key], f"missing or empty {key}"
     assert payload["condition_plain_zh"] == "AAPL涨破100"
+
+
+def test_outbox_payload_carries_the_fired_value(monkeypatch):
+    """MAJOR-2, Meta-CEO ruling (round 5): condition_plain/summary_plain deliberately describe
+    the CONDITION, never the fired result (MAJOR-3, round 4) — but the observed reading that
+    actually fired the alert must still reach the delivery queue somewhere, or a delivered alert
+    can never say what printed. `value` is that raw observed reading, additive to the payload,
+    alongside the (deliberately result-free) plain-text fields."""
+    fake = _FakeRest(tables_exist=True)
+    _patch_http(monkeypatch, fake)
+    supa = ae.Supa("https://x.example.co", "k")
+    alert = {"id": "a1", "user_id": "u1", "symbol": "AAPL",
+              "condition": {"type": "price", "op": "above", "value": 100}}
+    supa.fire(alert, 140, "price 140 above 100 (LIVE)", vintage="2026-09-05T10:01Z")
+
+    payload = fake.outbox[0]["payload"]
+    assert payload["value"] == 140
+    # condition_plain still names only the threshold (100), never the observed value (140) —
+    # MAJOR-3's rule is unaffected by adding `value` alongside it.
+    assert "140" not in payload["condition_plain"]
+    assert "140" not in payload["summary_plain"]
+
+
+_JARGON_TERMS = ("RSI(14)", "rsi(14)", "gamma", "net-put", "net-call", "direction-fragile",
+                  "outsized")
+
+# MAJOR-1, Meta-CEO ruling (round 5): every opt_* condition type, with a condition dict shaped
+# the way a real armed alert carries one (per terminal/components/AlertsView.tsx COND_TYPES).
+_ALL_CONDITION_TYPES = [
+    {"type": "price", "op": "above", "value": 100},
+    {"type": "rsi", "value": 30},
+    {"type": "regime"},
+    {"type": "signal", "target": "BUY"},
+    {"type": "opt_gamma_flip", "root": "SPY"},
+    {"type": "opt_wall_touch", "root": "SPY", "wall": "call"},
+    {"type": "opt_wall_touch", "root": "SPY", "wall": "put"},
+    {"type": "opt_premium_burst", "root": "SPY", "leg": "npp"},
+    {"type": "opt_premium_burst", "root": "SPY", "leg": "ncp"},
+    {"type": "opt_0dte_spike", "root": "SPY"},
+    {"type": "opt_wall_migration", "root": "SPY", "wall": "call"},
+    {"type": "opt_sign_fragile", "root": "SPY"},
+    {"type": "opt_opex_concentration", "root": "SPY"},
+    {"type": "opt_surface_pocket", "root": "SPY"},
+]
+
+
+def test_condition_plain_en_never_uses_internal_jargon():
+    """MAJOR-1, Meta-CEO ruling (round 5): every delivered condition_plain string uses plain
+    everyday words — no internal study/indicator name, no raw Greek-letter options term, no
+    internal leg/slug abbreviation (DEC-CHAIRMAN-FRONTEND-PLAIN-LANGUAGE-LAW-2026-09-06 binds
+    every user-facing string). Covers every opt_* type, not just the price/regime/signal
+    branches the round-4 review already found compliant."""
+    for cond in _ALL_CONDITION_TYPES:
+        text = ae._condition_plain_en(cond, "AAPL")
+        low = text.lower()
+        for term in _JARGON_TERMS:
+            assert term.lower() not in low, f"{cond['type']!r} -> {text!r} contains banned jargon {term!r}"
+
+
+def test_condition_plain_zh_never_leaves_untranslated_jargon():
+    """MAJOR-1, Meta-CEO ruling (round 5): the Chinese sibling must not leave a bare
+    English/Latin jargon fragment (RSI(14), gamma) sitting inside the Chinese sentence — a
+    mixed-language sentence fails the plain-language law exactly as an untranslated term does
+    in English."""
+    for cond in _ALL_CONDITION_TYPES:
+        text = ae._condition_plain_zh(cond, "AAPL")
+        low = text.lower()
+        for term in ("rsi(14)", "gamma"):
+            assert term not in low, f"{cond['type']!r} -> {text!r} leaves untranslated {term!r}"
 
 
 def test_insert_conflict_logs_already_enqueued_not_read_conflict(monkeypatch, capsys):
