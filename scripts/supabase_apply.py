@@ -439,7 +439,17 @@ class CurlRunner:
             ]
             stdin_config = f'header = "Authorization: Bearer {self.token}"\n'
             proc = self.runner(argv, input=stdin_config, capture_output=True, text=True)
-            out = proc.stdout or ""
+            # Redact the token out of anything the child process handed back
+            # BEFORE it can reach an ApiError message -- ApiError.body flows
+            # straight into the receipt's "error" field (the PR's own proof
+            # artifact) and into printed operator output. curl is given the
+            # token only on stdin via --config (never argv), so this is a
+            # defense-in-depth backstop against a curl version or error path
+            # that echoes its config back on stdout/stderr, not a case that
+            # is expected to fire in practice (frozen rule (a): the token
+            # must never appear in argv, logs, receipts, or error text).
+            out = (proc.stdout or "").replace(self.token, "<redacted>")
+            err = (proc.stderr or "").replace(self.token, "<redacted>")
             if "\n" in out:
                 payload, _, code = out.rpartition("\n")
             else:
@@ -449,7 +459,7 @@ class CurlRunner:
             except ValueError:
                 status = -1
             if status < 200 or status >= 300:
-                raise ApiError(status, payload or (proc.stderr or ""))
+                raise ApiError(status, payload or err)
             try:
                 return json.loads(payload) if payload.strip() else None
             except json.JSONDecodeError:
@@ -680,7 +690,16 @@ def run_apply(
         return build_receipt(**base)
 
     def _write(receipt: dict) -> None:
-        receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=False) + "\n")
+        try:
+            receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=False) + "\n")
+        except OSError as exc:
+            print(
+                f"could not write the receipt to {receipt_path}: {exc.strerror or exc}. "
+                "Check that the --receipt path's parent directory exists and is "
+                "writable. Some statements above may already have been sent.",
+                file=out,
+            )
+            raise SystemExit(2)
         print(f"receipt written to {receipt_path}", file=out)
 
     pre: list[dict] = []
@@ -722,11 +741,15 @@ def run_apply(
 
     # Statement-at-a-time, always -- one POST per statement via curl. A file
     # wrapped in its own begin/commit still reports apply_mode
-    # "single-transaction" in the receipt (has_transaction_wrapper), but this
-    # tool never sends the whole file as one POST: the Management API splits
-    # on ';' server-side (supabase/migrations/README.md), so one POST was
-    # never one transaction, and that branch also made a mid-file failure
-    # unreportable (failed_statement_index forced to None).
+    # "statement-at-a-time" in the receipt, same as any other file (apply_mode()
+    # never returns "single-transaction" -- review-#516 MAJOR 2/round-2 MINOR 1).
+    # has_transaction_wrapper() only describes the FILE's own shape (used by
+    # tests, not by this loop or the idempotency guard); this tool never sends
+    # the whole file as one POST regardless of what has_transaction_wrapper()
+    # reports: the Management API splits on ';' server-side
+    # (supabase/migrations/README.md), so one POST was never one transaction,
+    # and sending the whole file as one request would also make a mid-file
+    # failure unreportable (failed_statement_index forced to None).
     failed_index = None
     for i, s in enumerate(statements, 1):
         try:
@@ -830,6 +853,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--receipt is required with --apply")
     if args.dry_run and args.receipt:
         parser.error("--dry-run refuses --receipt")
+    if not args.path.exists():
+        print(
+            f"no such file: {args.path} -- check the path and try again. Nothing was sent.",
+            file=sys.stderr,
+        )
+        return 2
 
     if args.dry_run:
         return run_dry(args.path, allow_legacy=args.allow_legacy)

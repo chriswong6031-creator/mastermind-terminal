@@ -76,22 +76,30 @@ does not provide. The `begin;`/`commit;` wrapper itself is still sent as
 ordinary statements — it is a no-op against a connection that only ever sees
 one statement per request, and it costs nothing to leave in the file.
 
-## 7. Worked example (`0013_alert_runs_outbox.sql`-shaped file)
+## 7. Worked example (`FIXTURE_0013` from `tests/test_supabase_apply.py`, `--dry-run`)
 
-Real captured output, this PR's own fixture, `--dry-run`:
+There is no `0013_alert_runs_outbox.sql` on disk yet (migrations on disk stop
+at `0010`) — this repo's own idempotent 0013-shaped test fixture is written
+to a temp file and run through the real CLI below. Anyone can reproduce this
+exact transcript at this file's current head; nothing here is hand-typed.
 
 ```
-$ python3 scripts/supabase_apply.py supabase/migrations/0013_alert_runs_outbox.sql --dry-run
-supabase_apply -- supabase/migrations/0013_alert_runs_outbox.sql
-project: fsldfzlxyavsuwqbceod    mode: dry-run
+$ python3 - <<'PY'
+from pathlib import Path
+from tests.test_supabase_apply import FIXTURE_0013
+Path("/tmp/mo_readback_fixture.sql").write_text(FIXTURE_0013)
+PY
+$ python3 scripts/supabase_apply.py /tmp/mo_readback_fixture.sql --dry-run
+supabase_apply -- /tmp/mo_readback_fixture.sql
+project: <unresolved: no credentials -- dry-run does not need them>    mode: dry-run
 sha256:  01d9fcd4f57b9f988c867336f02c7ba1944312617e76d3664c610a7a6c18a151
 guards:  re-runnable OK · down block OK · readback block OK
 apply mode if run: statement-at-a-time
 
 statements that WOULD run (3):
-  [01] create table if not exists public.alert_runs ( id bigint generated always as identity primary key, c
+  [01] create table if not exists public.alert_runs ( id bigint generated always as identity primary key, c …[truncated, full statement in receipt/-- readback --]
   [02] create unique index if not exists alert_runs_id_key on public.alert_runs (id)
-  [03] do $$ begin create policy alert_runs_read on public.alert_runs for select using (true); exception wh
+  [03] do $$ begin create policy alert_runs_read on public.alert_runs for select using (true); exception wh …[truncated, full statement in receipt/-- readback --]
 
 readback query that WOULD run (3 statements):
   [01] select c.relname from pg_class c where c.relname = 'alert_runs'
@@ -103,9 +111,16 @@ objects this file should create (3): table alert_runs · index alert_runs_id_key
 no network call was made.
 ```
 
-Note statement `[03]` keeps its `do $$ begin … end $$;` wrapper intact byte
-for byte — the scanner is dollar-quote-aware end to end.
+`sha256: 01d9fcd4f5…` is `hashlib.sha256(FIXTURE_0013.encode()).hexdigest()` —
+anyone can check this transcript is genuine by hashing that same string.
+`project:` shows `<unresolved: …>` (not a real project ref) because this
+session has no `SUPABASE_ACCESS_TOKEN`/`.env` configured, which is exactly
+what frozen rule (b) requires: `--dry-run` never needs credentials and never
+makes a network call.
 
-See the PR body for a real transcript run against files on disk, including the
-`0010_search_event_stats.sql` refusal (it has no `-- down:`/`-- readback:`
-block — a correct exit-3 demonstration of the guard, not a bug).
+Statement `[03]` keeps its `do $$ begin … end $$;` wrapper intact byte for
+byte — the scanner is dollar-quote-aware end to end (round-1 blocker fix).
+
+See the PR body for a real transcript run against a file actually on disk,
+the `0010_search_event_stats.sql` refusal (it has no `-- down:`/`--
+readback:` block — a correct exit-3 demonstration of the guard, not a bug).

@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import glob
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
+import scripts.supabase_apply as supabase_apply_module
 from scripts.supabase_apply import (
     ApiError,
     CurlRunner,
@@ -25,6 +27,7 @@ from scripts.supabase_apply import (
     has_transaction_wrapper,
     idempotency_findings,
     load_dotenv_values,
+    main,
     migration_version,
     missing_after,
     readback_statements,
@@ -530,7 +533,18 @@ def test_transport_is_curl_not_urllib():
     assert "urllib.request" not in src
 
 
-def test_dry_run_makes_zero_calls(tmp_path, capsys):
+def test_dry_run_makes_zero_calls(tmp_path, capsys, monkeypatch):
+    # review-#516 round-2 MAJOR 3: the frozen rule ((b) "--dry-run makes NO
+    # network call") names the acceptance test explicitly ("test asserts
+    # subprocess/curl is never invoked") -- the pre-fix version of this test
+    # only checked rc==0 and a printed string, which passes even if run_dry
+    # secretly shelled out. Patch subprocess.run itself to explode if called
+    # so this test would fail (not silently pass) against any future run_dry
+    # change that adds a real network call.
+    def _boom(*_a, **_kw):
+        raise AssertionError("--dry-run must never invoke subprocess/curl")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
     f = tmp_path / "0013_alert_runs_outbox.sql"
     f.write_text(FIXTURE_0013)
     rc = run_dry(f)
@@ -659,6 +673,80 @@ def test_allow_legacy_waives_a_missing_readback_block_instead_of_crashing(tmp_pa
     rc3 = run_apply(f, runner=FakeApi(), receipt_path=tmp_path / "receipt3.json",
                      project_ref="ref123", allow_legacy=True, accept_unverifiable=True)
     assert rc3 == 0
+
+
+def test_pat_never_appears_in_receipt_or_in_curl_stderr_on_api_error(tmp_path, capsys):
+    # review-#516 round-2 MAJOR 4: frozen rule (a) says the PAT must never
+    # appear in "argv, logs, receipts, or error text", and names the
+    # acceptance test explicitly ("test greps the receipt and captured
+    # stderr for the token"). The prior test only grepped argv and stdout --
+    # supabase_apply.py's ApiError(status, payload or (proc.stderr or ""))
+    # fed curl's STDERR straight into the receipt's "error" field with no
+    # redaction. This simulates a curl failure whose stderr happens to
+    # contain the token text (e.g. a config-parse error echoing its input)
+    # and greps both the raised error text and the on-disk receipt for it.
+    token = "sbp_super_secret_token_for_stderr_leak_test"
+
+    def fake_subprocess_run(argv, input=None, capture_output=True, text=True):
+        class R:
+            stdout = ""
+            stderr = f"curl: (3) URL rejected: bad header near token {token}"
+            returncode = 3
+
+        return R()
+
+    runner = CurlRunner("ref123", token, runner=fake_subprocess_run)
+    with pytest.raises(ApiError) as exc_info:
+        runner("select 1")
+    assert token not in str(exc_info.value)
+    assert token not in exc_info.value.body
+
+    f = tmp_path / "0013_widget.sql"
+    f.write_text(FIXTURE_READBACK_DOES_NOT_NAME_THE_OBJECT)
+    receipt_path = tmp_path / "receipt.json"
+    runner2 = CurlRunner("ref123", token, runner=fake_subprocess_run)
+    rc = run_apply(f, runner=runner2, receipt_path=receipt_path, project_ref="ref123")
+    assert rc == 5
+    receipt_text = receipt_path.read_text()
+    assert token not in receipt_text
+    captured = capsys.readouterr()
+    assert token not in captured.out
+
+
+def test_allow_legacy_still_refuses_a_non_idempotent_non_legacy_file(tmp_path):
+    # review-#516 round-2 MINOR 4: the existing
+    # test_allow_legacy_waives_only_versions_0001_to_0010 only calls
+    # migration_version() and never exercises _guard()'s own refusal path for
+    # a non-legacy version passed with --allow-legacy -- it asserted a name,
+    # not the behavior the name promised. Drive it through run_dry (the real
+    # CLI path) instead of the private _guard helper.
+    f = tmp_path / "0013_not_idempotent.sql"
+    f.write_text(FIXTURE_NOT_IDEMPOTENT)
+    rc = run_dry(f, allow_legacy=True)
+    assert rc == 3
+
+
+def test_main_refuses_a_missing_path_with_a_plain_message_not_a_traceback(tmp_path, capsys):
+    missing = tmp_path / "does_not_exist.sql"
+    rc = main([str(missing), "--dry-run"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "no such file" in err
+    assert "Traceback" not in err
+
+
+def test_apply_receipt_write_failure_prints_a_plain_message_not_a_traceback(tmp_path, capsys):
+    f = tmp_path / "0013_alert_runs_outbox.sql"
+    f.write_text(FIXTURE_0013)
+    fake = FakeApi()
+    unwritable_receipt = tmp_path / "no_such_dir" / "receipt.json"
+    with pytest.raises(SystemExit) as exc_info:
+        run_apply(f, runner=fake, receipt_path=unwritable_receipt, project_ref="ref123",
+                   accept_unverifiable=True)
+    assert exc_info.value.code == 2
+    out = capsys.readouterr().out
+    assert "could not write the receipt" in out
+    assert "Traceback" not in out
 
 
 def test_dry_run_prints_comments_stripped_not_the_raw_statement(tmp_path, capsys):
