@@ -57,12 +57,14 @@
   .subject { max-width: none; }
 }
 
-/* ── LIGHT TREATMENT (specification; not yet live — shell has no light branch) ── */
+/* ── LIGHT TREATMENT (specification; not yet live — shell has no light branch). Tokens
+   only: --shadow-card/--line/--up/--warn are existing globals.css tokens, no new hex
+   literals introduced by this block. ── */
 :global(html[data-theme="light"]) .answerLine {
   background: #fff; box-shadow: var(--shadow-card); border-bottom: 1px solid var(--line);
 }
-:global(html[data-theme="light"]) .stanceWatching { text-shadow: none; border-left: 3px solid #12a06a; padding-left: 8px; }
-:global(html[data-theme="light"]) .stanceDegraded { border-left: 3px solid #b57708; }
+:global(html[data-theme="light"]) .stanceWatching { text-shadow: none; border-left: 3px solid var(--up); padding-left: 8px; }
+:global(html[data-theme="light"]) .stanceDegraded { border-left: 3px solid var(--warn); }
 :global(html[data-theme="light"]) .chip {
   background: color-mix(in srgb, var(--hue) 12%, #fff);
   border: 1px solid color-mix(in srgb, var(--hue) 46%, transparent);

@@ -23,11 +23,6 @@ export default function AlertsCockpit({ email }: { email: string }) {
   const [alertsState, setAlertsState] = useState<ReadState>("READ_UNAVAILABLE");
   const [receipts, setReceipts] = useState<ReceiptsResp | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
-  // Real no-coverage source (step 2, B-F08-3 continuation): a null quote from the existing
-  // batch quote route IS a live "we cannot read this price" signal — not a fabricated placeholder.
-  // A fetch failure here must never render as "0 could-not-watch symbols" (that would silently
-  // hide the honest READ_NO_COVERAGE state), so it is tracked separately from an empty result.
-  const [noCoverageSymbols, setNoCoverageSymbols] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -50,34 +45,23 @@ export default function AlertsCockpit({ email }: { email: string }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // Ask the same batch quote route the watchlist uses (read-only; this route is not owned by
-  // this packet and is never modified) which of the ACTIVE alerts' symbols currently have no
-  // live quote. A null entry is a genuine no-coverage signal; a fetch/network failure leaves
-  // the previous (possibly empty) list untouched rather than reporting a false all-clear.
-  useEffect(() => {
-    const activeSymbols = Array.from(new Set((alerts || []).filter((a) => a.active && a.symbol).map((a) => a.symbol as string)));
-    if (activeSymbols.length === 0) { setNoCoverageSymbols([]); return; }
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch(`/api/quote?syms=${encodeURIComponent(activeSymbols.join(","))}`);
-        if (!r.ok) return;
-        const body: { quotes?: Record<string, unknown | null> } = await r.json();
-        const quotes = body.quotes || {};
-        const missing = activeSymbols.filter((sy) => quotes[sy] == null);
-        if (!cancelled) setNoCoverageSymbols(missing);
-      } catch { /* leave prior state — a failed probe is not evidence of full coverage */ }
-    })();
-    return () => { cancelled = true; };
-  }, [alerts]);
+
+  // The four-state read vocabulary (freeze §5) is decided HERE, from the evaluator's own
+  // `unevaluable_n` on the run receipt — never from a client-side probe against an unrelated
+  // display route. This is the only place READ_NO_COVERAGE is produced.
+  const effectiveAlertsState: ReadState = useMemo(() => {
+    if (alertsState !== "READ_OK" && alertsState !== "READ_OK_ZERO") return alertsState;
+    const unevalN = receipts?.run?.unevaluable_n ?? null;
+    return unevalN !== null && unevalN > 0 ? "READ_NO_COVERAGE" : alertsState;
+  }, [alertsState, receipts]);
 
   const view = useMemo(() => buildAlertsView({
-    alerts, alertsState,
+    alerts, alertsState: effectiveAlertsState,
     run: receipts?.run ?? null, lastSuccessAt: receipts?.last_success_at ?? null,
     runsState: receipts?.runs_state ?? "READ_UNAVAILABLE",
     outbox: receipts?.outbox ?? [], outboxState: receipts?.outbox_state ?? "READ_UNAVAILABLE",
     now: Date.now(),
-  }), [alerts, alertsState, receipts]);
+  }), [alerts, effectiveAlertsState, receipts]);
 
   const timelineRows: TimelineRow[] = view.rows.map((r) => {
     const alert = alerts?.find((a) => a.id === r.alertId);
@@ -85,7 +69,7 @@ export default function AlertsCockpit({ email }: { email: string }) {
     return {
       id: r.alertId, time: t,
       subject: r.outboxRow?.payload?.ticker || alert?.symbol || "—",
-      verdict: r.outboxRow?.payload?.condition_plain || (alert?.condition?.type ?? ""),
+      verdict: r.outboxRow?.payload?.condition_plain || (lang === "zh" ? "条件" : "Condition"),
       delivery: r.delivery, foldedRows: r.foldedRows,
     };
   });
@@ -98,7 +82,7 @@ export default function AlertsCockpit({ email }: { email: string }) {
     return {
       conditionText: row.outboxRow?.payload?.condition_plain || alert.condition?.type || "",
       holdingSymbol: alert.symbol ?? row.outboxRow?.payload?.ticker ?? null,
-      bookState: "READ_OK",
+      bookState: view.coverage.state === "READ_NO_COVERAGE" ? "READ_NO_COVERAGE" : "READ_OK",
       summaryPlain: row.outboxRow?.payload?.summary_plain ?? null,
       conditionPlain: row.outboxRow?.payload?.condition_plain ?? null,
       firedAt: row.outboxRow?.payload?.fired_at ?? null,
@@ -114,7 +98,8 @@ export default function AlertsCockpit({ email }: { email: string }) {
     };
   }, [openId, view, alerts]);
 
-  const dataState = view.monitor === "unknown" ? "unavailable"
+  const dataState: "unavailable" | "never-ran" | "no-coverage" | "degraded" | "calm-empty" | "calm" =
+    view.monitor === "unknown" ? "unavailable"
     : view.monitor === "never_ran" ? "never-ran"
     : view.coverage.state === "READ_NO_COVERAGE" ? "no-coverage"
     : view.monitor === "degraded" ? "degraded"
@@ -141,12 +126,12 @@ export default function AlertsCockpit({ email }: { email: string }) {
           <button type="button" className={`btn ${s.emptyAction}`}>{copy("empty.calm.action", lang === "zh" ? "zh" : "en")}</button>
         </div>
       )}
-      <AlertTimeline rows={timelineRows} lang={lang === "zh" ? "zh" : "en"} onOpen={setOpenId} />
+      <AlertTimeline rows={timelineRows} lang={lang === "zh" ? "zh" : "en"} onOpen={setOpenId} spineState={dataState} />
       <WatchingList
         rows={(alerts || []).filter((a) => a.active).map((a) => ({ id: a.id, symbol: a.symbol || "—", label: a.condition?.type || "", state: "armed" as const }))}
         lang={lang === "zh" ? "zh" : "en"}
       />
-      <CouldNotWatch symbols={noCoverageSymbols} lang={lang === "zh" ? "zh" : "en"} />
+      <CouldNotWatch count={view.coverage.state === "READ_NO_COVERAGE" ? (view.noCoverageCount ?? 0) : 0} lang={lang === "zh" ? "zh" : "en"} />
       {detail && <AlertDetail data={detail} lang={lang === "zh" ? "zh" : "en"} onClose={() => setOpenId(null)} />}
     </div></main>
   );

@@ -59,6 +59,7 @@ export interface AlertsView {
   lastAttemptAt: string | null;
   lastSuccessAt: string | null;
   coverage: { state: ReadState; count: number | null };
+  noCoverageCount: number | null;
   rows: AlertRowView[];
   emptyAction: "add_watch" | "check_again" | null;
 }
@@ -101,22 +102,33 @@ export function foldOutbox(outbox: OutboxRow[]): Map<string, { row: OutboxRow; f
   return out;
 }
 
+// Statuses this surface can render, mapped onto mailer.STATUSES (freeze §8: no parallel
+// enum). `skipped_no_smtp` is a terminal non-delivery (config problem, never retried) and
+// must never masquerade as "pending" / in-flight.
+const KNOWN_DELIVERY: Record<string, DeliveryState> = {
+  sent: "sent", failed: "failed", deferred: "deferred", pending: "pending",
+  suppressed: "suppressed", skipped_no_smtp: "suppressed", queued: "pending",
+};
+
 export function deliveryFor(
   alert: Alert,
   outboxState: ReadState,
   folded: Map<string, { row: OutboxRow; folded: number }>,
-): { delivery: DeliveryState; foldedRows: number; outboxRow: OutboxRow | null } {
-  if (outboxState === "READ_UNAVAILABLE") return { delivery: "unconfirmed", foldedRows: 0, outboxRow: null };
-  const match = [...folded.values()].find((v) => v.row.alert_id === alert.id);
+): { delivery: DeliveryState; foldedRows: number; outboxRow: OutboxRow | null; fired: boolean } {
+  // `fired` is the ONLY gate for whether this alert has a delivery leg at all — an alert that
+  // has never fired must never appear in the delivery timeline (it has no delivery outcome to
+  // report, honest or otherwise). See buildAlertsView's row filter below.
   const fired = !alert.active && alert.condition?.triggered === true;
+  if (outboxState === "READ_UNAVAILABLE") return { delivery: "unconfirmed", foldedRows: 0, outboxRow: null, fired };
+  const match = [...folded.values()].find((v) => v.row.alert_id === alert.id);
   if (!match) {
-    return fired ? { delivery: "pending", foldedRows: 0, outboxRow: null } : { delivery: "pending", foldedRows: 0, outboxRow: null };
+    return { delivery: "pending", foldedRows: 0, outboxRow: null, fired };
   }
   const row = match.row;
-  const status = row.status as DeliveryState;
+  const status = row.status as string;
   const delivery: DeliveryState =
-    status === "sent" && row.delivered_at == null ? "pending" : (["sent", "failed", "deferred", "pending", "suppressed"].includes(status) ? status : "pending");
-  return { delivery, foldedRows: match.folded, outboxRow: row };
+    status === "sent" && row.delivered_at == null ? "pending" : (KNOWN_DELIVERY[status] ?? "failed");
+  return { delivery, foldedRows: match.folded, outboxRow: row, fired };
 }
 
 export function buildAlertsView(input: {
@@ -132,16 +144,32 @@ export function buildAlertsView(input: {
   const monitor = monitorFor(input.run, input.runsState, input.now);
   const folded = foldOutbox(input.outbox ?? []);
   const alerts = input.alerts ?? [];
-  const rows: AlertRowView[] = alerts.map((a) => {
-    const d = deliveryFor(a, input.outboxState, folded);
-    return { alertId: a.id, delivery: d.delivery, foldedRows: d.foldedRows, outboxRow: d.outboxRow };
-  });
+  // Only alerts that have actually FIRED get a delivery-timeline row — an alert that is
+  // still armed and has never fired has no delivery outcome and must not render one (blocker:
+  // every alert with no outbox row was previously resolving to "pending", claiming a
+  // delivery leg for events that never happened).
+  const rows: AlertRowView[] = alerts
+    .map((a) => ({ a, d: deliveryFor(a, input.outboxState, folded) }))
+    .filter(({ d }) => d.fired)
+    .map(({ a, d }) => ({ alertId: a.id, delivery: d.delivery, foldedRows: d.foldedRows, outboxRow: d.outboxRow }));
+
+  // `input.alertsState` is the frozen four-state read vocabulary (§5), decided by the caller —
+  // this view model never invents READ_NO_COVERAGE from a fabricated signal, it only ever
+  // reports what the caller determined. `unevaluable_n` on the run receipt is the AUTHORITATIVE
+  // upstream signal callers should use to decide READ_NO_COVERAGE (never a client quote probe).
   const emptyAction = input.alertsState === "READ_OK_ZERO" ? "add_watch" : monitor === "degraded" ? "check_again" : null;
   return {
     monitor,
     lastAttemptAt: input.run?.started_at ?? null,
     lastSuccessAt: input.lastSuccessAt,
-    coverage: { state: input.alertsState, count: input.alertsState === "READ_OK" ? alerts.length : null },
+    coverage: {
+      state: input.alertsState,
+      count: input.alertsState === "READ_OK" ? alerts.length : null,
+    },
+    // Distinct from `coverage.count` (which is an honest null, not a number, when coverage
+    // is degraded) — this is the "how many symbols could we not evaluate" fact for the
+    // CouldNotWatch module, sourced only from the evaluator's own run receipt.
+    noCoverageCount: input.run?.unevaluable_n ?? null,
     rows,
     emptyAction,
   };
@@ -171,6 +199,13 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
   "neverRan.body": ["We have not recorded a check yet. New conditions start being checked within about five minutes.", "我们尚未记录到任何检查。新建条件通常在约五分钟内开始检查。"],
   "noCoverage.body": ["We cannot read prices for {n} of your symbols, so those conditions were not checked.", "有 {n} 个代码我们读不到价格，这些条件未被检查。"],
   "folded.note": ["Duplicate rows folded ({n})", "已合并重复记录（{n}）"],
+  "resolution.armed": ["Armed — still watching", "已启用 —— 仍在监控"],
+  "resolution.resolved": ["Resolved", "已解决"],
+  "resolution.open": ["Open", "待处理"],
+  "resolution.paused": ["Paused", "已暂停"],
+  "receipt.attempts": ["Send attempts", "发送尝试次数"],
+  "receipt.lastError": ["Last error", "最近错误"],
+  "receipt.deliverAfter": ["Held until", "延迟至"],
   "ceiling": ["Context and decision support — not advice.", "仅供参考与决策支持，非投资建议。"],
 };
 

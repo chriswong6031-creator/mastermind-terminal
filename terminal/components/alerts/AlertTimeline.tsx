@@ -13,15 +13,15 @@ const CHIP_CLASS: Record<DeliveryState, string> = {
 };
 
 export default function AlertTimeline({
-  rows, lang, onOpen,
-}: { rows: TimelineRow[]; lang: "en" | "zh"; onOpen: (id: string) => void }) {
+  rows, lang, onOpen, spineState,
+}: { rows: TimelineRow[]; lang: "en" | "zh"; onOpen: (id: string) => void; spineState: "calm" | "calm-empty" | "degraded" | "unavailable" | "no-coverage" | "never-ran" }) {
   return (
     <div className={s.module}>
       <div className={s.moduleHead}>
         <span>{lang === "zh" ? "自上次访问以来" : "Since you were here"}</span>
         {rows.length > 0 && <span className={s.moduleCount}>{rows.length} {lang === "zh" ? "条新" : "new"}</span>}
       </div>
-      <div className={s.spine} data-alerts-state={rows.length ? "calm" : "calm-empty"}>
+      <div className={s.spine} data-alerts-state={spineState}>
         {rows.map((r) => (
           <div
             key={r.id} className={s.row} role="button" tabIndex={0} data-delivery={r.delivery}

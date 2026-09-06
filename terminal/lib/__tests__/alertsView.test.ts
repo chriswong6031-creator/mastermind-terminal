@@ -36,6 +36,60 @@ describe("monitorFor — calm requires proof-of-run", () => {
   });
 });
 
+describe("buildAlertsView row filter — RED-first proof of blocker 1", () => {
+  it("a never-fired (armed) alert produces ZERO delivery-timeline rows", () => {
+    const armed = alert({ id: "a-armed", active: true, condition: { type: "price", triggered: false } });
+    const view = buildAlertsView({
+      alerts: [armed], alertsState: "READ_OK",
+      run: baseRun(), lastSuccessAt: "2026-09-05T11:59:00Z", runsState: "READ_OK",
+      outbox: [], outboxState: "READ_OK_ZERO", now: NOW,
+    });
+    expect(view.rows.length).toBe(0);
+  });
+  it("a fired alert with no outbox row DOES produce a row, resolved pending", () => {
+    const fired = alert({ id: "a-fired", active: false, condition: { type: "price", triggered: true } });
+    const view = buildAlertsView({
+      alerts: [fired], alertsState: "READ_OK",
+      run: baseRun(), lastSuccessAt: "2026-09-05T11:59:00Z", runsState: "READ_OK",
+      outbox: [], outboxState: "READ_OK_ZERO", now: NOW,
+    });
+    expect(view.rows.length).toBe(1);
+    expect(view.rows[0].delivery).toBe("pending");
+  });
+  it("a mix of armed + fired alerts only surfaces the fired one", () => {
+    const armed = alert({ id: "a-armed", active: true, condition: { type: "price", triggered: false } });
+    const fired = alert({ id: "a-fired", active: false, condition: { type: "price", triggered: true } });
+    const view = buildAlertsView({
+      alerts: [armed, fired], alertsState: "READ_OK",
+      run: baseRun(), lastSuccessAt: "2026-09-05T11:59:00Z", runsState: "READ_OK",
+      outbox: [], outboxState: "READ_OK_ZERO", now: NOW,
+    });
+    expect(view.rows.map((r) => r.alertId)).toEqual(["a-fired"]);
+  });
+});
+
+describe("noCoverageCount surfaces the authoritative evaluator signal — RED-first proof of major 1", () => {
+  it("carries run.unevaluable_n through to the view, independent of coverage.count", () => {
+    const view = buildAlertsView({
+      alerts: [alert()], alertsState: "READ_NO_COVERAGE",
+      run: baseRun({ unevaluable_n: 3 }), lastSuccessAt: "2026-09-05T11:59:00Z", runsState: "READ_OK",
+      outbox: [], outboxState: "READ_OK_ZERO", now: NOW,
+    });
+    expect(view.noCoverageCount).toBe(3);
+    // coverage.count stays an honest null in the degraded state (blocker 8) — the count of
+    // UNREADABLE symbols is a distinct fact, never conflated with "how many are covered".
+    expect(view.coverage.count).toBeNull();
+  });
+  it("null unevaluable_n (e.g. run receipt unavailable) is a distinct honest null, never 0", () => {
+    const view = buildAlertsView({
+      alerts: [alert()], alertsState: "READ_OK",
+      run: null, lastSuccessAt: null, runsState: "READ_UNAVAILABLE",
+      outbox: [], outboxState: "READ_OK_ZERO", now: NOW,
+    });
+    expect(view.noCoverageCount).toBeNull();
+  });
+});
+
 describe("lastAttemptAt / lastSuccessAt independence", () => {
   it("attempt present, success absent -> success field is the two-word null only", () => {
     const view = buildAlertsView({
@@ -61,6 +115,18 @@ describe("delivery law", () => {
   it("fired alert with no outbox row -> pending, never delivered", () => {
     const d = deliveryFor(alert(), "READ_OK", new Map());
     expect(d.delivery).toBe("pending");
+    expect(d.fired).toBe(true);
+  });
+  it("armed (never-fired) alert is never mistaken for fired", () => {
+    const armed = alert({ active: true, condition: { type: "price", triggered: false } });
+    const d = deliveryFor(armed, "READ_OK", new Map());
+    expect(d.fired).toBe(false);
+  });
+  it("skipped_no_smtp is a terminal non-delivery, never masquerades as pending", () => {
+    const folded = foldOutbox([outboxRow({ status: "skipped_no_smtp", delivered_at: null })]);
+    const d = deliveryFor(alert(), "READ_OK", folded);
+    expect(d.delivery).not.toBe("pending");
+    expect(d.delivery).toBe("suppressed");
   });
   it("outboxState READ_UNAVAILABLE -> unconfirmed, never sent", () => {
     const folded = foldOutbox([outboxRow()]);

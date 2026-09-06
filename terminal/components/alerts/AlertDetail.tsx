@@ -39,13 +39,13 @@ export default function AlertDetail({ data, lang, onClose }: { data: AlertDetail
       <div className={s.detailFact}><span className={s.detailLabel}>{copy("fact.lastAttempt", lang)}</span><span>{fmt(data.lastAttemptAt)}</span></div>
       <div className={s.detailFact}><span className={s.detailLabel}>{copy("fact.lastSuccess", lang)}</span><span>{fmt(data.lastSuccessAt)}</span></div>
       <div className={s.ceiling}>{copy("ceiling", lang)}</div>
-      <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "解决状态" : "Resolution"}</span><span>{data.resolution}</span></div>
+      <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "解决状态" : "Resolution"}</span><span>{copy(`resolution.${data.resolution}`, lang)}</span></div>
       <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "投递结果" : "Delivery"}</span><span>{copy(`delivery.${data.delivery}`, lang)}</span></div>
       <details className={s.receiptDisclosure}>
         <summary>{lang === "zh" ? "回执" : "Receipt"}</summary>
-        <div>attempts: {data.attempts}</div>
-        <div>last_error: {data.lastError ?? "—"}</div>
-        <div>deliver_after: {data.deliverAfter ?? "—"}</div>
+        <div>{copy("receipt.attempts", lang)}: {data.attempts}</div>
+        <div>{copy("receipt.lastError", lang)}: {data.lastError ?? copy("null.notRecorded", lang)}</div>
+        <div>{copy("receipt.deliverAfter", lang)}: {data.deliverAfter ? fmt(data.deliverAfter) : copy("null.notRecorded", lang)}</div>
       </details>
     </div>
   );
