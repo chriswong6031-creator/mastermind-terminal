@@ -5,7 +5,12 @@ const mocks = vi.hoisted(() => ({
   tooMany: vi.fn(() => new Response("rate limited", { status: 429 })),
   hasLiveOptions: vi.fn(async () => true),
   isValidF: vi.fn(() => true),
-  loadFlowFresh: vi.fn(async () => ({ schema: "must-never-be-read" })),
+  // Typed to the real `loadFlowFresh` signature (Promise<Record<string, unknown> | null>)
+  // so each test can hand back whatever fixture shape it needs — the default payload
+  // below is a sentinel that must never actually be read.
+  loadFlowFresh: vi.fn<() => Promise<Record<string, unknown> | null>>(async () => ({
+    schema: "must-never-be-read",
+  })),
 }));
 
 vi.mock("@/lib/rateLimit", () => ({
