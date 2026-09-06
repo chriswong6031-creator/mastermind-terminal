@@ -88,9 +88,14 @@ in this estate, because nothing here records that it already was.
 
 ## Numbering and reservations
 
-Ruled 2026-09-06 by Meta-CEO B, recorded in the Macro repo as
-`agentos/decisions/DEC-SUPABASE-MIGRATION-NAMESPACE-TERMINAL-LEDGER-2026-09-06.md`. Four rules, in
-plain words:
+Ruled 2026-09-06 by Meta-CEO B. The ruling is intended to be recorded in the Macro repo as
+`agentos/decisions/DEC-SUPABASE-MIGRATION-NAMESPACE-TERMINAL-LEDGER-2026-09-06.md`; as of this pull
+request that path does **not** exist on macro `origin/main` (checked via `git cat-file -e
+origin/main:agentos/decisions/DEC-SUPABASE-MIGRATION-NAMESPACE-TERMINAL-LEDGER-2026-09-06.md`, and
+via `git ls-tree --name-only origin/main agentos/decisions/ | grep -iE 'supabase|migration'`, both
+empty). The rules below are binding per the ruling regardless; the DEC citation itself is an open
+null until that file is committed on macro `main` — do not read its presence here as proof the
+record has landed. Four rules, in plain words:
 
 **(a) One forward ledger.** This directory is the only forward migration ledger for the shared
 Supabase project `fsldfzlxyavsuwqbceod`. The Macro repo's `scripts/deploy/000N` series is frozen as
@@ -99,10 +104,19 @@ a historical record: it is never extended, and any Macro-side DDL need becomes a
 with the files here and mostly describe different objects — those numbers are history, not
 addresses, and nothing should ever be matched across the two series by number.
 
-**(b) A number is claimed when a pull request opens.** The next free number is `max(number on
-`master`, numbers claimed by open pull requests) + 1`. Whoever opens the pull request writes that
-number into the reservations table below **in the same pull request**. If two pull requests end up
-on one number, the earlier-opened one keeps it and the later one renumbers before it merges.
+**(b) A number is claimed when a pull request opens, or reserved directly by Meta-CEO B
+ahead of a pull request** (as with `0013`/`0014` below, which have no open pull request yet). The
+next free number is `max(number on `master`, numbers already reserved in the table below, numbers
+claimed by open pull requests) + 1` — the reservations table is part of the formula, not something
+derived after it, precisely so a Meta-CEO B pre-reservation with no open pull request (like `0013`/
+`0014`) is never invisible to the next claimant. Whoever opens the pull request writes that number
+into the reservations table below **in the same pull request**; a Meta-CEO B pre-reservation is
+written into the table by the ruling that creates it. If two pull requests end up on one number, the
+earlier-opened one keeps it and the later one renumbers before it merges. **A reservation is
+released** — its number returned to the free pool for Meta-CEO B to reassign — the moment its owning
+pull request closes without merging, or (for a pre-reservation) the moment Meta-CEO B stands it
+down; a released number is struck from the table with a `released` status rather than left `reserved`
+so the next claimant's `max()` does not pin it forever.
 
 **(c) The reservations standing today** are `0011` `analytics_eid` (#507), `0012` `thesis_objects`
 (#502, renumbering from `0011`), `0013` `alert_runs_outbox` (F08 slice 1, Meta-CEO B), and `0014`
@@ -124,9 +138,10 @@ posted on the pull request first, and only then is the application table above u
 | `0013` | `alert_runs_outbox` | F08 slice 1 (Meta-CEO B) — no pull request open yet | reserved |
 | `0014` | `tenancy_foundation` | F12 (Meta-CEO B) — no pull request open yet | reserved |
 
-What the three statuses mean: **reserved** — the number is claimed and no file for it is on
+What the statuses mean: **reserved** — the number is claimed and no file for it is on
 `master`; **merged** — the file is on `master`; **applied** — an operator has run it against
-production and posted the readback.
+production and posted the readback; **released** — the owning pull request closed unmerged (or the
+pre-reservation was stood down) and the number has returned to the free pool.
 
 **None of these four is merged, and none is applied.** Nothing in this table has reached the
 database, and the "in production?" table above is still the only record of what has. Do not read a
