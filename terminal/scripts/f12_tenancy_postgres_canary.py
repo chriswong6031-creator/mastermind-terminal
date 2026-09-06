@@ -90,8 +90,12 @@ def bootstrap(conn: psycopg.Connection) -> None:
         cur.execute("create schema if not exists auth")
         cur.execute("create schema if not exists extensions")
         cur.execute("create extension if not exists pgcrypto with schema extensions")
+        # raw_user_meta_data: 0001_init.sql's on_auth_user_created trigger (handle_new_user)
+        # reads new.raw_user_meta_data->>'name' on every insert into auth.users, so migration
+        # replay dies with UndefinedColumn before ever reaching 0014 unless the mock table carries
+        # the same column real Supabase auth.users has.
         cur.execute(
-            "create table if not exists auth.users (id uuid primary key default gen_random_uuid(), email text)"
+            "create table if not exists auth.users (id uuid primary key default gen_random_uuid(), email text, raw_user_meta_data jsonb not null default '{}'::jsonb)"
         )
         cur.execute(
             """
@@ -267,34 +271,45 @@ def main() -> int:
         "admin self-promotion to owner did not raise",
     )
 
-    # 8c. M1: admin (B) cannot demote the owner (A). tm_update_admin's USING clause blocks any
-    # target row whose role is 'owner' unless the caller is themselves the owner.
-    def b_admin_demotes_owner():
-        with conn_b.cursor() as cur:
-            cur.execute(
-                "update public.team_members set role = 'member' where team_id = %s and user_id = %s",
-                (team_id, user_ids["a"]),
-            )
-
+    # 8c. M1/B2: admin (B) cannot demote the owner (A). tm_update_admin's USING clause is a row
+    # filter, not a check — a Postgres RLS USING clause on UPDATE silently excludes the non-
+    # matching row instead of raising, so this must be asserted on EFFECT (RETURNING is empty, and
+    # a follow-up admin-connection SELECT shows A's row unchanged), never via expect_database_error.
+    with conn_b.cursor() as cur:
+        cur.execute(
+            "update public.team_members set role = 'member' where team_id = %s and user_id = %s returning id",
+            (team_id, user_ids["a"]),
+        )
+        demote_returned = cur.fetchall()
+    row = admin_row(
+        admin,
+        "select role from public.team_members where team_id = %s and user_id = %s",
+        (team_id, user_ids["a"]),
+    )
     proof.check(
         "rls:admin_cannot_demote_owner",
-        expect_database_error(b_admin_demotes_owner),
-        "admin demoting the owner did not raise",
+        demote_returned == [] and row == ("owner",),
+        f"admin demoting the owner affected rows={demote_returned}, owner row after={row}",
     )
 
-    # 8d. M1: admin (B) cannot delete the owner (A)'s membership row. tm_delete_admin's USING
-    # clause excludes any row whose role is 'owner' — owners are not deletable in V1.
-    def b_admin_deletes_owner():
-        with conn_b.cursor() as cur:
-            cur.execute(
-                "delete from public.team_members where team_id = %s and user_id = %s",
-                (team_id, user_ids["a"]),
-            )
-
+    # 8d. M1/B2: admin (B) cannot delete the owner (A)'s membership row. tm_delete_admin's USING
+    # clause is likewise a silent row filter on DELETE — assert 0 rows returned and the row still
+    # present afterward, not that an exception was raised.
+    with conn_b.cursor() as cur:
+        cur.execute(
+            "delete from public.team_members where team_id = %s and user_id = %s returning id",
+            (team_id, user_ids["a"]),
+        )
+        delete_returned = cur.fetchall()
+    row = admin_row(
+        admin,
+        "select count(*) from public.team_members where team_id = %s and user_id = %s",
+        (team_id, user_ids["a"]),
+    )
     proof.check(
         "rls:admin_cannot_delete_owner",
-        expect_database_error(b_admin_deletes_owner),
-        "admin deleting the owner did not raise",
+        delete_returned == [] and row == (1,),
+        f"admin deleting the owner affected rows={delete_returned}, owner row count after={row}",
     )
 
     # 9. anon: no privilege at all on any tenancy table (0014 revokes all from anon and grants
