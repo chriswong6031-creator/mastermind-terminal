@@ -66,6 +66,28 @@ jobs:
           timeout 480 npx playwright install --with-deps chromium \
             || { echo "::warning::apt/--with-deps stalled or failed — installing the browser only"; \
                  npx playwright install chromium; }
+      # Quarantined journeys are disclosed on EVERY run: a green matrix must never be read as
+      # full coverage. Bare `echo`, never a logger — a logger prefix pushes `::warning` off the
+      # start of the line and GitHub silently drops the annotation.
+      - name: Disclose quarantined e2e journeys
+        run: |
+          if [ ! -f e2e/QUARANTINE.md ]; then
+            echo "::error title=e2e-quarantine::terminal/e2e/QUARANTINE.md is missing"
+            exit 1
+          fi
+          awk -F'|' '/^## Observed but NOT quarantined/ { exit }
+          /^\| *terminal\/e2e\// && NF == 8 {
+            for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) }
+            print "::warning title=e2e-quarantine::" $2 " — " $3 " — owner: " $6 " — evidence: " $5 " — re-enable: " $7
+            n++
+          }
+          END { print n+0 > "/tmp/quarantine_row_count.txt" }' e2e/QUARANTINE.md
+          fixme_count=$(grep -rc "test\.fixme(" e2e | awk -F: '{s+=$2} END {print s+0}')
+          row_count=$(cat /tmp/quarantine_row_count.txt 2>/dev/null || echo 0)
+          if [ "$fixme_count" != "$row_count" ]; then
+            echo "::error title=e2e-quarantine::terminal/e2e has $fixme_count test.fixme( occurrence(s) but QUARANTINE.md's quarantine table has $row_count row(s) — every quarantined test needs a disclosed row, and every row needs a live test.fixme"
+            exit 1
+          fi
       - run: npm run test:e2e:responsive
       - name: Upload responsive QA screenshots
         if: always()
