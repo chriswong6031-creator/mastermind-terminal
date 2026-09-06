@@ -985,3 +985,97 @@ def test_run_once_logs_unevaluable_n_not_skipped_only(tmp_path, monkeypatch, cap
     assert receipt["unevaluable_n"] == 1
     out = capsys.readouterr().out
     assert "1 unevaluable" in out
+
+
+# Meta-CEO ruling (PR #513 review round 6, MAJOR-1/MAJOR-2/MINOR-3): the round-5 plain-language
+# rewrite of opt_0dte_spike and opt_sign_fragile changed the underlying CLAIM (a measured share
+# turned into an absolute "surge in trading"; an instrument-robustness statistic turned into a
+# trader-sentiment claim). Round 6 restores a plain-English/plain-Chinese description of the
+# actual MEASURED quantity: opt_0dte_spike measures a SHARE of options money traded (_eval_0dte,
+# "0d share of tracked net premium"); opt_sign_fragile measures how BALANCED the call/put gamma
+# split is (_eval_sign_fragile, tilt = ||call|-|put|| / total); opt_opex_concentration measures a
+# share of OPEN options positions concentrated in the front expiry (_eval_opex_concentration,
+# front-expiry share of gross/open gamma), never generic "options activity". Each condition's
+# EN and ZH sentence must name its measured quantity; this pins the round-6 fix against the
+# round-5 regression these three condition types held.
+_MEASURED_QUANTITY_TERMS = {
+    "opt_0dte_spike": {"en": ("share",), "zh": ("占比",)},
+    "opt_sign_fragile": {"en": ("balanced", "balance"), "zh": ("平衡",)},
+    "opt_opex_concentration": {"en": ("open options positions",), "zh": ("未平仓",)},
+}
+
+
+def test_opt_measured_quantity_named_in_plain_text_en_and_zh():
+    """Meta-CEO ruling, round 6: opt_0dte_spike/opt_sign_fragile/opt_opex_concentration must each
+    name their measured quantity (share / balance / open positions) in BOTH the EN and ZH plain
+    text -- never a different claim the evaluator does not measure (no "surge in trading", no
+    "losing conviction", no generic "options activity")."""
+    conds = {
+        "opt_0dte_spike": {"type": "opt_0dte_spike", "root": "SPY"},
+        "opt_sign_fragile": {"type": "opt_sign_fragile", "root": "SPY"},
+        "opt_opex_concentration": {"type": "opt_opex_concentration", "root": "SPY"},
+    }
+    for ctype, cond in conds.items():
+        en = ae._condition_plain_en(cond, "SPY")
+        zh = ae._condition_plain_zh(cond, "SPY")
+        en_terms = _MEASURED_QUANTITY_TERMS[ctype]["en"]
+        zh_terms = _MEASURED_QUANTITY_TERMS[ctype]["zh"]
+        assert any(t in en.lower() for t in en_terms), (
+            f"{ctype} EN text {en!r} names none of its measured-quantity terms {en_terms!r}"
+        )
+        assert any(t in zh for t in zh_terms), (
+            f"{ctype} ZH text {zh!r} names none of its measured-quantity terms {zh_terms!r}"
+        )
+
+
+def test_opt_0dte_spike_never_claims_a_surge_in_trading():
+    """Meta-CEO ruling, round 6, MAJOR-1: _eval_0dte (alerts_engine.py) computes the 0d SHARE of
+    tracked net premium against share_pct -- the share can cross while 0DTE activity is flat or
+    falling (longer-dated premium collapsing elsewhere). The round-5 text ("a surge in trading of
+    options expiring today" / ZH "交易量大幅上升") asserted an absolute volume surge the evaluator
+    never measures. The fix must never claim a surge/increase in trading or volume."""
+    en = ae._condition_plain_en({"type": "opt_0dte_spike", "root": "SPY"}, "SPY")
+    zh = ae._condition_plain_zh({"type": "opt_0dte_spike", "root": "SPY"}, "SPY")
+    assert "surge" not in en.lower()
+    assert "share" in en.lower()
+    assert "交易量" not in zh and "大幅上升" not in zh
+    assert "占比" in zh
+
+
+def test_opt_sign_fragile_never_claims_trader_sentiment():
+    """Meta-CEO ruling, round 6, MAJOR-2: _eval_sign_fragile measures the gamma tilt statistic
+    ||call|-|put||/total falling below tilt_pct -- an instrument-robustness measure, not a claim
+    about what options traders believe or how divided they are. The round-5 text ("options
+    traders are losing conviction" / ZH "期权交易者...看法出现分歧") asserted a market-participant
+    claim the evaluator never observes. The fix must never mention traders' conviction or
+    disagreement."""
+    en = ae._condition_plain_en({"type": "opt_sign_fragile", "root": "SPY"}, "SPY")
+    zh = ae._condition_plain_zh({"type": "opt_sign_fragile", "root": "SPY"}, "SPY")
+    assert "conviction" not in en.lower() and "trader" not in en.lower()
+    assert "balanced" in en.lower() or "balance" in en.lower()
+    assert "交易者" not in zh and "分歧" not in zh
+    assert "平衡" in zh
+
+
+def test_opt_opex_concentration_names_open_positions_not_activity():
+    """Meta-CEO ruling, round 6, MINOR-3: _eval_opex_concentration measures a share of gross/open
+    gamma (open options POSITIONS) concentrated in the front expiry -- the round-5 text
+    substituted the generic "options activity" for that quantity. Fixed text names open options
+    positions."""
+    en = ae._condition_plain_en({"type": "opt_opex_concentration", "root": "SPY"}, "SPY")
+    zh = ae._condition_plain_zh({"type": "opt_opex_concentration", "root": "SPY"}, "SPY")
+    assert "options activity" not in en.lower()
+    assert "open options positions" in en.lower()
+    assert "未平仓" in zh
+
+
+def test_opt_wall_side_names_options_qualifier():
+    """Meta-CEO ruling, round 6, MINOR-2: the gamma call/put wall must never render as the bare
+    generic TA term "resistance level"/"support level" (collides with chart resistance/support
+    the user already has) -- it must carry the "options" qualifier, e.g. "an options level that
+    tends to act as resistance/support"."""
+    for wall in ("call", "put"):
+        en = ae._condition_plain_en({"type": "opt_wall_touch", "root": "SPY", "wall": wall}, "SPY")
+        zh = ae._condition_plain_zh({"type": "opt_wall_touch", "root": "SPY", "wall": wall}, "SPY")
+        assert "options" in en.lower()
+        assert "期权" in zh

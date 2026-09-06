@@ -224,12 +224,19 @@ def _minute_vintage(value: str | None) -> str | None:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
 
 
-# Meta-CEO ruling (PR #513 review round 5, MAJOR-1): plain everyday words, never the internal
-# "gamma wall" name — a resistance/support level is the plain-language equivalent a retail user
-# already recognizes (DEC-CHAIRMAN-FRONTEND-PLAIN-LANGUAGE-LAW-2026-09-06 binds every
-# user-facing string, and this dict feeds the delivered outbox payload).
-_OPT_WALL_SIDE_EN = {"call": "resistance level", "put": "support level"}
-_OPT_WALL_SIDE_ZH = {"call": "阻力位", "put": "支撑位"}
+# Meta-CEO ruling (PR #513 review round 6, MINOR-2): the bare generic TA terms "resistance
+# level"/"support level" collide with the chart resistance/support the user already has —
+# precision loss without a qualifier. The wall side must always carry the "options" qualifier
+# (DEC-CHAIRMAN-FRONTEND-PLAIN-LANGUAGE-LAW-2026-09-06 binds every user-facing string, and this
+# dict feeds the delivered outbox payload).
+_OPT_WALL_SIDE_EN = {
+    "call": "an options level that tends to act as resistance",
+    "put": "an options level that tends to act as support",
+}
+_OPT_WALL_SIDE_ZH = {
+    "call": "一个通常起阻力作用的期权关键价位",
+    "put": "一个通常起支撑作用的期权关键价位",
+}
 
 
 def _plain_root(cond: dict, symbol: str) -> str:
@@ -245,10 +252,18 @@ def _condition_plain_en(cond: dict, symbol: str) -> str:
     Meta-CEO ruling (PR #513 review round 5, MAJOR-1): every branch — including the opt_* ones
     — uses plain everyday words, never an internal study/indicator name (no "RSI(14)"), a raw
     Greek-letter options term (no "gamma"), or an internal leg/slug abbreviation (no
-    "net-put"/"net-call"). "bullish"/"bearish"/"resistance level"/"support level" are the plain
+    "net-put"/"net-call"). "bullish"/"bearish" and the options-wall phrase above are the plain
     vocabulary this file already uses elsewhere (the regime branch below) — every reader already
     recognizes them, unlike the internal names they replace
-    (DEC-CHAIRMAN-FRONTEND-PLAIN-LANGUAGE-LAW-2026-09-06 binds every user-facing string)."""
+    (DEC-CHAIRMAN-FRONTEND-PLAIN-LANGUAGE-LAW-2026-09-06 binds every user-facing string).
+
+    Meta-CEO ruling (PR #513 review round 6, MAJOR-1/MAJOR-2/MINOR-3): plain wording must
+    describe the MEASURED quantity, never a different claim. opt_0dte_spike measures a SHARE of
+    the options money traded (never an absolute "surge in trading" — the share can cross while
+    0DTE activity is flat or falling); opt_sign_fragile measures how BALANCED the call/put gamma
+    split is (never a trader-sentiment/conviction claim — the evaluator observes no trader
+    behavior); opt_opex_concentration measures a share of OPEN options positions concentrated in
+    the front expiry (never generic "options activity")."""
     ctype = cond.get("type")
     sym = symbol or "the symbol"
     if ctype == "price":
@@ -265,19 +280,20 @@ def _condition_plain_en(cond: dict, symbol: str) -> str:
         return f"{root} crosses a key options level that can amplify its price swings"
     if ctype == "opt_wall_touch":
         wall = _OPT_WALL_SIDE_EN["put" if cond.get("wall") == "put" else "call"]
-        return f"{root} nears its {wall}"
+        return f"{root} nears {wall}"
     if ctype == "opt_premium_burst":
         bias = "bearish" if cond.get("leg") == "npp" else "bullish"
         return f"{root} sees an unusually large burst of {bias} options bets"
     if ctype == "opt_0dte_spike":
-        return f"{root} sees a surge in trading of options expiring today"
+        return (f"same-day options now make up an unusually large share of the options money "
+                 f"being traded in {root}")
     if ctype == "opt_wall_migration":
-        wall = _OPT_WALL_SIDE_EN["put" if cond.get("wall") == "put" else "call"]
-        return f"{root}'s {wall} shifts to a new price"
+        role = "support" if cond.get("wall") == "put" else "resistance"
+        return f"the options level that tends to act as {role} for {root} shifts to a new price"
     if ctype == "opt_sign_fragile":
-        return f"options traders are losing conviction on which way {root} will move"
+        return f"the options positioning picture for {root} is finely balanced and could flip either way"
     if ctype == "opt_opex_concentration":
-        return f"a large share of {root}'s options activity is concentrated in the nearest expiration date"
+        return f"a large share of {root}'s open options positions is concentrated in the nearest expiration date"
     if ctype == "opt_surface_pocket":
         return f"{root} shows an unusual cluster of options activity at one price level"
     return f"{sym} condition is met"
@@ -307,19 +323,19 @@ def _condition_plain_zh(cond: dict, symbol: str) -> str:
         return f"{root}突破一个可能放大其价格波动的关键期权水平"
     if ctype == "opt_wall_touch":
         wall = _OPT_WALL_SIDE_ZH["put" if cond.get("wall") == "put" else "call"]
-        return f"{root}接近其{wall}"
+        return f"{root}接近{wall}"
     if ctype == "opt_premium_burst":
         bias = "看跌" if cond.get("leg") == "npp" else "看涨"
         return f"{root}出现异常大量的{bias}期权押注"
     if ctype == "opt_0dte_spike":
-        return f"{root}今日到期期权的交易量大幅上升"
+        return f"{root}当日到期期权在期权成交金额中的占比异常偏高"
     if ctype == "opt_wall_migration":
-        wall = _OPT_WALL_SIDE_ZH["put" if cond.get("wall") == "put" else "call"]
-        return f"{root}的{wall}变为新的价位"
+        role = "支撑" if cond.get("wall") == "put" else "阻力"
+        return f"{root}那个通常起{role}作用的关键期权价位变为新的价位"
     if ctype == "opt_sign_fragile":
-        return f"期权交易者对{root}接下来的走势看法出现分歧"
+        return f"{root}的期权持仓格局非常接近平衡，读数可能翻转"
     if ctype == "opt_opex_concentration":
-        return f"{root}的期权交易高度集中在最近的到期日"
+        return f"{root}的未平仓期权头寸高度集中在最近的到期日"
     if ctype == "opt_surface_pocket":
         return f"{root}在某一价位出现异常集中的期权交易"
     return f"{sym}条件已触发"
@@ -344,8 +360,9 @@ class Supa:
         rather than a fire with no delivery trace.
 
         `vintage` is REQUIRED — the caller (run_once()) always supplies the data vintage the
-        evaluator actually used for this alert this run (Data.evaluation_vintage(), falling back
-        to the run's own source_asof). There is deliberately no fallback identity here: a prior-
+        evaluator actually used for this alert this run (Data.evaluation_vintage() — no
+        wall-clock rung anywhere in that ladder; Meta-CEO ruling, PR #513 review round 6,
+        MINOR-1). There is deliberately no fallback identity here: a prior-
         row lookup cannot tell a crash-retry from a genuine re-fire (that heuristic swallowed a
         genuine second fire and, separately, double-enqueued a deferred one — Meta-CEO ruling on
         PR #513 review round 1), so identity comes ONLY from the deterministic triple.
