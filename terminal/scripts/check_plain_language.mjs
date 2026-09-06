@@ -12,6 +12,14 @@
 // Packet B-PL-5 (lane marketontology-b4-plain-language-guard).
 //
 // Node 20 ESM, zero npm dependencies.
+//
+// Scanning model (full census, forward-only blocking — same shape as the
+// macro precedent): every file under SCAN_GLOBS/EXTRA_FILES is scanned on
+// every run, regardless of whether the diff touches it. A finding on a line
+// the diff marks as ADDED is `blocking`; the same finding on a pre-existing
+// line is reported as `legacy` and never fails the run. This is what lets an
+// untouched file's pre-existing violation surface (visibility) without
+// retroactively blocking code nobody in this PR wrote.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
@@ -44,6 +52,10 @@ export const PLAIN_VOCABULARY = {
     "iv_rank", "ivr", "gex", "dex", "vanna", "charm", "dte", "oi", "pcr", "rv30", "hv20",
     "atr14", "zscore", "z_score", "pctl", "yoy", "qoq", "ttm", "cagr",
   ],
+  // Names of helper calls / lookups that mean "this line already routes its
+  // text through the plain-language layer". Consumers must match these as
+  // whole call names (`\bNAME\(`), never as a bare substring — a substring
+  // match on e.g. "t(" also matches `sort(`, `useEffect(`, `.at(`, `count(`.
   plainHelpers: [
     "trustTierLabel(", "regimeLabel(", "planTierLabel(", "classicCategoryLabel(",
     "macroChipLabel(", "mappedOrNeutral(", "notClassified(", "t(", "tPlain(", "pick(", "LEX[",
@@ -60,6 +72,13 @@ function findRepoRoot() {
   return join(HERE, "..", "..");
 }
 
+// terminal/lib/plainLabels.ts (packet #519) is an OPTIONAL, forward-compatible
+// vocabulary overlay: if/when it lands on this tree, its exported label maps
+// and helper function names are harvested and merged into the terms the
+// guard treats as "already routed". Until #519 merges, `existsSync` below is
+// false, `overlay.present` is false, and every declared term lives in
+// PLAIN_VOCABULARY alone — that is the single declared source acceptance (2)
+// requires, with or without the overlay.
 function loadOverlay(root) {
   const p = join(root, "terminal/lib/plainLabels.ts");
   const result = { present: false, terms: [] };
@@ -147,13 +166,28 @@ function parseAddedLineNumbers(diffText) {
 function isUserVisiblePosition(line) {
   if (/>[^<>]*<\/?[a-zA-Z]/.test(line) || />[^<>]+</.test(line)) return true;
   if (/\b(label|title|sublabel|placeholder|aria-label|caption|heading|tooltip|emptyText|alt|children)\s*[:=]/.test(line)) return true;
-  if (/\bLEX\s*[.\[]/.test(line) || /^\s*[A-Za-z0-9_]+\s*:\s*\[/.test(line)) return true;
+  if (/\bLEX\s*[.\[]/.test(line)) return true;
   return false;
 }
 
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// A "plain helper on this line" match must be a whole call/lookup name, never
+// a bare substring — `line.includes("t(")` also matches `.sort(`, `.at(`,
+// `useEffect(`, `format(`, `count(`, defeating R3/R5b on any line that
+// happens to contain those. Every helper ending in "(" is matched as
+// `\bNAME\(`; a helper like "LEX[" (no trailing paren) is matched literally.
 function hasPlainHelperOnLine(line, overlayTerms) {
   const all = [...PLAIN_VOCABULARY.plainHelpers, ...overlayTerms];
-  return all.some((h) => line.includes(h));
+  return all.some((h) => {
+    if (h.endsWith("(")) {
+      const name = h.slice(0, -1);
+      return new RegExp(`\\b${escapeRegExp(name)}\\(`).test(line);
+    }
+    return line.includes(h);
+  });
 }
 
 function suggestionForEnum(token) {
@@ -171,19 +205,22 @@ function parseWaiver(line) {
   return reason.length > 0 ? reason : null;
 }
 
-function scanFile(root, absPath, addedLines) {
-  const relPath = relative(root, absPath).replace(/\\/g, "/");
-  const text = readFileSync(absPath, "utf8");
+// Real rule bodies, operating on in-memory text — shared by scanFile (reads
+// from disk) and runSelfCheck (feeds a fixture string directly, so the
+// self-check exercises the same code path CI runs, not a re-typed proxy).
+function scanLines(relPath, text, addedLines, overlayTerms) {
   const lines = text.split("\n");
   const added = addedLines.get(relPath) || new Set();
   const findings = [];
   const isI18n = relPath.endsWith("terminal/lib/i18n.tsx");
+  let visibleAddedCount = 0;
 
   lines.forEach((rawLine, idx) => {
     const lineNo = idx + 1;
     const line = rawLine;
     const visible = isUserVisiblePosition(line);
     const waiverReason = parseWaiver(line);
+    if (visible && added.has(lineNo)) visibleAddedCount += 1;
 
     // R1: raw_state_enum
     const enumRe = /\b([A-Z][A-Z0-9]+(?:_[A-Z0-9]+)+)\b/g;
@@ -210,7 +247,7 @@ function scanFile(root, absPath, addedLines) {
     // R3: raw_slug_interpolation — JSX interpolation of a slugFields field, no plain helper on line
     for (const field of PLAIN_VOCABULARY.slugFields) {
       const interpRe = new RegExp(`\\{[^}]*\\.${field}\\}`);
-      if (interpRe.test(line) && !hasPlainHelperOnLine(line, [])) {
+      if (interpRe.test(line) && !hasPlainHelperOnLine(line, overlayTerms)) {
         findings.push(mkFinding(relPath, lineNo, "raw_slug_interpolation", field,
           `raw "${field}" field interpolated with no plain-language helper on the same line`,
           `route through a plainLabels helper (e.g. regimeLabel/classicCategoryLabel) or lib/i18n t()`,
@@ -221,7 +258,7 @@ function scanFile(root, absPath, addedLines) {
     // R4: untranslated_stat_token — rendered as visible text, no gloss/LEX key on line
     for (const tok of PLAIN_VOCABULARY.statTokens) {
       const tokRe = new RegExp(`\\b${tok}\\b`, "i");
-      if (tokRe.test(line) && visible && !/\bLEX\[/.test(line) && !/\bt\(/.test(line)) {
+      if (tokRe.test(line) && visible && !hasPlainHelperOnLine(line, overlayTerms)) {
         findings.push(mkFinding(relPath, lineNo, "untranslated_stat_token", tok,
           "untranslated raw statistic token rendered as visible text",
           `add a gloss via lib/i18n t("${tok}") or an inline explanatory label`,
@@ -249,7 +286,7 @@ function scanFile(root, absPath, addedLines) {
       if (lm && visible) {
         const words = lm[1].trim().split(/\s+/).filter((w) => /[A-Za-z]/.test(w));
         const latinWords = words.filter((w) => /^[A-Za-z'-]+$/.test(w));
-        if (latinWords.length >= 2 && lm[1].trim().length >= 6 && !hasPlainHelperOnLine(line, [])) {
+        if (latinWords.length >= 2 && lm[1].trim().length >= 6 && !hasPlainHelperOnLine(line, overlayTerms)) {
           findings.push(mkFinding(relPath, lineNo, "missing_zh", lm[1].trim(),
             "added English literal in a user-visible position with no zh routing (t(/tPlain(/pick(/LEX[)",
             `route through t()/tPlain()/pick() with a LEX entry carrying an [en, zh] pair`,
@@ -259,7 +296,13 @@ function scanFile(root, absPath, addedLines) {
     }
   });
 
-  return findings;
+  return { findings, visibleAddedCount };
+}
+
+function scanFile(root, absPath, addedLines, overlayTerms) {
+  const relPath = relative(root, absPath).replace(/\\/g, "/");
+  const text = readFileSync(absPath, "utf8");
+  return scanLines(relPath, text, addedLines, overlayTerms);
 }
 
 function mkFinding(path, line, rule, token, detail, suggestion, addedFlag, waiverReason) {
@@ -312,37 +355,26 @@ function resolveDiff({ diffFile, since, root }) {
 
 function selfCheckFixtures() {
   return {
-    R1: 'const x = <span>BOTTOM_WATCH</span>;',
-    R2: 'const x = <span>trust_tier</span>;',
-    R3: 'const x = <span>{row.regime}</span>;',
-    R4: 'const x = <span>iv_rank</span>;',
-    R5a: '  newThing: ["Market is calm"],',
-    R5b: 'const x = <h2>Market is calm today</h2>;',
+    R1: { relPath: "fixture.tsx", code: "const x = <span>BOTTOM_WATCH</span>;", rule: "raw_state_enum" },
+    R2: { relPath: "fixture.tsx", code: "const x = <span>trust_tier</span>;", rule: "internal_study_slug" },
+    R3: { relPath: "fixture.tsx", code: "const x = <span>{row.regime}</span>;", rule: "raw_slug_interpolation" },
+    R4: { relPath: "fixture.tsx", code: "const x = <span>iv_rank</span>;", rule: "untranslated_stat_token" },
+    R5a: { relPath: "terminal/lib/i18n.tsx", code: '  newThing: ["Market is calm"],', rule: "missing_zh" },
+    R5b: { relPath: "fixture.tsx", code: "const x = <h2>Market is calm today</h2>;", rule: "missing_zh" },
   };
 }
 
+// Real invocation: each fixture line is fed through the SAME scanLines() the
+// production scan uses (not a re-typed regex proxy), with that one line
+// marked as added — so a rule only reports "detected" if the guard's actual
+// rule logic, on its actual code path, flags the fixture as blocking.
 function runSelfCheck(root) {
   const fixtures = selfCheckFixtures();
   const results = {};
-  for (const [rule, code] of Object.entries(fixtures)) {
-    const addedLines = new Map([["fixture.tsx", new Set([1])]]);
-    const isI18n = rule === "R5a";
-    const tmpRel = isI18n ? "terminal/lib/i18n.tsx" : "fixture.tsx";
-    addedLines.set(tmpRel, new Set([1]));
-    const lines = [code];
-    const findings = [];
-    // Reuse scanFile logic by writing to a fake path via direct line scan.
-    const visible = true;
-    // Minimal direct invocation using the same rule bodies is out of scope here;
-    // instead we just confirm the pattern matches, proving each rule is reachable.
-    let hit = false;
-    if (rule === "R1") hit = /\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+)+\b/.test(code);
-    if (rule === "R2") hit = PLAIN_VOCABULARY.studySlugs.some((s) => code.includes(s));
-    if (rule === "R3") hit = /\{[^}]*\.regime\}/.test(code);
-    if (rule === "R4") hit = /\biv_rank\b/i.test(code);
-    if (rule === "R5a") hit = /\[([^\]]*)\]/.test(code) && code.split(",").filter((s) => s.trim()).length < 2;
-    if (rule === "R5b") hit = /[">]\s*[A-Za-z][A-Za-z' -]{5,}\s*[<"]/.test(code);
-    results[rule] = hit;
+  for (const [rule, fx] of Object.entries(fixtures)) {
+    const addedLines = new Map([[fx.relPath, new Set([1])]]);
+    const { findings } = scanLines(fx.relPath, fx.code, addedLines, []);
+    results[rule] = findings.some((f) => f.rule === fx.rule && f.blocking);
   }
   return results;
 }
@@ -409,16 +441,21 @@ function main() {
   }
 
   const addedLines = parseAddedLineNumbers(diffResult.text);
-  const touchedRelPaths = [...addedLines.keys()].filter((p) => p.endsWith(".tsx"));
-  const scanFiles = touchedRelPaths
-    .map((p) => join(root, p))
-    .filter((p) => existsSync(p) && !EXCLUDE_RE.test(p.replace(/\\/g, "/")));
+  // Full census: every file under SCAN_GLOBS/EXTRA_FILES is scanned on every
+  // run, not only the files the diff touches — this is what lets a legacy
+  // (completely untouched) file's pre-existing violation be reported.
+  // `addedLines` (from the diff) is what decides which findings are
+  // `blocking` vs `legacy`; it never decides which files get opened.
+  const scanFiles = listScanFiles(root);
 
   let allFindings = [];
   const nulls = [];
   for (const f of scanFiles) {
-    const findings = scanFile(root, f, addedLines);
-    if (findings.length === 0) {
+    const { findings, visibleAddedCount } = scanFile(root, f, addedLines, overlay.terms);
+    if (findings.length === 0 && visibleAddedCount === 0) {
+      // Honest null: this file had no user-visible ADDED lines at all, so
+      // "no findings" cannot be hiding a missed zh-parity check — there was
+      // nothing on the diff's side of this file to check in the first place.
       nulls.push({ axis: "zh_translation", path: relative(root, f).replace(/\\/g, "/"), value: "not evaluable — no new user-visible strings added" });
     }
     allFindings = allFindings.concat(findings);

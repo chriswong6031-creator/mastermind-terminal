@@ -133,6 +133,39 @@ describe("check_plain_language.mjs", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("3b. reports an offending line in a file the diff never touches at all (full census)", () => {
+    const root = makeFixtureRoot();
+    // Untouched.tsx never appears in the diff in any form — no +++ header,
+    // no hunk. A scanner keyed off the diff's own touched-file list would
+    // never open it, and would report zero legacy findings.
+    const untouchedRelPath = "terminal/components/Untouched.tsx";
+    const untouchedContent = [
+      "export function Untouched() {",
+      "  return <div><b>BOTTOM_WATCH</b></div>;",
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, untouchedRelPath), untouchedContent);
+
+    // The diff touches a completely different file.
+    const otherRelPath = "terminal/components/Other.tsx";
+    const otherContent = ["export function Other() {", "  return <div />;", "}", ""].join("\n");
+    writeFileSync(join(root, otherRelPath), otherContent);
+    const diff = unifiedDiffFor(otherRelPath, otherContent, [1]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    expect(res.status).toBe(0);
+    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    expect(parsed.scannedFiles).toBeGreaterThanOrEqual(2);
+    const legacyHit = parsed.findings.find(
+      (f: any) => f.path === untouchedRelPath && f.rule === "raw_state_enum" && !f.blocking
+    );
+    expect(legacyHit).toBeTruthy();
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("4. EN/ZH parity: missing zh in LEX entry and unrouted English literal both block", () => {
     const root = makeFixtureRoot();
     const relPath = "terminal/lib/i18n.tsx";
@@ -217,6 +250,44 @@ describe("check_plain_language.mjs", () => {
     process.stdout.write("\n--- end receipt ---\n");
     expect(res2.stdout).toContain("legacy (pre-existing, not blocking)");
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it("10. a bare substring match on a helper name (.sort(/useEffect() does not defeat R3/R5b", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/components/Sneaky.tsx";
+    const content = [
+      "export function Sneaky({ rows }: any) {",
+      "  return <div>{rows.sort((a: any, b: any) => a - b) && <h2>Market is calm today</h2>}</div>;",
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [2]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    expect(res.status).toBe(1);
+    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    expect(parsed.counts.blocking).toBeGreaterThan(0);
+    rmSync(root, { recursive: true, force: true });
+
+    const root2 = makeFixtureRoot();
+    const relPath2 = "terminal/components/Sneaky2.tsx";
+    const content2 = [
+      "export function Sneaky2({ row }: any) {",
+      "  return <div>{useEffect(() => {})}<span>{row.regime}</span></div>;",
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(root2, relPath2), content2);
+    const diff2 = unifiedDiffFor(relPath2, content2, [2]);
+    const diffFile2 = join(root2, "diff.patch");
+    writeFileSync(diffFile2, diff2);
+    const res2 = run(["--mode", "enforce-added", "--root", root2, "--diff-file", diffFile2, "--json"]);
+    expect(res2.status).toBe(1);
+    const parsed2 = JSON.parse(res2.stdout.trim().split("\n").pop()!);
+    expect(parsed2.findings.some((f: any) => f.rule === "raw_slug_interpolation" && f.blocking)).toBe(true);
+    rmSync(root2, { recursive: true, force: true });
   });
 
   it("9. --json contract shape is stable", () => {
