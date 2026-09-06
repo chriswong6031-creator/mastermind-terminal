@@ -34,6 +34,8 @@ curl -X POST "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/databas
   -H "Content-Type: application/json" --data '{"query":"<sql>"}'
 ```
 
+A reviewed wrapper around this call, with pre/post catalog receipts, is `scripts/supabase_apply.py` (see `scripts/README_supabase_apply.md`).
+
 Two hard-won rules (see root `HANDOFF.md` §5): strip `--` comments first — the endpoint splits on
 `;` and chokes on a `;` inside a comment — and use `curl`, not python-urllib, which gets a
 Cloudflare 1010 block.
