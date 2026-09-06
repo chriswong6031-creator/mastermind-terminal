@@ -3,7 +3,7 @@
 This directory is the **schema source of record** for the shared Supabase project
 (`fsldfzlxyavsuwqbceod`). It is NOT a migration runner, and nothing in the deploy chain applies it.
 
-**Before you add a file here, claim its number.** Numbers are allocated when a pull request opens, not when it merges, and every open claim is listed in [Numbering and reservations](#numbering-and-reservations) at the foot of this file.
+**Before you add a file here, claim its number.** See [Numbering and reservations](#numbering-and-reservations) at the foot of this file for the allocation rule and the current list of open claims.
 
 ## There is no remote migration history
 
@@ -114,11 +114,11 @@ rebase regardless; no future exception to (b) without a DEC amendment.
 idempotent, carries a `-- down:` comment block saying how to undo it, and carries a `-- readback:`
 catalog query that answers whether it is live. Applying it remains an operator / Meta-CEO action
 performed by hand, out of band, and the pre/post catalog readback is posted on the pull request
-before the application table above is updated.
+before the README application table is updated.
 
 ### Operating notes (README author extension, not part of the ruling)
 
-These describe how this README author is implementing rules (a)-(c) above, plus one illustrative
+These describe how this README author is implementing rules (a)-(d) above, plus one illustrative
 fact about rule (a). None of this is itself ruled text — a future change to any of it needs no DEC
 amendment, only a README edit.
 
@@ -147,15 +147,17 @@ amendment, only a README edit.
 | number | name | owner (PR / packet) | status |
 |---|---|---|---|
 | `0011` | `analytics_eid` | PR #507 (applied live 2026-09-05; readback receipt on #507) | applied |
-| `0012` | `thesis_objects` | PR #502 (renumbering in flight) | reserved |
-| `0013` | `alert_runs_outbox` | PR #513 (open PR, packet B-F08-2) | reserved |
-| `0014` | `tenancy_foundation` | PR #514 (open PR, packet B-F12-1) | reserved |
+| `0012` | `thesis_objects` | PR #502 (renumbering in flight) | open PR |
+| `0013` | `alert_runs_outbox` | PR #513 (open PR, packet B-F08-2) | open PR |
+| `0014` | `tenancy_foundation` | PR #514 (open PR, packet B-F12-1) | open PR |
 
-What the statuses mean: **reserved** — the number is claimed and no file for it is on
-`master`; **merged** — the file is on `master`; **applied** — an operator has run it against
-production and posted the readback. (**released** is an operating-note-only status — see
-"Release path" above — for a claim that was returned to the free pool; it is not one of the
-ruling's own status words and no row currently carries it.)
+What the statuses mean: **reserved** — the number is claimed (for example, by a Meta-CEO B
+pre-reservation) but no pull request carrying its file is open yet; **open PR** — a pull
+request carrying the file for this number is open and not yet merged; **merged** — the file
+is on `master`; **applied** — an operator has run it against production and posted the
+readback. (**released** is an operating-note-only status — see "Release path" above — for a
+claim that was returned to the free pool; it is not one of the ruling's own status words and
+no row currently carries it.)
 
 Only `0011` has reached production: its corrective DDL was applied live on 2026-09-05 via the
 management API and recorded on PR #507, ahead of `0011`'s own file landing on `master`. The "in
