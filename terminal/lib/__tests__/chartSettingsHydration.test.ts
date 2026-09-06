@@ -2,7 +2,7 @@
 import React, { StrictMode } from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const panelReceipts = vi.hoisted(() => [] as Array<{
   dataReady: boolean;
@@ -89,6 +89,23 @@ function paneProps() {
 describe("ChartPane persisted chart-settings authority", () => {
   let container: HTMLDivElement;
   let root: Root | undefined;
+  // vi.importActual bypasses every mock above and really executes ChartPanel.tsx (8.5k
+  // lines, lightweight-charts and friends) to reach the one pure exported helper under test.
+  // That real import is genuinely slow, not racy — measured 3.5-5.0s depending on whether the
+  // vitest transform cache is warm and how many other files share the worker pool, which put
+  // it right against (and once over) vitest's 5000ms default *test* timeout. Paying that cost
+  // once in beforeAll, under the separate (and larger) hook-timeout budget below, removes the
+  // flake without pretending the helper itself is async or timer-driven — it is a real awaited
+  // import, just one that should not race the per-test clock.
+  let isRequestedPriceScaleApplied: (
+    typeof import("@/components/ChartPanel")
+  )["isRequestedPriceScaleApplied"];
+
+  beforeAll(async () => {
+    ({ isRequestedPriceScaleApplied } = await vi.importActual<
+      typeof import("@/components/ChartPanel")
+    >("@/components/ChartPanel"));
+  }, 30_000);
 
   beforeEach(() => {
     Object.defineProperty(globalThis, "localStorage", {
@@ -150,10 +167,7 @@ describe("ChartPane persisted chart-settings authority", () => {
     ).toBe(false);
   });
 
-  it("does not accept requested left state until the live series reports the left owner", async () => {
-    const { isRequestedPriceScaleApplied } = await vi.importActual<
-      typeof import("@/components/ChartPanel")
-    >("@/components/ChartPanel");
+  it("does not accept requested left state until the live series reports the left owner", () => {
     let liveOwner = "right";
     const series = { options: () => ({ priceScaleId: liveOwner }) };
 
