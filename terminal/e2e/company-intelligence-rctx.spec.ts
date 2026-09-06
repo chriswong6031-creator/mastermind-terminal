@@ -220,8 +220,20 @@ test("the real Analysis shell hosts one-turn exact source sends in the existing 
   // on the Analysis mount's "" stub (AppShell mounts BrainWidget with active=""). Below 860px
   // (tablet/mobile projects) AppNav itself is `display:none` (globals.css) and MobileNav's
   // hamburger + drawer is the real entry point instead — same TOP list (AppNav.tsx), same href.
+  //
+  // Review repair round 2, MAJOR 2: the branch used to be picked with a one-shot
+  // `appNavChart.isVisible()` probe. AppNav's Suspense fallback renders `<nav aria-label="Primary">`
+  // with no links at all (components/AppNav.tsx), so on the desktop project the locator can
+  // legitimately resolve to 0 elements while the real nav is still hydrating — `isVisible()` does
+  // not wait for that, so it can read "not visible" on desktop and fall into the mobile branch,
+  // where the "Menu" button is `display:none` and `.click()` times out. Pick the branch from the
+  // same CSS breakpoint the app itself uses (globals.css `@media (max-width:860px)`) instead —
+  // deterministic from the project's own viewport, no race against hydration.
+  const viewportWidth = page.viewportSize()?.width ?? 0;
+  const isDesktopNav = viewportWidth > 860;
   const appNavChart = page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Chart" });
-  if (await appNavChart.isVisible()) {
+  if (isDesktopNav) {
+    await expect(appNavChart).toBeVisible();
     await appNavChart.click();
   } else {
     // PRODUCT FINDING (pre-existing, not caused by this repair or by BrainWidget/AppShell —
