@@ -86,7 +86,7 @@ def bootstrap(conn: psycopg.Connection) -> None:
         cur.execute("create schema if not exists extensions")
         cur.execute("create extension if not exists pgcrypto with schema extensions")
         cur.execute(
-            "create table if not exists auth.users (id uuid primary key default gen_random_uuid())"
+            "create table if not exists auth.users (id uuid primary key default gen_random_uuid(), email text)"
         )
         cur.execute(
             """
@@ -289,9 +289,15 @@ def main() -> int:
 
     proof.check("unique:token_hash", expect_database_error(dup_token), "duplicate token_hash did not raise")
 
-    # 11. no 42P17: every authenticated select above completed without raising (already true if we
-    # reached this point) — record explicitly.
-    proof.check("no_recursion", True, "")
+    # 11. no 42P17: RLS recursion is avoided because is_team_member/team_role are SECURITY DEFINER
+    # (they bypass RLS internally instead of re-entering the policies that call them). Probe the
+    # actual property in pg_proc rather than merely observing that earlier statements didn't raise.
+    row = admin_row(
+        admin,
+        "select p.prosecdef from pg_proc p join pg_namespace n on n.oid = p.pronamespace "
+        "where n.nspname = 'public' and p.proname = 'is_team_member'",
+    )
+    proof.check("no_recursion", row == (True,), f"is_team_member not security definer: row={row}")
 
     # 12. re-runnability: apply 0014 a second time
     row_counts_before = admin_row(

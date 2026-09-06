@@ -262,6 +262,16 @@ export async function addMember(
     if (insertResult.error) {
       const code = (insertResult.error as { code?: string }).code;
       if (code === "23505") return { ok: false, reason: "duplicate", error: "already a member", status: 409 };
+      if (code === "23503") {
+        // Foreign key to auth.users: a well-formed but nonexistent userId. Caller error, not a
+        // server fault — do not surface this as a 500.
+        return { ok: false, reason: "invalid", error: "that user does not exist", status: 400 };
+      }
+      if (code === "22P02") {
+        // Malformed uuid literal (e.g. not even shaped like a uuid). Caller error, not a server
+        // fault — do not surface this as a 500.
+        return { ok: false, reason: "invalid", error: "invalid userId", status: 400 };
+      }
       if (isAbsentTableError(insertResult.error)) {
         return { ok: false, reason: "unavailable", error: insertResult.error.message || "unavailable", status: 503 };
       }
