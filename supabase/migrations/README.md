@@ -90,8 +90,7 @@ in this estate, because nothing here records that it already was.
 
 Ruled 2026-09-06 by Meta-CEO B. The DEC record is committed on the Meta-CEO B branch and lands
 on macro `main` through macro PR #6903; until that merge this README is the only public copy of
-the ruling text. The rules below are binding regardless of the DEC file's merge status — do not
-read the DEC citation as proof the record has landed on macro `main`.
+the ruling text.
 
 ### Ruling text (binding, DEC-SUPABASE-MIGRATION-NAMESPACE-TERMINAL-LEDGER-2026-09-06)
 
@@ -100,59 +99,63 @@ Four rules, in plain words:
 **(a) One forward ledger.** This directory is the only forward migration ledger for the shared
 Supabase project `fsldfzlxyavsuwqbceod`. The Macro repo's `scripts/deploy/000N` series is frozen as
 a historical record: it is never extended, and any Macro-side DDL need becomes a pull request in
-*this* directory instead. Macro's series carries its own `0004`–`0008`, which collide numerically
-with the files here and mostly describe different objects — those numbers are history, not
-addresses, and nothing should ever be matched across the two series by number.
+*this* directory instead.
 
-**(b) A number is claimed when a pull request opens, or reserved directly by Meta-CEO B ahead of
-a pull request** (as with `0013`/`0014`, which had no open pull request at the time they were
-first reserved). The next free number is `max(number on `master`, numbers claimed by open pull
-requests) + 1`, recorded in a Reservations table in this README in the same pull request. A
-collision resolves in favour of the earlier-opened pull request; the later one renumbers before
-merging.
+**(b) A number is claimed when a pull request opens.** The next free number is
+`max(number on master, numbers claimed by open pull requests) + 1`, recorded in a Reservations
+table in this README in the same pull request. A collision resolves in favour of the
+earlier-opened pull request; the later one renumbers before merging.
 
 **(c) The initial seed is a one-time ruling exception to (b):** `0011` stays with #507 because it
 is a one-file Ready PR whose DDL is already applied live, while #502 is a 24-file Draft that must
 rebase regardless; no future exception to (b) without a DEC amendment.
 
 **(d) Every file stays re-runnable, and applying it stays out of band.** Each migration is
-idempotent (`create ... if not exists`, `create policy` wrapped in `duplicate_object` handlers,
-`drop trigger` before `create trigger`), carries a `-- down:` comment block saying how to undo it,
-and carries a `-- readback:` catalog query that answers whether it is live. Applying it remains an
-operator / Meta-CEO action performed by hand, out of band, and the pre/post catalog readback is
-posted on the pull request before the application table above is updated.
+idempotent, carries a `-- down:` comment block saying how to undo it, and carries a `-- readback:`
+catalog query that answers whether it is live. Applying it remains an operator / Meta-CEO action
+performed by hand, out of band, and the pre/post catalog readback is posted on the pull request
+before the application table above is updated.
 
 ### Operating notes (README author extension, not part of the ruling)
 
-These describe how this README author is implementing rules (b) and (c) above. They are not
-themselves ruled text — a future change to any of them needs no DEC amendment, only a README edit.
+These describe how this README author is implementing rules (a)-(c) above, plus one illustrative
+fact about rule (a). None of this is itself ruled text — a future change to any of it needs no DEC
+amendment, only a README edit.
 
+- **Numeric collision with Macro's frozen series.** Macro's frozen `scripts/deploy/000N` series
+  carries its own `0004`–`0008`, which collide numerically with the files here and mostly describe
+  different objects — those numbers are history, not addresses, and nothing should ever be matched
+  across the two series by number.
+- **Meta-CEO B pre-reservation channel.** Meta-CEO B may reserve a number directly, ahead of any
+  pull request opening — as done for `0013`/`0014`, which had no open pull request at the time
+  they were first reserved. Such a pre-reservation is written into the table by the ruling record
+  that creates it, not by a pull request; the pull request that later claims that number updates
+  the table's owner and status columns rather than adding a new row.
 - **Formula fold-in.** The `max()` in rule (b) is read here as counting the reservations table
   below as well as open pull requests — not something derived after the formula — precisely so a
   Meta-CEO B pre-reservation with no open pull request (like `0013`/`0014` were, before #513/#514
   opened) is never invisible to the next claimant.
-- **Pre-reservation entry.** A Meta-CEO B pre-reservation is written into the table by the ruling
-  record that creates it, not by a pull request; the pull request that later claims that number
-  updates the table's owner and status columns rather than adding a new row.
 - **Release path.** A reservation is released — its number returned to the free pool for
   Meta-CEO B to reassign — the moment its owning pull request closes without merging, or (for a
   pre-reservation) the moment Meta-CEO B stands it down; a released number is struck from the table
   with a `released` status rather than left `reserved`, so the next claimant's `max()` does not pin
-  it forever. No number below has been released.
+  it forever. `released` is a status this README defines to implement the release path above; it
+  is not one of the ruling's enumerated statuses. No number below has been released.
 
 ### Reservations
 
 | number | name | owner (PR / packet) | status |
 |---|---|---|---|
 | `0011` | `analytics_eid` | PR #507 (applied live 2026-09-05; readback receipt on #507) | applied |
-| `0012` | `thesis_objects` | PR #502 (draft — renumbering in flight from `0011`) | reserved |
-| `0013` | `alert_runs_outbox` | PR #513 (open, packet B-F08-2) | reserved |
-| `0014` | `tenancy_foundation` | PR #514 (open, packet B-F12-1) | reserved |
+| `0012` | `thesis_objects` | PR #502 (renumbering in flight) | reserved |
+| `0013` | `alert_runs_outbox` | PR #513 (open PR, packet B-F08-2) | reserved |
+| `0014` | `tenancy_foundation` | PR #514 (open PR, packet B-F12-1) | reserved |
 
 What the statuses mean: **reserved** — the number is claimed and no file for it is on
 `master`; **merged** — the file is on `master`; **applied** — an operator has run it against
-production and posted the readback; **released** — the owning pull request closed unmerged (or the
-pre-reservation was stood down) and the number has returned to the free pool.
+production and posted the readback. (**released** is an operating-note-only status — see
+"Release path" above — for a claim that was returned to the free pool; it is not one of the
+ruling's own status words and no row currently carries it.)
 
 Only `0011` has reached production: its corrective DDL was applied live on 2026-09-05 via the
 management API and recorded on PR #507, ahead of `0011`'s own file landing on `master`. The "in
