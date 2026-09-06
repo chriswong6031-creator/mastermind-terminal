@@ -3,6 +3,8 @@
 This directory is the **schema source of record** for the shared Supabase project
 (`fsldfzlxyavsuwqbceod`). It is NOT a migration runner, and nothing in the deploy chain applies it.
 
+**Before you add a file here, claim its number.** Numbers are allocated when a pull request opens, not when it merges, and every open claim is listed in [Numbering and reservations](#numbering-and-reservations) at the foot of this file.
+
 ## There is no remote migration history
 
 Censused read-only against production on **2026-08-20** via the Management API
@@ -83,3 +85,58 @@ to apply **everything** from `0001`. That is survivable only because every file 
 
 **Keep it that way.** A migration that is not safe to re-run is a migration that cannot be applied
 in this estate, because nothing here records that it already was.
+
+## Numbering and reservations
+
+Ruled 2026-09-06 by Meta-CEO B, recorded in the Macro repo as
+`agentos/decisions/DEC-SUPABASE-MIGRATION-NAMESPACE-TERMINAL-LEDGER-2026-09-06.md`. Four rules, in
+plain words:
+
+**(a) One forward ledger.** This directory is the only forward migration ledger for the shared
+Supabase project `fsldfzlxyavsuwqbceod`. The Macro repo's `scripts/deploy/000N` series is frozen as
+a historical record: it is never extended, and any Macro-side DDL need becomes a pull request in
+*this* directory instead. Macro's series carries its own `0004`–`0008`, which collide numerically
+with the files here and mostly describe different objects — those numbers are history, not
+addresses, and nothing should ever be matched across the two series by number.
+
+**(b) A number is claimed when a pull request opens.** The next free number is `max(number on
+`master`, numbers claimed by open pull requests) + 1`. Whoever opens the pull request writes that
+number into the reservations table below **in the same pull request**. If two pull requests end up
+on one number, the earlier-opened one keeps it and the later one renumbers before it merges.
+
+**(c) The reservations standing today** are `0011` `analytics_eid` (#507), `0012` `thesis_objects`
+(#502, renumbering from `0011`), `0013` `alert_runs_outbox` (F08 slice 1, Meta-CEO B), and `0014`
+`tenancy_foundation` (F12, Meta-CEO B).
+
+**(d) Every file stays re-runnable, and applying it stays out of band.** Each migration is
+idempotent (`create ... if not exists`, `create policy` wrapped in `duplicate_object` handlers,
+`drop trigger` before `create trigger`), carries a `-- down:` comment block saying how to undo it,
+and carries a `-- readback:` catalog query that answers whether it is live. Applying it remains an
+operator / Meta-CEO action performed by hand, out of band: the before-and-after catalog readback is
+posted on the pull request first, and only then is the application table above updated.
+
+### Reservations
+
+| number | name | owner (PR / packet) | status |
+|---|---|---|---|
+| `0011` | `analytics_eid` | PR #507 (ready) | reserved |
+| `0012` | `thesis_objects` | PR #502 (draft — renumbers from `0011`) | reserved |
+| `0013` | `alert_runs_outbox` | F08 slice 1 (Meta-CEO B) — no pull request open yet | reserved |
+| `0014` | `tenancy_foundation` | F12 (Meta-CEO B) — no pull request open yet | reserved |
+
+What the three statuses mean: **reserved** — the number is claimed and no file for it is on
+`master`; **merged** — the file is on `master`; **applied** — an operator has run it against
+production and posted the readback.
+
+**None of these four is merged, and none is applied.** Nothing in this table has reached the
+database, and the "in production?" table above is still the only record of what has. Do not read a
+reservation as a schema that exists.
+
+How these numbers were derived, so a later reader can re-check rather than trust: `master` holds up
+to `0010`, and the only open pull requests carrying a file in this directory are #507 and #502,
+which both claimed `0011` — so `0012`, `0013` and `0014` were the next free numbers.
+
+One thing this table does **not** derive from rule (b): #502 opened on 2026-09-03 and #507 on
+2026-09-05, so rule (b)'s earlier-pull-request tiebreak, applied on its own, would have left `0011`
+with #502. The 2026-09-06 ruling allocated `0011` to #507 and `0012` to #502 directly. Rule (b)
+governs every future collision; this one pair was set by the ruling.
