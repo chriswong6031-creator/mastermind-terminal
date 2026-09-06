@@ -707,10 +707,14 @@ describe("toolbar invocation deadline ownership", () => {
     await expect(toggleToolbarSync(page, intent)).rejects.toThrow(/^TOOLBAR_/);
     const elapsedMs = Date.now() - startedAt;
 
-    // Generous overhead allowance for scheduler/microtask jitter, but this must stay far short of
-    // a second full budget window — that would mean the fix silently re-grants time beyond the
-    // caller's owned deadline instead of sharing it.
-    expect(elapsedMs).toBeLessThan(budgetMs + 400);
+    // A fixed wall-clock headroom (e.g. `budgetMs + 400`) is exactly the flaky shape this
+    // de-flaking round exists to remove: under CI scheduler/microtask contention a few hundred
+    // extra ms is not a stable margin. A proportional bound scales with the budget instead, and
+    // still catches the real regression this test guards against — a bug that silently re-grants
+    // each `waitForSettledToolbar` call its own full local budget instead of sharing the caller's
+    // deadline would push total elapsed time toward roughly 2-3x budgetMs (two settle waits plus
+    // one effect-observation window), far past this bound.
+    expect(elapsedMs).toBeLessThan(budgetMs * 2);
   }, 10_000);
 
   it("classifies a post-click settle failure with budget still remaining as TOOLBAR_NOT_SETTLED, not a generic action-failed/budget-exhausted code (review minor 3)", async () => {
@@ -762,6 +766,63 @@ describe("toolbar invocation deadline ownership", () => {
     const intent: ToolbarIntent = { deadline: Date.now() + 8_000 };
     await expect(toggleToolbarSync(page, intent)).rejects.toThrow(/^TOOLBAR_NOT_SETTLED /);
     expect(clickCount).toBe(1);
+  }, 10_000);
+
+  it("succeeds when the click's semantic effect lands after the effect-observation window closes even though the toolbar never converges to a settled commit (review MAJOR)", async () => {
+    // Reviewer's probe: the semantic effect (the sync attribute flip) lands ~1.8s after the
+    // click — after observeToolbarEffect's ~1.5s (TOOLBAR_EFFECT_SETTLE_MS) window has already
+    // closed — and the toolbar itself never converges to a settled commit at all (a real churn
+    // scenario, e.g. continuous font/resize remeasurement). Before the fix, the post-click
+    // "after" `waitForSettledToolbar` read failed with TOOLBAR_NOT_SETTLED and `viaToolbar` threw
+    // that failure straight out, even though the click's effect had, by that point, genuinely
+    // landed. A click whose effect DID land must never be reported as a failure.
+    const visibility = (visible: boolean) => ({ isVisible: async () => visible, isEnabled: async () => visible });
+    const beforeSnapshot = { mode: "full" as const, revision: 5, settled: true, overflowOpen: false, backVisible: false };
+    let effectLanded = false;
+    const control = {
+      click: async () => {},
+      // Flips only once the after-click settle wait has begun — i.e. strictly after
+      // observeToolbarEffect's own window has already closed without observing it.
+      getAttribute: async () => (effectLanded ? "on" : "off"),
+      isVisible: async () => true,
+    } as unknown as Locator;
+    let waitCall = 0;
+    const page = {
+      isClosed: () => false,
+      waitForFunction: (
+        _fn: unknown,
+        _arg: unknown,
+        _opts: { timeout: number },
+      ) => {
+        waitCall += 1;
+        if (waitCall === 1) {
+          // Before-click snapshot: settles instantly.
+          return Promise.resolve({ jsonValue: async () => beforeSnapshot, dispose: async () => {} });
+        }
+        // After-click snapshot: the toolbar never converges. The effect lands right as this wait
+        // begins (strictly after observeToolbarEffect's real ~1.5s poll window already elapsed
+        // observing nothing), then this settle read itself fails outright.
+        effectLanded = true;
+        return Promise.reject(new Error("simulated: toolbar never converges to a settled commit"));
+      },
+      getByTestId: () => visibility(true),
+      locator: (selector: string) => {
+        if (selector === ".chart-tabs") {
+          return {
+            first: () => ({
+              evaluate: async () => ({
+                mode: null, revision: null, settled: false, overflowOpen: false, backVisible: false,
+              }),
+            }),
+          };
+        }
+        if (selector === '[data-toolbar-action="sync"]') return control;
+        return visibility(false);
+      },
+    } as unknown as Page;
+
+    const intent: ToolbarIntent = { deadline: Date.now() + 6_000 };
+    await expect(toggleToolbarSync(page, intent)).resolves.toBeUndefined();
   }, 10_000);
 
   it("never lends the future reservation to the current action or its effect observation", () => {

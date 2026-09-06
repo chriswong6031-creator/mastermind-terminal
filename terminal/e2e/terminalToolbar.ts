@@ -524,7 +524,20 @@ async function viaToolbar(page: Page, opts: ToolbarAction, intent: ToolbarIntent
     // scenario. Waiting for the next settled commit — as the "before" snapshot above already does —
     // gives an authoritative comparison; if the toolbar never settles within budget this throws a
     // typed TOOLBAR_NOT_SETTLED/TOOLBAR_BUDGET_EXHAUSTED failure instead of guessing.
-    const after = await waitForSettledToolbar(page, opts, deadline);
+    //
+    // But a click whose semantic effect DID land must never fail as TOOLBAR_NOT_SETTLED just
+    // because the toolbar itself keeps churning (a real trace: the effect flipped ~1.8s after the
+    // click — after observeToolbarEffect's ~1.5s window closed — while the toolbar never
+    // converged to a settled commit at all). The action succeeded; a helper that throws anyway is
+    // reporting a false failure. So the settle wait's own failure is not fatal by itself: only
+    // when the semantic effect ALSO never landed is this attempt genuinely unresolved.
+    let after: ToolbarSnapshot;
+    try {
+      after = await waitForSettledToolbar(page, opts, deadline);
+    } catch (settleError) {
+      if (await opts.done().catch(() => false)) return;
+      throw settleError;
+    }
     const revisionChanged = after.revision !== snapshot.revision
       || after.mode !== snapshot.mode;
     // A committed revision bump proves this attempt's click already changed something real —
