@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import path from "path";
 import {
-  buildAlertsView, monitorFor, foldOutbox, deliveryFor, ALERTS_COPY, copy, conditionText,
+  buildAlertsView, monitorFor, foldOutbox, deliveryFor, ALERTS_COPY, copy, conditionText, conditionsWord,
   type RunReceipt, type OutboxRow, type Alert,
 } from "../alertsView";
 
@@ -296,6 +296,23 @@ describe("conditionText — no raw condition slugs (major 3)", () => {
   it("null/missing condition never throws and never renders a slug", () => {
     expect(conditionText(null, undefined, "en")).toBe("Condition");
     expect(conditionText({}, undefined, "zh")).toBe("条件");
+  });
+});
+
+describe("conditionsWord — EN singular/plural agreement (minor 2, round-3 review)", () => {
+  it("RED-first: a bare {n} conditions template rendered '1 conditions' for a single watch", () => {
+    expect(conditionsWord(1, "en")).toBe("condition");
+    expect(conditionsWord(0, "en")).toBe("conditions");
+    expect(conditionsWord(2, "en")).toBe("conditions");
+  });
+  it("ZH carries no plural marker regardless of n", () => {
+    expect(conditionsWord(1, "zh")).toBe(conditionsWord(2, "zh"));
+    expect(conditionsWord(0, "zh")).toBe("项条件");
+  });
+  it("copy('empty.calm', ...) with condWord never renders the un-agreed '1 conditions'", () => {
+    const text = copy("empty.calm", "en", { n: 1, condWord: conditionsWord(1, "en") });
+    expect(text).not.toContain("1 conditions");
+    expect(text).toContain("1 condition");
   });
 });
 

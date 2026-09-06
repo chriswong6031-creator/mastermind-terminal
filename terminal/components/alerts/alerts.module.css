@@ -14,7 +14,19 @@
 .coverage { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-weight: 650; display: flex; align-items: baseline; gap: 5px; }
 .coverageLabel { font-family: var(--font-ui); font-variant-numeric: normal; font-weight: 500; font-size: var(--fs-label); color: var(--muted); }
 
-.module { margin-top: 12px; }
+/* Major 2 (round-3 review): every cockpit module used to be bare text on the page background
+   (margin-top alone), reading as unstyled debris above the two legacy, materially-resolved
+   panels (New alert / Active alerts) it sits on top of. Give it the same elevated-panel
+   treatment as .board (globals.css) and .detail (below) — real surface, border, radius — so
+   the new surface reads as an object, not loose copy. */
+.module {
+  margin-top: 12px; padding: 14px 16px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+}
+/* Spacing-only sibling of .module — for the one wrapper (#alerts-manage) whose child already
+   supplies its own .panel material (globals.css); giving it .module's own background/border
+   too would double-box an already-boxed panel. */
+.moduleGap { margin-top: 12px; }
 .moduleHead { display: flex; align-items: baseline; gap: 8px; }
 .moduleCount { font-family: var(--font-num); font-variant-numeric: tabular-nums; color: var(--muted); font-size: var(--fs-label); }
 
@@ -74,7 +86,11 @@
 
 @media (max-width: 700px) {
   .answerLine { flex-wrap: wrap; }
-  .facts { display: grid; grid-template-columns: 1fr 1fr; width: 100%; gap: 6px; }
+  /* Minor 6 (round-3 review): a 2-column grid at 390px left no room for "Last successful
+     check" + its time, so the fact broke raggedly across three lines while `.coverage`
+     ("1 tracked") sat unrelated on the same visual row. One column per fact gives each its
+     own full-width line — label and value wrap together, never split mid-value. */
+  .facts { display: grid; grid-template-columns: 1fr; width: 100%; gap: 6px; }
   .row { flex-wrap: wrap; }
   .subject { max-width: none; }
 }

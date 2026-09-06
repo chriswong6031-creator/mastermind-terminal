@@ -209,7 +209,12 @@ const PROOF_DIR = "e2e/proof/f08-alerts";
 
 const WATCHING_ALERT = {
   id: "a0", symbol: "NVDA", active: true, created_at: "2026-08-01T00:00:00Z",
-  condition: { type: "price" },
+  // Major 1 (round-3 review): a price condition with no op/value is not a shape any real
+  // alert can have (AlertsView.tsx's PRICE_CONDITIONS always pairs op+value) and its legacy
+  // row label interpolates the missing value as the literal string "undefined" — this fixture
+  // used to print "NVDA · Price crosses below undefined" in every committed evidence crop.
+  // Production shape, matching PRICE_CONDITIONS ({ type: "price", op: "above" }, needsVal).
+  condition: { type: "price", op: "above", value: 200 },
 };
 const FIRED_ALERT = {
   id: "a1", symbol: "NVDA", active: false, created_at: "2026-08-01T00:00:00Z",
@@ -358,7 +363,10 @@ for (const vp of [1440, 390] as const) {
       });
       await page.setViewportSize({ width: vp, height: 900 });
       await page.goto("/alerts");
-      await expect(page.locator('[data-cockpit-state="calm-empty"]').first()).toBeVisible({ timeout: 45_000 });
+      // Minor 4 (round-3 review): assert the actual rendered module, not just the always-
+      // present .pg wrapper's own data-cockpit-state (which would pass even if the intended
+      // module never rendered — the .first() in `dataState()` used to mask exactly this).
+      await expect(page.locator('[data-alerts-module="calm-empty"]').first()).toBeVisible({ timeout: 45_000 });
       await crop(page, vp, `${vp}-en-calm-empty`);
     });
 
@@ -373,7 +381,7 @@ for (const vp of [1440, 390] as const) {
       });
       await page.setViewportSize({ width: vp, height: 900 });
       await page.goto("/alerts");
-      await expect(page.locator('[data-cockpit-state="no-coverage"]').first()).toBeVisible({ timeout: 45_000 });
+      await expect(page.locator('[data-alerts-module="no-coverage"]').first()).toBeVisible({ timeout: 45_000 });
       await crop(page, vp, `${vp}-en-no-coverage`);
     });
 
@@ -382,7 +390,7 @@ for (const vp of [1440, 390] as const) {
       await installFixtures(page, { alertsStatus: 503, runsState: "READ_UNAVAILABLE" });
       await page.setViewportSize({ width: vp, height: 900 });
       await page.goto("/alerts");
-      await expect(page.locator('[data-cockpit-state="unavailable"]').first()).toBeVisible({ timeout: 45_000 });
+      await expect(page.locator('[data-alerts-module="outage"]').first()).toBeVisible({ timeout: 45_000 });
       await crop(page, vp, `${vp}-en-unavailable`);
     });
   }

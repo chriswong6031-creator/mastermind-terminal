@@ -1,6 +1,6 @@
 "use client";
 import s from "./alerts.module.css";
-import { copy } from "@/lib/alertsView";
+import { copy, conditionsWord } from "@/lib/alertsView";
 
 export interface WatchingRow { id: string; symbol: string; label: string; state: "armed" | "paused" }
 
@@ -12,7 +12,8 @@ export default function WatchingList({ rows, lang, unavailable }: { rows: Watchi
     <div className={s.module}>
       <div className={s.moduleHead}>
         <span>{lang === "zh" ? "正在为你监控" : "What we're watching for you"}</span>
-        <span className={s.moduleCount}>{unavailable ? copy("null.cannotRead", lang) : `${rows.length} ${lang === "zh" ? "项条件" : "conditions"}`}</span>
+        {/* Minor 2 (round-3 review): "1 conditions" — EN needs singular/plural agreement. */}
+        <span className={s.moduleCount}>{unavailable ? copy("null.cannotRead", lang) : `${rows.length} ${conditionsWord(rows.length, lang)}`}</span>
       </div>
       <div>
         {rows.map((r) => (

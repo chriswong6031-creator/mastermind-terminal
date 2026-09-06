@@ -8,7 +8,7 @@ import CouldNotWatch from "./CouldNotWatch";
 import AlertDetail, { type AlertDetailData } from "./AlertDetail";
 import { NewAlertPanel } from "@/components/AlertsView";
 import {
-  buildAlertsView, conditionText, copy, ALERTS_CHANGED_EVENT,
+  buildAlertsView, conditionText, conditionsWord, copy, ALERTS_CHANGED_EVENT,
   type Alert, type ReadState, type RunReceipt, type OutboxRow,
 } from "@/lib/alertsView";
 import { useLang } from "@/lib/i18n";
@@ -211,23 +211,27 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
       )}
       {showDegraded && (
         <div className={s.module} data-alerts-module="degraded">
-          <p className={s.degradedBody}>{copy("degraded.body", L, { t: view.lastSuccessAt ? new Date(view.lastSuccessAt).toLocaleTimeString(L === "zh" ? "zh-CN" : "en-US") : copy(view.lastSuccessState === "READ_UNAVAILABLE" ? "null.cannotRead" : "null.notRecorded", L) })}</p>
+          {/* Minor 1 (round-3 review): a bare toLocaleTimeString() defaults to second precision
+              ("16:05:00"), contradicting AnswerLine's own fmtTime (minute precision, "16:05")
+              rendered a few lines above it. Plain-language law: a human reads a time, never a
+              machine timestamp with seconds — force the same minute precision here. */}
+          <p className={s.degradedBody}>{copy("degraded.body", L, { t: view.lastSuccessAt ? new Date(view.lastSuccessAt).toLocaleTimeString(L === "zh" ? "zh-CN" : "en-US", { hour: "2-digit", minute: "2-digit" }) : copy(view.lastSuccessState === "READ_UNAVAILABLE" ? "null.cannotRead" : "null.notRecorded", L) })}</p>
           <button type="button" className={`btn btn-ghost ${s.emptyAction}`} onClick={load}>{copy("degraded.action", L)}</button>
         </div>
       )}
       {dataState === "calm-empty" && !zeroAlerts && (
         <div className={s.module} data-alerts-module="calm-empty">
-          <p className={s.calmBody}>{copy("empty.calm", L, { n: view.coverage.count ?? 0 })}</p>
+          <p className={s.calmBody}>{copy("empty.calm", L, { n: view.coverage.count ?? 0, condWord: conditionsWord(view.coverage.count ?? 0, L) })}</p>
           <button type="button" className={`btn btn-ghost ${s.emptyAction}`} onClick={scrollToAddWatch}>{copy("empty.calm.action", L)}</button>
         </div>
       )}
-      <AlertTimeline rows={timelineRows} lang={L} onOpen={setOpenId} spineState={dataState} />
+      <AlertTimeline rows={timelineRows} lang={L} onOpen={setOpenId} />
       <WatchingList
         rows={(alerts || []).filter((a) => a.active).map((a) => ({ id: a.id, symbol: a.symbol || "—", label: conditionText(a.condition, a.symbol, L), state: "armed" as const }))}
         unavailable={listUnavailable}
         lang={L}
       />
-      <div id="alerts-manage" className={s.module} data-alerts-module="add-watch">
+      <div id="alerts-manage" className={s.moduleGap} data-alerts-module="add-watch">
         <NewAlertPanel email={email} />
       </div>
       <CouldNotWatch count={view.noCoverageCount ?? 0} lang={L} />

@@ -242,7 +242,10 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
   // last here" was an unsupported claim — AlertTimeline's own "Recent activity" header makes no
   // such claim, and this copy shipped the exact claim the module documents itself as unable to
   // support).
-  "empty.calm": ["No recent activity. We are still watching {n} conditions for you.", "近期没有活动，仍在为你监控 {n} 项条件。"],
+  // Minor 2 (round-3 review): {n} conditions/{condWord} — EN needs the singular "1 condition"
+  // (plain-language law: a bare "{n} conditions" reads "1 conditions" for a single watch,
+  // visible in the committed calm-crop evidence). ZH carries no plural marker either way.
+  "empty.calm": ["No recent activity. We are still watching {n} {condWord} for you.", "近期没有活动，仍在为你监控 {n} 项条件。"],
   "empty.calm.zero": ["You are not watching anything yet.", "你还没有设置任何监控。"],
   "empty.calm.action": ["Add a watch", "添加监控"],
   // META-CEO ruling (round-2, B1 reach): the calm-zero module wins over never_ran/degraded so a
@@ -294,6 +297,13 @@ export function copy(key: string, lang: "en" | "zh", vars?: Record<string, strin
   let text = pair ? pair[lang === "zh" ? 1 : 0] : key;
   if (vars) for (const [k, v] of Object.entries(vars)) text = text.split(`{${k}}`).join(String(v));
   return text;
+}
+
+// Minor 2 (round-3 review): "1 conditions" — EN singular/plural for the word following a
+// condition count. ZH has no plural marker so this only branches for `en`.
+export function conditionsWord(n: number, lang: "en" | "zh"): string {
+  if (lang === "zh") return "项条件";
+  return n === 1 ? "condition" : "conditions";
 }
 
 /**
