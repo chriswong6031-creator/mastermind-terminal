@@ -105,6 +105,9 @@
 .lensHead h2 { margin: 0; font-size: 13px; letter-spacing: .04em; }
 .lensWhat { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .scopeNote { margin: 0; color: var(--text-dim); font-size: 11px; line-height: 1.5; }
+.filterChip { display: flex; align-items: center; gap: 6px; margin: 2px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.filterChip strong { color: var(--text-2); }
+.filterChip button { border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; background: var(--panel-2); color: inherit; font: 700 10px/1.2 var(--font-ui); cursor: pointer; }
 .lensPanel { display: grid; gap: 7px; margin-top: 12px; }
 @media (max-width: 600px) {
   .root { height: auto; min-height: 100%; overflow: visible; }
@@ -138,7 +141,7 @@
 .subjectRow > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .subjectRow strong { font-size: 13px; }
 .subjectRow small { color: var(--muted); font-size: 11px; }
-.subjectRow i { width: 6px; height: 6px; border-radius: 50%; background: var(--regime-up); }
+.subjectRow i { width: 6px; height: 6px; border-radius: 50%; background: var(--brand-2); }
 .subjectRow i[data-state="idle"] { background: var(--line-3); }
 .lineRow { display: grid; gap: 6px; padding: 10px 11px 10px 12px; border-left: 1px solid var(--line-3); border-radius: 0 9px 9px 0; background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
 .lineText { margin: 0; color: var(--text); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }

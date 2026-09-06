@@ -418,6 +418,7 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   const [mobilePane, setMobilePane] = useState<MobilePane>(initialThesisId || seededSymbol ? "detail" : "list");
   const [view, setView] = useState<RmsViewId>(RMS_DEFAULT_VIEW);
   const [subjectFilterKey, setSubjectFilterKey] = useState<string | null>(null);
+  const [subjectFilterLabel, setSubjectFilterLabel] = useState<string | null>(null);
   const [hydratedDetails, setHydratedDetails] = useState<Map<string, ThesisDetail>>(new Map());
   const [hydrating, setHydrating] = useState(false);
   const [hydrationUnavailable, setHydrationUnavailable] = useState(false);
@@ -504,6 +505,7 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   const selectView = useCallback((id: RmsViewId) => {
     setView(id);
     setSubjectFilterKey(null);
+    setSubjectFilterLabel(null);
     try {
       window.localStorage.setItem(`mm.thesis.lens.v1:${ownerKey}`, id);
     } catch {
@@ -513,6 +515,7 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
 
   const filterBySubject = useCallback((row: CoverageRow) => {
     setSubjectFilterKey(row.key);
+    setSubjectFilterLabel(row.display);
     setView("theses");
     try {
       window.localStorage.setItem(`mm.thesis.lens.v1:${ownerKey}`, "theses");
@@ -1084,6 +1087,12 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
             <div className={styles.lensHead}>
               <h2>{rms.name[view]}</h2>
               <p className={styles.lensWhat}>{rms.what[view]}</p>
+              {view === "theses" && subjectFilterKey && (
+                <p className={styles.filterChip} data-testid="rms-subject-filter">
+                  {rms.filterActive}: <strong>{subjectFilterLabel}</strong>
+                  <button type="button" onClick={() => { setSubjectFilterKey(null); setSubjectFilterLabel(null); }}>{rms.clearFilter}</button>
+                </p>
+              )}
               {activeViewDef.requiresContent && (
                 <p className={styles.scopeNote} data-testid="rms-scope">{scopeSentence}</p>
               )}
@@ -1115,7 +1124,9 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
               )}
               {listState === "ready" && (view === "ideas" || view === "theses" || view === "reviews") && (
                 (view === "ideas" ? ideaViewRows : view === "reviews" ? reviewViewRows : thesesViewRows).length === 0
-                  ? <div className={styles.emptyLens} data-testid="rms-empty"><p>{rms.empty[view]}</p></div>
+                  ? <div className={styles.emptyLens} data-testid={view === "theses" ? "thesis-empty" : "rms-empty"}>
+                      <p>{view === "theses" && subjectFilterKey ? rms.filteredEmpty : rms.empty[view]}</p>
+                    </div>
                   : <div className={styles.thesisList}>
                     {(view === "ideas" ? ideaViewRows : view === "reviews" ? reviewViewRows : thesesViewRows).map((row) => (
                       <button key={row.id} type="button" disabled={carrierLocked} className={selectedId === row.id ? styles.selected : ""} onClick={() => beginDetailLoad(row.id)}>
