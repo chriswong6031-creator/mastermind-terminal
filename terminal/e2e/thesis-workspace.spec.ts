@@ -24,6 +24,16 @@ async function fillNew(page: Page, zh = false, title = "NVDA operating leverage"
   await page.getByLabel(zh ? "时间范围" : "Horizon").selectOption("quarters");
 }
 
+// Every proof screenshot names its UI locale explicitly. A capture that reused the
+// same `${project}-${name}.png` pattern for a Chinese-locale run would silently
+// overwrite the English frame at that same viewport (no separate directory, same
+// project name) — the caller must say which locale it captured so the two can
+// never collide.
+function proofShotPath(proofDir: string, testInfo: TestInfo, name: string, locale: "en" | "zh") {
+  const suffix = locale === "zh" ? "-zh" : "";
+  return path.join(proofDir, `${testInfo.project.name}-${name}${suffix}.png`);
+}
+
 async function createThesis(page: Page, title: string, requestId: string, symbol = "NVDA") {
   const response = await page.request.post("/api/theses", { data: {
     action: "create", clientRequestId: requestId,
@@ -95,7 +105,7 @@ test("create → deep link → reload → revise → conflict → archive/invali
   await stale.getByRole("button", { name: "New thesis" }).click();
   await expect(stale.getByLabel("Thesis statement")).toHaveValue(preserved);
   await stale.getByTestId("thesis-conflict").evaluate((element) => element.scrollIntoView({ block: "start" }));
-  await stale.screenshot({ path: path.join(proofDir, `${testInfo.project.name}-conflict.png`), fullPage: true });
+  await stale.screenshot({ path: proofShotPath(proofDir, testInfo, "conflict", "en"), fullPage: true });
   await stale.close();
 
   await page.getByRole("button", { name: "Archive", exact: true }).click();
@@ -156,7 +166,7 @@ test("create → deep link → reload → revise → conflict → archive/invali
   expect(overflow.document).toBeLessThanOrEqual(1);
 
   await page.locator("[aria-label='Version history']").evaluate((element) => element.scrollIntoView({ block: "start" }));
-  await page.screenshot({ path: path.join(proofDir, `${testInfo.project.name}-lineage.png`), fullPage: true });
+  await page.screenshot({ path: proofShotPath(proofDir, testInfo, "lineage", "en"), fullPage: true });
   expect(browserErrors).toEqual([]);
 });
 
