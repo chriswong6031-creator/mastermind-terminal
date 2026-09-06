@@ -289,7 +289,13 @@ def sweep(api: MergeApi, trigger_number: int | None = None) -> list[str]:
             # GitHub itself refusing the merge call (405 under strict
             # required-status protection when its own view of the PR is still
             # settling, or any other 4xx) is this PR's own wait, never a reason
-            # to stop evaluating the rest of the sweep.
+            # to stop evaluating the rest of the sweep. A 5xx/429/other
+            # non-4xx is NOT GitHub declining the merge on the merits -- it is
+            # the API itself failing -- so it is reraised and still aborts the
+            # sweep via main()'s existing handler rather than being recorded as
+            # a per-PR "declined" outcome that word does not honestly describe.
+            if not (400 <= error.status < 500):
+                raise
             actions.append(f"#{number}: declined: {error}")
             continue
         if not result.get("merged"):

@@ -107,6 +107,22 @@ class FakeApi:
             raise ApiError(status, message)
         return {"merged": True}
 
+    def compare(self, base_sha, head_sha):
+        # Current `sweep()` never calls this -- the refresh-vs-merge decision
+        # reads live `mergeable_state` (see the "behind" tests below), not a
+        # base/head comparison. Kept ONLY so a historical regression replay of
+        # these tests against a pre-fix `scripts/merge_on_green.py` (which does
+        # call `api.compare(base_sha, head_sha)`) exercises that old code's
+        # real branch-relation logic instead of dying on a missing attribute --
+        # reviewer minor #1 on PR #487 found 3 of the 4 new sweeper tests
+        # failing on the previous head with `AttributeError` rather than a
+        # genuine behavioural difference. "ahead" matches what the old
+        # comparison returned for this fixture's default base_sha, so the old
+        # code's real bug (trusting a stale base_sha instead of live
+        # mergeable_state) reproduces honestly under replay.
+        self.actions.append(("compare", base_sha, head_sha))
+        return "ahead"
+
     def add_labels(self, number, labels):
         self.actions.append(("add_labels", number, tuple(labels)))
         existing = {label["name"] for label in self.pulls[number]["labels"]}
@@ -388,6 +404,29 @@ def test_405_on_merge_is_declined_for_that_pr_and_the_sweep_continues():
         "#2: merged and deleted claude/pr-2",
         "no additional armed green branch required a base refresh",
     ]
+
+
+def test_5xx_on_merge_is_not_swallowed_as_declined_and_still_aborts_the_sweep():
+    # Reviewer minor #2 on PR #487: the ruling's carve-out is for GitHub
+    # itself DECLINING a merge on the merits (a 4xx, 405 in particular). A
+    # 5xx/429/etc is the API failing, not a considered refusal, and that word
+    # would misdescribe it -- it must still propagate like any other
+    # unhandled ApiError rather than being recorded as "declined" and letting
+    # the sweep move on to the next PR.
+    first = pull(1)
+    second = pull(2)
+    api = FakeApi(
+        [first, second],
+        merge_errors={1: (500, "Internal Server Error")},
+    )
+
+    with pytest.raises(ApiError) as excinfo:
+        sweep(api)
+
+    assert excinfo.value.status == 500
+    assert ("merge", 1, "head-1") in api.actions
+    # The sweep must not have gone on to evaluate PR #2 after the raise.
+    assert not any(action[0] == "merge" and action[1] == 2 for action in api.actions)
 
 
 def test_main_exits_non_zero_when_any_pr_was_declined_but_never_mid_sweep(monkeypatch, capsys):
