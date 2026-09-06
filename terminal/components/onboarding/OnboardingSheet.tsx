@@ -225,8 +225,15 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
   // Billing outcomes.
   // D7: `end` is a VERIFIED epoch from the gateway's receipt (StepBilling refuses anything less),
   // so reaching Done with trialActive now always carries a real first-charge date.
-  function billingTrialStarted(end: number) { setTrialActive(true); setTrialEnd(end); setStep(STEP_DONE); }
-  function billingAlreadyActive() { setStep(STEP_DONE); }       // 409 — plan already active, no in-sheet trial
+  // Fix round 2 (MINOR-1): a trial start is a real entitlement change (a brand-new subscription),
+  // and the 409 "already active" landing means an entitlement already exists that the Terminal's
+  // cached /api/me snapshot may predate — both must invalidate the same as a fresh purchase does,
+  // so no surface of the Terminal is left reading a stale pre-onboarding snapshot.
+  function billingTrialStarted(end: number) {
+    invalidateEntitlement();
+    setTrialActive(true); setTrialEnd(end); setStep(STEP_DONE);
+  }
+  function billingAlreadyActive() { invalidateEntitlement(); setStep(STEP_DONE); } // 409 — plan already active, no in-sheet trial
   // Fix round 1 (BLOCKER-1): a genuine no-trial purchase (e.g. essential) completed — the
   // entitlement changed (a brand-new paid subscription), so the canonical /api/me store must
   // re-read, exactly as a trial start would trigger once invalidateEntitlement() is wired through
