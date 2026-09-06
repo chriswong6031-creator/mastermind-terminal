@@ -600,7 +600,9 @@ def run_dry(path: Path, *, allow_legacy: bool = False, out=None) -> int:
     print(f"\nstatements that WOULD run ({len(statements)}):", file=out)
     for i, s in enumerate(statements, 1):
         one_line = " ".join(strip_sql_comments(s).split())
-        print(f"  [{i:02d}] {one_line[:100]}", file=out)
+        shown = one_line[:100]
+        marker = " …[truncated, full statement in receipt/-- readback --]" if len(one_line) > 100 else ""
+        print(f"  [{i:02d}] {shown}{marker}", file=out)
 
     try:
         rb = readback_statements(text)
@@ -615,7 +617,10 @@ def run_dry(path: Path, *, allow_legacy: bool = False, out=None) -> int:
     else:
         print(f"\nreadback query that WOULD run ({len(rb)} statements):", file=out)
         for i, s in enumerate(rb, 1):
-            print(f"  [{i:02d}] {' '.join(strip_sql_comments(s).split())[:100]}", file=out)
+            rb_one_line = " ".join(strip_sql_comments(s).split())
+            rb_shown = rb_one_line[:100]
+            rb_marker = " …[truncated]" if len(rb_one_line) > 100 else ""
+            print(f"  [{i:02d}] {rb_shown}{rb_marker}", file=out)
 
     objs = expected_objects(statements)
     if objs:
@@ -686,10 +691,12 @@ def run_apply(
             file=out,
         )
     else:
-        for s in rb_statements:
+        print(f"\npre-readback ({len(rb_statements)} statements):", file=out)
+        for i, s in enumerate(rb_statements, 1):
             try:
                 rows = runner(strip_sql_comments(s))
                 pre.append({"statement": s, "rows": rows})
+                print(f"  [{i:02d}] pre: {rows}", file=out)
             except ApiError as exc:
                 if _is_missing_relation_error(exc):
                     pre.append({"statement": s, "error": str(exc)})
@@ -737,10 +744,12 @@ def run_apply(
 
     post: list[dict] = []
     if rb_statements is not None:
+        print(f"\npost-readback ({len(rb_statements)} statements):", file=out)
         try:
-            for s in rb_statements:
+            for i, s in enumerate(rb_statements, 1):
                 rows = runner(strip_sql_comments(s))
                 post.append({"statement": s, "rows": rows})
+                print(f"  [{i:02d}] post: {rows}", file=out)
         except ApiError as exc:
             _write(_receipt(
                 pre=pre, post=post, status="failed",
