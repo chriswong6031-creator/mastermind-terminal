@@ -298,7 +298,10 @@ export const RMS_COPY: { en: RmsCopy; zh: RmsCopy } = {
     scope: "Showing lines from {loaded} of your {total} theses.",
     scopeComplete: "Showing lines from all {total} of your theses.",
     showMore: "Show 10 more",
-    unavailableLens: "Your thesis store did not answer, so this view has nothing to show. Nothing has been changed.",
+    // Not "Your thesis store did not answer..." — the strong heading right above this
+    // paragraph already says exactly that; repeating it read as a stutter (sibling
+    // repair on this branch).
+    unavailableLens: "This view has nothing to show right now. Nothing has been changed.",
     "condition.window_closed": "The window you were watching has closed",
     "condition.open": "The window you were watching is still open.",
     "condition.unavailable": "Condition checks are not connected yet.",
@@ -345,7 +348,7 @@ export const RMS_COPY: { en: RmsCopy; zh: RmsCopy } = {
     scope: "正在显示 {total} 条论点中 {loaded} 条的内容。",
     scopeComplete: "正在显示全部 {total} 条论点的内容。",
     showMore: "再载入 10 条",
-    unavailableLens: "论点存储未响应，因此该视角暂无内容。没有任何内容被更改。",
+    unavailableLens: "此视角暂时没有内容可显示。没有任何内容被更改。",
     "condition.window_closed": "你关注的观察窗口已结束",
     "condition.open": "你关注的观察窗口仍然开着。",
     "condition.unavailable": "条件检查尚未接入",

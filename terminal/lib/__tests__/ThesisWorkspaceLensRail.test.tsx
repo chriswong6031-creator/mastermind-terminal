@@ -265,7 +265,11 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
       await act(async () => {
         tab.click();
       });
-      const empty = el.querySelector('[data-testid="rms-empty"]');
+      // The Theses lens keeps master's pre-existing "thesis-empty" testid (a sibling
+      // repair on this branch caught the rail rewrite silently dropping the e2e
+      // contract in terminal/e2e/thesis-workspace.spec.ts) — every other lens is
+      // "rms-empty".
+      const empty = el.querySelector(view === "theses" ? '[data-testid="thesis-empty"]' : '[data-testid="rms-empty"]');
       expect(empty, `expected an empty state for lens "${view}"`).not.toBeNull();
       expect(empty!.textContent).toBe(text);
     }

@@ -1166,7 +1166,12 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
               )}
               {listState === "ready" && (view === "ideas" || view === "theses" || view === "reviews") && (
                 (view === "ideas" ? ideaViewRows : view === "reviews" ? reviewViewRows : thesesViewRows).length === 0
-                  ? <div className={styles.emptyLens} data-testid="rms-empty"><p>{rms.empty[view]}</p></div>
+                  // The Theses lens is the default view a fresh workspace lands on, and
+                  // master's own e2e contract (terminal/e2e/thesis-workspace.spec.ts)
+                  // asserts `getByTestId("thesis-empty")` for that exact first-run empty
+                  // state (a sibling repair on this branch caught this PR's rail rewrite
+                  // silently dropping it) — every other lens still reads "rms-empty".
+                  ? <div className={styles.emptyLens} data-testid={view === "theses" ? "thesis-empty" : "rms-empty"}><p>{rms.empty[view]}</p></div>
                   : <div className={styles.thesisList}>
                     {(view === "ideas" ? ideaViewRows : view === "reviews" ? reviewViewRows : thesesViewRows).map((row) => (
                       <button key={row.id} type="button" disabled={carrierLocked} className={selectedId === row.id ? styles.selected : ""} onClick={() => beginDetailLoad(row.id)}>

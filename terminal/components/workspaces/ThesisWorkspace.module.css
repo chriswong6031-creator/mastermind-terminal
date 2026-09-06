@@ -140,7 +140,10 @@
 .subjectRow > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .subjectRow strong { font-size: 13px; }
 .subjectRow small { color: var(--muted); font-size: 11px; }
-.subjectRow i { width: 6px; height: 6px; border-radius: 50%; background: var(--regime-up); }
+/* --brand-2 (not --regime-up, the market up/down token): a sibling repair on this
+   branch found --regime-up flips to a "down"/red-adjacent hue under the ZH-locale
+   up/down convention, which is wrong for a plain active/idle coverage dot. */
+.subjectRow i { width: 6px; height: 6px; border-radius: 50%; background: var(--brand-2); }
 .subjectRow i[data-state="idle"] { background: var(--line-3); }
 .lineRow { display: grid; gap: 6px; padding: 10px 11px 10px 12px; border-left: 1px solid var(--line-3); border-radius: 0 9px 9px 0; background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
 .lineText { margin: 0; color: var(--text); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
