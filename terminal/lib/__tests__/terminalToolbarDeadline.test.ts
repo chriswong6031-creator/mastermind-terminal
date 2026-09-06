@@ -598,6 +598,62 @@ describe("toolbar invocation deadline ownership", () => {
     expect(clickCount).toBe(2);
   }, 10_000);
 
+  it("permits the single allowed recovery when the post-click read is caught unsettled mid font/resize churn (MAJOR-1)", async () => {
+    // Reproduces the exact font/resize-churn scenario this helper exists for: right after the
+    // click, an instantaneous read of .chart-tabs lands mid-remeasurement (settled=false) — that
+    // tells you NOTHING about whether the click had an effect, it is just a bad instant to look.
+    // The buggy code read `after` with a raw, non-waiting snapshot and treated `!after.settled` as
+    // "revision changed" (i.e. "the click landed"), which skips the one allowed retry. The fix
+    // waits for the NEXT settled commit (same helper the "before" snapshot already uses) before
+    // comparing revisions. Once settled, the revision is byte-identical to before the click (the
+    // click provably had zero effect), so a real fix must retry a second time; the bug stops at one.
+    const visibility = (visible: boolean) => ({ isVisible: async () => visible, isEnabled: async () => visible });
+    const settledSnapshot = { mode: "full" as const, revision: 5, settled: true, overflowOpen: false, backVisible: false };
+    // What a raw, non-waiting `.chart-tabs` read reports if it is ever consulted directly (it must
+    // not be, after the fix) — caught mid churn, settled is false and tells you nothing.
+    const unsettledRawRead = { mode: "full" as const, revision: 5, settled: false, overflowOpen: false, backVisible: false };
+    let clickCount = 0;
+    let rawEvaluateReads = 0;
+    const control = {
+      click: async () => { clickCount += 1; },
+      // The done-check's target attribute never changes: models a click whose semantic effect
+      // never converges by itself, so the retry decision rests entirely on the committed revision.
+      getAttribute: async () => "off",
+      isVisible: async () => true,
+    } as unknown as Locator;
+    const page = {
+      isClosed: () => false,
+      // Every settled WAIT (waitForSettledToolbar's real success path) reports the same committed
+      // revision before and after the click: the click had zero observable effect.
+      waitForFunction: async () => ({ jsonValue: async () => settledSnapshot, dispose: async () => {} }),
+      getByTestId: () => visibility(true),
+      locator: (selector: string) => {
+        if (selector === ".chart-tabs") {
+          return {
+            first: () => ({
+              evaluate: async () => {
+                rawEvaluateReads += 1;
+                return unsettledRawRead;
+              },
+            }),
+          };
+        }
+        if (selector === '[data-toolbar-action="sync"]') return control;
+        return visibility(false);
+      },
+    } as unknown as Page;
+
+    const intent: ToolbarIntent = { deadline: Date.now() + 6_000 };
+    await expect(toggleToolbarSync(page, intent)).rejects.toThrow(
+      /^TOOLBAR_(ACTION_FAILED|BUDGET_EXHAUSTED) /,
+    );
+    // The defect: the raw unsettled read was consulted for the retry decision at all, and its
+    // false "revision changed" reading suppressed the second click. A correct fix never uses the
+    // raw evaluate() path for that decision, only the settled wait — so retry proceeds and clicks
+    // twice, exactly like the sibling "dominant branch" real-settle-path test above.
+    expect(clickCount).toBe(2);
+  }, 10_000);
+
   it("never lends the future reservation to the current action or its effect observation", () => {
     expect(allocateToolbarStage(7_759, 4_000)).toEqual({
       currentMs: 3_759,

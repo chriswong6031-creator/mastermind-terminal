@@ -517,9 +517,15 @@ async function viaToolbar(page: Page, opts: ToolbarAction, intent: ToolbarIntent
     }
     if (await observeToolbarEffect(opts.done, deadline)) return;
     if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
-    const after = await readToolbarSnapshot(page);
-    const revisionChanged = !after.settled
-      || after.revision !== snapshot.revision
+    // Must be a SETTLED read, not a raw instantaneous one: a raw read caught mid font/resize
+    // remeasurement reports settled=false with no information about whether the click landed,
+    // which is exactly the churn scenario this helper exists to survive. Treating "unsettled right
+    // now" as "revision changed" (the prior bug) throws away the single allowed recovery in that
+    // scenario. Waiting for the next settled commit — as the "before" snapshot above already does —
+    // gives an authoritative comparison; if the toolbar never settles within budget this throws a
+    // typed TOOLBAR_NOT_SETTLED/TOOLBAR_BUDGET_EXHAUSTED failure instead of guessing.
+    const after = await waitForSettledToolbar(page, opts, deadline);
+    const revisionChanged = after.revision !== snapshot.revision
       || after.mode !== snapshot.mode;
     // A committed revision bump proves this attempt's click already changed something real —
     // clicking again would repeat a landed action (e.g. re-toggle Sync back off, or reopen a menu
