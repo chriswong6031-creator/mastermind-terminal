@@ -175,8 +175,37 @@ def check_files_are_reserved(filenames: Sequence[str], doc: dict) -> list[Findin
             findings.append(Finding("FREE_PREFIX_HAS_FILE", prefix, f"'{name}' sits at prefix {prefix}, which RESERVATIONS.json marks free"))
             continue
 
+        if state == "reserved":
+            # `reserved` legitimately carries file=null (schema-enforced in
+            # validate_reservations) -- the owning packet has claimed the prefix
+            # but has not written the .sql yet. So *any* on-disk file at this
+            # prefix is a collision: either the true owner has landed and the
+            # ledger is stale (should have flipped to state=taken with this
+            # file), or a different lane has occupied a prefix it does not own.
+            # Either way this must fail loudly rather than silently pass a null
+            # 'file' through the equality check below.
+            findings.append(
+                Finding(
+                    "RESERVED_PREFIX_OCCUPIED",
+                    prefix,
+                    f"'{name}' occupies prefix {prefix}, which RESERVATIONS.json marks reserved "
+                    f"(not yet taken) for packet '{entry.get('packet')}'; flip the ledger entry to "
+                    "state=taken naming this file and its owning PR before this can pass",
+                )
+            )
+            continue
+
         expected_file = entry.get("file")
-        if expected_file is not None and expected_file != name:
+        if expected_file is None:
+            findings.append(
+                Finding(
+                    "RESERVED_NAME_MISMATCH",
+                    prefix,
+                    f"'{name}' occupies prefix {prefix} (state={state!r}) but RESERVATIONS.json "
+                    "records no owning file for it -- the ledger entry cannot vouch for this file",
+                )
+            )
+        elif expected_file != name:
             findings.append(
                 Finding(
                     "RESERVED_NAME_MISMATCH",

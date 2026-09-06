@@ -221,6 +221,56 @@ def test_free_prefix_with_a_file_present_is_detected():
     assert any(f.code == "FREE_PREFIX_HAS_FILE" and f.prefix == "0017" for f in findings)
 
 
+# --- 11b (major fix: reserved prefix with file=null must not vouch for an occupant) -----
+
+def test_reserved_prefix_occupied_by_a_file_is_detected():
+    """RESERVATIONS.json diff:482-497 shape: 0015/0016 are `reserved` for
+    B-F12-3/B-F12-4 with file=null (the owner has claimed the number but not
+    written the .sql yet). A non-owner lane dropping a file at that prefix
+    used to pass silently because `expected_file != name` short-circuited on
+    the null `file`. It must fail loudly instead, naming the owning packet so
+    the log points at who actually holds the prefix.
+    """
+    doc = reservations_doc(
+        prefixes={
+            "0015": {
+                "state": "reserved",
+                "file": None,
+                "packet": "B-F12-3",
+                "pr": None,
+                "pr_state": None,
+                "note": "fixture",
+            }
+        }
+    )
+    findings = check_files_are_reserved(["0015_anything.sql"], doc)
+    assert any(f.code == "RESERVED_PREFIX_OCCUPIED" and f.prefix == "0015" for f in findings)
+    assert not any(f.code == "UNRESERVED_PREFIX" for f in findings)
+    detail = next(f.detail for f in findings if f.code == "RESERVED_PREFIX_OCCUPIED")
+    assert "B-F12-3" in detail
+
+
+def test_taken_prefix_with_null_file_cannot_vouch_for_any_name():
+    """Defense in depth for the same join-skip shape on state=taken: even if
+    RESERVATIONS.json schema validation is bypassed and a `taken` entry somehow
+    carries file=null, the join must not let an arbitrary on-disk name pass.
+    """
+    doc = reservations_doc(
+        prefixes={
+            "0015": {
+                "state": "taken",
+                "file": None,
+                "packet": "B-F12-3",
+                "pr": 600,
+                "pr_state": "open",
+                "note": "fixture (schema-invalid on purpose)",
+            }
+        }
+    )
+    findings = check_files_are_reserved(["0015_anything.sql"], doc)
+    assert any(f.code == "RESERVED_NAME_MISMATCH" and f.prefix == "0015" for f in findings)
+
+
 # --- 12 (acceptance 2) ----------------------------------------------------------
 
 def test_reservations_records_the_known_collision_surface():
