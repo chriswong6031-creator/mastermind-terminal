@@ -6,16 +6,40 @@ journeys"), so a green responsive matrix can never be read as full coverage.
 
 Rules (Meta-CEO ruling 2026-09-05, under issue #485):
 
-1. A spec may be quarantined only when it failed or flaked in >= 2 inventoried CI runs, or when
-   the error is a documented nondeterministic harness race.
+1. A spec may be quarantined only when it failed or flaked in >= 2 inventoried CI runs, OR when
+   a single run reproduced a deterministic all-attempts-failed result (initial attempt + every
+   retry failing at the same line), or when the error is a documented nondeterministic harness
+   race.
 2. A spec that fails deterministically for a product reason is FIXED, not quarantined, when the
    fix is <= ~40 lines and obviously correct.
-3. Every row names its evidence run ids, an owner, and a re-enable condition.
+3. Every row names its evidence run ids, an owner, and a re-enable condition, and states any
+   coverage given up beyond the row's own defect (assertions inside the same test body that stop
+   running as a side effect of the quarantine).
 4. This table shrinks. It never grows without the ruling above and a row here.
 
 | Spec:line | Test title | Project | Evidence runs | Owner | Re-enable condition |
 | --- | --- | --- | --- | --- | --- |
-| terminal/e2e/drawing-system.spec.ts:992 | flagship geometry, editing, and path limits survive adversarial interaction | desktop (tablet/mobile already width-skipped) | 33942726252 — failed initial attempt + Retry #1 + Retry #2 at spec line 1140; 33787644981 — same file, :264 and :738 timed out and :1586 flaked | issue #485 (R1 reliability program); no repair PR owns this journey yet | Delete this row and the `test.fixme` at the top of the test body in the same PR that makes the Path tool commit on double-click, with one green desktop run of this spec on the repair head |
+| terminal/e2e/drawing-system.spec.ts:992 | flagship geometry, editing, and path limits survive adversarial interaction | desktop (tablet/mobile already width-skipped) | 33942726252 — failed initial attempt + Retry #1 + Retry #2, all three at spec line 1140 (single-run deterministic reproduction, rule 1) | issue #485 (R1 reliability program); no repair PR owns this journey yet | Delete this row and the `test.fixme` at the top of the test body in the same PR that makes the Path tool commit on double-click, with one green desktop run of this spec on the repair head |
+
+## Coverage given up
+
+`test.fixme` at drawing-system.spec.ts:998 aborts the entire monolithic test body (lines
+992-1183; the next `test(` is at line 1184), not only the Path-commit assertion at :1140. On
+unmodified master, everything before :1140 was passing and is now unasserted too. Surrendered
+contracts, by rough source line:
+
+- vertical-SVG line count (~28)
+- text editor opens on the correct tool (`.text-edit`, ~45)
+- inspector binding + `data-drawing-id` wiring (~53-54)
+- fib `stroke-dasharray` / `stroke-width` / `fill-opacity` (~58, 59, 66)
+- inspector draft survives a live language/quote rerender (~80-82)
+- drag span/midpoint invariants (~111-112)
+- brush polyline contract (~121-124)
+- coarse-pointer tap-to-finish 16px tolerance, `toHaveCount(2)` (~170)
+- triangle preview cleanup/abort (~183, 189, 190)
+
+None of these are known-broken; they are simply unasserted while this row is quarantined. The
+re-enable condition above restores all of them, not only the Path-commit contract.
 
 ## Defect under quarantine
 

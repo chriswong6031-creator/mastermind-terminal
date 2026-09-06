@@ -75,7 +75,8 @@ jobs:
             echo "::error title=e2e-quarantine::terminal/e2e/QUARANTINE.md is missing"
             exit 1
           fi
-          awk -F'|' '/^\| *terminal\/e2e\// {
+          awk -F'|' '/^## Observed but NOT quarantined/ { exit }
+          /^\| *terminal\/e2e\// && NF == 8 {
             for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) }
             print "::warning title=e2e-quarantine::" $2 " — " $3 " — owner: " $6 " — evidence: " $5
           }' e2e/QUARANTINE.md
