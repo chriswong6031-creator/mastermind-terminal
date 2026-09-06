@@ -12,6 +12,11 @@ type StoreResult = { data: unknown; error: { message?: string; code?: string } |
 
 const H = vi.hoisted(() => ({
   user: { id: "user-A", email: "a@example.com" } as { id: string; email: string } | null,
+  // Real two-user table contents (review BLOCKER acceptance-1): a genuine isolation test needs
+  // an actual OTHER-user row sitting in the store, and the mock must actually honor the
+  // `.eq("user_id", …)` predicate rather than ignoring it.
+  watchlistTable: [] as Array<Record<string, unknown>>,
+  positionTable: [] as Array<Record<string, unknown>>,
   watchlistRows: { data: [] as unknown[], error: null } as StoreResult,
   positionRows: { data: [] as unknown[], error: null } as StoreResult,
   probeResult: { data: [{ id: "w1" }], error: null } as StoreResult,
@@ -21,15 +26,24 @@ const H = vi.hoisted(() => ({
   insertCalled: false,
 }));
 
+// Rows whose `col` field does not exist are never filtered out (only `user_id` is enforced —
+// the one predicate every own-tables read is required to carry); a row whose `col` DOES exist
+// must match `val` exactly. This is a real predicate, not a rubber stamp.
+function filterByEq(rows: Array<Record<string, unknown>>, eqs: Array<[string, unknown]>) {
+  return rows.filter((row) => eqs.every(([col, val]) => !(col in row) || row[col] === val));
+}
+
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: vi.fn(async () => ({ data: { user: H.user } })) },
     from: vi.fn((table: string) => {
       let mode: "read" | "insert" = "read";
+      const localEq: Array<[string, unknown]> = [];
       const q: Record<string, unknown> = {};
       q.select = vi.fn(() => q);
       q.eq = vi.fn((col: string, val: unknown) => {
         H.eqCalls.push([col, val]);
+        localEq.push([col, val]);
         return q;
       });
       q.limit = vi.fn(() => q);
@@ -48,9 +62,13 @@ vi.mock("@/lib/supabase/server", () => ({
           mode === "insert"
             ? H.lifecycleInsertResult
             : table === "watchlists"
-              ? H.probeResult
+              ? H.probeResult.error
+                ? H.probeResult
+                : { data: filterByEq(H.watchlistTable, localEq), error: null }
               : table === "portfolio_positions"
-                ? H.positionRows
+                ? H.positionRows.error
+                  ? H.positionRows
+                  : { data: filterByEq(H.positionTable, localEq), error: null }
                 : table === "account_lifecycle_requests"
                   ? H.lifecycleSelectResult
                   : { data: [], error: null };
@@ -79,6 +97,18 @@ beforeEach(() => {
   // otherwise leaks across tests in this file (test isolation, not a production concern).
   userCounter += 1;
   H.user = { id: `user-A-${userCounter}`, email: "a@example.com" };
+  // A real row for the caller AND a real row for a different account ("user-B-fixed") in the
+  // SAME underlying table — the isolation test below proves the export never returns the
+  // user-B row, and the mock above proves it by actually filtering on `.eq("user_id", …)`
+  // rather than ignoring the predicate (review BLOCKER acceptance-1).
+  H.watchlistTable = [
+    { id: "w-mine", user_id: H.user.id, name: "My List", position: 0 },
+    { id: "w-b", user_id: "user-B-fixed", name: "user-B secret list", position: 0 },
+  ];
+  H.positionTable = [
+    { id: "p-mine", user_id: H.user.id, ticker: "AAPL", shares: 1, entry_price: 1, entry_date: "2026-01-01", notes: "mine", status: "open", created_at: "2026-01-01T00:00:00Z" },
+    { id: "p-b", user_id: "user-B-fixed", ticker: "ZZZZ", shares: 1, entry_price: 1, entry_date: "2026-01-01", notes: "user-B secret note", status: "open", created_at: "2026-01-01T00:00:00Z" },
+  ];
   H.watchlistRows = { data: [], error: null };
   H.positionRows = { data: [], error: null };
   H.probeResult = { data: [{ id: "w1" }], error: null };
@@ -93,11 +123,19 @@ beforeEach(() => {
 
 describe("GET /api/account/export", () => {
   it("returns only the caller's own rows and filters by user_id", async () => {
+    // Non-vacuous isolation proof (review BLOCKER acceptance-1): the store genuinely holds a
+    // "user-B-fixed" row in both tables (see beforeEach), and every single `.eq("user_id", …)`
+    // call this request makes must scope to the caller — `.every`, not `.some` — or the mock
+    // above would actually hand the user-B row back and the assertions below would fail.
     const res = await exportGET(req("https://x.test/api/account/export"));
     expect(res.status).toBe(200);
     const bodyText = await res.text();
     expect(bodyText).not.toContain("user-B");
-    expect(H.eqCalls.some(([col, val]) => col === "user_id" && val === H.user!.id)).toBe(true);
+    expect(H.eqCalls.length).toBeGreaterThan(0);
+    expect(H.eqCalls.every(([col, val]) => col !== "user_id" || val === H.user!.id)).toBe(true);
+    const body = JSON.parse(bodyText);
+    expect(body.watchlists.map((w: { id: string }) => w.id)).toEqual(["w-mine"]);
+    expect(body.portfolio_positions.map((p: { id: string }) => p.id)).toEqual(["p-mine"]);
   });
 
   it("401s when signed out and makes no store call", async () => {

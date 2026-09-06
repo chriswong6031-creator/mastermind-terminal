@@ -141,12 +141,14 @@ describe("serializeCsv", () => {
 });
 
 describe("assertNoSecrets", () => {
-  const banned = [
-    "password", "access_token", "refresh_token", "service_role", "apikey", "api_key",
-    "authorization", "bearer token-x", "secret", "sb-access-token=x", "eyJhbGciOiJIUzI1NiJ9.xxxxxxxxxx.yyy",
+  const secretShaped = [
+    "access_token=abcdef1234", "refresh_token: abcdef1234", "service_role=abcdef1234",
+    "apikey=abcdef1234", "api_key: abcdef1234", "authorization: Bearer abcdef1234",
+    "password=abcdef1234", "secret=abcdef1234", "bearer token-x", "sb-access-token=x",
+    "eyJhbGciOiJIUzI1NiJ9.xxxxxxxxxx.yyy",
   ];
 
-  it.each(banned)("trips on %s", (needle) => {
+  it.each(secretShaped)("trips on secret-shaped value: %s", (needle) => {
     expect(assertNoSecrets(`clean text ${needle} more text`).ok).toBe(false);
   });
 
@@ -154,8 +156,18 @@ describe("assertNoSecrets", () => {
     expect(assertNoSecrets("just plain export content").ok).toBe(true);
   });
 
-  it("trips fail-closed even when the banned word is ordinary prose in a note", () => {
+  it("does NOT trip when a banned word is ordinary prose in a note (review MAJOR acceptance-1/6)", () => {
     const result = assertNoSecrets("note: remember your password when you call support");
+    expect(result.ok).toBe(true);
+  });
+
+  it("does NOT trip on a watchlist named 'Secret picks'", () => {
+    const result = assertNoSecrets("watchlist name: Secret picks, section: core");
+    expect(result.ok).toBe(true);
+  });
+
+  it("still trips on an actual key=value shaped secret embedded in ordinary content", () => {
+    const result = assertNoSecrets("note: api_key=sk_live_abcdefgh12345 rest of note");
     expect(result.ok).toBe(false);
   });
 });

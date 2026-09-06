@@ -236,24 +236,26 @@ export function exportFilename(doc: AccountExportDoc, format: ExportFormat): str
   return `mastermind-terminal-data-${date}.${format}`;
 }
 
-const SECRET_PATTERNS: Array<{ label: string; test: (lower: string, raw: string) => boolean }> = [
-  { label: "password", test: (l) => l.includes("password") },
-  { label: "access_token", test: (l) => l.includes("access_token") },
-  { label: "refresh_token", test: (l) => l.includes("refresh_token") },
-  { label: "service_role", test: (l) => l.includes("service_role") },
-  { label: "apikey", test: (l) => l.includes("apikey") },
-  { label: "api_key", test: (l) => l.includes("api_key") },
-  { label: "authorization", test: (l) => l.includes("authorization") },
-  { label: "bearer ", test: (l) => l.includes("bearer ") },
-  { label: "secret", test: (l) => l.includes("secret") },
-  { label: "sb-cookie", test: (l) => l.includes("sb-") },
-  { label: "jwt", test: (_l, raw) => /\beyJ[A-Za-z0-9_-]{10,}\./.test(raw) },
+// Structural, not substring: a watchlist named "Secret picks" or a note reading "changed
+// password" must NOT withhold the export (review MAJOR acceptance-1/6) — only a value that
+// is actually SHAPED like a credential (key=value, a bearer token, a session cookie, a JWT)
+// trips this. Plain prose that merely mentions one of these words never matches.
+const SECRET_PATTERNS: Array<{ label: string; test: (raw: string) => boolean }> = [
+  { label: "jwt", test: (raw) => /\beyJ[A-Za-z0-9_-]{10,}\./.test(raw) },
+  { label: "bearer_token", test: (raw) => /\bbearer\s+[A-Za-z0-9._-]{6,}/i.test(raw) },
+  { label: "sb_cookie", test: (raw) => /\bsb-[a-z0-9_-]{2,}=\S/i.test(raw) },
+  {
+    label: "key_value_secret",
+    test: (raw) =>
+      /\b(password|secret|access_token|refresh_token|service_role|api[_-]?key|authorization)\b\s*[:=]\s*\S{4,}/i.test(
+        raw,
+      ),
+  },
 ];
 
 export function assertNoSecrets(serialized: string): { ok: true } | { ok: false; hit: string } {
-  const lower = serialized.toLowerCase();
   for (const pattern of SECRET_PATTERNS) {
-    if (pattern.test(lower, serialized)) return { ok: false, hit: pattern.label };
+    if (pattern.test(serialized)) return { ok: false, hit: pattern.label };
   }
   return { ok: true };
 }

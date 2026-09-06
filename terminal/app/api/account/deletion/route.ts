@@ -55,7 +55,21 @@ const NOT_RECORDED_MESSAGE: Bilingual = [
   "我们无法记录你的请求，因此不会假装已经记录。没有提交任何请求，你的数据也没有任何改动。请稍后再试。",
 ];
 
-function stepsFor(receiptCode: string): LifecycleStep[] {
+// `status` is advanced only by the operator's elevated store credential — see 0016's table
+// comment. A receipt whose status has moved past "received" must say so: rendering the same
+// "nothing has been removed yet" sentence for a completed request was the MAJOR acceptance-2
+// finding.
+function stepsFor(receiptCode: string, status: string): LifecycleStep[] {
+  const asyncDone = status === "completed";
+  const asyncText: Bilingual = asyncDone
+    ? [
+        "Your watchlists and positions from this account have been removed.",
+        "你的自选与持仓已从此账户中移除。",
+      ]
+    : [
+        "Nothing has been removed yet. Your watchlists and positions are removed by our team after this request, not the moment you file it.",
+        "目前尚未删除任何内容。你的自选与持仓会在此请求提交后由我们的团队处理，而不是在你提交的当下。",
+      ];
   return [
     {
       phase: "immediate",
@@ -67,14 +81,14 @@ function stepsFor(receiptCode: string): LifecycleStep[] {
     },
     {
       phase: "asynchronous",
-      done: false,
-      text: [
-        "Nothing has been removed yet. Your watchlists and positions are removed by our team after this request, not the moment you file it.",
-        "目前尚未删除任何内容。你的自选与持仓会在此请求提交后由我们的团队处理，而不是在你提交的当下。",
-      ],
+      done: asyncDone,
+      text: asyncText,
     },
     {
       phase: "external",
+      // Always false: whether the identity-side deletion ran is a fact this route never has —
+      // it is not derived from `status`, which only tracks this table (F12 do_not_redo: no
+      // second auth plane). Stated honestly rather than inferred.
       done: false,
       text: [
         "Your sign-in itself is removed on the account service. That is a separate step we do not perform here, so this page cannot tell you it is done.",
@@ -100,7 +114,7 @@ function rowToReceipt(row: Record<string, unknown>, email: string): LifecycleRec
     status: (row.status as LifecycleReceipt["status"]) || "received",
     requested_at: String(row.requested_at ?? new Date().toISOString()),
     account_email: email,
-    steps: stepsFor(code),
+    steps: stepsFor(code, (row.status as string) || "received"),
   };
 }
 

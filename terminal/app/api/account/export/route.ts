@@ -42,7 +42,11 @@ const unauthenticated = () => NextResponse.json({ error: "unauthenticated" }, { 
 // Per-session throttle: at most one export per 60s. Deliberately shorter than macro's 15-minute
 // whole-account export (#515 §2.2) — proportionate for a two-table read; a stated divergence.
 const THROTTLE_MS = 60_000;
+// Keyed by user+format (not just user): the obvious first action is downloading BOTH JSON and
+// CSV back to back, and co-throttling them across formats broke that happy path (review
+// MAJOR happy-path). Repeating the SAME format is still throttled.
 const lastExportAt = new Map<string, number>();
+const throttleKey = (userId: string, format: ExportFormat) => `${userId}:${format}`;
 
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -55,7 +59,8 @@ export async function GET(req: Request): Promise<Response> {
   if (!session) return unauthenticated();
 
   const now = Date.now();
-  const last = lastExportAt.get(session.userId);
+  const tKey = throttleKey(session.userId, format);
+  const last = lastExportAt.get(tKey);
   if (last && now - last < THROTTLE_MS) {
     return NextResponse.json(
       { error: "too_soon", retry_after_s: Math.ceil((THROTTLE_MS - (now - last)) / 1000) },
@@ -75,7 +80,7 @@ export async function GET(req: Request): Promise<Response> {
     return NextResponse.json({ error: "export unavailable" }, { status: 503 });
   }
 
-  lastExportAt.set(session.userId, now);
+  lastExportAt.set(tKey, now);
 
   const doc = buildAccountExport({
     userId: session.userId,

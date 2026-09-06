@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Group, IconGoogle, IconSignOut, IconTwitterX, Msg, Row, SectionHead } from "./icons";
 import { acsDate, type SectionProps } from "./types";
+import type { ExportFormat } from "@/lib/accountExport";
 
 // ── Account ──────────────────────────────────────────────────────────────────
 // Ported from the macro dashboard's `_renderSDAccount` + `_wireSDAccount`:
@@ -111,6 +112,51 @@ export default function SectionAccount({ t, lang, email, user, onClose, onPatchM
       setMsg({ kind: "err", text: (e as Error)?.message || t("acsDeleteErr") });
     } finally {
       setBusy(false);
+    }
+  }
+
+  // ── data export (B-F12-4 / review MAJOR acceptance-6) ──
+  // A plain <a download> saved every non-200 body (429/503/500/401) to disk verbatim. This
+  // fetches, checks the status, and only ever hands the browser a real file on 200.
+  const [dlBusy, setDlBusy] = useState<ExportFormat | null>(null);
+  const [dlMsg, setDlMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  async function downloadExport(format: ExportFormat) {
+    setDlBusy(format);
+    setDlMsg(null);
+    try {
+      const res = await fetch(`/api/account/export?format=${format}`);
+      if (res.status === 429) {
+        let retryAfterS: number | null = null;
+        try {
+          const body = await res.json();
+          retryAfterS = typeof body?.retry_after_s === "number" ? body.retry_after_s : null;
+        } catch { /* keep retryAfterS null */ }
+        setDlMsg({
+          kind: "err",
+          text: retryAfterS ? `${t("acsDownloadWait")} (${retryAfterS}s)` : t("acsDownloadWait"),
+        });
+        return;
+      }
+      if (!res.ok) {
+        setDlMsg({ kind: "err", text: t("acsDownloadErr") });
+        return;
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = /filename="([^"]+)"/.exec(disposition);
+      const filename = match ? match[1] : `mastermind-terminal-data.${format}`;
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setDlMsg({ kind: "err", text: t("acsDownloadErr") });
+    } finally {
+      setDlBusy(null);
     }
   }
 
@@ -347,11 +393,26 @@ export default function SectionAccount({ t, lang, email, user, onClose, onPatchM
               desc={t("acsDownloadDesc")}
               control={(
                 <>
-                  <a className="acs-mini" href="/api/account/export?format=json" download>JSON</a>
-                  <a className="acs-mini" href="/api/account/export?format=csv" download>CSV</a>
+                  <button
+                    type="button"
+                    className="acs-mini"
+                    disabled={dlBusy !== null}
+                    onClick={() => downloadExport("json")}
+                  >
+                    {dlBusy === "json" ? t("acsDownloadWait") : "JSON"}
+                  </button>
+                  <button
+                    type="button"
+                    className="acs-mini"
+                    disabled={dlBusy !== null}
+                    onClick={() => downloadExport("csv")}
+                  >
+                    {dlBusy === "csv" ? t("acsDownloadWait") : "CSV"}
+                  </button>
                 </>
               )}
             />
+            {dlMsg ? <Msg text={dlMsg.text} kind={dlMsg.kind} /> : null}
             {filed ? (
               <Row label={t("acsDeleteFiled")} value={filed.receipt_code} desc={stepText(filed)} />
             ) : (
