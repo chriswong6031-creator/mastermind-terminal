@@ -114,4 +114,42 @@
   .historySummary > button { grid-column: 2; grid-row: 1 / span 4; align-self: stretch; }
   .versionMeta, .snapshotGrid { grid-template-columns: 1fr; }
   .snapshotFull { grid-column: auto; }
+  .lensRail { margin: 0 -10px 12px; padding: 0 10px; }
+  .lensRail ul { grid-auto-flow: column; grid-auto-columns: max-content; overflow-x: auto; gap: 6px; padding-bottom: 4px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+  .lens { min-height: 38px; border-left: 0; border-bottom: 2px solid transparent; border-radius: var(--r-md); padding: 8px 12px; scroll-snap-align: start; }
+  .lens[data-selected] { border-bottom-color: var(--brand); }
+  .lensPanel { gap: 8px; }
 }
+.lensRail { margin: 0 0 14px; }
+.lensRail ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.lens { width: 100%; min-height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 9px 6px 8px; border: 0; border-left: 2px solid transparent; border-radius: 0 var(--r-md) var(--r-md) 0; background: transparent; color: var(--muted); font: 700 12px/1.2 var(--font-ui); text-align: left; cursor: pointer; transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease); }
+.lens:hover:not(:disabled) { color: var(--text-2); background: color-mix(in srgb, var(--panel-2) 60%, transparent); }
+.lens[data-selected] { border-left-color: var(--brand); background: var(--panel-2); color: var(--text); }
+.lens:focus-visible { outline: 2px solid color-mix(in srgb, var(--brand) 55%, transparent); outline-offset: -2px; }
+.lensCount { color: var(--text-dim); font: 700 11px/1 var(--font-num); font-variant-numeric: tabular-nums; }
+.lens[data-selected] .lensCount { color: var(--text-2); }
+.lensHead { display: grid; gap: 4px; padding: 12px 2px 0; border-top: 1px solid var(--line-2); }
+.lensHead h2 { margin: 0; font-size: 13px; letter-spacing: .04em; }
+.lensWhat { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.scopeNote { margin: 0; color: var(--text-dim); font-size: 11px; line-height: 1.5; }
+.lensPanel { display: grid; gap: 7px; margin-top: 12px; }
+.subjectRow { width: 100%; display: grid; gap: 6px; padding: 11px; text-align: left; color: inherit; border: 1px solid transparent; border-radius: 9px; background: transparent; cursor: pointer; }
+.subjectRow:hover { border-color: var(--line); background: var(--panel-2); }
+.subjectRow > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.subjectRow strong { font-size: 13px; }
+.subjectRow small { color: var(--muted); font-size: 11px; }
+.subjectRow i { width: 6px; height: 6px; border-radius: 50%; background: var(--regime-up); }
+.subjectRow i[data-state="idle"] { background: var(--line-3); }
+.lineRow { display: grid; gap: 6px; padding: 10px 11px 10px 12px; border-left: 1px solid var(--line-3); border-radius: 0 9px 9px 0; background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
+.lineText { margin: 0; color: var(--text); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.lineOwner { display: flex; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: var(--muted); font: 11px/1.2 var(--font-ui); text-align: left; cursor: pointer; }
+.lineOwner b { flex: 0 0 auto; color: var(--brand-2); font: 700 11px/1 var(--font-num); }
+.lineOwner span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lineOwner:hover { color: var(--text-2); }
+.rowReason { font-style: normal; color: var(--muted); font-size: 11px; }
+.emptyLens { margin-top: 4px; padding: 14px; border: 1px dashed var(--line); border-radius: 10px; }
+.emptyLens p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.showMore { min-height: 34px; margin-top: 4px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; color: inherit; background: var(--panel-2); font: 700 11px/1.2 var(--font-ui); cursor: pointer; }
+.conditionLine { margin: -8px 0 16px; padding-left: 10px; border-left: 2px solid var(--line-3); color: var(--muted); font-size: 12px; line-height: 1.5; }
+.conditionLine[data-state="window_closed"] { border-left-color: var(--warn); color: var(--text-2); }
+@media (prefers-reduced-motion: reduce) { .lens { transition: none; } }
