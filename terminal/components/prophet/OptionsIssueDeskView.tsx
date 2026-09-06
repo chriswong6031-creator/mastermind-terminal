@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLang } from "@/lib/i18n";
-import { APPROVE_REASONS, REJECT_REASONS, confirmActionLabel, eventStateLabel, lifecycleLabel, reasonLabel, visibleReceiptFields } from "./optionsIssueDeskLabels";
+import { APPROVE_REASONS, FORM_FIELD_LABELS, REJECT_REASONS, REQUIRED_FORM_FIELDS, confirmActionLabel, eventStateLabel, lifecycleLabel, reasonLabel, visibleReceiptFields, type FormFieldKey } from "./optionsIssueDeskLabels";
 import { ISSUE_LIFECYCLE, normalizeIssueDeskPayload, type IssueDeskPayload, type IssueDeskProposal, type IssueDeskPosition } from "./optionsIssueDeskTypes";
 
 type Action = { proposal: IssueDeskProposal; kind: "approve" | "reject" } | null;
@@ -11,9 +11,8 @@ type Form = Record<string, string>;
 const EMPTY_FORM: Form = {};
 const fmtClock = (v: string, zh = false) => new Date(v).toLocaleString(zh ? "zh-CN" : "en-US", { timeZone: "America/New_York", dateStyle: "medium", timeStyle: "short" });
 const num = (v: string) => Number(v);
-const required = ["reference", "trigger", "no_chase", "stop", "t1", "t2", "t1_fraction", "t2_fraction", "minimum_hold_days", "horizon_days", "starter_allowed", "add_rule", "invalidation", "occ_symbol", "right", "strike", "expiry", "quantity", "premium", "nbbo_bid", "nbbo_ask", "nbbo_mid", "quote_at", "quote_source", "receipt_sha256", "spread", "spread_pct", "allocation", "loss_at_stop", "cash_after", "risk_disclosure", "sleeve", "correlation_cluster", "cooldown_clear", "event_risk_clear"];
 function complete(form: Form, activeAllocation: number, expectedSymbol: string) {
-  if (required.some((key) => !form[key]?.trim())) return false;
+  if (REQUIRED_FORM_FIELDS.some((key) => !form[key]?.trim())) return false;
   const n = (key: string) => num(form[key]);
   return ["reference", "trigger", "no_chase", "stop", "t1", "t2", "t1_fraction", "t2_fraction", "minimum_hold_days", "horizon_days", "invalidation", "strike", "quantity", "premium", "nbbo_bid", "nbbo_ask", "nbbo_mid", "spread", "spread_pct", "allocation"].every((key) => Number.isFinite(n(key)) && n(key) > 0)
     && ["loss_at_stop", "cash_after"].every((key) => Number.isFinite(n(key)) && n(key) >= 0)
@@ -56,12 +55,12 @@ function Lifecycle({ position, zh }: { position: IssueDeskPosition; zh: boolean 
 }
 
 function ApprovalEditor({ form, setForm, zh }: { form: Form; setForm: (form: Form) => void; zh: boolean }) {
-  const field = (key: string, en: string, cn: string, type = "text") => <label key={key}><span>{copy(zh, cn, en)}</span><input type={type} value={form[key] ?? ""} onChange={(e) => setForm({ ...form, [key]: e.target.value })} /></label>;
+  const field = (key: FormFieldKey, type = "text") => { const [en, cn] = FORM_FIELD_LABELS[key]; return <label key={key}><span>{copy(zh, cn, en)}</span><input type={type} value={form[key] ?? ""} onChange={(e) => setForm({ ...form, [key]: e.target.value })} /></label>; };
   return <div className="obs-issue-editor" data-testid="issue-desk-approval-editor">
     <p>{copy(zh, "操作员证明的研究发布凭据。系统不会从当前期权数据中猜测合约或报价。", "Operator-attested research issue receipt. The desk never guesses a contract or quote from current options data.")}</p>
-    <h4>{copy(zh, "底层计划", "Underlying plan")}</h4><div className="obs-issue-form-grid">{field("reference", "Reference price", "参考价", "number")}{field("trigger", "Trigger price", "触发价", "number")}{field("no_chase", "Do-not-chase ceiling", "不追价上限", "number")}{field("stop", "Stop", "止损", "number")}{field("t1", "First target", "目标一", "number")}{field("t2", "Second target", "目标二", "number")}{field("t1_fraction", "Fraction at first target", "目标一比例", "number")}{field("t2_fraction", "Fraction at second target", "目标二比例", "number")}{field("minimum_hold_days", "Minimum hold days", "最短持有天数", "number")}{field("horizon_days", "Holding period days", "持有期限天数", "number")}{field("starter_allowed", "Allow a starter position (true/false)", "允许初始仓 (true/false)")}{field("add_rule", "Add-on rule", "加仓规则")}{field("invalidation", "Invalidation level", "失效价")}</div>
-    <h4>{copy(zh, "期权执行", "Option execution")}</h4><div className="obs-issue-form-grid">{field("occ_symbol", "OCC symbol (official options clearing record)", "OCC 代码（期权清算公司正式记录）")}{field("right", "Call only (C)", "方向（仅认购 C）")}{field("strike", "Strike", "行权价", "number")}{field("expiry", "Expiry (YYYY-MM-DD)", "到期日 (YYYY-MM-DD)")}{field("quantity", "Quantity", "数量", "number")}{field("premium", "Premium", "权利金", "number")}{field("nbbo_bid", "NBBO (best available quote) · bid", "NBBO（最优买卖报价）· 买价", "number")}{field("nbbo_ask", "NBBO ask", "NBBO 卖价", "number")}{field("nbbo_mid", "NBBO mid", "NBBO 中间价", "number")}{field("spread", "Spread", "价差", "number")}{field("spread_pct", "Spread percent", "价差百分比", "number")}{field("quote_at", "Quote time (UTC)", "报价时间 (UTC)")}{field("quote_source", "Quote source", "报价来源")}{field("receipt_sha256", "Receipt fingerprint (SHA-256)", "凭据指纹（SHA-256）")}</div>
-    <h4>{copy(zh, "风险、披露与组合契合度", "Risk, disclosure, and portfolio fit")}</h4><div className="obs-issue-form-grid">{field("allocation", "Allocation weight", "配置比例", "number")}{field("loss_at_stop", "Loss at stop weight", "止损损失", "number")}{field("cash_after", "Cash after weight", "剩余现金", "number")}{field("risk_disclosure", "Risk disclosure", "风险披露")}{field("sleeve", "Portfolio group", "组合分组")}{field("correlation_cluster", "Related-name group", "相关标的组")}{field("cooldown_clear", "Cooldown period has passed (true)", "冷却期已过 (true)")}{field("event_risk_clear", "Event risk is clear (true)", "事件风险已排除 (true)")}</div>
+    <h4>{copy(zh, "底层计划", "Underlying plan")}</h4><div className="obs-issue-form-grid">{field("reference", "number")}{field("trigger", "number")}{field("no_chase", "number")}{field("stop", "number")}{field("t1", "number")}{field("t2", "number")}{field("t1_fraction", "number")}{field("t2_fraction", "number")}{field("minimum_hold_days", "number")}{field("horizon_days", "number")}{field("starter_allowed")}{field("add_rule")}{field("invalidation")}</div>
+    <h4>{copy(zh, "期权执行", "Option execution")}</h4><div className="obs-issue-form-grid">{field("occ_symbol")}{field("right")}{field("strike", "number")}{field("expiry")}{field("quantity", "number")}{field("premium", "number")}{field("nbbo_bid", "number")}{field("nbbo_ask", "number")}{field("nbbo_mid", "number")}{field("spread", "number")}{field("spread_pct", "number")}{field("quote_at")}{field("quote_source")}{field("receipt_sha256")}</div>
+    <h4>{copy(zh, "风险、披露与组合契合度", "Risk, disclosure, and portfolio fit")}</h4><div className="obs-issue-form-grid">{field("allocation", "number")}{field("loss_at_stop", "number")}{field("cash_after", "number")}{field("risk_disclosure")}{field("sleeve")}{field("correlation_cluster")}{field("cooldown_clear")}{field("event_risk_clear")}</div>
   </div>;
 }
 

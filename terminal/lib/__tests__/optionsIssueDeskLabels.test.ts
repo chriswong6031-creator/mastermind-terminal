@@ -1,12 +1,19 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ISSUE_LIFECYCLE } from "@/components/prophet/optionsIssueDeskTypes";
 import {
   APPROVE_REASONS,
+  EVENT_STATE_LABELS,
+  FORM_FIELD_LABELS,
+  LIFECYCLE_LABELS,
   REJECT_REASONS,
+  REQUIRED_FORM_FIELDS,
   approveReasonLabel,
   confirmActionLabel,
   eventStateLabel,
   lifecycleLabel,
+  quoteSourceLabel,
   reasonLabel,
   rejectReasonLabel,
   visibleReceiptFields,
@@ -98,20 +105,89 @@ describe("options issue desk labels", () => {
     expect(fields.find((field) => field.key === "quote_source")?.value).not.toContain("_");
     expect(fields.find((field) => field.key === "quote_source")?.value).not.toBe("operator_attested_nbbo");
     expect(fields.find((field) => field.key === "timestamp")?.value).toBe("2026-08-08T21:16:00Z");
-    expect(fields.some((field) => field.key === "venue")).toBe(false);
+    expect(fields.map((field) => field.key as string)).not.toContain("venue");
     expect(JSON.stringify(fields)).not.toContain("undefined");
     expect(JSON.stringify(fields)).not.toContain("null");
 
     const zh = visibleReceiptFields({
       option: { occ_symbol: "LMT260918C00600000", quote_source: "operator_attested_nbbo", quote_at: "2026-08-08T21:16:00Z" },
     }, true);
-    expect(zh.find((field) => field.key === "contract")?.label).toBe("合约");
+    expect(fields.find((field) => field.key === "contract")?.label).toBe("Contract (OCC symbol)");
+    expect(fields.find((field) => field.key === "timestamp")?.label).toBe("Quote time (New York)");
+    expect(zh.find((field) => field.key === "contract")?.label).toBe("合约（OCC 代码）");
     expect(zh.find((field) => field.key === "quote_source")?.label).toBe("报价来源");
-    expect(zh.find((field) => field.key === "timestamp")?.label).toBe("报价时间");
+    expect(zh.find((field) => field.key === "timestamp")?.label).toBe("报价时间（纽约）");
 
     expect(visibleReceiptFields({ option: { occ_symbol: "LMT260918C00600000" } }, false).map((field) => field.key)).toEqual(["contract"]);
     expect(visibleReceiptFields({}, false)).toEqual([]);
     expect(visibleReceiptFields(null, false)).toEqual([]);
     expect(visibleReceiptFields({ option: { occ_symbol: null, quote_source: undefined, venue: null } }, false)).toEqual([]);
+  });
+
+  it("labels every required approval-editor field in EN and ZH without machine keys", () => {
+    expect(REQUIRED_FORM_FIELDS.length).toBeGreaterThan(0);
+    for (const key of REQUIRED_FORM_FIELDS) {
+      const pair = FORM_FIELD_LABELS[key];
+      expect(pair?.[0]?.length, `${key} EN`).toBeGreaterThan(0);
+      expect(pair?.[1]?.length, `${key} ZH`).toBeGreaterThan(0);
+      expect(pair[0]).not.toContain("_");
+      expect(pair[1]).not.toContain("_");
+    }
+    expect(FORM_FIELD_LABELS.occ_symbol[0]).toContain("official options clearing record");
+    expect(FORM_FIELD_LABELS.occ_symbol[1]).toContain("期权清算公司");
+    expect(FORM_FIELD_LABELS.nbbo_bid[0]).toContain("best available quote");
+    expect(FORM_FIELD_LABELS.nbbo_bid[1]).toContain("最优买卖报价");
+    expect(FORM_FIELD_LABELS.quote_at[0]).toBe("Quote time (UTC)");
+    expect(FORM_FIELD_LABELS.quote_at[1]).toBe("报价时间 (UTC)");
+  });
+
+  it("keeps JSON.stringify and proposal_id interpolations inside technical-details disclosures", () => {
+    const source = readFileSync(join(__dirname, "../../components/prophet/OptionsIssueDeskView.tsx"), "utf8");
+    expect(source).toContain("Show technical details");
+    expect(source).toContain("显示技术细节");
+
+    const insideDetails = (index: number) => {
+      const before = source.slice(0, index);
+      return before.lastIndexOf("<details") > before.lastIndexOf("</details>");
+    };
+    let cursor = 0;
+    let stringifyCount = 0;
+    while ((cursor = source.indexOf("{JSON.stringify(", cursor)) !== -1) {
+      expect(insideDetails(cursor), `{JSON.stringify at ${cursor} is outside <details>`).toBe(true);
+      stringifyCount += 1;
+      cursor += "{JSON.stringify(".length;
+    }
+    expect(stringifyCount).toBeGreaterThan(0);
+
+    cursor = 0;
+    while ((cursor = source.indexOf("proposal_id}", cursor)) !== -1) {
+      const attrStart = source.lastIndexOf("key={", cursor);
+      const isReactKey = attrStart !== -1 && !source.slice(attrStart, cursor).includes(">");
+      if (!isReactKey) {
+        expect(insideDetails(cursor), `proposal_id} at ${cursor} is outside <details>`).toBe(true);
+      }
+      cursor += "proposal_id}".length;
+    }
+  });
+
+  it("maps known quote sources, omits empty ones, and humanises attested free text", () => {
+    expect(quoteSourceLabel("operator_attested_nbbo", false)).toBe("Operator-attested best available quote");
+    expect(quoteSourceLabel("operator_attested_nbbo", true)).toBe("操作员确认的最优买卖报价");
+    expect(quoteSourceLabel("", false)).toBe("");
+    expect(quoteSourceLabel("   ", true)).toBe("");
+    expect(quoteSourceLabel("cboe_live-tape", false)).toBe("Cboe live tape");
+    expect(quoteSourceLabel("cboe_live-tape", true)).toBe("Cboe live tape");
+    expect(quoteSourceLabel("cboe_live-tape", false)).not.toBe("Not classified");
+    expect(quoteSourceLabel("cboe_live-tape", true)).not.toBe("未分类");
+    expect(quoteSourceLabel("cboe_live-tape", false)).not.toContain("_");
+
+    expect(visibleReceiptFields({ option: { occ_symbol: "LMT260918C00600000", quote_source: "" } }, false).map((field) => field.key)).toEqual(["contract"]);
+    expect(visibleReceiptFields({ option: { occ_symbol: "LMT260918C00600000", quote_source: "   " } }, false).map((field) => field.key)).toEqual(["contract"]);
+    expect(visibleReceiptFields({ option: { occ_symbol: "LMT260918C00600000", quote_source: "pit_print-manual" } }, false).find((field) => field.key === "quote_source")?.value).toBe("Pit print manual");
+  });
+
+  it("shares one lifecycle/event-state map and finishes the diversification gloss", () => {
+    expect(EVENT_STATE_LABELS).toBe(LIFECYCLE_LABELS);
+    expect(reasonLabel("DIVERSIFICATION_FIT", true)).toBe("有助于分散风险");
   });
 });
