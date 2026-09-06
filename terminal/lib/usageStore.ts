@@ -31,6 +31,9 @@ import { parseAccountUsage, type AccountQuotas, type AccountUsage } from "@/lib/
 /** A held usage answer older than this is re-verified on the next Usage entry. */
 export const USAGE_TTL_MS = 60_000;
 
+/** A refresh that has not settled by this point is abandoned so `inflight` cannot latch forever. */
+const USAGE_FETCH_TIMEOUT_MS = 10_000;
+
 export type UsageState = "GUEST" | "LOADING" | "VERIFIED" | "UNAVAILABLE" | "STALE_LAST_GOOD";
 
 export type UsageSnapshot = {
@@ -74,24 +77,31 @@ function setOwner(next: string): boolean {
 /** Ask the brain gateway. `force` re-asks regardless of how fresh the held answer is. */
 export function refreshUsage(force = false, now = Date.now()): void {
   if (!isAccountOwner(owner)) return;
-  if (inflight) return;
-  if (!force && snapshot.usage && now - snapshot.verifiedAt < USAGE_TTL_MS) return;
+  if (inflight && !force) return;
+  // `snapshot.usage` is always a (possibly content-free) object once any 2xx has landed — the
+  // TTL and "has something to show" checks must discriminate on the LANES, not the wrapper, or a
+  // single quota-less 200 permanently reads as a fresh, non-stale answer.
+  if (!force && snapshot.usage?.quotas && now - snapshot.verifiedAt < USAGE_TTL_MS) return;
   const gen = generation;
   inflight = true;
   // A revalidation keeps the current meters on screen; only a first read has nothing to show.
-  if (!snapshot.usage) publish({ state: "LOADING" });
+  if (!snapshot.usage?.quotas) publish({ state: "LOADING" });
 
-  fetch("/api/brain/me", { cache: "no-store" })
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), USAGE_FETCH_TIMEOUT_MS);
+  const settle = () => { clearTimeout(timeoutId); inflight = false; };
+
+  fetch("/api/brain/me", { cache: "no-store", signal: controller.signal })
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
     .then((raw) => {
-      if (gen !== generation) return;
-      inflight = false;
-      publish({ usage: parseAccountUsage(raw), verifiedAt: Date.now(), state: "VERIFIED" });
+      if (gen !== generation) { settle(); return; }
+      settle();
+      publish({ usage: parseAccountUsage(raw), verifiedAt: now, state: "VERIFIED" });
     })
     .catch(() => {
-      if (gen !== generation) return;
-      inflight = false;
-      publish({ state: snapshot.usage ? "STALE_LAST_GOOD" : "UNAVAILABLE" });
+      if (gen !== generation) { settle(); return; }
+      settle();
+      publish({ state: snapshot.usage?.quotas ? "STALE_LAST_GOOD" : "UNAVAILABLE" });
     });
 }
 

@@ -70,10 +70,11 @@ describe("verification is tied to looking at the meters", () => {
 
     // …and comes back later, having spent most of the lane in the meantime.
     respond = async () => json(SPENT);
-    refreshUsage(false, Date.now() + USAGE_TTL_MS + 1);
+    refreshUsage(false, t0 + USAGE_TTL_MS + 1);
     await settle();
     expect(calls).toBe(2);
     expect(usageView().quotas?.fast?.remaining).toBe(3);
+    expect(__usageSnapshot().verifiedAt).toBe(t0 + USAGE_TTL_MS + 1);
   });
 
   it("never asks for a guest", async () => {
