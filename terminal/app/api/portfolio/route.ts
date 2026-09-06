@@ -8,7 +8,9 @@ import {
   readPositions,
   updatePosition,
   type PortfolioDb,
+  type Position,
 } from "@/lib/portfolio";
+import { computePortfolioRisk, type ArtifactState, type PortfolioRisk } from "@/lib/portfolioRisk";
 
 // Owner-scoped portfolio-position API (W5).
 //
@@ -57,6 +59,75 @@ const fail = (error: string, status: number) => NextResponse.json({ error }, { s
  * collapsed a Supabase error into `[]` one layer down, so this route answered "you hold nothing"
  * for an outage. On a holdings surface that is the worst available lie.
  */
+// ── Artifact fan-out (W B-F08-4) — additive `risk` field on GET only ──
+//
+// Anonymous by construction: no cookie, no Authorization, no user id, no ticker list in a query
+// string. A `{locked:true}` envelope is therefore an EXPECTED state (the artifact endpoint is
+// auth-gated), never an error — and a total outage here must never degrade the `positions`
+// response, which is why every failure is caught locally rather than allowed to reject GET.
+const STOCKDATA_BASE = process.env.STOCKDATA_BASE || "https://www.mastermind-x.com";
+const ARTIFACT_FANOUT_CAP = 60;
+const ARTIFACT_CONCURRENCY = 8;
+const ARTIFACT_TIMEOUT_MS = 2500;
+
+async function fetchArtifact(ticker: string): Promise<ArtifactState> {
+  try {
+    const url = `${STOCKDATA_BASE}/stockdata/${encodeURIComponent(ticker.toUpperCase())}.json`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(ARTIFACT_TIMEOUT_MS),
+      next: { revalidate: 900 },
+    } as RequestInit);
+    if (res.status === 404) return { kind: "missing" };
+    if (!res.ok) return { kind: "unreadable" };
+    const body = await res.json().catch(() => null);
+    if (!body || typeof body !== "object") return { kind: "unreadable" };
+    if ((body as { locked?: unknown }).locked === true) return { kind: "locked" };
+    const personality = (body as { personality?: { market_cap?: unknown } }).personality;
+    const sector = typeof (body as { sector?: unknown }).sector === "string" ? (body as { sector: string }).sector : null;
+    const marketCap = typeof personality?.market_cap === "number" && Number.isFinite(personality.market_cap)
+      ? personality.market_cap : null;
+    const thin = (body as { thinly_traded?: unknown }).thinly_traded;
+    const thinlyTraded = typeof thin === "boolean" ? thin : null;
+    return { kind: "read", facts: { ticker, sector, marketCap, thinlyTraded } };
+  } catch {
+    return { kind: "unreadable" };
+  }
+}
+
+async function fetchArtifactsFor(tickers: readonly string[]): Promise<Record<string, ArtifactState>> {
+  const unique = [...new Set(tickers)];
+  const attempted = unique.slice(0, ARTIFACT_FANOUT_CAP);
+  const overflow = unique.slice(ARTIFACT_FANOUT_CAP);
+  const out: Record<string, ArtifactState> = {};
+  for (const t of overflow) out[t] = { kind: "not_attempted" };
+
+  let i = 0;
+  async function worker() {
+    while (i < attempted.length) {
+      const idx = i++;
+      const ticker = attempted[idx];
+      out[ticker] = await fetchArtifact(ticker);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(ARTIFACT_CONCURRENCY, attempted.length || 1) }, worker));
+  return out;
+}
+
+async function buildRisk(positions: readonly Position[]): Promise<PortfolioRisk> {
+  const open = positions.filter((p) => p.status === "open");
+  const tickers = open.map((p) => p.ticker);
+  let artifacts: Record<string, ArtifactState> = {};
+  try {
+    artifacts = await fetchArtifactsFor(tickers);
+  } catch {
+    artifacts = {};
+  }
+  return computePortfolioRisk(
+    positions.map((p) => ({ ticker: p.ticker, shares: p.shares, entryPrice: p.entryPrice, status: p.status })),
+    artifacts,
+  );
+}
+
 export async function GET() {
   const session = await resolveDb();
   if (!session) return unauthenticated();
@@ -65,7 +136,8 @@ export async function GET() {
     console.error("portfolio GET failed:", read.error);
     return fail("portfolio unavailable", 503);
   }
-  return NextResponse.json({ positions: read.positions });
+  const risk = await buildRisk(read.positions);
+  return NextResponse.json({ positions: read.positions, risk });
 }
 
 export async function POST(req: Request) {

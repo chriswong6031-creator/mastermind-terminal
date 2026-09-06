@@ -34,6 +34,8 @@ import {
   sinceEntryValue,
   type Position,
 } from "@/lib/portfolio";
+import { riskCopy, type PortfolioRisk, type Lang } from "@/lib/portfolioRisk";
+import s from "@/components/PortfolioRisk.module.css";
 
 type Quote = { last?: number; chg?: number } | null | undefined;
 type ManifestRow = { name?: string; zh?: string; col?: string; last?: number; chg?: number };
@@ -88,6 +90,7 @@ export default function PortfolioView(
   const t = useT();
   const { lang } = useLang();
   const [positions, setPositions] = useState<Position[]>(seed);
+  const [risk, setRisk] = useState<PortfolioRisk | null>(null);
   // The server could not read the book. `positions` is [] here because there is nothing to show
   // — NOT because the user holds nothing. Everything that would assert a count or a total is
   // suppressed while this is true, and it clears the moment a read lands.
@@ -129,6 +132,7 @@ export default function PortfolioView(
       if (!Array.isArray(payload?.positions)) { setUnread(true); return null; }
       const authoritative = payload.positions as Position[];
       setPositions(authoritative);
+      setRisk((payload?.risk ?? null) as PortfolioRisk | null);
       setUnread(false);
       return authoritative;
     } catch { setUnread(true); return null; }
@@ -376,6 +380,8 @@ export default function PortfolioView(
           </div>
         )}
 
+        {!!open.length && risk && <PortfolioRiskReadout risk={risk} lang={lang as Lang} />}
+
         <div className="panel" data-testid="portfolio-open">
           <div className="ph">
             {t("openPositions")}
@@ -435,6 +441,130 @@ export default function PortfolioView(
         />
       )}
     </main>
+  );
+}
+
+/** One shared-scale stacked bar. Not an SVG data chart (terminal/AGENTS.md's chart law does not
+ *  apply) — each segment is a plain div with a genuinely data-dependent inline `width`, the only
+ *  inline style this surface uses. Uncovered segments render as a hatched neutral material, never
+ *  a color with direction semantics (never --up/--down/--warn). */
+function Bar({ rows }: { rows: { key: string; label: { en: string; zh: string }; weightPct: number; covered: boolean }[] }) {
+  const ariaLabel = rows.map((r) => `${r.label.en} ${r.weightPct}%`).join(", ");
+  return (
+    <div className={s.bar} role="img" aria-label={ariaLabel}>
+      {rows.map((r) => (
+        <div
+          key={r.key}
+          aria-hidden="true"
+          data-covered={r.covered ? "true" : "false"}
+          className={`${s.seg} ${r.covered ? "" : s.segUncovered}`}
+          style={{ width: `${r.weightPct}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function Legend({ rows, colors }: { rows: { key: string; label: { en: string; zh: string }; weightPct: number; covered: boolean }[]; lang: Lang; colors: string[] }) {
+  return (
+    <div className={s.legend}>
+      {rows.map((r, i) => (
+        <div key={r.key} className={s.legendRow}>
+          <span
+            className={s.legendSwatch}
+            aria-hidden="true"
+            style={{ background: r.covered ? colors[i % colors.length] : "var(--panel-3, #1f222b)" }}
+          />
+          <span className={s.legendLabel}>{r.label.en}</span>
+          <span className={s.legendPct}>{r.weightPct}%</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const RAMP = ["var(--brand-2)", "var(--flow-buy)", "var(--signal)", "var(--ai)", "var(--text-3, #5c6272)"];
+
+function PortfolioRiskReadout({ risk, lang }: { risk: PortfolioRisk; lang: Lang }) {
+  const c = riskCopy(risk);
+  const pick = (b: { en: string; zh: string } | null) => (b ? (lang === "zh" ? b.zh : b.en) : null);
+  return (
+    <section
+      className={s.shape}
+      data-testid="portfolio-shape"
+      data-shape-read={risk.counts.read}
+      data-shape-total={risk.counts.total}
+      aria-labelledby="pf-shape-h"
+    >
+      <header className={s.head}>
+        <h3 id="pf-shape-h" className={s.title}>{pick(c.title)}</h3>
+        <p className={s.standing}>{pick(c.standing)}</p>
+        <p className={s.meta}>
+          <span className={s.basis}>{pick(c.basis)}</span>
+          <span className={s.dot} aria-hidden="true" />
+          <span className={s.coverage} data-testid="shape-coverage">{pick(c.coverage)}</span>
+        </p>
+      </header>
+
+      <div className={s.grid}>
+        <article className={`${s.card} ${s.wide}`} data-card="concentration">
+          <span className={s.lbl}>{pick(c.cards[0].label)}</span>
+          <p className={s.q}>{pick(c.cards[0].question)}</p>
+          {c.cards[0].value
+            ? <>
+              <b className={s.hero}>{pick(c.cards[0].value)}</b>
+              <p className={s.sub}>{pick(c.cards[0].sub)}</p>
+              <Bar rows={c.legend[0]} />
+              <Legend rows={c.legend[0]} lang={lang} colors={RAMP} />
+            </>
+            : <p className={s.unread}>{pick(c.cards[0].unread)}</p>}
+        </article>
+
+        <article className={s.card} data-card="industries">
+          <span className={s.lbl}>{pick(c.cards[1].label)}</span>
+          <p className={s.q}>{pick(c.cards[1].question)}</p>
+          {c.legend[1].length
+            ? <>
+              <Bar rows={c.legend[1]} />
+              <Legend rows={c.legend[1]} lang={lang} colors={RAMP} />
+            </>
+            : <p className={s.unread}>{pick(c.cards[1].unread)}</p>}
+        </article>
+
+        <article className={s.card} data-card="size">
+          <span className={s.lbl}>{pick(c.cards[2].label)}</span>
+          <p className={s.q}>{pick(c.cards[2].question)}</p>
+          {c.legend[2].length
+            ? <>
+              <Bar rows={c.legend[2]} />
+              <Legend rows={c.legend[2]} lang={lang} colors={RAMP} />
+            </>
+            : <p className={s.unread}>{pick(c.cards[2].unread)}</p>}
+        </article>
+
+        <article className={`${s.card} ${s.wide} ${s.short}`} data-card="thickness">
+          <span className={s.lbl}>{pick(c.cards[3].label)}</span>
+          <p className={s.q}>{pick(c.cards[3].question)}</p>
+          {c.cards[3].value
+            ? <b className={s.hero}>{pick(c.cards[3].value)}</b>
+            : <p className={s.unread}>{pick(c.cards[3].unread)}</p>}
+        </article>
+      </div>
+
+      {!!c.gapLines.length && (
+        <details className={s.gaps} data-testid="shape-gaps" open>
+          <summary className={s.gapsSummary}>{pick(c.gapsSummary)}</summary>
+          <ul className={s.gapList}>
+            {c.gapLines.map((g) => (
+              <li key={`${g.ticker}-${g.text.en}`} className={s.gapRow}>
+                <span className={s.gapTk}>{g.ticker}</span>
+                <span className={s.gapWhy}>{pick(g.text)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </section>
   );
 }
 
