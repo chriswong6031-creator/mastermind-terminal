@@ -142,7 +142,7 @@ export function _resetAlertPrefill(): void {
   pendingPrefill = null;
 }
 
-export default function AlertsView({ email, panelOnly }: { email: string; panelOnly?: boolean }) {
+export default function AlertsView({ email, panelOnly, listOnly }: { email: string; panelOnly?: boolean; listOnly?: boolean }) {
   const t = useT();
   const { lang } = useLang();
   const fmtDate = (iso: string) => {
@@ -587,10 +587,7 @@ export default function AlertsView({ email, panelOnly }: { email: string; panelO
     return newAlertPanel;
   }
 
-  return (
-    <main className="main2"><div className="pg">
-        <div className="pg-head"><h2>{t("signalRegimeAlerts")}</h2><span className="sub">{t("alertsSub")}</span></div>
-        {newAlertPanel}
+  const existingAlertsPanel = (
         <div className="panel">
           {/* The count is a claim about the inventory — it must not print "0 total" over a
               read that never landed. The re-read control is always present when signed in: a
@@ -678,6 +675,16 @@ export default function AlertsView({ email, panelOnly }: { email: string; panelO
             );
           })}
         </div>
+  );
+  if (listOnly) {
+    return existingAlertsPanel;
+  }
+
+  return (
+    <main className="main2"><div className="pg">
+        <div className="pg-head"><h2>{t("signalRegimeAlerts")}</h2><span className="sub">{t("alertsSub")}</span></div>
+        {newAlertPanel}
+        {existingAlertsPanel}
       </div>
       {/* anon register nudge — options alerts require a free account */}
       {gateNudge && (
@@ -692,8 +699,16 @@ export default function AlertsView({ email, panelOnly }: { email: string; panelO
 
 // D1 extraction (frozen-spec-flagged deviation): the create-alert panel as a
 // standalone export for AlertsCockpit's L1-3 'Add a watch' module. Zero behaviour
-// change — same component, same hooks/state, panelOnly just narrows the render to
-// the create panel alone.
+// change — same component, same hooks/state, panelOnly/listOnly just narrow the
+// render to one panel alone, so the cockpit's inline create form and the full
+// management view's existing-alerts (pause/rearm/delete) list never render twice.
 export function NewAlertPanel({ email }: { email: string }) {
   return <AlertsView email={email} panelOnly />;
+}
+
+// The existing-alerts list (pause/rearm/delete) as its own export — mounted on the
+// composed /alerts page ALONGSIDE the cockpit's own NewAlertPanel, so create/pause/
+// delete stay reachable without a duplicate "New alert" form on the page.
+export function ExistingAlertsPanel({ email }: { email: string }) {
+  return <AlertsView email={email} listOnly />;
 }

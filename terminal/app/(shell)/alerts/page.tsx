@@ -14,9 +14,12 @@ import SignupGate from "@/components/gates/SignupGate";
 // the sign-up gate. The chart (/terminal) is what stays open to guests.
 //
 // B-F08-3: the monitor/delivery cockpit (AlertsCockpitMount) composes ABOVE the
-// existing create/pause/delete management view (AlertsViewMount) — it augments that
-// surface, it does not replace it. The cockpit's own "Add a watch" empty-state action
-// scrolls down to #alerts-manage, which is the real, already-working create flow.
+// existing create/pause/delete management view — it augments that surface, it does
+// not replace it. The cockpit renders its own create form inline (NewAlertPanel,
+// id="alerts-manage" — the cockpit's own "Add a watch" empty-state action scrolls
+// there); this page mounts ONLY the existing-alerts list (ExistingAlertsPanel via
+// `listOnly`) below it, so pause/rearm/delete stay reachable without a second,
+// duplicate "New alert" form on the page.
 
 export const metadata: Metadata = { title: "Alerts · Mastermind Terminal" };
 
@@ -24,9 +27,7 @@ function AlertsSurfaces({ email }: { email: string }) {
   return (
     <>
       <AlertsCockpitMount email={email} />
-      <div id="alerts-manage">
-        <AlertsViewMount email={email} />
-      </div>
+      <AlertsViewMount email={email} listOnly />
     </>
   );
 }
