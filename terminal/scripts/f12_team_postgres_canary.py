@@ -79,7 +79,8 @@ def bootstrap(conn: "psycopg.Connection") -> None:
     with conn.cursor() as cur:
         cur.execute("create schema if not exists auth")
         cur.execute(
-            "create table if not exists auth.users (id uuid primary key default gen_random_uuid(), email text)"
+            "create table if not exists auth.users (id uuid primary key default gen_random_uuid(), email text,"
+            " raw_user_meta_data jsonb not null default '{}'::jsonb)"
         )
         cur.execute(
             "create or replace function auth.uid() returns uuid language sql stable as $$"
@@ -87,6 +88,7 @@ def bootstrap(conn: "psycopg.Connection") -> None:
         )
         for role in ("anon", "authenticated", "service_role"):
             cur.execute(f"do $$ begin create role {role}; exception when duplicate_object then null; end $$;")
+        cur.execute("grant select on auth.users to anon, authenticated")
 
 
 def apply_migrations(conn: "psycopg.Connection", migrations_dir: Path) -> list[dict]:
