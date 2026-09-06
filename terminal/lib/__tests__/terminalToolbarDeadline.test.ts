@@ -560,6 +560,44 @@ describe("toolbar invocation deadline ownership", () => {
     expect(clickCount).toBe(1);
   }, 10_000);
 
+  it("retries the click at most once when the committed revision comes back unchanged, then fails without a third attempt (MAJOR-2 dominant branch, real settle path)", async () => {
+    // The sibling MAJOR-2 test above only pins the revisionChanged===true branch (skip retry) and
+    // forces page.waitForFunction to throw, so waitForSettledToolbar never takes its real success
+    // path. Most local toggles (e.g. Sync) never touch .chart-tabs' mode/revision at all, so
+    // revisionChanged is normally FALSE — the branch this round's fix newly makes a retry path.
+    // This test exercises that branch through waitForSettledToolbar's REAL success path (a
+    // resolving waitForFunction, not the degraded recover/fail fallback) and pins the loop's own
+    // hard bound: an action that never confirms by either signal (semantic done(), or a changed
+    // committed revision) must click at most twice — the `for (attempt = 0; attempt < 2; ...)`
+    // bound — never a third time.
+    const visibility = (visible: boolean) => ({ isVisible: async () => visible, isEnabled: async () => visible });
+    const snapshot = { mode: "full" as const, revision: 5, settled: true, overflowOpen: false, backVisible: false };
+    let clickCount = 0;
+    const control = {
+      click: async () => { clickCount += 1; },
+      // The done-check's target attribute never changes: models a click that never registers as
+      // having landed by either signal (semantic done() or committed revision).
+      getAttribute: async () => "off",
+      isVisible: async () => true,
+    } as unknown as Locator;
+    const page = {
+      isClosed: () => false,
+      waitForFunction: async () => ({ jsonValue: async () => snapshot, dispose: async () => {} }),
+      getByTestId: () => visibility(true),
+      locator: (selector: string) => {
+        if (selector === ".chart-tabs") return { first: () => ({ evaluate: async () => snapshot }) };
+        if (selector === '[data-toolbar-action="sync"]') return control;
+        return visibility(false);
+      },
+    } as unknown as Page;
+
+    const intent: ToolbarIntent = { deadline: Date.now() + 6_000 };
+    await expect(toggleToolbarSync(page, intent)).rejects.toThrow(
+      /^TOOLBAR_(ACTION_FAILED|BUDGET_EXHAUSTED) /,
+    );
+    expect(clickCount).toBe(2);
+  }, 10_000);
+
   it("never lends the future reservation to the current action or its effect observation", () => {
     expect(allocateToolbarStage(7_759, 4_000)).toEqual({
       currentMs: 3_759,
