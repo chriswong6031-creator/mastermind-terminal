@@ -949,6 +949,109 @@ def test_dry_run_for_0012_readback_lists_clean_statements_with_prose_excluded(tm
     assert "select relname, relrowsecurity" in out
 
 
+# --- Regression tests: round-2 review (this round) on top of ruling r2 -----
+#
+# The r2 fix (_drop_leading_prose via an unanchored .search()) still had two
+# defects the reviewer measured against head f7fb2f60: (MAJOR 1) a chunk with
+# NO keyword anywhere was returned unchanged instead of dropped, and
+# (MAJOR 2) the unanchored search could match a keyword that is not the
+# chunk's own first content line, silently truncating the head off a
+# legitimate multi-line statement whose own leading keyword is not in the
+# list.
+
+FIXTURE_PROSE_ONLY_READBACK_HEADER = """
+create table if not exists public.t (id bigint generated always as identity primary key);
+
+-- down:
+-- drop table if exists public.t;
+
+-- readback:
+-- Post-apply verification; run these manually against the target DB:
+--
+-- select 1 from pg_class where relname = 't';
+"""
+
+
+def test_readback_statements_drops_a_keyword_less_prose_chunk_entirely():
+    # RED-FIRST at head f7fb2f60: _drop_leading_prose() returned a chunk
+    # with no recognized-keyword line unchanged, so readback_statements()
+    # returned ['Post-apply verification', "select 1 from pg_class where
+    # relname = 't'"] -- the bare prose chunk survived as a "statement" and
+    # would have been sent to the Management API (review-#516 MAJOR 1).
+    stmts = readback_statements(FIXTURE_PROSE_ONLY_READBACK_HEADER)
+    assert stmts == ["select 1 from pg_class where relname = 't'"]
+    assert not any("post-apply verification" in s.lower() for s in stmts)
+
+
+FIXTURE_MULTILINE_STATEMENT_WITH_UNLISTED_LEADING_KEYWORD = """
+create table if not exists public.t (id bigint generated always as identity primary key);
+
+-- down:
+-- drop table if exists public.t;
+
+-- readback:
+-- refresh materialized view public.mv
+--   with data;
+-- select 1;
+"""
+
+
+def test_readback_statements_does_not_truncate_a_multiline_statement_at_an_inner_keyword():
+    # RED-FIRST at head f7fb2f60: readback_statements() returned
+    # ['  with data', 'select 1'] -- the unanchored .search() matched
+    # "with" on the statement's SECOND line and silently discarded its
+    # first line ("refresh materialized view public.mv"), corrupting the
+    # SQL that would be sent (review-#516 MAJOR 2).
+    stmts = readback_statements(
+        FIXTURE_MULTILINE_STATEMENT_WITH_UNLISTED_LEADING_KEYWORD
+    )
+    assert stmts == [
+        "refresh materialized view public.mv\n  with data",
+        "select 1",
+    ]
+
+
+def test_dry_run_names_an_excluded_prose_chunk_not_just_a_smaller_count(tmp_path, capsys):
+    # Round-2 review MINOR 1: requirement (3) was only half met -- run_dry
+    # listed the surviving statements but never said anything was excluded,
+    # so an operator could not tell "no prose in this block" from "prose
+    # was silently dropped". A `note:` line naming the dropped chunk closes
+    # that gap.
+    f = tmp_path / "0099_prose_only_header.sql"
+    f.write_text(FIXTURE_PROSE_ONLY_READBACK_HEADER)
+    rc = run_dry(f)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "note: excluded" in out
+    assert "post-apply verification" in out.lower()
+
+
+def test_idempotency_findings_flags_a_down_block_that_is_prose_only():
+    # Round-2 review MINOR 2: the ruling named "readback/down block parsing"
+    # but _drop_leading_prose was wired only into readback_statements. A
+    # down block whose only content is a descriptive header (no line that
+    # starts with a recognized SQL keyword) must be flagged, not silently
+    # accepted as if it named a real undo statement.
+    text = """
+create table if not exists public.t (id bigint generated always as identity primary key);
+
+-- down:
+-- Manual cleanup required; no automated undo for this migration.
+
+-- readback:
+-- select 1;
+"""
+    findings = idempotency_findings(text, split_statements(text))
+    assert any("down:" in f and "prose" in f for f in findings)
+
+
+def test_idempotency_findings_does_not_flag_a_normal_down_block():
+    # A real down block (a plain drop statement) must not be flagged by the
+    # new prose-only-down-block guard.
+    findings = idempotency_findings(FIXTURE_0013, split_statements(FIXTURE_0013))
+    assert not any("reads as prose" in f for f in findings)
+
+
 def test_is_missing_relation_error_recognizes_more_object_kinds_without_reopening_the_project_ref_hole():
     # review-#516 round-4 MINOR: "_is_missing_relation_error over-narrowed".
     # Round-3's message-only fallback matched only relation/table/index/

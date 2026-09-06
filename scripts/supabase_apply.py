@@ -294,13 +294,21 @@ def extract_block(text: str, anchor: str) -> Optional[str]:
 _STATEMENT_KEYWORD_RE = re.compile(
     r"(?im)^[ \t]*("
     r"select|with|explain|insert|update|delete|drop|alter|create|revoke|"
-    r"grant|begin|commit|do"
+    r"grant|begin|commit|do|table|values|show|set|comment|refresh|"
+    r"truncate|call|merge|analyze|vacuum|copy|prepare|execute"
     r")\b"
 )
 
 
-def _drop_leading_prose(stmt: str) -> str:
-    """Drop any leading prose that precedes the first recognized SQL keyword.
+def _first_content_line(text: str) -> str:
+    for line in text.splitlines():
+        if line.strip():
+            return line
+    return ""
+
+
+def _drop_leading_prose(stmt: str) -> Optional[str]:
+    """Drop leading prose paragraphs that precede the first SQL statement.
 
     A `-- readback:`/`-- down:` block's own descriptive header line (e.g.
     "Post-apply verification (run manually against the target database):"
@@ -311,32 +319,72 @@ def _drop_leading_prose(stmt: str) -> str:
     "Post-apply verification ...\\n\\nselect ..." as one statement, which the
     Management API rejected with `syntax error at or near "Post"` on the
     very first --apply of 0012 -- the production incident this fix answers,
-    Meta-CEO B ruling r2). A statement starts only at one of these keywords;
-    anything before the first line-anchored match is prose and must never
-    reach the endpoint as part of the SQL.
+    Meta-CEO B ruling r2).
+
+    A "paragraph" is a run of lines inside the chunk with no blank line in
+    it. Only a paragraph's OWN first content line is checked against the
+    keyword list -- a keyword occurring later, inside a real multi-line
+    statement (e.g. the "with data" continuation of a bare
+    "refresh materialized view ... with data" statement), must never be
+    treated as a new statement start: searching anywhere in the chunk
+    instead of a paragraph's own head silently truncated the head off a
+    legitimate multi-line statement (round-2 review MAJOR 2). Anything
+    before the first keyword-led paragraph is prose and is dropped a whole
+    paragraph at a time.
+
+    Returns the statement text from the first keyword-led paragraph
+    onward, or ``None`` when NO paragraph in the chunk starts with a
+    recognized keyword -- the whole chunk is then prose, not a statement,
+    and the caller must drop it rather than send it to the endpoint
+    unchanged (round-2 review MAJOR 1 -- a keyword-less chunk used to be
+    passed through as-is).
     """
-    m = _STATEMENT_KEYWORD_RE.search(stmt)
-    if m is None:
-        return stmt
-    return stmt[m.start():]
+    paragraphs = re.split(r"\n[ \t]*\n", stmt)
+    for i, para in enumerate(paragraphs):
+        if _STATEMENT_KEYWORD_RE.match(_first_content_line(para)):
+            return "\n\n".join(paragraphs[i:]).strip()
+    return None
+
+
+def _block_statements(block: str) -> tuple[list[str], list[str]]:
+    """Split a `-- readback:`/`-- down:` block into statements.
+
+    Returns (kept, dropped): `kept` is every chunk with its leading prose
+    paragraphs removed (see _drop_leading_prose); `dropped` is the raw
+    (pre-strip) text of every chunk that was ALL prose -- no paragraph in it
+    started with a recognized keyword -- so callers can report what was
+    excluded instead of silently reducing the statement count (round-2
+    review MINOR 1).
+    """
+    raw = split_statements(strip_sql_comments(block))
+    kept: list[str] = []
+    dropped: list[str] = []
+    for s in raw:
+        cleaned = _drop_leading_prose(s)
+        if cleaned is None:
+            dropped.append(s)
+        else:
+            kept.append(cleaned)
+    return kept, dropped
 
 
 def readback_statements(text: str) -> list[str]:
+    stmts, _dropped = readback_statements_detailed(text)
+    return stmts
+
+
+def readback_statements_detailed(text: str) -> tuple[list[str], list[str]]:
     block = extract_block(text, "readback")
     if block is None:
         raise MigrationError(
             "no -- readback: block -- there is no query that proves this landed"
         )
-    stmts = split_statements(strip_sql_comments(block))
-    # Drop any leading prose glued onto a statement -- see _drop_leading_prose
-    # docstring. A no-op for a statement that already starts with a keyword
-    # (every case except the block's own descriptive header line, if any).
-    stmts = [_drop_leading_prose(s) for s in stmts]
+    stmts, dropped = _block_statements(block)
     if not stmts:
         raise MigrationError(
             "no -- readback: block -- there is no query that proves this landed"
         )
-    return stmts
+    return stmts, dropped
 
 
 def has_transaction_wrapper(statements: list[str]) -> bool:
@@ -454,8 +502,21 @@ def idempotency_findings(text: str, statements: list[str]) -> list[str]:
         if fm and not fm.group(1):
             findings.append(f"create function without or replace: {head}")
 
-    if extract_block(text, "down") is None:
+    down_block = extract_block(text, "down")
+    if down_block is None:
         findings.append("no -- down: block -- the file does not say how to undo itself")
+    else:
+        # Ruling item (1) named both the readback AND the down block for
+        # leading-prose parsing (round-2 review MINOR 2) -- the down block
+        # has no separate statement-splitting call site today (it is only
+        # presence-checked), so apply the same paragraph-anchored drop here
+        # and flag a down block that reads as prose only, not an undo query.
+        down_kept, _down_dropped = _block_statements(down_block)
+        if not down_kept:
+            findings.append(
+                "-- down: block has no statement that starts with a "
+                "recognized SQL keyword -- it reads as prose, not an undo query"
+            )
     try:
         readback_statements(text)
     except MigrationError as exc:
@@ -715,9 +776,9 @@ def run_dry(path: Path, *, allow_legacy: bool = False, project_ref: Optional[str
         print(f"  [{i:02d}] {shown}{marker}", file=out)
 
     try:
-        rb = readback_statements(text)
+        rb, rb_dropped = readback_statements_detailed(text)
     except MigrationError:
-        rb = None
+        rb, rb_dropped = None, []
     if rb is None:
         print(
             "\nreadback: none (legacy file, missing -- readback: block waived "
@@ -731,6 +792,12 @@ def run_dry(path: Path, *, allow_legacy: bool = False, project_ref: Optional[str
             rb_shown = rb_one_line[:100]
             rb_marker = " …[truncated]" if len(rb_one_line) > 100 else ""
             print(f"  [{i:02d}] {rb_shown}{rb_marker}", file=out)
+        # Ruling item (3): the dry-run listing must let an operator see that
+        # prose was excluded, not just a statement count that is smaller
+        # than they might expect (round-2 review MINOR 1).
+        for s in rb_dropped:
+            note_one_line = " ".join(strip_sql_comments(s).split())
+            print(f"  note: excluded (no SQL keyword found): {note_one_line[:100]}", file=out)
 
     objs = expected_objects(statements)
     if objs:
