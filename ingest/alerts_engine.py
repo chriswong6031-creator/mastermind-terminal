@@ -77,10 +77,13 @@ import argparse
 import json
 import math
 import os
+import hashlib
 import re
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -132,6 +135,54 @@ def http_json(url: str, headers: dict | None = None, method: str = "GET", body: 
         return json.loads(raw) if raw.strip() else None
 
 
+def http_json_status(url: str, headers: dict | None = None, method: str = "GET", body: dict | None = None, timeout: int = 15):
+    """Like http_json but never raises on an HTTPError — returns (status, parsed_body_or_None,
+    raw_text). Used by the receipt/outbox paths, which must classify a 404/42P01 (table absent —
+    typed READ_UNAVAILABLE) instead of crashing the run."""
+    req = urllib.request.Request(url, method=method, headers=headers or {})
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, data=data, timeout=timeout) as r:
+            raw = r.read()
+            return r.status, (json.loads(raw) if raw.strip() else None), raw.decode(errors="replace")
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        text = raw.decode(errors="replace")
+        try:
+            parsed = json.loads(raw) if raw.strip() else None
+        except json.JSONDecodeError:
+            parsed = None
+        return e.code, parsed, text
+
+
+# Transient state riding the condition jsonb — hysteresis flags the stateful options
+# evaluators persist between runs (see _OPT_EVALUATORS), plus the trigger stamp itself. None of
+# these are part of what the alert IS; excluding them keeps condition_version stable across the
+# runs that lead up to a fire.
+_CONDITION_TRANSIENT_KEYS = {"triggered", "_fs", "_wp", "_pb", "_zd", "_wm", "_sf", "_oc"}
+
+
+def condition_version(condition: dict) -> str:
+    """A short, deterministic fingerprint of the alert's condition, excluding transient/hysteresis
+    keys, so it changes only when the user actually edits the condition."""
+    stable = {k: v for k, v in (condition or {}).items() if k not in _CONDITION_TRANSIENT_KEYS}
+    raw = json.dumps(stable, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def mint_fire_event_id(alert: dict, vintage: str) -> str:
+    """Deterministic fire_event_id = f(alert id, condition version, evaluation vintage). Same
+    alert + same condition + same data vintage => same id, so a replayed run (crash-and-retry, or
+    a second engine invocation racing the first) inserts the SAME outbox row instead of a second
+    one — the unique index on alert_outbox.fire_event_id is the enforcement point, this is just
+    the deterministic input to it."""
+    raw = f"{alert.get('id')}:{condition_version(alert.get('condition') or {})}:{vintage}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
 class Supa:
     def __init__(self, url: str, key: str):
         self.base = url.rstrip("/") + "/rest/v1"
@@ -140,11 +191,31 @@ class Supa:
     def active_alerts(self) -> list[dict]:
         return http_json(f"{self.base}/alerts?active=eq.true&select=*", self.h) or []
 
-    def fire(self, alert: dict, value, note: str) -> bool:
+    def fire(self, alert: dict, value, note: str, *, vintage: str | None = None) -> bool:
         """Disarm + stamp trigger evidence. The active=eq.true guard makes double-fires a no-op
-        even if two engine runs overlap."""
+        even if two engine runs overlap — this PATCH filter and its disarm semantics are FROZEN,
+        never replaced. Before the disarm, mint a deterministic fire_event_id and insert (or,
+        on replay, no-op into) the alert_outbox row so delivery has a durable, replay-safe queue
+        entry — see mint_fire_event_id / Supa.insert_outbox. The outbox insert happens BEFORE the
+        disarm PATCH so a crash between the two leaves a pending outbox row (never lost, never
+        marked delivered) rather than a fire with no delivery trace."""
+        fired_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         cond = dict(alert.get("condition") or {})
-        cond["triggered"] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "value": value, "note": note}
+        cond["triggered"] = {"at": fired_at, "value": value, "note": note}
+
+        fire_event_id = mint_fire_event_id(alert, vintage or fired_at[:10])
+        ticker = str(alert.get("symbol") or "").upper()
+        summary_plain = f"{ticker} alert fired: {note}" if note else f"{ticker} alert fired."
+        payload = {
+            "subject": f"{ticker} alert fired",
+            "summary_plain": summary_plain,
+            "ticker": ticker,
+            "condition_plain": note or "condition met",
+            "evidence_url": f"/alerts?id={alert.get('id')}",
+            "fired_at": fired_at,
+        }
+        self.insert_outbox(alert.get("user_id"), alert.get("id"), fire_event_id, payload)
+
         url = f"{self.base}/alerts?id=eq.{urllib.parse.quote(str(alert['id']))}&active=eq.true"
         http_json(url, {**self.h, "Prefer": "return=minimal"}, method="PATCH",
                   body={"active": False, "condition": cond})
@@ -157,6 +228,81 @@ class Supa:
         fire(), so it never resurrects an already-disarmed alert."""
         url = f"{self.base}/alerts?id=eq.{urllib.parse.quote(str(alert['id']))}&active=eq.true"
         http_json(url, {**self.h, "Prefer": "return=minimal"}, method="PATCH", body={"condition": cond})
+
+    @staticmethod
+    def _table_missing(status: int, parsed) -> bool:
+        """A receipt/outbox table that has not been applied yet (migration 0013 is a RESERVATION,
+        not an application — see supabase/migrations/README.md) answers 404 from PostgREST's
+        schema-cache lookup, or occasionally 400 with Postgres code 42P01 (undefined_table).
+        Anything else is a real error and must not be swallowed."""
+        if status == 404:
+            return True
+        if isinstance(parsed, dict) and parsed.get("code") == "42P01":
+            return True
+        return False
+
+    def start_run(self, lane: str, run_id: str, started_at: str, source_asof: str | None,
+                   lane_cadence_budget_s: int | None) -> bool:
+        """Insert the 'started' half of the two-phase alert_runs receipt. Returns False (and logs
+        a typed READ_UNAVAILABLE line) when alert_runs has not been applied yet — the fire path is
+        unaffected either way, this is receipts-only."""
+        url = f"{self.base}/alert_runs"
+        body = {
+            "lane": lane, "run_id": run_id, "started_at": started_at,
+            "source_asof": source_asof, "lane_cadence_budget_s": lane_cadence_budget_s,
+        }
+        status, parsed, text = http_json_status(url, {**self.h, "Prefer": "return=minimal"},
+                                                 method="POST", body=body)
+        if self._table_missing(status, parsed):
+            log("READ_UNAVAILABLE alert_runs (start) — table not applied yet; run proceeds without a receipt")
+            return False
+        if status >= 300:
+            log(f"READ_UNAVAILABLE alert_runs (start) — unexpected {status}: {text[:200]}")
+            return False
+        return True
+
+    def conclude_run(self, lane: str, run_id: str, concluded_at: str, outcome: str,
+                      evaluated_n: int, fired_n: int, unevaluable_n: int,
+                      error_class: str | None) -> bool:
+        """Patch the terminal half of the receipt by (lane, run_id). No-ops quietly if the start
+        row was never written (table absent) — the guard mirrors start_run's classification."""
+        url = (f"{self.base}/alert_runs?lane=eq.{urllib.parse.quote(lane)}"
+               f"&run_id=eq.{urllib.parse.quote(run_id)}")
+        body = {
+            "concluded_at": concluded_at, "outcome": outcome, "evaluated_n": evaluated_n,
+            "fired_n": fired_n, "unevaluable_n": unevaluable_n, "error_class": error_class,
+        }
+        status, parsed, text = http_json_status(url, {**self.h, "Prefer": "return=minimal"},
+                                                 method="PATCH", body=body)
+        if self._table_missing(status, parsed):
+            log("READ_UNAVAILABLE alert_runs (conclude) — table not applied yet")
+            return False
+        if status >= 300:
+            log(f"READ_UNAVAILABLE alert_runs (conclude) — unexpected {status}: {text[:200]}")
+            return False
+        return True
+
+    def insert_outbox(self, user_id, alert_id, fire_event_id: str, payload: dict) -> str:
+        """Insert one alert_outbox row keyed by fire_event_id. Idempotent by construction
+        (Prefer: resolution=ignore-duplicates against the unique fire_event_id index): a
+        replayed run computing the SAME fire_event_id (same alert, same condition version, same
+        evaluation vintage) inserts nothing new and is reported 'duplicate', never raises, and
+        never double-enqueues delivery. Returns one of 'inserted' | 'duplicate' | 'unavailable'
+        (unavailable = table not applied yet — the caller's disarm path is unaffected)."""
+        url = f"{self.base}/alert_outbox"
+        headers = {**self.h, "Prefer": "return=representation,resolution=ignore-duplicates"}
+        body = {
+            "user_id": user_id, "alert_id": alert_id, "fire_event_id": fire_event_id,
+            "channel": "email", "status": "pending", "payload": payload,
+        }
+        status, parsed, text = http_json_status(url, headers, method="POST", body=body)
+        if self._table_missing(status, parsed):
+            log("READ_UNAVAILABLE alert_outbox (insert) — table not applied yet; disarm proceeds without an outbox row")
+            return "unavailable"
+        if status >= 300:
+            log(f"READ_UNAVAILABLE alert_outbox (insert) — unexpected {status}: {text[:200]}")
+            return "unavailable"
+        return "inserted" if parsed else "duplicate"
 
 
 def rsi14(closes: list[float], period: int = 14) -> float | None:
@@ -1087,65 +1233,92 @@ def main() -> int:
         return 2
 
     supa = Supa(url, key)
+    lane = "alerts_engine"
+    run_id = uuid.uuid4().hex
+    run_started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    vintage = run_started_at[:10]
+    run_receipted = supa.start_run(lane, run_id, run_started_at, None, 300)
+
     alerts = supa.active_alerts()
     if not alerts:
         log("no armed alerts — nothing to do")
+        if run_receipted:
+            supa.conclude_run(lane, run_id, datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                               "success", 0, 0, 0, None)
         return 0
 
-    data = Data(args.data_dir, env.get("HUB_PORT", "3100"))
-    price_syms = {
-        str(a.get("symbol") or "").upper()
-        for a in alerts
-        if (a.get("condition") or {}).get("type") == "price"
-    }
-    option_syms = {
-        str((a.get("condition") or {}).get("root") or "").upper()
-        for a in alerts
-        if str((a.get("condition") or {}).get("type") or "").startswith("opt_")
-    }
-    quote_syms = sorted({
-        sym for sym in price_syms | option_syms
-        if sym != "MARKET" and len(sym) <= 12 and FLOW_ROOT_RE.fullmatch(sym)
-    })
-    data.prime_quotes(quote_syms)
-    flow = Flow(
-        args.data_dir,
-        backend_base=env.get("FLOW_API_BASE") or DEFAULT_FLOW_BACKEND,
-        r2_base=env.get("FLOW_R2_BASE") or DEFAULT_FLOW_R2,
-        fixture_mode=args.flow_fixtures,
-        spot_getter=data.live_quote,
-    )
+    try:
+        data = Data(args.data_dir, env.get("HUB_PORT", "3100"))
+        price_syms = {
+            str(a.get("symbol") or "").upper()
+            for a in alerts
+            if (a.get("condition") or {}).get("type") == "price"
+        }
+        option_syms = {
+            str((a.get("condition") or {}).get("root") or "").upper()
+            for a in alerts
+            if str((a.get("condition") or {}).get("type") or "").startswith("opt_")
+        }
+        quote_syms = sorted({
+            sym for sym in price_syms | option_syms
+            if sym != "MARKET" and len(sym) <= 12 and FLOW_ROOT_RE.fullmatch(sym)
+        })
+        data.prime_quotes(quote_syms)
+        flow = Flow(
+            args.data_dir,
+            backend_base=env.get("FLOW_API_BASE") or DEFAULT_FLOW_BACKEND,
+            r2_base=env.get("FLOW_R2_BASE") or DEFAULT_FLOW_R2,
+            fixture_mode=args.flow_fixtures,
+            spot_getter=data.live_quote,
+        )
 
-    fired = skipped = 0
-    for a in alerts:
-        try:
-            hit, value, note, nxt = evaluate(a, data, flow)
-        except Exception as e:
-            log(f"EVAL ERROR {a.get('symbol')} {a.get('id')}: {e}")
-            continue
-        tag = f"{a.get('symbol')} {json.dumps((a.get('condition') or {}), separators=(',', ':'))[:80]}"
-        if hit is None:
-            skipped += 1
-            log(f"SKIP  {tag} — {note}")
-        elif hit:
-            fired += 1
-            log(f"FIRE  {tag} — {note}" + (" [dry-run]" if args.dry_run else ""))
-            if not args.dry_run:
-                supa.fire(a, value, note)  # disarm + stamp; the fired cond need not carry state
-        else:
-            log(f"idle  {tag}")
-            # Stateful options types: persist the confirmed flip-side / wall-inside flag between
-            # runs (active stays true) so the hysteresis machine survives the 5-min cron. Only
-            # when it actually changed — avoid a needless PATCH every run.
-            ctype = (a.get("condition") or {}).get("type")
-            if isinstance(nxt, dict) and ctype in _OPT_EVALUATORS:
-                state_key = _OPT_EVALUATORS[ctype][0]
-                cur = (a.get("condition") or {}).get(state_key)
-                if cur != nxt:
-                    cond = dict(a.get("condition") or {})
-                    cond[state_key] = nxt
-                    if not args.dry_run:
-                        supa.update_condition(a, cond)
+        fired = skipped = errored = 0
+        for a in alerts:
+            try:
+                hit, value, note, nxt = evaluate(a, data, flow)
+            except Exception as e:
+                errored += 1
+                log(f"EVAL ERROR {a.get('symbol')} {a.get('id')}: {e}")
+                continue
+            tag = f"{a.get('symbol')} {json.dumps((a.get('condition') or {}), separators=(',', ':'))[:80]}"
+            if hit is None:
+                skipped += 1
+                log(f"SKIP  {tag} — {note}")
+            elif hit:
+                fired += 1
+                log(f"FIRE  {tag} — {note}" + (" [dry-run]" if args.dry_run else ""))
+                if not args.dry_run:
+                    supa.fire(a, value, note, vintage=vintage)  # disarm + stamp; the fired cond need not carry state
+            else:
+                log(f"idle  {tag}")
+                # Stateful options types: persist the confirmed flip-side / wall-inside flag between
+                # runs (active stays true) so the hysteresis machine survives the 5-min cron. Only
+                # when it actually changed — avoid a needless PATCH every run.
+                ctype = (a.get("condition") or {}).get("type")
+                if isinstance(nxt, dict) and ctype in _OPT_EVALUATORS:
+                    state_key = _OPT_EVALUATORS[ctype][0]
+                    cur = (a.get("condition") or {}).get(state_key)
+                    if cur != nxt:
+                        cond = dict(a.get("condition") or {})
+                        cond[state_key] = nxt
+                        if not args.dry_run:
+                            supa.update_condition(a, cond)
+    except Exception as e:
+        if run_receipted:
+            supa.conclude_run(lane, run_id, datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                               "failure", 0, 0, 0, type(e).__name__)
+        log(f"FATAL: run crashed before completion: {e}")
+        raise
+    unevaluable_n = skipped + errored
+    evaluated_n = len(alerts) - errored
+    # outcome is DERIVED from typed reads, never asserted: success only when every alert was
+    # evaluated cleanly with nothing unevaluable; any evaluation error or SKIP falls back to
+    # 'partial' (never silently 'success') — see F08 run-receipt law.
+    outcome = "success" if (errored == 0 and skipped == 0) else "partial"
+    if run_receipted:
+        supa.conclude_run(lane, run_id, datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                           outcome, evaluated_n, fired, unevaluable_n,
+                           None if errored == 0 else "eval_error")
     log(f"done: {len(alerts)} armed, {fired} fired, {skipped} unevaluable")
     return 0
 
