@@ -382,7 +382,7 @@ describe("delivery is serialized, acknowledged, and retryable", () => {
     expect(__marketPrefsSnapshot().sync.phase).toBe("saved");
   });
 
-  it("evicts an acknowledged shared atomic — a LATER unrelated edit never re-sends it", async () => {
+  it("evicts an acknowledged shared atomic AND the legacy prefs blob — a LATER unrelated edit re-sends neither (M3)", async () => {
     getUser = async () => userWith(UUID_A, { terminal: { start_tf: "W", updown: "west" } });
     __loadOwner(OWNER_A);
     await settle();
@@ -396,15 +396,12 @@ describe("delivery is serialized, acknowledged, and retryable", () => {
     persistUpDown("east");
     await settle();
 
-    // The shared ATOMIC was already acknowledged and is a one-shot key — an edit that never
-    // touched it must not re-send a stale value. The legacy `prefs` blob is NOT one-shot (same
-    // always-resend contract as `terminal`, since a nested blob has no "already delivered, drop
-    // it" state — the account's copy must always carry every sibling field).
+    // Round-2 review MAJOR (M3, now fixed): the shared ATOMIC and the legacy `prefs` blob were
+    // BOTH already acknowledged, so an edit that touches neither must not re-send either one.
+    // `prefs` is queued one-shot in `persistMetaPrefs` precisely so it does not ride along on
+    // every later unrelated write forever — the failure mode this test used to pin as correct.
     expect(updates).toHaveLength(2);
-    expect(updates[1]).toEqual({
-      prefs: { lang: "zh" },
-      terminal: { start_tf: "W", updown: "east" },
-    });
+    expect(updates[1]).toEqual({ terminal: { start_tf: "W", updown: "east" } });
   });
 
   it("delivers an intent held through a FAILED hydrate once a retried read answers", async () => {
@@ -537,11 +534,13 @@ describe("an in-flight hydrate cannot answer over a newer local edit", () => {
 
 // ── E6 dual-write: a shared preference edit lands in BOTH representations (M1) ───────────
 //
-// Macro's own preference writer has not migrated to the v2 atomics yet — it still only writes
-// the legacy nested `prefs` blob. Shipping Terminal's atomic-only write (and an atomic-wins
-// read) would make every macro write invisible to Terminal the moment an account's atomic
-// existed. Until macro migrates, Terminal writes BOTH representations and reads prefer the
-// legacy one — see lib/accountPrefs.ts's FLIP CONDITION note.
+// Macro's own preference writer (templates/theme.js) has ALREADY migrated to the v2 atomics —
+// it writes only the top-level keys and never touches the legacy nested `prefs` blob any more
+// (round-2 BLOCKER, resolved by flipping the read priority to atomic-first — see
+// lib/accountPrefs.ts's FLIP CONDITION note). Terminal still WRITES both representations (the
+// legacy write is harmless and keeps any remaining legacy-only reader fed, and it is queued
+// one-shot so it never rides along on a later unrelated write — M3), but reads now prefer the
+// atomic, matching macro's own priority exactly.
 
 describe("a shared preference edit dual-writes into the legacy `prefs` blob too (E6 flip condition)", () => {
   it("merges the change into the account's OWN nested blob rather than replacing it", async () => {
@@ -580,14 +579,15 @@ describe("a shared preference edit dual-writes into the legacy `prefs` blob too 
     }
   });
 
-  it("reads back LEGACY-first once hydrated, even after Terminal's own atomic write", async () => {
-    // The account already has a macro-written nested theme; Terminal has never touched this
-    // field. metaPrefs must reflect the nested blob, not merely "whatever the atomic key says".
+  it("reads back ATOMIC-first once hydrated — mirrors macro's own atomic-first priority (round-2 BLOCKER, M1)", async () => {
+    // The account has a fresher top-level atomic theme (macro's own writer is atomic-only now)
+    // and a stale legacy nested sibling. metaPrefs must reflect the atomic, not the stale nested
+    // blob — that is the whole round-2 fix: a legacy-first reader would show "light" forever.
     getUser = async () => userWith(UUID_A, { theme: "dark", prefs: { theme: "light", lang: "en" } });
     __loadOwner(OWNER_A);
     await settle();
 
-    expect(__marketPrefsSnapshot().metaPrefs).toEqual({ theme: "light", lang: "en" });
+    expect(__marketPrefsSnapshot().metaPrefs).toEqual({ theme: "dark", lang: "en" });
   });
 
   it("never dual-writes for a guest, same as the atomic half", async () => {

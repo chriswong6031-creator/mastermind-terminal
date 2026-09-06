@@ -165,19 +165,23 @@ describe("readUpDown / applyUpDown", () => {
 //   5. Macro's newer Light choice is gone.
 //
 // The repair removes the shared container as the thing Terminal RACES on: each field is also a
-// top-level key, and top-level keys MERGE. But macro's own writer has not migrated to those
-// atomics yet — it still only ever writes the nested blob — so a Terminal reader that preferred
-// the atomic the moment one existed would go BLIND to every macro write on an account Terminal
-// had touched. These cases pin the CURRENT (legacy-wins) priority, the write-side restraint, and
-// the dual-write that keeps the nested blob current for macro to keep reading. See
-// lib/accountPrefs.ts's FLIP CONDITION note for when (and how) this priority reverses.
+// top-level key, and top-level keys MERGE. Macro's own writer (`templates/theme.js` on macro
+// `origin/main`, PR #6170 / commit `d048a261`) has ALREADY migrated to atomic-first reads and
+// atomic-only writes — `_sharedPref` there prefers the atomic and falls back to the nested blob
+// only when the atomic is absent (theme.js:3987-3991), and `_savePrefToServer` never writes
+// `prefs` at all (theme.js:4017-4034). A Terminal reader that kept preferring the legacy blob
+// would therefore go BLIND to every macro write forever, the instant any atomic existed on the
+// account — this was M1/the round-2 BLOCKER, and the fix is to mirror macro's own priority
+// exactly. These cases pin the CURRENT (atomic-wins) priority, the write-side restraint, and the
+// dual-write that keeps the nested blob fed for any remaining legacy-only reader. See
+// lib/accountPrefs.ts's FLIP CONDITION note: macro has already flipped, so this file matches it.
 
-describe("readSharedPrefs — legacy blob wins, v2 atomic is the fallback (FLIP CONDITION pending)", () => {
-  it("prefers the legacy sibling over the atomic — macro is still the nested blob's only writer", () => {
+describe("readSharedPrefs — v2 atomic wins, legacy blob is the fallback (macro has already migrated)", () => {
+  it("prefers the atomic over the legacy sibling — macro's own writer is atomic-only now", () => {
     expect(readSharedPrefs({
       theme: "light", theme_auto: "1", lang: "zh",
       prefs: { theme: "dark", themeAuto: "0", lang: "en" },
-    })).toEqual({ theme: "dark", themeAuto: "0", lang: "en" });
+    })).toEqual({ theme: "light", themeAuto: "1", lang: "zh" });
   });
 
   it("falls back FIELD BY FIELD — a half-migrated account is the normal rollout state", () => {
@@ -206,10 +210,12 @@ describe("readSharedPrefs — legacy blob wins, v2 atomic is the fallback (FLIP 
   });
 
   it("a macro-only edit made AFTER Terminal last touched the account is not hidden", () => {
-    // This is the exact failure M1 exists to prevent: Terminal wrote the atomics once, then
-    // macro (which only ever writes the nested blob) changed the theme. An atomic-wins reader
-    // would show Terminal's stale value forever; legacy-wins shows macro's newer one.
-    const account = { theme: "dark", lang: "en", prefs: { theme: "light", lang: "en" } };
+    // Round-2 BLOCKER (M1): macro's browser writer (templates/theme.js) is atomic-only now, so
+    // the REAL later-write scenario is Terminal dual-wrote both representations once, then macro
+    // changed the theme by writing ONLY the atomic (it never touches `prefs` any more). A
+    // legacy-wins reader would show Terminal's stale nested value forever; atomic-wins shows
+    // macro's newer one — which is what actually happens on macro's `origin/main` today.
+    const account = { theme: "light", lang: "en", prefs: { theme: "dark", lang: "en" } };
     expect(readSharedPrefs(account)).toEqual({ theme: "light", lang: "en" });
   });
 });
@@ -249,13 +255,14 @@ describe("legacyPrefsPatch — the SAME patch, shaped for the dual-written neste
 });
 
 describe("the dual write round-trips through BOTH representations", () => {
-  it("an atomic-ONLY write (no dual write) is invisible once the legacy sibling already exists — this is exactly why the write must be dual", () => {
-    // If Terminal wrote ONLY the atomic, the account's existing `prefs.lang` would keep winning
-    // forever and the user's edit would never take effect. This pins the failure mode M1 covers.
+  it("an atomic-ONLY macro write is visible even when a stale legacy sibling already exists", () => {
+    // Round-2 finding (M1, now resolved atomic-first): macro's own writer no longer touches
+    // `prefs` at all, so the real shape of a macro edit on a Terminal-touched account is exactly
+    // this — a fresh atomic with a stale legacy sibling underneath it. Atomic-wins must show it.
     const terminalWrite = sharedPrefsPatch({ lang: "zh" });
     const account = { theme: "light", lang: "en", prefs: { theme: "light", lang: "en" } };
     const merged = { ...account, ...terminalWrite };
-    expect(readSharedPrefs(merged)).toEqual({ theme: "light", lang: "en" }); // NOT "zh"
+    expect(readSharedPrefs(merged)).toEqual({ theme: "light", lang: "zh" }); // atomic wins
   });
 
   it("the SAME edit, dual-written, takes effect immediately", () => {

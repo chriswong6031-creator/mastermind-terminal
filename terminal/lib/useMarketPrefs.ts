@@ -448,13 +448,20 @@ export function persistUpDown(v: UpDown) {
  *
  * DUAL-WRITES (E6 flip condition, lib/accountPrefs.ts): the atomics go out as top-level keys with
  * no merge base to wait for — a language pick delivers immediately. The SAME patch also merges
- * into the legacy nested `prefs` blob, because macro's own writer has not migrated off it yet;
- * an un-migrated macro read only ever sees that blob, so writing only the atomics here would make
- * a Terminal-side change invisible to macro. The nested half DOES need a merge base, exactly like
- * `terminal` above: before one is loaded the patch is HELD (`pendingMetaPrefs`) rather than sent
- * as a partial blob that would delete a sibling field macro already wrote — `hydrate()` folds it
- * in once the account read answers. Delete this dual write (and `legacyPrefsPatch`) once macro
- * migrates to the atomics; see the PR body for that follow-up.
+ * into the legacy nested `prefs` blob — macro's own writer has already migrated off it
+ * (readSharedPrefs's FLIP CONDITION note), so this half is no longer load-bearing for macro, but
+ * it costs nothing and keeps any remaining legacy-only reader fed. The nested half DOES need a
+ * merge base, exactly like `terminal` above: before one is loaded the patch is HELD
+ * (`pendingMetaPrefs`) rather than sent as a partial blob that would delete a sibling field macro
+ * already wrote — `hydrate()` folds it in once the account read answers.
+ *
+ * The `prefs` key is queued ONE-SHOT (`prefDelivery.ts`'s `oneShot` option): once the pump's
+ * authority acknowledges it, it is evicted from `desired` so a later UNRELATED write (e.g.
+ * `persistUpDown`) never re-sends this stale nested snapshot forever. Without this, `prefs` would
+ * ride along on every subsequent write and could re-clobber a sibling field macro wrote in the
+ * meantime — the atomics are read-priority now, so a stale re-sent `prefs` cannot hide a macro
+ * edit from Terminal's OWN reads, but it would still be a wasted, ever-growing payload and a
+ * needless legacy-blob write racing macro's other writers.
  */
 export function persistMetaPrefs(patch: MetaPrefs) {
   const atoms = sharedPrefsPatch(patch);
@@ -482,7 +489,9 @@ export function persistMetaPrefs(patch: MetaPrefs) {
     if (oneShot.length) pump?.queue(atoms, { oneShot });
     return;
   }
-  pump?.queue({ ...atoms, prefs: rawMetaPrefs }, { oneShot });
+  // "prefs" itself must be one-shot too (not just the atomics) — otherwise it never leaves
+  // `desired` once acknowledged and rides along on every later unrelated write forever (M3).
+  pump?.queue({ ...atoms, prefs: rawMetaPrefs }, { oneShot: [...oneShot, "prefs"] });
 }
 
 /** Record the account language. Call i18n's `setLang` (or `applyLang`) separately to switch the UI. */

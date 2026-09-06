@@ -98,42 +98,50 @@ export function readMetaPrefs(blob: unknown): MetaPrefs {
 // the one field with no existing home — it is a browser-side presentation flag (macro computes
 // the theme from local time when it is set) and no server route writes it.
 //
-// Readers prefer the LEGACY nested value and fall back to the atomic PER FIELD (not per blob),
-// so an account that has only ever had `prefs` still reads correctly, and one where a single
-// field has been migrated reads that field from wherever it was last written.
+// Readers prefer the v2 ATOMIC value and fall back to the legacy nested sibling PER FIELD (not
+// per blob), so an account that has only ever had `prefs` still reads correctly, and one where a
+// single field has been migrated reads that field from wherever it was last written.
 //
-// FLIP CONDITION (read this before changing the priority back): legacy wins for as long as the
-// macro dashboard's own preference writer (`lib/user_prefs.py` there) still writes ONLY the
-// nested `prefs` blob and never the atomics. The paired macro-side change that moves it to the
-// atomic keys does not exist yet (tracked as this PR's own follow-up — see the PR body). Until
-// it ships, Terminal DUAL-WRITES every change to both places (`sharedPrefsPatch` for the
-// atomics, `legacyPrefsPatch` for the nested blob) and reads must prefer whichever place macro
-// is still authoritative for — the nested blob — or a macro write on a Terminal-touched account
-// would go invisible to Terminal the moment the atomic looked "present". Once macro migrates,
-// flip this back to atomic-wins and delete the nested write and `legacyPrefsPatch`.
+// FLIP CONDITION (read this before changing the priority back): macro's own writer has ALREADY
+// migrated — this is not a future condition. `templates/theme.js` on macro `origin/main` (landed
+// PR #6170, commit `d048a261`; re-verified present at `27145b01` and current `origin/main`)
+// writes ONLY the top-level atomics (`_savePrefToServer`, theme.js:4017-4034 — builds its patch
+// from `theme`/`theme_auto`/`lang` and never touches `prefs`) and reads atomic-first with the
+// nested blob as a read-only fallback (`_sharedPref`, theme.js:3987-3991 — "v2 atomic if valid,
+// else the legacy nested sibling. Per FIELD."). The nested `prefs` blob is therefore a **read-only
+// legacy fallback** on both sides now, kept alive only for whatever account still has a
+// never-migrated value sitting in it. Terminal mirrors macro's own priority exactly: atomic wins,
+// legacy fills in only where the atomic is absent or invalid. Terminal still DUAL-WRITES every
+// change to both places (`sharedPrefsPatch` for the atomics, `legacyPrefsPatch` for the nested
+// blob) — harmless, and it keeps any remaining legacy-only reader fed — but the `prefs` write is
+// queued one-shot (see `persistMetaPrefs` in `lib/useMarketPrefs.ts`) so it never rides along on
+// an unrelated later write once acknowledged. `lib/user_prefs.py`'s *server* route may still be
+// legacy-only; that does not change this file's read priority, because the account's stored
+// value is the same JSON regardless of which macro code path wrote the atomic.
 
-/** Top-level, independently mergeable. Written by BOTH products; read with a legacy fallback. */
+/** Top-level, independently mergeable. Written by BOTH products; read-priority winner. */
 export const SHARED_THEME_KEY = "theme";
 export const SHARED_THEME_AUTO_KEY = "theme_auto";
 export const SHARED_LANG_KEY = "lang";
 
 /**
- * The effective shared preferences: the legacy `prefs.*` value where present, else the v2
- * atomic sibling. Resolved field by field — a half-migrated account is the normal state during
- * the cross-product rollout, not an edge case. See the FLIP CONDITION note above: this priority
- * is intentionally the opposite of "prefer the new format" until macro's writer migrates.
+ * The effective shared preferences: the v2 atomic `meta.*` value where present and valid, else
+ * the legacy `prefs.*` sibling. Resolved field by field — a half-migrated account is the normal
+ * state during the cross-product rollout, not an edge case. Mirrors macro's own `_sharedPref`
+ * (`templates/theme.js:3987-3991`) exactly. See the FLIP CONDITION note above: macro has already
+ * migrated, so the atomic is preferred, not the legacy blob.
  */
 export function readSharedPrefs(meta: unknown): MetaPrefs {
   const m = (meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {}) as Record<string, unknown>;
   const legacy = readMetaPrefs(m.prefs);
   const out: MetaPrefs = {};
-  const theme = legacy.theme ?? (isThemeId(m[SHARED_THEME_KEY]) ? (m[SHARED_THEME_KEY] as ThemeId) : undefined);
-  const themeAuto = legacy.themeAuto ?? (
+  const theme = (isThemeId(m[SHARED_THEME_KEY]) ? (m[SHARED_THEME_KEY] as ThemeId) : undefined) ?? legacy.theme;
+  const themeAuto = (
     m[SHARED_THEME_AUTO_KEY] === "1" || m[SHARED_THEME_AUTO_KEY] === "0"
       ? (m[SHARED_THEME_AUTO_KEY] as "1" | "0")
       : undefined
-  );
-  const lang = legacy.lang ?? (isLangId(m[SHARED_LANG_KEY]) ? (m[SHARED_LANG_KEY] as LangId) : undefined);
+  ) ?? legacy.themeAuto;
+  const lang = (isLangId(m[SHARED_LANG_KEY]) ? (m[SHARED_LANG_KEY] as LangId) : undefined) ?? legacy.lang;
   if (theme) out.theme = theme;
   if (themeAuto) out.themeAuto = themeAuto;
   if (lang) out.lang = lang;
