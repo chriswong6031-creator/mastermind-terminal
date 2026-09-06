@@ -4,7 +4,7 @@
 **File**: `docs/F12_ACCOUNT_DATA_LIFECYCLE_SPEC_2026-09-06.md` (this file), repo `mastermindx-market-intelligence/mastermind-terminal`, branch `claude/mo-b-b2-b-f12-2`.
 *(The commission named `research/…`; this repo's default branch has no `research/` directory — `git ls-tree --name-only origin/master` returns `docs` and no `research`. Per the commission's own fallback, this lands in `docs/`.)*
 **Live URL after merge: n/a — records only.** Nothing renders; no nav family is touched; no third header exists to create.
-**Ledger rows closed:** MO-PAID-087 (lifecycle verification precedes scoping), MO-PAID-086 (export product spec), MO-PAID-078 (blocked on 087).
+**Ledger rows advanced, NOT closed** (acceptance line 4 is records-only; each row's own `acceptance_test` names a live user action this packet does not perform — see §6): MO-PAID-087 stays PARTIAL (spec + mandatory §4 gate delivered; the ledger's own `next_bounded_child` says DEFER pending Supabase-side verification, which this packet respects by gating §2/§3 behind §4 rather than scoping ahead of it), MO-PAID-086 stays PARTIAL (export spec written; no route exists yet), MO-PAID-078 stays PARTIAL/blocked on 087 (unchanged).
 
 ---
 
@@ -31,7 +31,7 @@ Columns: FK to `auth.users` · ON DELETE · RLS · owner policy · reachable tod
 | 8 | `drawings` | T `0002_drawings.sql:11` | `user_id` | **cascade** | `0002_drawings.sql:21` | `drawings_owner` `0002_drawings.sql:25-26` | `T terminal/app/api/drawings/route.ts:20` (GET, per-symbol) |
 | 9 | `brain_threads` | T `0005_brain_threads.sql:16` | `user_id` | **cascade** | `0005_brain_threads.sql:27` | select-own `0005_brain_threads.sql:31-34` (no insert/update/delete policy — service-role only, `0005:10-11`) | `T terminal/app/api/brain/[...path]/route.ts:200` (GET, proxy) |
 | 10 | `brain_messages` | T `0005_brain_threads.sql:39` | via parent `brain_threads(id)` | **cascade (parent)** | `0005_brain_threads.sql:50` | select-own via parent `0005_brain_threads.sql:53-61` | same proxy as #9 |
-| 11 | `portfolio_positions` | T `0007_portfolio_positions.sql:86`; M `templates/uwp_supabase.sql:36-55` | `user_id` | **cascade** | T `0007:104` / M `uwp_supabase.sql:36` | 4 policies T `0007:111-127` / M `uwp_supabase.sql:40-55` | `T terminal/app/api/portfolio/route.ts:60` (GET) |
+| 11 | `portfolio_positions` | T `0007_portfolio_positions.sql:86`; M `templates/uwp_supabase.sql:36-55` | `user_id` (asserted) | **cascade — UNVERIFIED, weakest cell in this table**: the file's own header says the live table predates all committed DDL and was created by hand (`0007_portfolio_positions.sql:10-11` "Against live production the table, RLS and policy statements are NO-OPS"; `:60-64` "NOT ANONYMOUSLY INTROSPECTABLE ... the FK to `auth.users`" is explicitly flagged unconfirmed; corroborated `templates/uwp_supabase.sql:12-14`) | T `0007:104` / M `uwp_supabase.sql:36` (same unverified status) | 4 policies T `0007:111-127` / M `uwp_supabase.sql:40-55` (unverified) | `T terminal/app/api/portfolio/route.ts:60` (GET) |
 | 12 | `search_events` | T `0003_search_events.sql:43` | `user_id` | **set null** | `0003:54` | **deny-all, no policies on purpose** `0003:53` | **none** (service-role only) |
 | 13 | `analytics_events` | T `0004_analytics.sql:32`; M `scripts/deploy/0004_analytics.sql:17` | `user_id` | **set null** | T `0004:47` / M `0004:29` | **deny-all** T `0004:46` | **none** |
 | 14 | `ip_geo` | T `0004_analytics.sql:50`; M `scripts/deploy/0004_analytics.sql:31` | none (`ip` PK) | n/a | T `0004:71` / M `0004:39` | **deny-all** `0004:70` | **none** — not user-scoped, but joins to #13 by `ip` |
@@ -49,9 +49,9 @@ Columns: FK to `auth.users` · ON DELETE · RLS · owner policy · reachable tod
 | 26 | research-vault download quota ledger | M `engine/research_vault/download_quota.py:55` (`_quota_dir`), `:61` (`_safe_uid`), `:91` (`_ledger_file`) | **filesystem JSON, not Supabase** | **no cascade — survives account deletion** | n/a | n/a | **none** |
 | 27 | Stripe customer + subscriptions | M `app/billing.py:643` (`read_entitlement`), `:550` (PostgREST), `:1470` (`_cancel_subscriptions`) | external processor | **outside our database** | n/a | n/a | Stripe portal `T terminal/app/api/billing/portal/route.ts` |
 
-**Read of that table:**
-1. **Twelve tables cascade on auth deletion** (#1-11, 15, 20, 23, 24) — ~85% of the deletion job *if* production FKs match these files, which §4 must prove.
-2. **Four tables do NOT cascade and hold identifiable data after deletion**: `search_events`/`analytics_events` null `user_id` but keep re-linkable `anon_id`/`visitor_id`/`ip`; `support_tickets` nulls `user_id` while `support_ticket_messages` keeps the user's own prose; `email_log` keeps `to_email` with no FK at all.
+**Read of that table (corrected — the enumeration is the source of truth; this prose must match it):**
+1. **Fifteen tables are cleared when `auth.users` is deleted** — #1,2,4,5,6,7,8,9,11,15,20,23,24 (thirteen rows) cascade *directly* off `auth.users`, plus #3 (`watchlist_symbols`) and #10 (`brain_messages`) are cleared *transitively* because their parent (`watchlists`, `brain_threads`) itself cascades off `auth.users` — together #1-11,15,20,23,24 (15/27 ≈ 56% of the tables in this estate) *if* production FKs match these files, which §4 (Q1 + Q1b below) must prove. #18 (`support_ticket_messages`) is NOT in this group: its parent `support_tickets` uses `set null`, not cascade-delete, so nothing above deletes it — it is handled explicitly in §3.2's non-cascading-store stage instead.
+2. **Six tables/stores do NOT cascade and hold identifiable or re-linkable data after deletion**: `search_events`/`analytics_events` (#12/13) null `user_id` but keep re-linkable `anon_id`/`visitor_id`; `ip_geo` (#14) is never user-scoped and never cascades, but joins to #13 by `ip` — the same identifiable trail by another key; `support_tickets` (#17) nulls `user_id` while `support_ticket_messages` (#18) keeps the user's own prose because its parent row is never deleted; `email_log` (#19) keeps `to_email` with no FK at all; `stripe_events` (#16) has no FK to `auth.users` and is not queryable by `user_id` in our schema, but its payloads carry the Stripe customer/payment identifiers a subject-access request would still need disclosed.
 3. **One table must be deliberately RETAINED**: `email_suppression` is address-keyed to cover people who never registered — deleting it would silently re-subscribe someone who unsubscribed.
 4. **Two stores live outside Postgres**: the filesystem quota ledger and Stripe. Neither is reached by any cascade.
 
@@ -69,12 +69,23 @@ Body v1: `schema:"mm.account_export.v1"`, `generated_at`, `account{user_id,email
 
 Rows are stored rows, unchanged — no scoring, no derived judgement, no LLM-written summary (A7). `unavailable` is the null-disclosure channel: a failed collection is named there, omitted from `counts`, and the bundle still ships — never a silent drop.
 
-### 2.3 Excluded in v1 (plain words, EN+ZH, each `{what,why,how_to_ask}`)
-- Site usage records (`search_events`, `analytics_events`, `ip_geo`) — kept partly against a cookie, not the account; ask support.
-- Support messages (`support_tickets`, `support_ticket_messages`) — held in helpdesk records; ask support.
-- Email delivery records (`email_log`) — a sending record, not account content.
-- Payment records (Stripe) — held by the payment processor; receipts in the billing portal.
-- Download allowance counters (research-vault quota) — monthly usage count.
+### 2.3 Excluded in v1 (`not_included[{what,why,how_to_ask}]`, EN+ZH, all five entries below)
+1. **what** (EN) "Site usage records" / (ZH) "网站使用记录" — covers `search_events`, `analytics_events`, `ip_geo`.
+   **why** (EN) "These are kept partly against a browser cookie, not your account, so they can't be bundled into your account file." / (ZH) "这些记录部分与浏览器 cookie 绑定，而不是与你的账户绑定，因此无法归入账户数据文件。"
+   **how_to_ask** (EN) "Contact support and name this category; we'll explain what's retained and why." / (ZH) "请联系客服并说明此类别；我们会解释保留了哪些内容及原因。"
+2. **what** (EN) "Support messages" / (ZH) "客服工单消息" — covers `support_tickets`, `support_ticket_messages`.
+   **why** (EN) "Your support conversations are kept in our helpdesk records, separate from account data." / (ZH) "你的客服对话保存在客服系统记录中，与账户数据分开存放。"
+   **how_to_ask** (EN) "Contact support directly — they can pull your ticket history for you." / (ZH) "请直接联系客服，他们可以为你调取工单历史记录。"
+3. **what** (EN) "Email delivery records" / (ZH) "邮件发送记录" — covers `email_log`.
+   **why** (EN) "This is a record that we sent you an email, not part of your account content." / (ZH) "这只是我们曾向你发送过邮件的记录，不属于账户内容。"
+   **how_to_ask** (EN) "Contact support if you need proof a specific email was sent." / (ZH) "如需证明某封邮件已发送，请联系客服。"
+4. **what** (EN) "Payment records" / (ZH) "付款记录" — covers Stripe.
+   **why** (EN) "Payment records are held by our payment processor, not by us." / (ZH) "付款记录由我们的支付服务商保存，而非我们自己保存。"
+   **how_to_ask** (EN) "Find your receipts in the billing portal, or ask support for a copy." / (ZH) "可在账单门户中查看收据，或联系客服索取副本。"
+5. **what** (EN) "Download allowance counters" / (ZH) "下载额度计数" — covers the research-vault quota ledger.
+   **why** (EN) "This is just a monthly usage count, not account content." / (ZH) "这只是每月使用次数统计，不属于账户内容。"
+   **how_to_ask** (EN) "Contact support if you want to know your current count." / (ZH) "如需了解当前计数，请联系客服。"
+
 CSV/zip is explicitly deferred; copy says "JSON only for now". MO-PAID-086's "CSV/JSON snapshot" is therefore **partially** closed: JSON ships, CSV is a named null.
 
 ### 2.4 Plain-language copy (account panel, EN / ZH)
@@ -96,18 +107,20 @@ Button: "Download my data" / "下载我的数据". Subtext: "A single file with 
 ### 3.1 Contract
 `POST /api/account/delete`, `Authorization: Bearer <token>`, body `{confirm_email}` → 200 `{ok:true, receipt}`; 400 mismatch; 401 no token; 409 already in progress; 503 `{ok:false, stage, receipt(partial)}`.
 
-### 3.2 Order of operations (load-bearing)
+### 3.2 Order of operations (load-bearing; REORDERED to fix a self-defeating sequence — see note below)
 0. Verify token→user; require typed `confirm_email` match (`app/account_prefs.py:17-19`).
 1. Offer (never force) the §2 export first; UI requires a checkbox acknowledgement.
 2. Cancel live Stripe subscriptions — reuse `app/billing.py:1470 _cancel_subscriptions` — must precede identity deletion or a charge lands on a vanished account.
-3. Explicit deletes for non-cascading stores: `support_ticket_messages`+`support_tickets` for that user, `email_log` rows for that `user_id` (no FK), scrub `search_events`/`analytics_events` beyond the automatic set-null. Stage 5 does not reach these.
-4. Delete the filesystem quota ledger for `_safe_uid(user_id)` (`engine/research_vault/download_quota.py:61,91`) — outside Postgres.
-5. `DELETE {SUPABASE_URL}/auth/v1/admin/users/{id}` with the service-role key — the existing admin path (`lib/user_prefs.py:117-123,131-135`). No new secret store, no new auth plane. Cascades tables #1-11,15,20,23,24 *if §4.1 confirms it*.
-6. Write a receipt keyed by `sha256(user_id+email)` — never the raw identifiers.
-7. Return + email the receipt as a transactional class (not suppressed by `email_prefs.marketing_opt_out`, `scripts/deploy/0007_support_email.sql:95-97`).
+3. Delete the filesystem quota ledger for `_safe_uid(user_id)` (`engine/research_vault/download_quota.py:61,91`) — outside Postgres.
+4. `DELETE {SUPABASE_URL}/auth/v1/admin/users/{id}` with the service-role key — the existing admin path (`lib/user_prefs.py:117-123,131-135`). No new secret store, no new auth plane. Cascades tables #1-11,15,20,23,24 *if §4.1/§4.1b confirms it*. **This stage is the point of no return** — every later stage is cleanup/notification, not a chance to abort.
+5. Write a receipt keyed by `sha256(user_id+email)` — never the raw identifiers.
+6. Return + email the receipt as a transactional class (not suppressed by `email_prefs.marketing_opt_out`, `scripts/deploy/0007_support_email.sql:95-97`). This send inserts an `email_log` row exactly like any other transactional email.
+7. Explicit deletes for non-cascading stores, run LAST and on purpose: `support_ticket_messages`+`support_tickets` for that user, **every** `email_log` row for that `user_id` (no FK) *including the row stage 6 just wrote* — the row's job (making sure the receipt email actually queued) is done by the time this stage runs, and its purge is what makes §3.5 test 2 pass — plus scrub `search_events`/`analytics_events` beyond the automatic set-null. Stage 4's cascade does not reach any of these; nothing after stage 7 can re-create them, because stage 7 runs last.
 Retained on purpose: `email_suppression`, Stripe's own records, aggregate campaign counters — each disclosed by name in the confirmation copy.
 
-**Failure posture:** every stage idempotent/re-runnable; a failure at stage n returns 503 with `stage` + partial receipt, account left usable. A partially deleted account must never be reported as deleted. Stage 5 is the point of no return and runs last by design.
+**Why this ordering (repair note for BLOCKER 1):** the original draft ran the explicit `email_log` purge at stage 3, *before* the receipt send at (old) stage 7 — so the receipt email's own mailer write (`app/mailer.py:180-192 _ledger_insert`, unconditional on every send, no FK to `auth.users` per `scripts/deploy/0007_support_email.sql:81`) recreated exactly the row the purge had just removed, and the acceptance test (§3.5 test 2, "`email_log` holds no row for that user/address") could never pass. Moving the purge to the final stage — after the receipt is written and sent — means the receipt's own log row gets swept up in the same purge, and no stage after it can write a new one.
+
+**Failure posture:** every stage idempotent/re-runnable; a failure at stage n returns 503 with `stage` + partial receipt, account left usable. A partially deleted account must never be reported as deleted. Stage 4 is the point of no return; stages 5-7 (receipt, notification, non-cascading purge) still run afterward to complete cleanup and notification even though the account is already gone.
 
 ### 3.3 Receipt fields
 `request_id`, `subject_digest` (sha256 as above), `requested_at`, `completed_at`, `stages[{name,status:ok|skipped|failed,rows_deleted|null}]`, `retained[{what,why}]`, `export_offered:bool`. **Must be emitted in the K1 `EvidenceRef`/`EvidenceBlock` shape** — the builder maps these fields into that contract rather than inventing a near-miss shape.
@@ -116,12 +129,12 @@ Retained on purpose: `email_suppression`, Stripe's own records, aggregate campai
 Trigger: "Delete my account" / "删除我的账户". Confirm: "This removes your account and the data you created: watchlists, layouts, drawings, alerts, positions, saved scripts and chat threads. It cannot be undone. Download your data first if you want a copy." / "这将删除你的账户以及你创建的数据：自选、布局、画线、提醒、持仓、脚本和对话记录。无法撤销。如需保留副本，请先下载你的数据。" Kept-on-purpose: "We keep two things: a record that this email asked not to receive marketing, and payment records our payment provider must keep by law." / "我们会保留两项：该邮箱不再接收营销邮件的记录，以及支付服务商依法必须保留的付款记录。" Typed confirm label: "Type your email address to confirm" / "请输入你的邮箱以确认". Success: "Your account is deleted." / "你的账户已删除。" plus "We sent a confirmation to <email>." — never "request submitted" when complete, never "deleted" when it isn't. Partial failure: "We could not finish. Your account is still active and nothing was lost. Contact support with this reference: <request_id>." / "未能完成。你的账户仍然有效，数据没有丢失。请凭此编号联系客服：<request_id>。"
 
 ### 3.5 Deletion — not done unless (macro `tests/test_account_deletion.py`)
-1. Cascade proof per table: seeded user with ≥1 row in every §1 row 1-11/15/20/23/24 → after stage 5, each returns 0 rows for that id, failing per table name.
-2. Non-cascading stores explicitly emptied: `support_tickets`/`support_ticket_messages`/`email_log` hold no row for that user/address; `search_events`/`analytics_events` hold no row bearing the user's `anon_id`/`visitor_id` — the test that would have caught #19's missing FK.
+1. Cascade proof per table: seeded user with ≥1 row in every §1 row 1-11/15/20/23/24 → after stage 4 (identity deletion), each returns 0 rows for that id, failing per table name.
+2. Non-cascading stores explicitly emptied AFTER the full run (stage 7, which runs after the stage-6 receipt send): `support_tickets`/`support_ticket_messages`/`email_log` hold no row for that user/address — including whatever row the stage-6 receipt email itself wrote; `search_events`/`analytics_events` hold no row bearing the user's `anon_id`/`visitor_id` — the test that would have caught #19's missing FK, and that the old stage-3-before-stage-7 ordering could never pass.
 3. Retention intentional and asserted: `email_suppression` for that address still present after deletion, receipt's `retained` names it.
 4. Cross-tenant safety: a second seeded user's rows in every table byte-identical before/after.
 5. Wrong confirmation deletes nothing: mismatch → 400, zero writes anywhere (row counts, not mock-call counts).
-6. Stripe first: injected stage-2 failure → 503 `stage="cancel_subscriptions"`, `auth.users` still holds the user.
+6. Stripe first: injected stage-2 failure → 503 `stage="cancel_subscriptions"`, `auth.users` still holds the user (stage numbering unchanged — Stripe cancellation is still stage 2).
 7. Idempotent replay: re-run for an already-deleted user → 200, every stage `skipped`, no new receipt row.
 8. Receipt carries no raw identifier: neither email nor user id in any stored field; `subject_digest` reproduces from `sha256(user_id+email)`.
 
@@ -129,21 +142,22 @@ Trigger: "Delete my account" / "删除我的账户". Confirm: "This removes your
 
 ## 4. Production readbacks the Meta-CEO must run BEFORE any build (mandatory gate)
 
-Via the Management API with the PAT in `charting-app/.env` (`supabase/migrations/README.md:31-35`; strip `--` comments, use `curl` not python-urllib, `README.md:37-39`). Project ref `fsldfzlxyavsuwqbceod` (`README.md:4`). Every §1 cascade cell is unproven until Q1 answers.
+Via the Management API with the PAT in `charting-app/.env` (`supabase/migrations/README.md:31-35`; strip `--` comments, use `curl` not python-urllib, `README.md:37-39`). Project ref `fsldfzlxyavsuwqbceod` (`README.md:4`). Every §1 cascade cell is unproven until Q1/Q1b answer.
 
-1. **Q1 (most important):** `select conrelid::regclass as tbl, conname, confdeltype from pg_constraint where confrelid='auth.users'::regclass order by 1;` — compare row-for-row vs §1; any §1 table absent means stage 5 will not touch it.
+1. **Q1 (most important):** `select conrelid::regclass as tbl, conname, confdeltype from pg_constraint where confrelid='auth.users'::regclass order by 1;` — compare row-for-row vs §1's *direct* cascades (#1,2,4,5,6,7,8,9,11,15,20,23,24). **Known-expected absences, do not treat as a gate failure:** #3 (`watchlist_symbols`), #10 (`brain_messages`) and #18 (`support_ticket_messages`) FK to a *public* parent (`watchlists`, `brain_threads`, `support_tickets` respectively), never straight to `auth.users`, so Q1 cannot and should not list them — verify them with Q1b instead. Any *other* §1 direct-cascade table absent from Q1 is a real gate failure.
+1b. **Q1b (two-level walk, closes the gap Q1 structurally cannot cover):** `select conrelid::regclass as tbl, conname, confdeltype from pg_constraint where confrelid in (select conrelid from pg_constraint where confrelid='auth.users'::regclass and confdeltype='c') order by 1;` — for every parent that Q1 already confirmed cascades, list what cascades off *it*. Expect `watchlist_symbols`→`watchlists` (#3) and `brain_messages`→`brain_threads` (#10) here, proving they ARE cleared when stage 4 runs, transitively. **`support_ticket_messages` (#18) must NOT appear here**, because its parent `support_tickets` (#17) uses `set null`, not cascade, so it is excluded from Q1b's `confdeltype='c'` filter on the parent side — #18 is correctly left to §3.2 stage 7's explicit delete, not to any cascade. If Q1b ever lists #18, the gate fails the other way (the DDL changed and #17 now cascades) and §3.2 stage 7's #18 entry becomes redundant, not wrong.
 2. **Q2:** `select table_name from information_schema.tables where table_schema='public' order by 1;` — tables in prod but no file (README:41-53 makes this non-optional).
 3. **Q3:** `select relname, relrowsecurity, relforcerowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public';` — RLS actually on.
 4. **Q4:** `select tablename, policyname, cmd, qual from pg_policies where schemaname='public' order by 1,2;` — confirms deny-all posture of #12/13/17-22 and the `scripts_public_read` exception (#5).
-5. **Q5:** `select column_name, data_type, is_nullable from information_schema.columns where table_schema='public' and table_name='portfolio_positions';` — its exact column set was never fully verified (`0007_portfolio_positions.sql:40-68`).
+5. **Q5:** the column *names* are already verified (`0007_portfolio_positions.sql:40-43` "VERIFIED PRESENT"); what is genuinely unknown is the FK/PK/NOT NULL/defaults/index, so query those instead: `select conname, contype, confrelid::regclass, confdeltype from pg_constraint where conrelid='public.portfolio_positions'::regclass;` (confirms the row 11 FK-to-`auth.users` claim, currently unverified per `0007_portfolio_positions.sql:60-64` "NOT ANONYMOUSLY INTROSPECTABLE") plus `select column_name, is_nullable, column_default from information_schema.columns where table_schema='public' and table_name='portfolio_positions';` (NOT NULL + defaults).
 6. **Q6:** Q1's query restricted to `nspname='auth'` — do `auth.identities`/`sessions`/`refresh_tokens`/`mfa_factors`/`one_time_tokens` cascade? Documented Supabase behaviour, not a fact in our files.
 7. **Q7:** `select tgname, tgtype, tgenabled from pg_trigger where tgrelid='auth.users'::regclass and not tgisinternal;` — `0001_init.sql:24-25` installs `on_auth_user_created`; confirm no delete-side trigger.
 8. **Q8:** `select id, name, public from storage.buckets;` and, if any, `select count(*) from storage.objects where owner='<test uid>';` — no file in either repo creates a bucket, so whether user files exist is genuinely unknown.
 9. **Q9:** `select table_name, privilege_type, grantee from information_schema.role_table_grants where table_schema='public' and grantee in ('anon','authenticated') order by 1;` — confirm `profiles` UPDATE stays narrowed to `display_name` (`0003:27`, `0006:50`).
 10. **Q10 (the only proof of hard-vs-soft delete):** create a throwaway user, seed one row per §1 table, snapshot counts, run `DELETE /auth/v1/admin/users/{id}`, re-snapshot. Record whether the row vanishes from `auth.users` or is merely marked deleted.
-11. **Q11 (orphan census after Q10):** for `search_events`/`analytics_events`/`support_tickets`/`email_log`, count rows still bearing the test user's `anon_id`/`visitor_id`/`ip`/`to_email` — the exact size of stage 3.
+11. **Q11 (orphan census after Q10):** for `search_events`/`analytics_events`/`support_tickets`/`email_log`, count rows still bearing the test user's `anon_id`/`visitor_id`/`ip`/`to_email` — the exact size of §3.2 stage 7's explicit-delete job.
 
-**Gate rule:** if Q1 disagrees with §1 for any table, §3.2 stage 3 grows and this document is amended before code is written — the builder does not reconcile the difference on the fly.
+**Gate rule:** if Q1/Q1b disagree with §1 for any table (excluding the known-expected #3/#10/#18 absences named above), §3.2 stage 7's explicit-delete list grows and this document is amended before code is written — the builder does not reconcile the difference on the fly.
 
 ---
 
