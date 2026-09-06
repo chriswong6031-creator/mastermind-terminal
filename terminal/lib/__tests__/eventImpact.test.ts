@@ -248,4 +248,34 @@ describe("eventImpact join", () => {
       expect(zh.length).toBeGreaterThan(0);
     }
   });
+
+  it("12. presentPosition pluralizes EN shares, ZH is invariant (major m1, review r3)", () => {
+    // RED before the fix: "You hold 1 shares" is what the un-pluralized template produced.
+    expect(presentPosition({ ...pos(), shares: 1 }, "en")).toBe("You hold 1 share");
+    expect(presentPosition({ ...pos(), shares: 1 }, "en")).not.toBe("You hold 1 shares");
+    expect(presentPosition({ ...pos(), shares: 2 }, "en")).toBe("You hold 2 shares");
+    expect(presentPosition({ ...pos(), shares: 1 }, "zh")).toBe("你持有 1 股");
+    expect(presentPosition({ ...pos(), shares: 2 }, "zh")).toBe("你持有 2 股");
+  });
+
+  it("13. zero holdings outranks a locked/unreadable calendar (minor 3, review r3)", () => {
+    // A user with no open positions must see the neutral "add a position" state regardless of
+    // whether the calendar can be read — before the reorder, the ctx-schema/locked check ran
+    // first and this rendered "upstream_locked" ("your positions are unaffected") to someone
+    // with no positions to be unaffected in.
+    const lockedNoBook = joinEventImpact({ positions: [], ctx: null, ctxError: "HTTP 401", ctxLocked: true });
+    expect(lockedNoBook.state).toBe("no_holdings");
+
+    const unreadableNoBook = joinEventImpact({ positions: [], ctx: null, ctxError: "HTTP 500" });
+    expect(unreadableNoBook.state).toBe("no_holdings");
+
+    // Same locked ctx, but WITH an open position: still upstream_locked (unchanged behavior).
+    const lockedWithBook = joinEventImpact({
+      positions: [pos()],
+      ctx: null,
+      ctxError: "HTTP 401",
+      ctxLocked: true,
+    });
+    expect(lockedWithBook.state).toBe("upstream_locked");
+  });
 });

@@ -139,7 +139,21 @@ export function joinEventImpact(input: {
   // 1. No book, no story.
   if (positions === null) return { state: "holdings_unreadable" };
 
-  // 2. Wrong or missing schema is unreadable, never partially trusted.
+  // 2. Open positions only, distinct uppercased tickers — computed BEFORE the calendar-readable
+  // check on purpose (minor 3, review r3): a user who holds nothing must always see the neutral
+  // "add a position" state, never a calendar-locked/unreadable disclosure that implies they have
+  // positions worth checking. Whether the calendar can be read is irrelevant when there is
+  // nothing in the book to join it against.
+  const openPositions = positions.filter(
+    (p) => p.status === "open" && trimmedStringOrNull(p.ticker) !== null
+  );
+  const heldTickerSet = new Set(openPositions.map((p) => p.ticker.trim().toUpperCase()));
+  const heldTickers = heldTickerSet.size;
+
+  // 3. Nothing held, nothing to say — checked before the ctx schema/lock check (see above).
+  if (heldTickers === 0) return { state: "no_holdings" };
+
+  // 4. Wrong or missing schema is unreadable, never partially trusted.
   if (
     !isPlainObject(ctx) ||
     typeof (ctx as Record<string, unknown>).schema !== "string" ||
@@ -149,16 +163,6 @@ export function joinEventImpact(input: {
     return { state: "calendar_unreadable", detail: ctxError || "bad schema" };
   }
   const ctxObj = ctx as Record<string, unknown>;
-
-  // 3. Open positions only, distinct uppercased tickers.
-  const openPositions = positions.filter(
-    (p) => p.status === "open" && trimmedStringOrNull(p.ticker) !== null
-  );
-  const heldTickerSet = new Set(openPositions.map((p) => p.ticker.trim().toUpperCase()));
-  const heldTickers = heldTickerSet.size;
-
-  // 4. Nothing held, nothing to say.
-  if (heldTickers === 0) return { state: "no_holdings" };
 
   const asof = typeof ctxObj.asof === "string" ? ctxObj.asof : "";
   const tickersBlock = isPlainObject(ctxObj.tickers) ? ctxObj.tickers : {};
@@ -230,7 +234,9 @@ export function presentEventSentence(e: EventTouch, lang: Lang): string {
 
 export function presentPosition(p: TouchedPosition, lang: Lang): string {
   if (p.shares === null) return lang === "zh" ? "未记录持仓数量" : "Size not recorded";
-  return lang === "zh" ? `你持有 ${p.shares} 股` : `You hold ${p.shares} shares`;
+  // ZH has no grammatical plural (股 is invariant); EN must not say "1 shares" (major, review r3).
+  if (lang === "zh") return `你持有 ${p.shares} 股`;
+  return p.shares === 1 ? "You hold 1 share" : `You hold ${p.shares} shares`;
 }
 
 export function presentUnjoinable(u: readonly UnjoinableSource[], lang: Lang): string {

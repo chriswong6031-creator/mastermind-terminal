@@ -19,7 +19,10 @@
 .list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px;
   background:var(--line-2);border-radius:var(--r-tile);overflow:hidden}
 
-.row{position:relative;display:grid;grid-template-columns:3px 88px minmax(0,1fr);
+/* The date column must fit a full ISO date ("2026-09-10") on one line at the tabular-nums
+   weight used below — 88px wrapped it on every row at 1440 (minor, review r3); widened with
+   headroom rather than trimmed to the exact measured width. */
+.row{position:relative;display:grid;grid-template-columns:3px 108px minmax(0,1fr);
   align-items:start;column-gap:var(--sp-3);
   padding:var(--sp-3) var(--sp-3) var(--sp-3) 0;background:var(--panel-2);
   animation:eiRise var(--t-slow) var(--ease-out) both}
@@ -38,7 +41,8 @@
 .row[data-near="1"] .rail{background:var(--signal)}
 
 .when{grid-column:2;display:flex;flex-direction:column;gap:2px;padding-left:var(--sp-3)}
-.date{font:600 var(--fs-ui)/1.2 var(--font-num);font-variant-numeric:tabular-nums;color:var(--text)}
+.date{font:600 var(--fs-ui)/1.2 var(--font-num);font-variant-numeric:tabular-nums;color:var(--text);
+  white-space:nowrap}
 .days{font:600 var(--fs-micro)/1.2 var(--font-ui);letter-spacing:.06em;
   text-transform:uppercase;color:var(--muted)}
 .row[data-near="1"] .days{color:var(--signal)}

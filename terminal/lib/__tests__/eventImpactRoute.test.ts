@@ -261,4 +261,36 @@ describe("event-impact route", () => {
       vi.useRealTimers();
     }
   });
+
+  // Minor 2, review r3: a stale cache has no maximum age today, so an outage that outlives the
+  // artifact's staleness window would serve an ever-more-wrong `daysUntil` countdown forever,
+  // disclosed only by a prose "stale" chip. RED before the fix: this asserted `stale: true` and
+  // an `ok`/`no_events` body no matter how old the cache was.
+  it("15. a cache older than MAX_STALE_MS is not served — disclosed as unreadable instead of an indefinitely stale countdown", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockResolvedValueOnce(okCtx());
+      const { GET } = await import("@/app/api/event-impact/route");
+      const first = await GET(new Request("http://x/api/event-impact"));
+      expect((await first.json()).stale).toBeUndefined();
+
+      // Just past the TTL, still well within the max-staleness window: served stale (case 7).
+      vi.advanceTimersByTime(900_001);
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 500 }));
+      const second = await GET(new Request("http://x/api/event-impact"));
+      const secondBody = await second.json();
+      expect(secondBody.stale).toBe(true);
+
+      // Advance well past the 6h max-staleness window measured from the original cache write.
+      vi.advanceTimersByTime(6 * 60 * 60_000);
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 500 }));
+      const third = await GET(new Request("http://x/api/event-impact"));
+      expect(third.status).toBe(503);
+      const thirdBody = await third.json();
+      expect(thirdBody.state).toBe("calendar_unreadable");
+      expect(thirdBody.stale).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

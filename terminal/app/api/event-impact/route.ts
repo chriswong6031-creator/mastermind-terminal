@@ -24,6 +24,12 @@ const MACRO_DATA_BASE = process.env.MACRO_DATA_BASE || "https://www.mastermind-x
 const CTX_URL = `${MACRO_DATA_BASE}/data/portfolio_ctx.json`;
 const TTL_MS = 900_000; // the artifact is a once-a-night bake
 const FETCH_TIMEOUT_MS = 4_000;
+// A stale cache has no business being served forever: `daysUntil` is carried verbatim from the
+// cached copy, so an outage that outlives this window would render a numerically false countdown
+// as if it were current, with only a prose "stale" chip disclosing it (minor, review r3). Past
+// this age the cache is treated the same as no cache at all — the caller sees the honest
+// unreadable/locked state instead of an ever-more-wrong "In N days".
+const MAX_STALE_MS = 6 * 60 * 60_000; // 6h — well past one failed nightly bake, short of "days old"
 
 // The live artifact is registration-walled at the edge (app/regwall.py in the macro repo): every
 // `/data/*` path 401s an unauthenticated server-to-server fetch with `x-regwall: deny` (verified
@@ -152,11 +158,14 @@ export async function GET(req: Request): Promise<Response> {
     if (fetched.data !== null) {
       ctx = fetched.data;
       CTX_CACHE = { data: fetched.data, ts: now };
-    } else if (CTX_CACHE) {
-      // Upstream hiccup with a cached copy on hand: serve it, flagged stale — never served silently as fresh.
+    } else if (CTX_CACHE && now - CTX_CACHE.ts <= MAX_STALE_MS) {
+      // Upstream hiccup with a cached copy on hand, within the max-staleness window: serve it,
+      // flagged stale — never served silently as fresh.
       ctx = CTX_CACHE.data;
       stale = true;
     } else {
+      // Either no cache at all, or a cache too old to trust (MAX_STALE_MS exceeded) — the outage
+      // has gone on long enough that the cached `daysUntil` values are no longer honest to show.
       ctxError = fetched.error;
       ctxLocked = Boolean(fetched.locked);
     }

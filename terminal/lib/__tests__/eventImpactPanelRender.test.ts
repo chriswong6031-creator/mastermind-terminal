@@ -198,6 +198,53 @@ describe("EventImpactPanel render (acceptance 2)", () => {
     expect(node?.textContent).toContain("your 2 open positions");
   });
 
+  // MAJOR (review r3): the modal single-position case is ungrammatical if only the digit changes
+  // — "any of your 1 open positions" — so the singular phrasing must actually differ, not the
+  // count alone. RED before the fix: the prior template always said "your {n} open positions".
+  it("uses singular phrasing for exactly one open position, never 'your 1 open positions'", async () => {
+    const body: EventImpactRead = {
+      state: "no_events",
+      asof: "2026-09-05",
+      heldTickers: 1,
+      heldPositions: 1,
+      unjoinable: [],
+    };
+    await renderWith(body);
+    const node = container.querySelector('[data-testid="event-impact-empty"]');
+    expect(node?.textContent).toContain("your one open position");
+    expect(node?.textContent).not.toContain("1 open positions");
+  });
+
+  // MAJOR (review r3): the position chip on the primary `ok` path must not say "You hold 1
+  // shares" — RED before the fix, this was the un-pluralized string on the very first line of
+  // the panel a single-position user sees.
+  it("pluralizes the held-shares chip text ('1 share', never '1 shares')", async () => {
+    const body: EventImpactRead = {
+      state: "ok",
+      asof: "2026-09-05",
+      heldTickers: 1,
+      heldPositions: 1,
+      unjoinable: [],
+      events: [
+        {
+          eventId: "earnings|AAPL|2026-10-30",
+          kind: "earnings",
+          ticker: "AAPL",
+          date: "2026-10-30",
+          daysUntil: 5,
+          positions: [{ id: "p1", ticker: "AAPL", shares: 1, status: "open" }],
+          direction: { state: "not_stated" },
+          mechanism: { state: "not_stated" },
+          timeframe: { state: "not_stated" },
+          sourcePath: "/data/portfolio_ctx.json",
+        },
+      ],
+    };
+    await renderWith(body);
+    expect(container.textContent).toContain("You hold 1 share");
+    expect(container.textContent).not.toContain("You hold 1 shares");
+  });
+
   // m4 (review r2): the 5-day highlight is a Terminal display choice, not part of the source, and
   // must be labelled as such rather than left as an unexplained colour.
   it("labels the 5-day highlight as a display convention, not a source claim", async () => {

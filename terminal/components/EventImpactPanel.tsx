@@ -37,6 +37,13 @@ const COPY: Record<string, [string, string]> = {
     "No upcoming event in the macro calendar names any of your {n} open positions.",
     "宏观日历中暂时没有事件点名你的 {n} 个持仓。",
   ],
+  // Singular variant — "any of your 1 open positions" is ungrammatical (major, review r3).
+  // ZH has no grammatical number, so its half of eiNoEvents already reads correctly for n=1
+  // and is reused unchanged here.
+  eiNoEventsOne: [
+    "No upcoming event in the macro calendar names your one open position.",
+    "宏观日历中暂时没有事件点名你的 {n} 个持仓。",
+  ],
   eiHoldingsUnreadable: [
     "We can't read your positions right now, so we can't say what's coming for them. An empty list here does not mean nothing is coming.",
     "我们暂时读不到你的持仓，因此无法说明将有哪些事件。此处为空并不代表没有事件。",
@@ -231,7 +238,9 @@ export default function EventImpactPanel({ positions, holdingsUnreadable }: Even
 
       {read.state === "no_events" && (
         <p className={s.empty} data-testid="event-impact-empty">
-          {fill(c("eiNoEvents"), { n: read.heldPositions })}
+          {read.heldPositions === 1
+            ? fill(c("eiNoEventsOne"), { n: read.heldPositions })
+            : fill(c("eiNoEvents"), { n: read.heldPositions })}
         </p>
       )}
 
