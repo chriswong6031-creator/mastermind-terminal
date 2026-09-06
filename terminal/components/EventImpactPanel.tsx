@@ -45,6 +45,21 @@ const COPY: Record<string, [string, string]> = {
     "We can't read the macro calendar right now. Your positions are fine — the event list is the part that's missing.",
     "我们暂时读不到宏观日历。你的持仓没有问题，缺的是事件列表。",
   ],
+  // Exact copy per the RULING (B-F08-5 review r2, BLOCKER 1) — distinct from eiCalendarUnreadable
+  // above: this is specifically "we are locked out of the source", never "no event touches your
+  // positions" (which `upstream_locked` must never render as).
+  eiUpstreamLocked: [
+    "We could not read the event calendar right now. Your positions are unaffected.",
+    "目前无法读取事件日历，您的持仓不受影响。",
+  ],
+  eiChecking: [
+    "Checking your positions…",
+    "正在检查你的持仓……",
+  ],
+  eiNearLegend: [
+    "Highlighted rows are within 5 days of the event — a Terminal display choice, not something the source states.",
+    "高亮的行表示距事件在 5 天以内——这是终端自身的显示方式，并非来源本身的说明。",
+  ],
   eiSourceLine: [
     "Open positions only. Source: the macro calendar, as of {asof}. Nothing here is advice.",
     "仅包含未平仓持仓。来源：宏观日历，数据截至 {asof}。此处内容不构成任何建议。",
@@ -80,12 +95,21 @@ export interface EventImpactPanelProps {
   holdingsUnreadable: boolean;
 }
 
+// `checking` is a UI-only concept the fetch lifecycle needs and the route never returns — kept
+// out of `EventImpactRead` (eventImpact.ts stays a pure, fetch-free module) and added here instead.
+type PanelRead = EventImpactRead | { readonly state: "checking" };
+
 export default function EventImpactPanel({ positions, holdingsUnreadable }: EventImpactPanelProps) {
   const { lang } = useLang();
   const c = useCallback((k: string) => COPY[k][lang === "zh" ? 1 : 0], [lang]);
 
-  const [read, setRead] = useState<EventImpactRead>(
-    holdingsUnreadable ? { state: "holdings_unreadable" } : { state: "no_holdings" }
+  // The initial render must never CLAIM anything about the fetch it hasn't made yet.
+  // `holdingsUnreadable` is a known server-passed fact (not a guess), so that branch is honest
+  // immediately; absent that, the old default of `no_holdings` asserted "you hold nothing" to a
+  // user who may hold plenty, on the one surface whose job is to describe their book (m2, review
+  // r2) — `checking` replaces it with a neutral busy state until the fetch actually resolves.
+  const [read, setRead] = useState<PanelRead>(
+    holdingsUnreadable ? { state: "holdings_unreadable" } : { state: "checking" }
   );
   const [busy, setBusy] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -117,7 +141,11 @@ export default function EventImpactPanel({ positions, holdingsUnreadable }: Even
       if (res.status === 503) {
         try {
           const body = (await res.json()) as EventImpactRead;
-          if (body.state === "holdings_unreadable" || body.state === "calendar_unreadable") {
+          if (
+            body.state === "holdings_unreadable" ||
+            body.state === "calendar_unreadable" ||
+            body.state === "upstream_locked"
+          ) {
             setRead(body);
             return;
           }
@@ -160,6 +188,12 @@ export default function EventImpactPanel({ positions, holdingsUnreadable }: Even
         <p className={s.sub}>{c("eiSub")}</p>
       </header>
 
+      {read.state === "checking" && (
+        <p className={s.empty} role="status" data-testid="event-impact-checking">
+          {c("eiChecking")}
+        </p>
+      )}
+
       {read.state === "holdings_unreadable" && (
         <p className={s.cannotRead} role="status" data-testid="event-impact-holdings-unreadable">
           {c("eiHoldingsUnreadable")}{" "}
@@ -178,6 +212,15 @@ export default function EventImpactPanel({ positions, holdingsUnreadable }: Even
         </p>
       )}
 
+      {read.state === "upstream_locked" && (
+        <p className={s.cannotRead} role="status" data-testid="event-impact-upstream-locked">
+          {c("eiUpstreamLocked")}{" "}
+          <button type="button" className={s.more} onClick={retry} disabled={busy}>
+            {c("eiRetry")}
+          </button>
+        </p>
+      )}
+
       {read.state === "unauthenticated" && (
         <p className={s.cannotRead} role="status" data-testid="event-impact-unauthenticated">
           {c("eiUnauthenticated")}
@@ -188,7 +231,7 @@ export default function EventImpactPanel({ positions, holdingsUnreadable }: Even
 
       {read.state === "no_events" && (
         <p className={s.empty} data-testid="event-impact-empty">
-          {fill(c("eiNoEvents"), { n: read.heldTickers })}
+          {fill(c("eiNoEvents"), { n: read.heldPositions })}
         </p>
       )}
 
@@ -241,6 +284,15 @@ export default function EventImpactPanel({ positions, holdingsUnreadable }: Even
         <button type="button" className={s.more} onClick={() => setShowAll(true)}>
           {fill(c("eiShowAll"), { n: read.events.length })}
         </button>
+      )}
+
+      {/* The 5-day highlight (`data-near`) is a TERMINAL display convention, not something the
+          source states — labelled here so it never reads as a claim the source made (m4, review
+          r2). Shown only when a row is actually highlighted. */}
+      {read.state === "ok" && read.events.some((e) => e.daysUntil <= 5) && (
+        <p className={s.disclosure} data-testid="event-impact-near-legend">
+          {c("eiNearLegend")}
+        </p>
       )}
 
       {(read.state === "ok" || read.state === "no_events") && (

@@ -111,8 +111,10 @@ describe("eventImpact join", () => {
     ];
     for (const earnings of cases) {
       const ctx = baseCtx({ AAPL: { earnings } });
+      // A single open AAPL position is held in every case, so `no_holdings` is never reachable
+      // here — the disjunction this used to assert only weakened the test (m5, review r2).
       const read = joinEventImpact({ positions: [pos()], ctx });
-      expect(read.state === "no_events" || read.state === "no_holdings").toBe(true);
+      expect(read.state).toBe("no_events");
     }
   });
 
@@ -176,6 +178,37 @@ describe("eventImpact join", () => {
     expect(
       joinEventImpact({ positions: [pos()], ctx: { schema: "something_else.v1" } }).state
     ).toBe("calendar_unreadable");
+  });
+
+  it("8b. a locked upstream is 'upstream_locked', never 'no_events' (BLOCKER 1, review r2)", () => {
+    // The registration wall answers with no ctx at all — `ctxLocked` is the only signal
+    // distinguishing "we were denied" from "the artifact is malformed" (both leave `ctx: null`).
+    const locked = joinEventImpact({ positions: [pos()], ctx: null, ctxError: "HTTP 401", ctxLocked: true });
+    expect(locked.state).toBe("upstream_locked");
+    expect(locked.state).not.toBe("no_events");
+    expect(locked.state).not.toBe("calendar_unreadable");
+
+    // Without ctxLocked, the exact same null ctx stays the generic "artifact is broken" state —
+    // ctxLocked must be the ONLY thing that changes the outcome, not the presence of ctxError.
+    const unlocked = joinEventImpact({ positions: [pos()], ctx: null, ctxError: "HTTP 500" });
+    expect(unlocked.state).toBe("calendar_unreadable");
+
+    // A locked upstream with no holdings read at all is still `holdings_unreadable` — that check
+    // runs first and ctxLocked never overrides a real "no book" fact.
+    const noBook = joinEventImpact({ positions: null, ctx: null, ctxLocked: true });
+    expect(noBook.state).toBe("holdings_unreadable");
+  });
+
+  it("8c. heldPositions counts open positions, not distinct tickers (m1, review r2)", () => {
+    const ctx = baseCtx({});
+    const read = joinEventImpact({
+      positions: [pos({ id: "p1" }), pos({ id: "p2" })], // two AAPL positions, one ticker
+      ctx,
+    });
+    expect(read.state).toBe("no_events");
+    if (read.state !== "no_events") throw new Error("unreachable");
+    expect(read.heldTickers).toBe(1);
+    expect(read.heldPositions).toBe(2);
   });
 
   it("9. empty vs unreadable are distinct", () => {

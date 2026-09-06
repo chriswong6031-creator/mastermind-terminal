@@ -1,5 +1,7 @@
 /* EventImpactPanel — the Terminal shell is dark-only
-   (DEC:TERMINAL-SHELL-IS-DARK-ONLY-EVIDENCE-MATRIX-2026-09-06).
+   (DEC:TERMINAL-SHELL-IS-DARK-ONLY-EVIDENCE-MATRIX-2026-09-06, macro#6903 — armed, unmerged
+   at agentos/decisions/ in the macro repo as of this pass; cited here because it is the
+   authority this file's dark-only posture rests on, not because it has landed on macro main).
    Every colour is a globals.css token and no literal hex or dark-ground rgba()
    appears here, so a future light shell is a token swap plus the shadow change
    noted in the spec — never a fork of this file. */

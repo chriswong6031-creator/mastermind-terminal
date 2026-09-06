@@ -405,11 +405,6 @@ export default function PortfolioView(
           </div>
         </div>
 
-        {/* BEGIN event-impact mount (B-F08-5) — one block; no other change to this file.
-            Alerts-cockpit mount is a follow-up after PR #517 lands. */}
-        <EventImpactPanel positions={open} holdingsUnreadable={unread} />
-        {/* END event-impact mount (B-F08-5) */}
-
         {/* Closed positions are KEPT — closing is not deleting — and folded out of the way. */}
         {!!closed.length && (
           <details className="pf-closed" data-testid="portfolio-closed">
@@ -430,6 +425,16 @@ export default function PortfolioView(
           </details>
         )}
         </>}
+
+        {/* BEGIN event-impact mount (B-F08-5) — one block; no other change to this file.
+            Deliberately OUTSIDE the `{!unread && <>...</>}` fragment above: `holdingsUnreadable`
+            must be able to be true at this call site, and the panel owns its own unreadable
+            rendering (it does not depend on the rest of the page's book-derived KPIs/table).
+            Moved here after MAJOR (review r2): the panel used to sit inside that fragment, which
+            made `holdingsUnreadable` structurally always false and its unreadable branch dead
+            code. Alerts-cockpit mount is a follow-up after PR #517 lands. */}
+        <EventImpactPanel positions={open} holdingsUnreadable={unread} />
+        {/* END event-impact mount (B-F08-5) */}
       </div>
 
       {editing && (

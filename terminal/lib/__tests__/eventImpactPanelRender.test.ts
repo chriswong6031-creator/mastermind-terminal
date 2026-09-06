@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import React, { act } from "react";
 import type { EventImpactRead } from "@/lib/eventImpact";
+import type { Position } from "@/lib/portfolio";
 
 vi.mock("@/lib/i18n", () => ({
   useLang: () => ({ lang: "en", setLang: () => {} }),
@@ -31,12 +32,21 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function renderWith(body: EventImpactRead, status = 200) {
+async function renderWith(
+  body: EventImpactRead,
+  status = 200,
+  props: { positions?: Position[]; holdingsUnreadable?: boolean } = {}
+) {
   fetchMock.mockResolvedValue(new Response(JSON.stringify(body), { status }));
   const { default: EventImpactPanel } = await import("@/components/EventImpactPanel");
   root = createRoot(container);
   await act(async () => {
-    root.render(React.createElement(EventImpactPanel, { positions: [], holdingsUnreadable: false }));
+    root.render(
+      React.createElement(EventImpactPanel, {
+        positions: props.positions ?? [],
+        holdingsUnreadable: props.holdingsUnreadable ?? false,
+      })
+    );
     await Promise.resolve();
     await Promise.resolve();
   });
@@ -48,6 +58,7 @@ describe("EventImpactPanel render (acceptance 2)", () => {
       state: "ok",
       asof: "2026-09-05",
       heldTickers: 1,
+      heldPositions: 1,
       unjoinable: [],
       events: [
         {
@@ -76,6 +87,7 @@ describe("EventImpactPanel render (acceptance 2)", () => {
       state: "ok",
       asof: "2026-09-05",
       heldTickers: 1,
+      heldPositions: 1,
       unjoinable: [],
       events: [
         {
@@ -108,6 +120,7 @@ describe("EventImpactPanel render (acceptance 2)", () => {
       state: "no_events",
       asof: "2026-09-05",
       heldTickers: 1,
+      heldPositions: 1,
       unjoinable: [],
       stale: true,
     };
@@ -118,5 +131,99 @@ describe("EventImpactPanel render (acceptance 2)", () => {
   it("renders a typed sentence, not a blank panel, on a 401 from the route", async () => {
     await renderWith({ state: "unauthenticated" }, 401);
     expect(container.querySelector('[data-testid="event-impact-unauthenticated"]')).toBeTruthy();
+  });
+
+  // BLOCKER 1 (review r2): the upstream artifact is regwalled in production, so a 401/403/timeout
+  // must render its OWN typed, plain-language state — never a blank panel, and never the
+  // `no_events` claim "no event touches your positions" (the source was never actually checked).
+  it("renders the upstream-locked disclosure, never the no-events claim, when the source is locked out", async () => {
+    await renderWith({ state: "upstream_locked" });
+    const node = container.querySelector('[data-testid="event-impact-upstream-locked"]');
+    expect(node).toBeTruthy();
+    expect(node?.textContent).toContain("We could not read the event calendar right now");
+    expect(container.querySelector('[data-testid="event-impact-empty"]')).toBeNull();
+  });
+
+  // MAJOR 1 (review r2): the mount used to sit inside `{!unread && <>...</>}` in PortfolioView.tsx,
+  // which made `holdingsUnreadable` structurally always false at the call site. This proves the
+  // component's OWN unreadable branch actually renders when the prop is true — the fix is that the
+  // call site can now pass `true` at all, which is a PortfolioView.tsx-level fact this render test
+  // cannot see directly, but the branch under test is exactly the one that was dead code before.
+  it("renders the holdings-unreadable state when holdingsUnreadable is true, never a fetch", async () => {
+    await renderWith({ state: "ok", asof: "x", heldTickers: 0, heldPositions: 0, unjoinable: [], events: [] }, 200, {
+      holdingsUnreadable: true,
+    });
+    expect(container.querySelector('[data-testid="event-impact-holdings-unreadable"]')).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // m2 (review r2): the initial paint must never claim "you hold nothing" before the fetch has
+  // resolved. Asserted directly on the DOM synchronously after the first render commit, before the
+  // fetch microtask queue is flushed.
+  it("renders a neutral checking state before the fetch resolves, never the no-holdings claim", async () => {
+    let resolveFetch: (() => void) | undefined;
+    fetchMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = () =>
+            resolve(new Response(JSON.stringify({ state: "no_holdings" }), { status: 200 }));
+        })
+    );
+    const { default: EventImpactPanel } = await import("@/components/EventImpactPanel");
+    root = createRoot(container);
+    act(() => {
+      root.render(React.createElement(EventImpactPanel, { positions: [], holdingsUnreadable: false }));
+    });
+    expect(container.querySelector('[data-testid="event-impact-checking"]')).toBeTruthy();
+    expect(container.textContent).not.toContain("Add a position and any event that names it");
+    await act(async () => {
+      resolveFetch?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  });
+
+  // m1 (review r2): the empty-state plural must count OPEN POSITIONS, not distinct tickers — two
+  // positions in one ticker is "2 open positions", never "1".
+  it("pluralizes the no-events count by open positions, not distinct tickers", async () => {
+    const body: EventImpactRead = {
+      state: "no_events",
+      asof: "2026-09-05",
+      heldTickers: 1,
+      heldPositions: 2,
+      unjoinable: [],
+    };
+    await renderWith(body);
+    const node = container.querySelector('[data-testid="event-impact-empty"]');
+    expect(node?.textContent).toContain("your 2 open positions");
+  });
+
+  // m4 (review r2): the 5-day highlight is a Terminal display choice, not part of the source, and
+  // must be labelled as such rather than left as an unexplained colour.
+  it("labels the 5-day highlight as a display convention, not a source claim", async () => {
+    const body: EventImpactRead = {
+      state: "ok",
+      asof: "2026-09-05",
+      heldTickers: 1,
+      heldPositions: 1,
+      unjoinable: [],
+      events: [
+        {
+          eventId: "earnings|AAPL|2026-09-08",
+          kind: "earnings",
+          ticker: "AAPL",
+          date: "2026-09-08",
+          daysUntil: 3,
+          positions: [{ id: "p1", ticker: "AAPL", shares: 10, status: "open" }],
+          direction: { state: "not_stated" },
+          mechanism: { state: "not_stated" },
+          timeframe: { state: "not_stated" },
+          sourcePath: "/data/portfolio_ctx.json",
+        },
+      ],
+    };
+    await renderWith(body);
+    expect(container.querySelector('[data-testid="event-impact-row"]')?.getAttribute("data-near")).toBe("1");
+    expect(container.querySelector('[data-testid="event-impact-near-legend"]')).toBeTruthy();
   });
 });

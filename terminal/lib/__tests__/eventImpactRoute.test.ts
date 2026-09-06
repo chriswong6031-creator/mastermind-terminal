@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { promises as fsPromises } from "fs";
+import os from "os";
+import path from "path";
 
 const fetchMock = vi.fn();
 
@@ -45,11 +48,13 @@ beforeEach(() => {
     positions: [{ id: "p1", ticker: "AAPL", shares: 10, status: "open" }],
   });
   delete process.env.TERMINAL_E2E_FIXTURE;
+  delete process.env.MACRO_DATA_DIR;
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.resetModules();
+  delete process.env.MACRO_DATA_DIR;
 });
 
 const okCtx = () =>
@@ -163,5 +168,97 @@ describe("event-impact route", () => {
     const res = await GET(new Request("http://x/api/event-impact"));
     const body = await res.json();
     expect(body).toEqual({ state: "unauthenticated" });
+  });
+
+  // RULING B1 / BLOCKER 1: the live artifact is regwalled (401 x-regwall:deny on an
+  // unauthenticated server-to-server fetch) — a 401/403 upstream must render `upstream_locked`,
+  // never `no_events` (which would assert "no event touches your positions" without ever having
+  // checked).
+  it("9. a 401 upstream is 'upstream_locked', never 'no_events' (BLOCKER 1)", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
+    const { GET } = await import("@/app/api/event-impact/route");
+    const res = await GET(new Request("http://x/api/event-impact"));
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.state).toBe("upstream_locked");
+    expect(body.state).not.toBe("no_events");
+  });
+
+  it("10. a 403 upstream is also 'upstream_locked'", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 403 }));
+    const { GET } = await import("@/app/api/event-impact/route");
+    const res = await GET(new Request("http://x/api/event-impact"));
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.state).toBe("upstream_locked");
+  });
+
+  it("11. a genuine 5xx stays 'calendar_unreadable', not 'upstream_locked'", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 500 }));
+    const { GET } = await import("@/app/api/event-impact/route");
+    const res = await GET(new Request("http://x/api/event-impact"));
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.state).toBe("calendar_unreadable");
+  });
+
+  // RULING B1(b): the file-read path is PRIMARY in production; the regwalled HTTP fetch is only
+  // the fallback. This proves the disk read actually works and that a successful disk read never
+  // touches the HTTP path at all.
+  it("12. reads the artifact from MACRO_DATA_DIR on disk, never touching the HTTP fallback", async () => {
+    const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "mo-event-impact-ctx-"));
+    const file = path.join(dir, "portfolio_ctx.json");
+    await fsPromises.writeFile(
+      file,
+      JSON.stringify({
+        schema: "portfolio_ctx.v2",
+        asof: "2026-09-05",
+        tickers: { AAPL: { earnings: { next: "2026-10-30", days_to: 5 } } },
+      }),
+      "utf8"
+    );
+    process.env.MACRO_DATA_DIR = dir;
+    try {
+      const { GET } = await import("@/app/api/event-impact/route");
+      const res = await GET(new Request("http://x/api/event-impact"));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.state).toBe("ok");
+      expect(body.events[0].ticker).toBe("AAPL");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("13. MACRO_DATA_DIR missing on this box falls through to the HTTP fetch, not an error", async () => {
+    process.env.MACRO_DATA_DIR = path.join(os.tmpdir(), "mo-event-impact-does-not-exist");
+    fetchMock.mockResolvedValue(okCtx());
+    const { GET } = await import("@/app/api/event-impact/route");
+    const res = await GET(new Request("http://x/api/event-impact"));
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // m3: `stale` must never be spread onto a shape the EventImpactRead union does not declare it
+  // on. A holdings-read failure racing a stale-cache window must surface as a clean
+  // `holdings_unreadable`, with no dangling `stale` field the panel never reads.
+  it("14. stale is never spread onto holdings_unreadable (m3)", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockResolvedValueOnce(okCtx());
+      const { GET } = await import("@/app/api/event-impact/route");
+      await GET(new Request("http://x/api/event-impact"));
+
+      vi.advanceTimersByTime(900_001);
+      mockReadPositions = async () => ({ ok: false, error: "boom" });
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 500 }));
+      const res = await GET(new Request("http://x/api/event-impact"));
+      const body = await res.json();
+      expect(body.state).toBe("holdings_unreadable");
+      expect(body.stale).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

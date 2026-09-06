@@ -54,6 +54,12 @@ export interface UnjoinableSource {
 export type EventImpactRead =
   | { readonly state: "holdings_unreadable" }
   | { readonly state: "calendar_unreadable"; readonly detail: string }
+  // The macro artifact is regwalled at the edge (x-regwall: deny for an unauthenticated
+  // server-to-server fetch) — a 401/403/timeout from the upstream is a DIFFERENT fact than a
+  // malformed or missing artifact (`calendar_unreadable`): the source is fine, we are simply
+  // locked out of it right now. Never collapsed into `no_events`, which would assert "no event
+  // touches your positions" when the truth is "we could not check" (BLOCKER 1, B-F08-5 review r2).
+  | { readonly state: "upstream_locked" }
   | { readonly state: "no_holdings" }
   // The route's own auth check (401) — carried through so a signed-out fetch never
   // renders as a silently blank panel (MAJOR: route/UI honesty parity).
@@ -62,6 +68,10 @@ export type EventImpactRead =
       readonly state: "no_events";
       readonly asof: string;
       readonly heldTickers: number;
+      // Count of OPEN POSITIONS (not distinct tickers) — two positions in one ticker is "2 open
+      // positions", not "1" (m1, review r2). `heldTickers` stays for callers that need the
+      // distinct-ticker count; the panel's plural copy reads this field instead.
+      readonly heldPositions: number;
       readonly unjoinable: readonly UnjoinableSource[];
       // Set only when the route served a cached artifact past its TTL because the
       // upstream fetch failed — never served silently as fresh (MAJOR: stale-through-outage).
@@ -71,6 +81,7 @@ export type EventImpactRead =
       readonly state: "ok";
       readonly asof: string;
       readonly heldTickers: number;
+      readonly heldPositions: number;
       readonly events: readonly EventTouch[];
       readonly unjoinable: readonly UnjoinableSource[];
       readonly stale?: boolean;
@@ -117,8 +128,13 @@ export function joinEventImpact(input: {
   positions: readonly TouchedPosition[] | null;
   ctx: unknown | null;
   ctxError?: string;
+  // True when the LAST attempt to reach the upstream artifact (file read + HTTP fallback, both
+  // in the route) failed specifically because access was denied or timed out — a 401/403/timeout,
+  // never a parse failure or a 5xx. Distinguishes "we are locked out" from "the artifact is
+  // broken" so the former never renders as `no_events` (BLOCKER 1).
+  ctxLocked?: boolean;
 }): EventImpactRead {
-  const { positions, ctx, ctxError } = input;
+  const { positions, ctx, ctxError, ctxLocked } = input;
 
   // 1. No book, no story.
   if (positions === null) return { state: "holdings_unreadable" };
@@ -129,6 +145,7 @@ export function joinEventImpact(input: {
     typeof (ctx as Record<string, unknown>).schema !== "string" ||
     !((ctx as Record<string, unknown>).schema as string).startsWith("portfolio_ctx.")
   ) {
+    if (ctxLocked) return { state: "upstream_locked" };
     return { state: "calendar_unreadable", detail: ctxError || "bad schema" };
   }
   const ctxObj = ctx as Record<string, unknown>;
@@ -186,10 +203,11 @@ export function joinEventImpact(input: {
   });
 
   // 8/9.
+  const heldPositions = openPositions.length;
   if (events.length === 0) {
-    return { state: "no_events", asof, heldTickers, unjoinable: UNJOINABLE_SOURCES };
+    return { state: "no_events", asof, heldTickers, heldPositions, unjoinable: UNJOINABLE_SOURCES };
   }
-  return { state: "ok", asof, heldTickers, events, unjoinable: UNJOINABLE_SOURCES };
+  return { state: "ok", asof, heldTickers, heldPositions, events, unjoinable: UNJOINABLE_SOURCES };
 }
 
 export function presentCarried(c: Carried, lang: Lang): string {
