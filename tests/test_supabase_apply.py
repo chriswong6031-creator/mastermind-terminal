@@ -296,34 +296,57 @@ def test_transaction_wrapper_is_detected_and_selects_single_transaction_mode():
 def test_apply_sends_one_post_per_statement_when_unwrapped(tmp_path):
     f = tmp_path / "0013_alert_runs_outbox.sql"
     f.write_text(FIXTURE_0013)
-    fake = FakeApi()
+    rb = readback_statements(FIXTURE_0013)
+    stmts = split_statements(FIXTURE_0013)
+    # Only the POST-readback rows (not the echoed statement text) count as
+    # evidence an object exists -- feed the fake catalog rows that actually
+    # name the three objects this migration creates.
+    post_start = len(rb) + len(stmts) + 1
+    responses = {
+        post_start: [{"relname": "alert_runs"}],
+        post_start + 1: [{"relname": "alert_runs_id_key"}],
+        post_start + 2: [{"polname": "alert_runs_read"}],
+    }
+    fake = FakeApi(responses=responses)
     receipt_path = tmp_path / "receipt.json"
     rc = run_apply(f, runner=fake, receipt_path=receipt_path, project_ref="ref123",
                     accept_unverifiable=True)
     assert rc == 0
-    stmts = split_statements(FIXTURE_0013)
-    rb = readback_statements(FIXTURE_0013)
     expected_calls = len(rb) + len(stmts) + len(rb)
     assert len(fake.calls) == expected_calls
 
 
-def test_apply_sends_exactly_one_post_when_wrapped_and_keeps_begin_and_commit(tmp_path):
+def test_wrapped_migrations_still_apply_one_statement_per_post(tmp_path):
     f = tmp_path / "0014_tenancy_foundation.sql"
     f.write_text(FIXTURE_0014)
     fake = FakeApi()
     receipt_path = tmp_path / "receipt.json"
-    # This fixture's own readback query only asserts the `tenants` table, so a
-    # fake catalog that never echoes the other expected names (index/trigger/
-    # function/policy) correctly reports failed_readback -- the point of the
-    # test is the POST count and the preserved begin/commit wrapper, not a
-    # full pass.
+    # apply_mode labels this "single-transaction" (has_transaction_wrapper is
+    # True) but the tool never POSTs the whole file as one query: the
+    # Management API splits on ';' server-side (supabase/migrations/
+    # README.md), so a single POST was never actually one transaction, and
+    # it also made a mid-file failure unreportable (failed_statement_index
+    # forced to None). Every migration -- wrapped or not -- applies one
+    # statement per POST.
+    #
+    # This fixture's own readback query only asserts the `tenants` table, so
+    # a fake catalog that never echoes the other expected names (index/
+    # trigger/function/policy) correctly reports failed_readback -- the
+    # point of this test is the per-statement POST behaviour, not a full
+    # pass.
     rc = run_apply(f, runner=fake, receipt_path=receipt_path, project_ref="ref123",
                     accept_unverifiable=False)
     assert rc == 6
     rb = readback_statements(FIXTURE_0014)
-    apply_calls = [c for c in fake.calls if "begin" in c.lower() and "commit" in c.lower()]
-    assert len(apply_calls) == 1
-    assert len(fake.calls) == len(rb) + 1 + len(rb)
+    stmts = split_statements(FIXTURE_0014)
+    assert len(fake.calls) == len(rb) + len(stmts) + len(rb)
+    combined = [c for c in fake.calls if "begin" in c.lower() and "commit" in c.lower()]
+    assert combined == []
+    begin_calls = [c for c in fake.calls if c.strip().lower() == "begin"]
+    assert len(begin_calls) == 1
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["apply_mode"] == "single-transaction"
+    assert receipt["failed_statement_index"] is None
 
 
 def test_receipt_carries_every_required_key_and_no_token(tmp_path):
@@ -478,3 +501,125 @@ def test_every_migration_on_disk_passes_the_guard_or_is_legacy():
             continue
         assert findings == [], f"{fp} is not idempotent without --allow-legacy: {findings}"
     print(f"migration versions seen on disk: {seen_versions}")
+
+
+# --- Regression tests: review findings on PR #516 -------------------------
+
+def test_missing_after_ignores_the_echoed_readback_statement_text():
+    # The readback statement text names the very object it is checking for
+    # ("select ... where relname = 'alerts'"), and a naive substring search
+    # over json.dumps(post) matched on that echoed text even when the
+    # returned ROWS were empty -- i.e. a partial/absent apply reported as
+    # applied. Real evidence has to come from the rows, never the statement.
+    expected = [ExpectedObject("table", "alerts")]
+    post = [{"statement": "select relname from pg_class where relname = 'alerts';", "rows": []}]
+    assert missing_after(expected, post) == ["table alerts"]
+
+
+def test_missing_after_does_not_let_a_prefix_collide():
+    # expected index "idx_alerts" must not be satisfied by a returned row
+    # value of "idx_alerts_user" -- exact identifier match, not substring.
+    expected = [ExpectedObject("index", "idx_alerts")]
+    post = [{"statement": "select indexname from pg_indexes;", "rows": [{"indexname": "idx_alerts_user"}]}]
+    assert missing_after(expected, post) == ["index idx_alerts"]
+
+
+def test_missing_after_matches_an_exact_row_value():
+    expected = [ExpectedObject("index", "idx_alerts")]
+    post = [{"statement": "select indexname from pg_indexes;", "rows": [{"indexname": "idx_alerts"}]}]
+    assert missing_after(expected, post) == []
+
+
+def test_pre_readback_swallows_only_a_missing_relation_error(tmp_path):
+    # A 401/404/429/5xx before the create must fail the run, not be treated
+    # as "expected before a create" -- only a genuine 42P01 / "does not
+    # exist" undefined-relation error is expected there.
+    f = tmp_path / "0013_widget.sql"
+    f.write_text(FIXTURE_READBACK_DOES_NOT_NAME_THE_OBJECT)
+    rb = readback_statements(FIXTURE_READBACK_DOES_NOT_NAME_THE_OBJECT)
+
+    class UnauthorizedApi:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, sql):
+            self.calls.append(sql)
+            raise ApiError(401, '{"message": "Invalid API key"}')
+
+    fake = UnauthorizedApi()
+    receipt_path = tmp_path / "receipt.json"
+    rc = run_apply(f, runner=fake, receipt_path=receipt_path, project_ref="ref123")
+    assert rc == 5
+    assert len(fake.calls) == 1  # never proceeded past the first pre-readback call
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["status"] == "failed"
+    assert "401" in receipt["error"] or "Invalid API key" in receipt["error"]
+
+
+def test_pre_readback_undefined_table_error_is_still_swallowed(tmp_path):
+    f = tmp_path / "0013_widget.sql"
+    f.write_text(FIXTURE_READBACK_DOES_NOT_NAME_THE_OBJECT)
+
+    class NotFoundOnceApi:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, sql):
+            self.calls.append(sql)
+            if len(self.calls) == 1:
+                raise ApiError(400, '{"code": "42P01", "message": "relation does not exist"}')
+            return []
+
+    fake = NotFoundOnceApi()
+    receipt_path = tmp_path / "receipt.json"
+    rc = run_apply(f, runner=fake, receipt_path=receipt_path, project_ref="ref123")
+    # still runs to completion (missing readback afterwards -> exit 6, not 5)
+    assert rc == 6
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["status"] == "failed_readback"
+
+
+FIXTURE_LEGACY_NO_READBACK = """
+create table if not exists public.legacy_thing (id int);
+"""
+
+
+def test_allow_legacy_waives_a_missing_readback_block_instead_of_crashing(tmp_path, capsys):
+    f = tmp_path / "0003_legacy_thing.sql"
+    f.write_text(FIXTURE_LEGACY_NO_READBACK)
+
+    rc = run_dry(f, allow_legacy=True)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "waived (legacy 0001-0010)" in out
+    assert "readback: none" in out
+
+    fake = FakeApi()
+    receipt_path = tmp_path / "receipt.json"
+    rc2 = run_apply(f, runner=fake, receipt_path=receipt_path, project_ref="ref123",
+                     allow_legacy=True)
+    assert rc2 == 6  # unverified: no readback to check against, and --accept-unverifiable was not passed
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["status"] == "unverified"
+    assert receipt["pre"] == []
+    assert receipt["post"] == []
+
+    rc3 = run_apply(f, runner=FakeApi(), receipt_path=tmp_path / "receipt3.json",
+                     project_ref="ref123", allow_legacy=True, accept_unverifiable=True)
+    assert rc3 == 0
+
+
+def test_dry_run_prints_comments_stripped_not_the_raw_statement(tmp_path, capsys):
+    text = (
+        "create table if not exists public.thing (id int); "
+        "-- this comment must not appear in the dry-run output\n"
+        "-- down:\n-- drop table if exists public.thing;\n"
+        "-- readback:\n-- select 1;\n"
+    )
+    f = tmp_path / "0013_thing.sql"
+    f.write_text(text)
+    rc = run_dry(f)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "this comment must not appear" not in out
+    assert "create table if not exists public.thing" in out

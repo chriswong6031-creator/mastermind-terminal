@@ -63,6 +63,25 @@ class ApiError(RuntimeError):
         self.body = body
 
 
+def _is_missing_relation_error(exc: "ApiError") -> bool:
+    """True only for a Postgres "relation/object does not exist" error.
+
+    A pre-readback query against an object that has not been created yet is
+    expected to fail this way -- that is not a real failure. Anything else
+    (auth, network, rate limit, syntax, a transient 5xx) must fail the run
+    instead of being silently swallowed as "expected before a create", which
+    used to let a real outage end with status "applied" and a `pre` half
+    that is nothing but an error string.
+    """
+    body = (exc.body or "").lower()
+    return (
+        '"code":"42p01"' in body
+        or '"code": "42p01"' in body
+        or "does not exist" in body
+        or "undefined_table" in body
+    )
+
+
 @dataclass(frozen=True)
 class ExpectedObject:
     kind: str
@@ -422,11 +441,34 @@ class CurlRunner:
                 pass
 
 
+def _flatten_strings(value: Any) -> Iterable[str]:
+    """Yield every string leaf inside a JSON-shaped value, lowercased."""
+    if isinstance(value, dict):
+        for v in value.values():
+            yield from _flatten_strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _flatten_strings(v)
+    elif isinstance(value, str):
+        yield value.lower()
+
+
 def missing_after(expected: list[ExpectedObject], post: list[dict]) -> list[str]:
-    haystack = json.dumps(post).lower()
+    # Only the query RESULT ROWS are evidence an object exists. post entries
+    # also carry the echoed readback statement text (post[i]["statement"]),
+    # and the packet's own `-- readback:` convention names the very objects
+    # it is checking for -- so a substring search over json.dumps(post) (the
+    # old behaviour) matched on the echoed query even with zero rows back.
+    # Compare exact identifier values pulled out of the rows instead of a
+    # substring search, which also stops "idx_alerts" matching the returned
+    # row value "idx_alerts_user".
+    values: set[str] = set()
+    for entry in post:
+        rows = entry.get("rows") if isinstance(entry, dict) else None
+        values.update(_flatten_strings(rows))
     missing = []
     for obj in expected:
-        if obj.name not in haystack:
+        if obj.name not in values:
             missing.append(f"{obj.kind} {obj.name}")
     return missing
 
@@ -528,13 +570,23 @@ def run_dry(path: Path, *, allow_legacy: bool = False, out=None) -> int:
 
     print(f"\nstatements that WOULD run ({len(statements)}):", file=out)
     for i, s in enumerate(statements, 1):
-        one_line = " ".join(s.split())
+        one_line = " ".join(strip_sql_comments(s).split())
         print(f"  [{i:02d}] {one_line[:100]}", file=out)
 
-    rb = readback_statements(text)
-    print(f"\nreadback query that WOULD run ({len(rb)} statements):", file=out)
-    for i, s in enumerate(rb, 1):
-        print(f"  [{i:02d}] {' '.join(s.split())[:100]}", file=out)
+    try:
+        rb = readback_statements(text)
+    except MigrationError:
+        rb = None
+    if rb is None:
+        print(
+            "\nreadback: none (legacy file, missing -- readback: block waived "
+            "by --allow-legacy) -- pre/post cannot be checked automatically.",
+            file=out,
+        )
+    else:
+        print(f"\nreadback query that WOULD run ({len(rb)} statements):", file=out)
+        for i, s in enumerate(rb, 1):
+            print(f"  [{i:02d}] {' '.join(strip_sql_comments(s).split())[:100]}", file=out)
 
     objs = expected_objects(statements)
     if objs:
@@ -576,108 +628,135 @@ def run_apply(
         return 3
 
     mode = apply_mode(statements)
-    rb_statements = readback_statements(text)
-    expected = expected_objects(statements)
+    try:
+        rb_statements = readback_statements(text)
+    except MigrationError:
+        # Only reachable when --allow-legacy waived a missing `-- readback:`
+        # block for a 0001-0010 file -- _guard already refused otherwise.
+        rb_statements = None
+    expected = expected_objects(statements) if rb_statements is not None else []
+
+    def _receipt(**kw) -> dict:
+        base = dict(
+            file=str(path), sha256=digest,
+            applied_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            statements_n=len(statements), project_ref=project_ref, apply_mode=mode,
+        )
+        base.update(kw)
+        return build_receipt(**base)
+
+    def _write(receipt: dict) -> None:
+        receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=False) + "\n")
+        print(f"receipt written to {receipt_path}", file=out)
 
     pre: list[dict] = []
-    for s in rb_statements:
-        try:
-            rows = runner(strip_sql_comments(s))
-            pre.append({"statement": s, "rows": rows})
-        except ApiError as exc:
-            pre.append({"statement": s, "error": str(exc)})
-            print(
-                f"pre-readback statement could not run yet ({exc}). That is "
-                "expected before a create; recorded in the receipt, not "
-                "treated as a failure.",
-                file=out,
-            )
-
-    failed_index = None
-    error_msg = None
-    try:
-        if mode == "single-transaction":
-            runner(strip_sql_comments(text))
-        else:
-            for i, s in enumerate(statements, 1):
-                runner(strip_sql_comments(s))
-                print(f"[{i:02d}/{len(statements)}] ok", file=out)
-    except ApiError as exc:
-        failed_index = i if mode != "single-transaction" else None
-        error_msg = str(exc)
-        receipt = build_receipt(
-            file=str(path), sha256=digest, pre=pre, post=[],
-            applied_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            statements_n=len(statements), status="failed", project_ref=project_ref,
-            apply_mode=mode, expected_objects=[o.as_dict() for o in expected],
-            missing_after=[], failed_statement_index=failed_index, error=error_msg,
+    if rb_statements is None:
+        print(
+            "pre-readback: none (legacy file, missing -- readback: block "
+            "waived by --allow-legacy).",
+            file=out,
         )
-        receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=False) + "\n")
-        print(f"apply failed: {error_msg}", file=out)
-        print(f"receipt written to {receipt_path}", file=out)
-        return 5
+    else:
+        for s in rb_statements:
+            try:
+                rows = runner(strip_sql_comments(s))
+                pre.append({"statement": s, "rows": rows})
+            except ApiError as exc:
+                if _is_missing_relation_error(exc):
+                    pre.append({"statement": s, "error": str(exc)})
+                    print(
+                        f"pre-readback statement could not run yet ({exc}). "
+                        "That looks like the object does not exist yet, which "
+                        "is expected before a create; recorded in the receipt, "
+                        "not treated as a failure.",
+                        file=out,
+                    )
+                else:
+                    pre.append({"statement": s, "error": str(exc)})
+                    _write(_receipt(
+                        pre=pre, post=[], status="failed",
+                        expected_objects=[o.as_dict() for o in expected],
+                        missing_after=[], failed_statement_index=None, error=str(exc),
+                    ))
+                    print(
+                        f"pre-readback failed (not a missing-object error): {exc}",
+                        file=out,
+                    )
+                    return 5
+
+    # Statement-at-a-time, always -- one POST per statement via curl. A file
+    # wrapped in its own begin/commit still reports apply_mode
+    # "single-transaction" in the receipt (has_transaction_wrapper), but this
+    # tool never sends the whole file as one POST: the Management API splits
+    # on ';' server-side (supabase/migrations/README.md), so one POST was
+    # never one transaction, and that branch also made a mid-file failure
+    # unreportable (failed_statement_index forced to None).
+    failed_index = None
+    for i, s in enumerate(statements, 1):
+        try:
+            runner(strip_sql_comments(s))
+        except ApiError as exc:
+            failed_index = i
+            _write(_receipt(
+                pre=pre, post=[], status="failed",
+                expected_objects=[o.as_dict() for o in expected], missing_after=[],
+                failed_statement_index=failed_index, error=str(exc),
+            ))
+            print(f"apply failed: {exc}", file=out)
+            return 5
+        print(f"[{i:02d}/{len(statements)}] ok", file=out)
 
     post: list[dict] = []
-    try:
-        for s in rb_statements:
-            rows = runner(strip_sql_comments(s))
-            post.append({"statement": s, "rows": rows})
-    except ApiError as exc:
-        receipt = build_receipt(
-            file=str(path), sha256=digest, pre=pre, post=post,
-            applied_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            statements_n=len(statements), status="failed", project_ref=project_ref,
-            apply_mode=mode, expected_objects=[o.as_dict() for o in expected],
-            missing_after=[], failed_statement_index=None, error=str(exc),
-        )
-        receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=False) + "\n")
-        print(f"post-readback failed: {exc}", file=out)
-        print(f"receipt written to {receipt_path}", file=out)
-        return 5
+    if rb_statements is not None:
+        try:
+            for s in rb_statements:
+                rows = runner(strip_sql_comments(s))
+                post.append({"statement": s, "rows": rows})
+        except ApiError as exc:
+            _write(_receipt(
+                pre=pre, post=post, status="failed",
+                expected_objects=[o.as_dict() for o in expected], missing_after=[],
+                failed_statement_index=None, error=str(exc),
+            ))
+            print(f"post-readback failed: {exc}", file=out)
+            return 5
 
-    missing = missing_after(expected, post)
-    if not expected:
+    if rb_statements is None or not expected:
         if not accept_unverifiable:
-            receipt = build_receipt(
-                file=str(path), sha256=digest, pre=pre, post=post,
-                applied_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                statements_n=len(statements), status="unverified", project_ref=project_ref,
-                apply_mode=mode, expected_objects=[], missing_after=[],
-                failed_statement_index=None, error=None,
+            _write(_receipt(
+                pre=pre, post=post, status="unverified", expected_objects=[],
+                missing_after=[], failed_statement_index=None, error=None,
+            ))
+            reason = (
+                "no readback available for this legacy file"
+                if rb_statements is None
+                else "no object names could be read out of this file"
             )
-            receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=False) + "\n")
             print(
-                "null: no object names could be read out of this file, so the "
-                "post-readback cannot be checked automatically -- read the rows "
-                "yourself and re-run with --accept-unverifiable if they are right.",
+                f"null: {reason}, so the post-readback cannot be checked "
+                "automatically -- read the rows yourself and re-run with "
+                "--accept-unverifiable if they are right.",
                 file=out,
             )
-            print(f"receipt written to {receipt_path}", file=out)
             return 6
-    elif missing:
-        receipt = build_receipt(
-            file=str(path), sha256=digest, pre=pre, post=post,
-            applied_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            statements_n=len(statements), status="failed_readback", project_ref=project_ref,
-            apply_mode=mode, expected_objects=[o.as_dict() for o in expected],
-            missing_after=missing, failed_statement_index=None, error=None,
-        )
-        receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=False) + "\n")
-        print(f"post-readback did not show: {', '.join(missing)}", file=out)
-        print(f"receipt written to {receipt_path}", file=out)
-        return 6
+    else:
+        missing = missing_after(expected, post)
+        if missing:
+            _write(_receipt(
+                pre=pre, post=post, status="failed_readback",
+                expected_objects=[o.as_dict() for o in expected], missing_after=missing,
+                failed_statement_index=None, error=None,
+            ))
+            print(f"post-readback did not show: {', '.join(missing)}", file=out)
+            return 6
 
-    receipt = build_receipt(
-        file=str(path), sha256=digest, pre=pre, post=post,
-        applied_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        statements_n=len(statements), status="applied", project_ref=project_ref,
-        apply_mode=mode, expected_objects=[o.as_dict() for o in expected],
-        missing_after=[], failed_statement_index=None, error=None,
-    )
-    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=False) + "\n")
+    _write(_receipt(
+        pre=pre, post=post, status="applied",
+        expected_objects=[o.as_dict() for o in expected], missing_after=[],
+        failed_statement_index=None, error=None,
+    ))
     print(f"applied. receipt written to {receipt_path}", file=out)
     return 0
-
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="supabase_apply.py")
