@@ -301,6 +301,32 @@ describe("adaptive toolbar committed-settled contract", () => {
     expect(element.dataset.toolbarMeasuring).toBeUndefined();
   });
 
+  it("settles via a bounded fallback when FontFaceSet.ready never resolves or rejects (MINOR-4)", async () => {
+    vi.useFakeTimers();
+    try {
+      // Deliberately never resolved/rejected: a hung or broken FontFaceSet implementation.
+      const fonts = deferred<void>();
+      installFontsReady(fonts.promise);
+      mountHarness();
+
+      const element = toolbar();
+      expect(element.dataset.toolbarSettled).toBeUndefined();
+
+      // The authoritative fallback measurement should choose a different route, proving it is a
+      // real remeasurement and not merely re-publishing the stale initial snapshot.
+      rootWidth = 430;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+
+      expect(element.dataset.toolbarMode).toBe("overflow");
+      expect(element.dataset.toolbarSettled).toBe("true");
+      expect(Number(element.dataset.toolbarRevision)).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("removes blind action polling and binds one aggregate deadline to the owning test", () => {
     const helperSource = readFileSync(
       path.resolve(process.cwd(), "e2e", "terminalToolbar.ts"),

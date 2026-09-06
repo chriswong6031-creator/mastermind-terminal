@@ -10,9 +10,11 @@ import {
   createToolbarTestBound,
   executeToolbarStage,
   formatToolbarFailure,
+  toggleToolbarSync,
   waitForSettledToolbar,
   type ToolbarAction,
   type ToolbarFailureReceipt,
+  type ToolbarIntent,
 } from "../../e2e/terminalToolbar";
 
 describe("toolbar invocation deadline ownership", () => {
@@ -506,6 +508,57 @@ describe("toolbar invocation deadline ownership", () => {
       futureMs: 1_500,
     });
   });
+
+  it("never repeats a toggle whose click already landed a committed revision bump (MAJOR-2)", async () => {
+    // Reproduces a real race: the click's own attribute check (`opts.done`) never converges
+    // (e.g. the node it reads was replaced by the same re-render the click triggered), while the
+    // toolbar's independent committed-state watermark (mode/revision on .chart-tabs) DID advance —
+    // proof the click already had an effect. viaToolbar must treat that as "landed" and must not
+    // click the control a second time (which would toggle Sync straight back off).
+    const visibility = (visible: boolean) => ({ isVisible: async () => visible, isEnabled: async () => visible });
+    let chartTabsReads = 0;
+    const snapshotBeforeClick = { mode: "full" as const, revision: 5, settled: true, overflowOpen: false, backVisible: false };
+    const snapshotAfterClick = { mode: "full" as const, revision: 6, settled: true, overflowOpen: false, backVisible: false };
+    let clickCount = 0;
+    const control = {
+      click: async () => { clickCount += 1; },
+      // Always reports the SAME value: this models the done-check's target attribute never
+      // converging, independent of how many times the control is clicked.
+      getAttribute: async () => "off",
+      isVisible: async () => true,
+    } as unknown as Locator;
+    const page = {
+      isClosed: () => false,
+      waitForFunction: async () => {
+        throw new Error("simulated: real Playwright settle-wait unavailable in a node unit test");
+      },
+      getByTestId: () => visibility(true),
+      locator: (selector: string) => {
+        if (selector === ".chart-tabs") {
+          return {
+            first: () => ({
+              evaluate: async () => {
+                chartTabsReads += 1;
+                return chartTabsReads === 1 ? snapshotBeforeClick : snapshotAfterClick;
+              },
+            }),
+          };
+        }
+        if (selector === '[data-toolbar-action="sync"]') return control;
+        return visibility(false);
+      },
+    } as unknown as Page;
+
+    // Generous budget: both a buggy retry AND the fixed single-attempt path must each get to run
+    // their full observation window (up to TOOLBAR_EFFECT_SETTLE_MS) before the deadline could
+    // itself start starving a genuine second click of budget and mask the defect.
+    const intent: ToolbarIntent = { deadline: Date.now() + 2_500 };
+
+    await expect(toggleToolbarSync(page, intent)).rejects.toThrow(
+      /^TOOLBAR_(ACTION_FAILED|BUDGET_EXHAUSTED) /,
+    );
+    expect(clickCount).toBe(1);
+  }, 10_000);
 
   it("never lends the future reservation to the current action or its effect observation", () => {
     expect(allocateToolbarStage(7_759, 4_000)).toEqual({

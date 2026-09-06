@@ -489,8 +489,11 @@ async function executeRouteOnlyStage(
 
 async function viaToolbar(page: Page, opts: ToolbarAction, intent: ToolbarIntent): Promise<void> {
   const deadline = intent.deadline;
-  if (await opts.done()) return;
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    // Rechecked at the top of EVERY attempt, not just once before the loop: a retry must never
+    // re-click an action whose effect already landed between the previous attempt's observation
+    // window and this one.
+    if (await opts.done().catch(() => false)) return;
     const snapshot = await waitForSettledToolbar(page, opts, deadline);
     if (page.isClosed()) return failToolbar(page, opts, deadline, "TOOLBAR_PAGE_CLOSED");
     const directVisible = snapshot.mode === "full";
@@ -518,7 +521,12 @@ async function viaToolbar(page: Page, opts: ToolbarAction, intent: ToolbarIntent
     const revisionChanged = !after.settled
       || after.revision !== snapshot.revision
       || after.mode !== snapshot.mode;
-    if (attempt === 0 && revisionChanged) continue;
+    // A committed revision bump proves this attempt's click already changed something real —
+    // clicking again would repeat a landed action (e.g. re-toggle Sync back off, or reopen a menu
+    // that already opened once). Retry only when the toolbar's committed state came back
+    // byte-identical to before the click, i.e. the click provably had zero effect and a fresh
+    // attempt cannot double anything up.
+    if (attempt === 0 && !revisionChanged) continue;
     return failToolbarActionUnlessDone(page, opts, deadline);
   }
   return failToolbarActionUnlessDone(page, opts, deadline);

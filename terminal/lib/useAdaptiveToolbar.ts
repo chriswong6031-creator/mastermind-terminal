@@ -22,6 +22,12 @@ type LastMeasurement = {
   mode: AdaptiveToolbarMode;
 };
 
+// FontFaceSet.ready is specified to always settle (resolve or reject), but a hung or broken
+// implementation (a stuck worker, an injected polyfill that never fulfils) must not strand the
+// toolbar permanently unsettled. Bound the wait with the same deterministic fallback the reject
+// path already had.
+const TOOLBAR_FONT_GATE_FALLBACK_MS = 4_000;
+
 function cssPixels(value: string | null | undefined): number {
   const parsed = Number.parseFloat(value || "0");
   return Number.isFinite(parsed) ? parsed : 0;
@@ -201,27 +207,28 @@ export function useAdaptiveToolbar(signature: string) {
     const observer = new ResizeObserver(measureResize);
     observer.observe(root);
 
+    let fontGateFallbackTimer: ReturnType<typeof setTimeout> | null = null;
     if (fontsReady && typeof fontsReady.then === "function") {
-      void fontsReady.then(
-        () => {
-          if (cancelled) return;
-          fontGateComplete = true;
-          // Font metrics are authoritative even when they retain the same mode. A fresh revision
-          // guarantees that React cannot elide the post-commit settled receipt.
-          measureAll(true);
-        },
-        () => {
-          if (cancelled) return;
-          // FontFaceSet.ready is specified to resolve, but an injected/broken implementation must
-          // not strand the toolbar forever. Fall back deterministically to a final remeasurement.
-          fontGateComplete = true;
-          measureAll(true);
-        },
-      );
+      const completeFontGate = () => {
+        if (cancelled || fontGateComplete) return;
+        fontGateComplete = true;
+        if (fontGateFallbackTimer !== null) {
+          clearTimeout(fontGateFallbackTimer);
+          fontGateFallbackTimer = null;
+        }
+        // Font metrics are authoritative even when they retain the same mode. A fresh revision
+        // guarantees that React cannot elide the post-commit settled receipt.
+        measureAll(true);
+      };
+      // Resolve, reject, AND a bounded timeout all converge on the same idempotent completion —
+      // whichever settles the gate first wins, and the other two become no-ops.
+      void fontsReady.then(completeFontGate, completeFontGate);
+      fontGateFallbackTimer = setTimeout(completeFontGate, TOOLBAR_FONT_GATE_FALLBACK_MS);
     }
 
     return () => {
       cancelled = true;
+      if (fontGateFallbackTimer !== null) clearTimeout(fontGateFallbackTimer);
       observer.disconnect();
       metricsRef.current = null;
       delete root.dataset.toolbarSettled;
