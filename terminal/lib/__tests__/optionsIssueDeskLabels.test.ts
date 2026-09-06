@@ -143,30 +143,46 @@ describe("options issue desk labels", () => {
 
   it("keeps JSON.stringify and proposal_id interpolations inside technical-details disclosures", () => {
     const source = readFileSync(join(__dirname, "../../components/prophet/OptionsIssueDeskView.tsx"), "utf8");
+    expect(source).toContain("lifecycleLabel(");
+    expect(source).toContain("eventStateLabel(");
+    expect(source).toContain("reasonLabel(");
+    expect(source).toContain("visibleReceiptFields(");
+    expect(source).toContain("confirmActionLabel(");
+    expect(source).toContain("FORM_FIELD_LABELS[");
+    expect(source).not.toContain(".replaceAll(\"_\"");
+    expect(source).not.toContain("reason_codes.join(");
+    for (const join of source.matchAll(/\.join\(" · "\)/g)) {
+      const window = source.slice(Math.max(0, join.index - 120), join.index);
+      expect(window.includes("reasonLabel("), `.join(" · ") at ${join.index} is on raw codes`).toBe(true);
+    }
+
+    const detailLabelCount = source.split("Show technical details").length - 1;
     expect(source).toContain("Show technical details");
     expect(source).toContain("显示技术细节");
+    expect(detailLabelCount).toBeGreaterThanOrEqual(3);
+    expect(detailLabelCount).toBe(3);
 
     const insideDetails = (index: number) => {
       const before = source.slice(0, index);
       return before.lastIndexOf("<details") > before.lastIndexOf("</details>");
     };
-    let cursor = 0;
-    let stringifyCount = 0;
-    while ((cursor = source.indexOf("{JSON.stringify(", cursor)) !== -1) {
-      expect(insideDetails(cursor), `{JSON.stringify at ${cursor} is outside <details>`).toBe(true);
-      stringifyCount += 1;
-      cursor += "{JSON.stringify(".length;
-    }
-    expect(stringifyCount).toBeGreaterThan(0);
+    const isKeyAttr = (index: number) => {
+      const sixBefore = (at: number) => source.slice(Math.max(0, at - 6), at).trim() === "key={";
+      if (sixBefore(index)) return true;
+      let cursor = index;
+      while (cursor > 0 && /[\w.]/.test(source[cursor - 1]!)) cursor -= 1;
+      return sixBefore(cursor);
+    };
 
-    cursor = 0;
-    while ((cursor = source.indexOf("proposal_id}", cursor)) !== -1) {
-      const attrStart = source.lastIndexOf("key={", cursor);
-      const isReactKey = attrStart !== -1 && !source.slice(attrStart, cursor).includes(">");
-      if (!isReactKey) {
-        expect(insideDetails(cursor), `proposal_id} at ${cursor} is outside <details>`).toBe(true);
-      }
-      cursor += "proposal_id}".length;
+    const stringifyMatches = [...source.matchAll(/\{\s*JSON\.stringify\(/g)];
+    expect(stringifyMatches.length).toBeGreaterThan(0);
+    for (const match of stringifyMatches) {
+      expect(insideDetails(match.index), `{JSON.stringify at ${match.index} is outside <details>`).toBe(true);
+    }
+
+    for (const match of source.matchAll(/proposal_id\s*[}.]/g)) {
+      if (isKeyAttr(match.index)) continue;
+      expect(insideDetails(match.index), `proposal_id at ${match.index} is outside <details>`).toBe(true);
     }
   });
 
