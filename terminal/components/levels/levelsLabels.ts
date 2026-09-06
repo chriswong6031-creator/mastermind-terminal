@@ -43,6 +43,13 @@ export const ROLE_GLYPH: Record<Role, string> = {
 
 const UNCLASSIFIED = { en: "Not classified", zh: "未分类" } as const;
 
+// `role` stays `string` (not `Role`) on purpose: the exhaustiveness suite
+// (lib/__tests__/levelsLabels.test.ts, "falls back to Not classified") calls
+// this with unknown/empty strings to pin the defensive fallback for role
+// values that arrive from untrusted runtime data (API payload, not a type-checked
+// literal). Narrowing to `Role` would make that call site a type error and
+// remove the guard the fallback exists to test. Reviewed and left widened
+// (round-1 ruling; round-2 review re-confirms "not a blocker").
 export function roleLabel(role: string, lang: "en" | "zh"): string {
   const pair = Object.prototype.hasOwnProperty.call(ROLE_LABELS, role)
     ? ROLE_LABELS[role as Role]
