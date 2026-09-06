@@ -9,7 +9,13 @@ import { acsDate, type SectionProps } from "./types";
 // the aurora ID card, then Profile (name / email / password inline editors) and
 // Security (login method / last sign-in / user id) in the two-column grid.
 
-type EditKind = "name" | "email" | "pw";
+type EditKind = "name" | "email" | "pw" | "del";
+
+type DeletionReceipt = {
+  receipt_code: string;
+  status: string;
+  steps: { phase: string; done: boolean; text: [string, string] }[];
+};
 
 function providerLabelKey(p: string): string {
   if (p === "google") return "acsProvGoogle";
@@ -62,6 +68,52 @@ export default function SectionAccount({ t, lang, email, user, onClose, onPatchM
     if (closeTimer.current) clearTimeout(closeTimer.current);
   }, []);
 
+  // ── data lifecycle (export / deletion request, B-F12-4) ──
+  const [delIn, setDelIn] = useState("");
+  const [filed, setFiled] = useState<DeletionReceipt | null>(null);
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/account/deletion");
+        if (!res.ok) return;
+        const body = await res.json();
+        const rows: DeletionReceipt[] = Array.isArray(body?.requests) ? body.requests : [];
+        if (live && rows.length) setFiled(rows[0]);
+      } catch { /* no receipt shown — not an error state, just unknown */ }
+    })();
+    return () => { live = false; };
+  }, []);
+  function stepText(r: DeletionReceipt): string {
+    const step = r.steps.find((s) => !s.done) || r.steps[r.steps.length - 1];
+    return step ? step.text[lang === "zh" ? 1 : 0] : r.receipt_code;
+  }
+  async function saveDeletion() {
+    const email = delIn.trim();
+    if (email.toLowerCase() !== (addr || "").trim().toLowerCase()) {
+      setMsg({ kind: "err", text: t("acsDeleteMismatch") });
+      return;
+    }
+    setBusy(true); setMsg(null);
+    try {
+      const res = await fetch("/api/account/deletion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm_email: email }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body?.ok) throw new Error(t("acsDeleteErr"));
+      setFiled(body.receipt as DeletionReceipt);
+      setMsg({ kind: "ok", text: t("acsDeleteOk") });
+      setEditing(null);
+      setDelIn("");
+    } catch (e) {
+      setMsg({ kind: "err", text: (e as Error)?.message || t("acsDeleteErr") });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const displayName = (typeof user?.meta?.display_name === "string" ? user.meta.display_name : "") || "";
   const addr = user?.email || email;
   const provider = user?.provider || "email";
@@ -78,11 +130,12 @@ export default function SectionAccount({ t, lang, email, user, onClose, onPatchM
     if (kind === "name") setNameIn(displayName);
     if (kind === "email") setEmailIn("");
     if (kind === "pw") { setPw1(""); setPw2(""); }
+    if (kind === "del") setDelIn("");
   }
   function cancelEdit() {
     setEditing(null);
     setMsg(null);
-    setEmailIn(""); setPw1(""); setPw2("");
+    setEmailIn(""); setPw1(""); setPw2(""); setDelIn("");
   }
 
   async function saveName() {
@@ -286,6 +339,45 @@ export default function SectionAccount({ t, lang, email, user, onClose, onPatchM
                 </button>
               }
             />
+          </Group>
+
+          <Group title={t("acsData")}>
+            <Row
+              label={t("acsDownload")}
+              desc={t("acsDownloadDesc")}
+              control={(
+                <>
+                  <a className="acs-mini" href="/api/account/export?format=json" download>JSON</a>
+                  <a className="acs-mini" href="/api/account/export?format=csv" download>CSV</a>
+                </>
+              )}
+            />
+            {filed ? (
+              <Row label={t("acsDeleteFiled")} value={filed.receipt_code} desc={stepText(filed)} />
+            ) : (
+              <Row
+                label={t("acsDelete")}
+                desc={t("acsDeleteDesc")}
+                control={editing === "del" ? undefined : editBtn("del")}
+                editing={editing === "del"}
+              >
+                <div className="acs-form">
+                  <p className="acs-note">{t("acsDeleteConfirm")}</p>
+                  <input
+                    className="acs-in"
+                    type="email"
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-label={t("acsDeleteTypeEmail")}
+                    placeholder={t("acsDeleteTypeEmail")}
+                    value={delIn}
+                    onChange={(e) => setDelIn(e.target.value)}
+                  />
+                  <Msg text={msg && editing === "del" ? msg.text : ""} kind={msg?.kind || "err"} />
+                  <FormBtns busy={busy} t={t} onCancel={cancelEdit} onSave={saveDeletion} saveKey="acsDelete" />
+                </div>
+              </Row>
+            )}
           </Group>
         </div>
 
