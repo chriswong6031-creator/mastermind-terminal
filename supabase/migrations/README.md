@@ -49,6 +49,7 @@ and have been.** Application status, re-censused 2026-08-21:
 | `0008_chart_layouts_unique_name.sql` | `chart_layouts_user_name` | **yes** — applied 2026-08-21 |
 | `0009_watchlist_symbol_unique.sql` | `wls_watchlist_symbol` | **yes** — applied 2026-08-19 |
 | `0010_search_event_stats.sql` | `search_event_stats()` + `search_events_created_at` | **yes** — applied 2026-08-21 |
+| `0011_analytics_eid.sql` | `analytics_events.eid` (nullable unique UUID column) + `analytics_events_eid_uniq` unique index | yes — applied 2026-09-06 (readback receipt: PR #507 comment `5557754941`) |
 | `0012_thesis_objects.sql` | `theses`, `thesis_versions` | yes — applied 2026-09-06 (Meta-CEO B; project fsldfzlxyavsuwqbceod; post-apply readback: both tables relrowsecurity=true, policies theses_select_own + thesis_versions_select_own, SELECT-only grant to authenticated, functions apply_thesis_version_v1 (security definer) + read_current_thesis_versions_v1 (security invoker), indexes theses_owner_updated_idx/theses_owner_subject_idx/thesis_versions_owner_thesis_idx) |
 
 `0009` was applied two days before `0008`. The numbering records *when the DDL entered the repo*,
@@ -109,7 +110,9 @@ earlier-opened pull request; the later one renumbers before merging.
 
 **(c) The initial seed is a one-time ruling exception to (b):** `0011` stays with #507 because it
 is a one-file Ready PR whose DDL is already applied live, while #502 is a 25-file Draft that must
-rebase regardless; no future exception to (b) without a DEC amendment.
+rebase regardless; no future exception to (b) without a DEC amendment. (As of 2026-09-06, when
+this exception was ruled, #502 was a 25-file Draft that had to rebase regardless; it merged later
+that same day as `d4556962`.)
 
 **(d) Every file stays re-runnable, and applying it stays out of band.** Each migration is
 idempotent, carries a `-- down:` comment block saying how to undo it, and carries a `-- readback:`
@@ -151,23 +154,26 @@ amendment, only a README edit.
 | number | name | owner (PR / packet) | status |
 |---|---|---|---|
 | `0011` | `analytics_eid` | PR #507 (applied live 2026-09-05; readback receipt: https://github.com/mastermindx-market-intelligence/mastermind-terminal/pull/507#issuecomment-5557754941) | applied |
-| `0012` | `thesis_objects` | PR #502 (renumbering in flight) | open PR |
+| `0012` | `thesis_objects` | PR #502 (merged as `d4556962`; DDL applied 2026-09-06, readback receipt) | merged + applied 2026-09-06 |
 | `0013` | `alert_runs_outbox` | PR #513 (open PR, packet B-F08-2) | open PR |
 | `0014` | `tenancy_foundation` | PR #514 (open PR, packet B-F12-1) | open PR |
 
 What the statuses mean: **reserved** — the number is claimed (for example, by a Meta-CEO B
 pre-reservation) but no pull request carrying its file is open yet; **open PR** — a pull
 request carrying the file for this number is open and not yet merged; **merged** — the file
-is on `master`; **applied** — an operator has run it against production and posted the
-readback. (**released** is an operating-note-only status — see "Release path" above — for a
-claim that was stood down; it is not one of the ruling's own status words and
-no row currently carries it.)
+is on `master`; **applied** — the file is on `master` **and** its DDL has been run against the
+production project with a readback receipt. `merged + applied <date>` (used by `0012` below) is
+the same "applied" meaning, spelled out with the merge fact alongside it because the row's own
+history (merged first, applied later) is otherwise lost. (**released** is an operating-note-only
+status — see "Release path" above — for a claim that was stood down; it is not one of the
+ruling's own status words and no row currently carries it.)
 
-Only `0011` has reached production: its corrective DDL was applied live on 2026-09-05 via the
-management API and recorded on PR #507, ahead of `0011`'s own file landing on `master`. The "in
-production?" table above predates this reservation and covers only `0001`–`0010`, so this paragraph
-is the record of that fact until that table is updated. None of `0012`/`0013`/`0014` is merged or
-applied — do not read this table as a schema that exists beyond `0011`'s applied DDL.
+`0001`–`0012` have reached production: `0001`–`0010` per the application-status table above,
+`0011` via its corrective DDL applied live on 2026-09-05 via the management API and recorded on
+PR #507 (ahead of `0011`'s own file landing on `master`), and `0012` merged to `master` as
+`d4556962` with its DDL applied 2026-09-06 (Meta-CEO B, readback receipt). The "in production?"
+table above now covers `0001`–`0012`. `0013` (PR #513) and `0014` (PR #514) are open pull
+requests: merged = no, applied = no.
 
 This table is re-verified at merge time, not just at the moment this pull request opened. A later
 reader should re-run the same open-pull-request query rather than trust these owner cells past
