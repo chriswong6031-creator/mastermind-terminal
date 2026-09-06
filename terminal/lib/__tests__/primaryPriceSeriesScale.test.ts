@@ -88,4 +88,45 @@ describe("ChartPanel primary price-series construction", () => {
       ).toBe(true);
     }
   });
+
+  it("actually invokes the shared constructor and hands lightweight-charts the requested scale for every family (behavioral, not source-text)", () => {
+    const constructor = findVariable("addPriceSeries", sourceFile);
+    const initializer = constructor.initializer as ts.ArrowFunction;
+    const snippet = `const addPriceSeries = ${initializer.getText(sourceFile)};\naddPriceSeries;`;
+    const transpiled = ts.transpileModule(snippet, {
+      compilerOptions: { target: ts.ScriptTarget.ES2019, module: ts.ModuleKind.CommonJS },
+    }).outputText;
+
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const build = new Function(
+      "exports",
+      "LineSeries", "AreaSeries", "BaselineSeries", "BarSeries", "CandlestickSeries", "LineType", "withAlpha",
+      "priceFmt", "chartSettingsRef", "chartTypeRef",
+      `${transpiled}
+return addPriceSeries;`,
+    );
+
+    const tokens = { brand2: "#000", up: "#0f0", down: "#f00" };
+    const families = ["line", "line-markers", "step", "area", "baseline", "bars", "candle", "hollow"];
+    for (const family of families) {
+      for (const scaleLeft of [true, false]) {
+        const chartTypeRef = { current: family };
+        const chartSettingsRef = { current: { scaleLeft } };
+        const calls: unknown[][] = [];
+        const chart = { addSeries: (...args: unknown[]) => { calls.push(args); return { __series: true }; } };
+        const fn = build(
+          {},
+          "LineSeries", "AreaSeries", "BaselineSeries", "BarSeries", "CandlestickSeries", { WithSteps: "withSteps" },
+          (c: string) => c,
+          () => ({ priceFormat: "auto" }),
+          chartSettingsRef,
+          chartTypeRef,
+        ) as (chart: unknown, t: Record<string, string>) => unknown;
+        fn(chart, tokens);
+        expect(calls, `${family} scaleLeft=${scaleLeft} must call chart.addSeries exactly once`).toHaveLength(1);
+        const options = calls[0][1] as { priceScaleId?: string };
+        expect(options.priceScaleId, `${family} scaleLeft=${scaleLeft}`).toBe(scaleLeft ? "left" : "right");
+      }
+    }
+  });
 });

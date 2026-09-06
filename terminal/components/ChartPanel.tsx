@@ -7437,15 +7437,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         timeframe: effectiveTimeframe,
         generation: epoch,
         isCurrent: () => !cancelled && epochRef.current === epoch,
-        isReady: () => state === "empty"
-          ? dataReadyRef.current
-          : isTerminalIndicatorSetBuilt(
+        ...(state === "data" ? {
+          isReady: () => isTerminalIndicatorSetBuilt(
             dataReadyRef.current,
             epoch,
             indicatorSetKey(indicatorsRef.current),
             builtIndicatorRef.current,
           ) && isRequestedPriceScaleApplied(chartSettingsRef.current, priceSeriesRef.current),
-        ...(state === "data" ? {
           // LWC's setData/build calls update its model synchronously, but the first coordinate map is
           // established by its next canvas frame. Re-project the dependent SVG/DOM layers in that
           // frame, then terminalBoot releases consumers only on the following frame.
