@@ -144,6 +144,11 @@ export default function PortfolioView(
     setRetrying(false);
   }, [reload]);
 
+  // Initial risk read: the SSR seed carries `positions` but never `risk` (the readout is
+  // sourced only from the client GET, per B-F08-4 section 5), so without this the shape
+  // readout would silently stay absent until the user's first mutation of the session.
+  useEffect(() => { reload(); }, [reload]);
+
   /** One serialized write + re-read. Serialization matters for the same reason the rail's watchlist
    *  chain is serialized: two mutations in flight can land out of order, and the second re-read
    *  then paints pre-first-write state over a change the user already saw. */
