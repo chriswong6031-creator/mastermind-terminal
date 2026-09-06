@@ -48,6 +48,47 @@ describe("eventImpact join", () => {
     expect(presentCarried(e.timeframe, "en")).toBe("Over the next 5 sessions.");
   });
 
+  it("2b. realistic production coverage (MAJOR: case 1 alone is fixture-only)", () => {
+    // Measured on the macro producer's live artifact (portfolio_ctx.v2, 2026-09-06, 4,359
+    // tickers): only 8 tickers carry an `earnings` block at all, and across the WHOLE artifact
+    // zero tickers carry direction/mechanism/timeframe. A normal book therefore either resolves
+    // to no_events (no held ticker in the 8) or to "ok" with all three slots not-stated (a held
+    // ticker is one of the 8, matching case "2. prints missing" above) — it never exercises the
+    // all-three-populated shape in case "1. carries verbatim", which is a mechanism unit test
+    // only and does not reflect what the artifact actually emits.
+    const ctx = baseCtx({
+      AAPL: { earnings: { next: "2026-10-30", days_to: 5 } }, // one of the ~8 covered tickers
+      // MSFT, GOOGL and every other held ticker below carry no earnings block at all — this is
+      // the common case for the other 4,351 tickers in the artifact.
+    });
+    const positions = [
+      pos({ id: "p1", ticker: "AAPL" }),
+      pos({ id: "p2", ticker: "MSFT" }),
+      pos({ id: "p3", ticker: "GOOGL" }),
+    ];
+    const read = joinEventImpact({ positions, ctx });
+    expect(read.state).toBe("ok");
+    if (read.state !== "ok") throw new Error("unreachable");
+    expect(read.heldTickers).toBe(3);
+    expect(read.events).toHaveLength(1);
+    const e = read.events[0];
+    expect(e.ticker).toBe("AAPL");
+    expect(e.direction.state).toBe("not_stated");
+    expect(e.mechanism.state).toBe("not_stated");
+    expect(e.timeframe.state).toBe("not_stated");
+  });
+
+  it("2c. realistic production coverage, no held ticker covered (MAJOR)", () => {
+    // The other side of the same measured shape: a book whose tickers are all outside the ~8
+    // covered ones resolves to no_events, not to a false "ok" with empty events.
+    const ctx = baseCtx({ AAPL: { earnings: { next: "2026-10-30", days_to: 5 } } });
+    const positions = [pos({ id: "p1", ticker: "MSFT" }), pos({ id: "p2", ticker: "GOOGL" })];
+    const read = joinEventImpact({ positions, ctx });
+    expect(read.state).toBe("no_events");
+    if (read.state !== "no_events") throw new Error("unreachable");
+    expect(read.heldTickers).toBe(2);
+  });
+
   it("2. prints missing (acceptance 2)", () => {
     const ctx = baseCtx({ AAPL: { earnings: { next: "2026-10-30", days_to: 5 } } });
     const read = joinEventImpact({ positions: [pos()], ctx });

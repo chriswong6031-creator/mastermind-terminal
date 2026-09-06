@@ -103,12 +103,27 @@ export default function EventImpactPanel({ positions, holdingsUnreadable }: Even
         setRead(body);
         return;
       }
-      // A non-2xx response (401 unauthenticated, 429 rate-limited, 5xx) must never render as a
-      // silently blank panel (MAJOR: route/UI honesty parity). 401's body IS a typed
-      // EventImpactRead already; anything else is disclosed as a typed "can't read" state.
+      // A non-2xx response (401 unauthenticated, 429 rate-limited, 503, other 5xx) must never
+      // render as a silently blank panel (MAJOR: route/UI honesty parity). 401's body IS a typed
+      // EventImpactRead already. The route's 503 ALSO carries a typed body distinguishing
+      // holdings_unreadable from calendar_unreadable (route.ts:111) — that distinction matters:
+      // rendering a holdings-read failure as "your positions are fine, the calendar is missing"
+      // would be an affirmatively false claim (MAJOR: state-mapping honesty). Read the body and
+      // trust its own typed state before falling back to a generic calendar_unreadable guess.
       if (res.status === 401) {
         setRead({ state: "unauthenticated" });
         return;
+      }
+      if (res.status === 503) {
+        try {
+          const body = (await res.json()) as EventImpactRead;
+          if (body.state === "holdings_unreadable" || body.state === "calendar_unreadable") {
+            setRead(body);
+            return;
+          }
+        } catch {
+          // Unparseable 503 body: fall through to the generic http_503 disclosure below.
+        }
       }
       setRead({ state: "calendar_unreadable", detail: `http_${res.status}` });
     } catch {
