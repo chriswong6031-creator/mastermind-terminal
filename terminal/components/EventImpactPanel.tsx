@@ -1,0 +1,214 @@
+"use client";
+
+import { useEffect, useMemo, useState, useCallback } from "react";
+import { useLang } from "@/lib/i18n";
+import type { Position } from "@/lib/portfolio";
+import {
+  presentCarried,
+  presentDaysUntil,
+  presentEventSentence,
+  presentPosition,
+  presentUnjoinable,
+  type EventImpactRead,
+} from "@/lib/eventImpact";
+import s from "./EventImpactPanel.module.css";
+
+// Ledger-adjacency panel (MO-PAID-028 / MO-DELTA-042): an event is on the clock, here is which
+// of your rows it lands on, and here is exactly what the source does and does not say about it.
+// It reports; it never advises, ranks, or scores. Inherits PortfolioView's honesty rules
+// unchanged (TWO-ORGANISMS LAW, UWP-R2).
+//
+// `lib/i18n.tsx`'s LEX table is outside this packet's owned paths, so the copy below is a local
+// table with the same [en, zh] tuple discipline — see DEVIATIONS in the packet report.
+const COPY: Record<string, [string, string]> = {
+  eiTitle: ["What's coming for what you hold", "你持仓将面临的事件"],
+  eiSub: [
+    "Dates come from the macro calendar. An event is listed only when the source names one of your open positions.",
+    "日期来自宏观日历。只有当来源点名了你的某个持仓，该事件才会列出。",
+  ],
+  eiLabelDirection: ["Direction", "方向"],
+  eiLabelMechanism: ["How it reaches you", "如何影响到你"],
+  eiLabelTimeframe: ["Over what period", "影响时长"],
+  eiNoHoldings: [
+    "Add a position and any event that names it will show up here.",
+    "添加持仓后，点名该持仓的事件会显示在这里。",
+  ],
+  eiNoEvents: [
+    "No upcoming event in the macro calendar names any of your {n} open positions.",
+    "宏观日历中暂时没有事件点名你的 {n} 个持仓。",
+  ],
+  eiHoldingsUnreadable: [
+    "We can't read your positions right now, so we can't say what's coming for them. An empty list here does not mean nothing is coming.",
+    "我们暂时读不到你的持仓，因此无法说明将有哪些事件。此处为空并不代表没有事件。",
+  ],
+  eiCalendarUnreadable: [
+    "We can't read the macro calendar right now. Your positions are fine — the event list is the part that's missing.",
+    "我们暂时读不到宏观日历。你的持仓没有问题，缺的是事件列表。",
+  ],
+  eiSourceLine: [
+    "Open positions only. Source: the macro calendar, as of {asof}. Nothing here is advice.",
+    "仅包含未平仓持仓。来源：宏观日历，数据截至 {asof}。此处内容不构成任何建议。",
+  ],
+  eiShowAll: ["Show all {n} events", "显示全部 {n} 个事件"],
+  eiRetry: ["Try again", "重试"],
+};
+
+function fill(template: string, vars: Record<string, string | number>): string {
+  return Object.entries(vars).reduce(
+    (acc, [k, v]) => acc.replace(new RegExp(`\\{${k}\\}`, "g"), String(v)),
+    template
+  );
+}
+
+const CARRY_SLOTS = [
+  ["direction", "eiLabelDirection"],
+  ["mechanism", "eiLabelMechanism"],
+  ["timeframe", "eiLabelTimeframe"],
+] as const;
+const VISIBLE_MAX = 6;
+
+export interface EventImpactPanelProps {
+  positions: Position[];
+  holdingsUnreadable: boolean;
+}
+
+export default function EventImpactPanel({ positions, holdingsUnreadable }: EventImpactPanelProps) {
+  const { lang } = useLang();
+  const c = useCallback((k: string) => COPY[k][lang === "zh" ? 1 : 0], [lang]);
+
+  const [read, setRead] = useState<EventImpactRead>(
+    holdingsUnreadable ? { state: "holdings_unreadable" } : { state: "no_holdings" }
+  );
+  const [busy, setBusy] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+
+  const load = useCallback(async () => {
+    if (holdingsUnreadable) {
+      setRead({ state: "holdings_unreadable" });
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch("/api/event-impact", { cache: "no-store" });
+      const body = (await res.json()) as EventImpactRead;
+      setRead(body);
+    } catch {
+      setRead({ state: "calendar_unreadable", detail: "network" });
+    } finally {
+      setBusy(false);
+    }
+  }, [holdingsUnreadable]);
+
+  useEffect(() => {
+    setShowAll(false);
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [holdingsUnreadable, positions.length, load]);
+
+  const retry = useCallback(() => void load(), [load]);
+
+  const visible = useMemo(() => {
+    if (read.state !== "ok") return [];
+    return showAll ? read.events : read.events.slice(0, VISIBLE_MAX);
+  }, [read, showAll]);
+
+  return (
+    <section
+      className={s.wrap}
+      id="event-impact"
+      data-testid="event-impact"
+      aria-labelledby="event-impact-title"
+    >
+      <header className={s.head}>
+        <h2 id="event-impact-title" className={s.title}>
+          {c("eiTitle")}
+        </h2>
+        <p className={s.sub}>{c("eiSub")}</p>
+      </header>
+
+      {read.state === "holdings_unreadable" && (
+        <p className={s.cannotRead} role="status" data-testid="event-impact-holdings-unreadable">
+          {c("eiHoldingsUnreadable")}{" "}
+          <button type="button" className={s.more} onClick={retry} disabled={busy}>
+            {c("eiRetry")}
+          </button>
+        </p>
+      )}
+
+      {read.state === "calendar_unreadable" && (
+        <p className={s.cannotRead} role="status" data-testid="event-impact-calendar-unreadable">
+          {c("eiCalendarUnreadable")}{" "}
+          <button type="button" className={s.more} onClick={retry} disabled={busy}>
+            {c("eiRetry")}
+          </button>
+        </p>
+      )}
+
+      {read.state === "no_holdings" && <p className={s.empty}>{c("eiNoHoldings")}</p>}
+
+      {read.state === "no_events" && (
+        <p className={s.empty} data-testid="event-impact-empty">
+          {fill(c("eiNoEvents"), { n: read.heldTickers })}
+        </p>
+      )}
+
+      {read.state === "ok" && (
+        <ol className={s.list}>
+          {visible.map((e) => (
+            <li
+              key={e.eventId}
+              className={s.row}
+              data-testid="event-impact-row"
+              data-ticker={e.ticker}
+              data-near={e.daysUntil <= 5 ? "1" : undefined}
+            >
+              <span className={s.rail} aria-hidden="true" />
+              <div className={s.when}>
+                <time className={s.date} dateTime={e.date}>
+                  {e.date}
+                </time>
+                <span className={s.days}>{presentDaysUntil(e.daysUntil, lang)}</span>
+              </div>
+              <div className={s.body}>
+                <p className={s.sentence}>{presentEventSentence(e, lang)}</p>
+                <ul className={s.chips}>
+                  {e.positions.map((p) => (
+                    <li key={p.id} className={p.shares == null ? `${s.chip} ${s.chipUnsized}` : s.chip}>
+                      {presentPosition(p, lang)}
+                    </li>
+                  ))}
+                </ul>
+                <dl className={s.carry}>
+                  {CARRY_SLOTS.map(([key, labelKey]) => (
+                    <div
+                      key={key}
+                      data-slot={key}
+                      data-stated={e[key].state === "stated" ? "1" : "0"}
+                      className={e[key].state === "stated" ? s.slot : `${s.slot} ${s.slotMissing}`}
+                    >
+                      <dt className={s.slotLabel}>{c(labelKey)}</dt>
+                      <dd className={s.slotValue}>{presentCarried(e[key], lang)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {read.state === "ok" && !showAll && read.events.length > VISIBLE_MAX && (
+        <button type="button" className={s.more} onClick={() => setShowAll(true)}>
+          {fill(c("eiShowAll"), { n: read.events.length })}
+        </button>
+      )}
+
+      {(read.state === "ok" || read.state === "no_events") && (
+        <>
+          <p className={s.disclosure}>{presentUnjoinable(read.unjoinable, lang)}</p>
+          <p className={s.disclosure}>{fill(c("eiSourceLine"), { asof: read.asof || "—" })}</p>
+        </>
+      )}
+    </section>
+  );
+}

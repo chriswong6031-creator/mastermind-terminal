@@ -24,6 +24,7 @@ import Link from "next/link";
 import { useT, useLang } from "@/lib/i18n";
 import { getJSON } from "@/lib/dataCache";
 import PortfolioBriefPanel from "@/components/PortfolioBriefPanel";
+import EventImpactPanel from "@/components/EventImpactPanel";
 import PositionModal, { type PositionDraft } from "@/components/PositionModal";
 import {
   bookTotals,
@@ -403,6 +404,11 @@ export default function PortfolioView(
             </table>
           </div>
         </div>
+
+        {/* BEGIN event-impact mount (B-F08-5) — one block; no other change to this file.
+            Alerts-cockpit mount is a follow-up after PR #517 lands. */}
+        <EventImpactPanel positions={open} holdingsUnreadable={unread} />
+        {/* END event-impact mount (B-F08-5) */}
 
         {/* Closed positions are KEPT — closing is not deleting — and folded out of the way. */}
         {!!closed.length && (
