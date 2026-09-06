@@ -2646,7 +2646,7 @@ export default function OptionsHubView({
                               <td style={{ fontVariantNumeric: "tabular-nums" }}>{e.size.toLocaleString("en-US")}</td>
                               <td style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPremium(e.premium)}</td>
                               <td>
-                                <span style={{ display: "flex", gap: 4, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                                <span style={{ display: "flex", gap: 4, justifyContent: "flex-end", flexWrap: "wrap", alignItems: "flex-start" }}>
                                   {e.zerodte && <span className="flow-flag-chip">{lang === "zh" ? "当日" : "0DTE"}</span>}
                                   {e.vol_gt_oi && <span className="flow-flag-chip is-long">{volAboveOi(lang)}</span>}
                                   {e.repeated && <span className="flow-flag-chip">{lang === "zh" ? "重复" : "repeat"}</span>}
