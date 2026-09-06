@@ -137,10 +137,11 @@ amendment, only a README edit.
   opened) is never invisible to the next claimant.
 - **Release path.** A reservation is released — its number returned to the free pool for
   Meta-CEO B to reassign — the moment its owning pull request closes without merging, or (for a
-  pre-reservation) the moment Meta-CEO B stands it down; a released number is struck from the table
-  with a `released` status rather than left `reserved`, so the next claimant's `max()` does not pin
-  it forever. `released` is a status this README defines to implement the release path above; it
-  is not one of the ruling's enumerated statuses. No number below has been released.
+  pre-reservation) the moment Meta-CEO B stands it down; the row is not removed. Its status
+  changes to `released` in place, replacing `reserved`, so the next claimant's `max()` does not
+  pin the number forever. `released` is a status this README defines to implement the release
+  path above; it is not one of the ruling's enumerated statuses. No number below has been
+  released.
 
 ### Reservations
 
