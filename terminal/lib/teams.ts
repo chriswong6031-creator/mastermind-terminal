@@ -429,7 +429,7 @@ export async function createInvite(
 ): Promise<CreateInviteResult> {
   const fail = (v: { reason: string; error: string; code?: InviteCode; status: number }): CreateInviteResult => ({ ok: false, ...v } as unknown as CreateInviteResult);
   const roleResult = await getCallerRole(db, userId, teamId);
-  if (!roleResult.ok) return fail({reason: roleResult.reason, error: roleResult.error, status: roleResult.reason === "unavailable" ? 503 : 500})
+  if (!roleResult.ok) return fail({reason: roleResult.reason, error: roleResult.error, code: roleResult.reason === "unavailable" ? "unavailable" : "failed", status: roleResult.reason === "unavailable" ? 503 : 500})
   if (!roleResult.role) {
     return fail({reason: "not_found", error: "team not found", code: "team_not_found", status: 404})
   }
@@ -560,7 +560,10 @@ export async function writeSetting(
   if (!normalized.ok) return { ok: false, reason: "invalid", error: "invalid value", status: 400 };
   const teamId = args.scope === "workspace" ? args.teamId ?? null : null;
   if (args.scope === "workspace" && !teamId) return { ok: false, reason: "invalid", error: "teamId required for workspace scope", status: 400 };
-  const onConflict = args.scope === "workspace" ? "team_id,key" : "user_id,key";
+  // owner_id (generated column: coalesce(team_id, user_id)) makes this one target work for both
+  // scopes -- see supabase/migrations/0015_team_roles_invitations.sql for why a partial index
+  // cannot be used as a PostgREST onConflict target.
+  const onConflict = "scope,owner_id,key";
   const result = await db
     .from(WORKSPACE_SETTINGS_TABLE)
     .upsert(

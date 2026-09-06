@@ -138,6 +138,36 @@ describe("POST /api/teams/invitations", () => {
     expect(json.messageZh).toBe(INVITE_MESSAGES.unavailable[1]);
   });
 
+  it("create branch: team_members table unavailable -> 503 unavailable, never the generic failed sentence", async () => {
+    // Regression for the null-disclosure MAJOR: createInvite's fail() used to omit `code`, so
+    // route.ts fell back to bodyFor("failed") even though the underlying reason was "unavailable"
+    // (HTTP 503 carrying error:"FAILED" + the generic sentence instead of INVITE_MESSAGES.unavailable).
+    const { POST } = await loadRoute();
+    (globalThis as any).__teamsRouteFake = {
+      from: (table: string) => {
+        const q: any = {
+          select: () => q,
+          eq: () => q,
+          maybeSingle: async () =>
+            table === "team_members" ? { data: null, error: { code: "PGRST205", message: "schema cache" } } : { data: null, error: null },
+        };
+        return q;
+      },
+      rpc: async () => ({ data: null, error: null }),
+    };
+    const res = await POST(
+      new Request("http://x/api/teams/invitations", {
+        method: "POST",
+        body: JSON.stringify({ action: "create", teamId: "t1", email: "x@example.com", role: "member" }),
+      }),
+    );
+    expect(res.status).toBe(503);
+    const json = await res.json();
+    expect(json.message).toBe(INVITE_MESSAGES.unavailable[0]);
+    expect(json.messageZh).toBe(INVITE_MESSAGES.unavailable[1]);
+    expect(json.error).not.toBe("FAILED");
+  });
+
   it("every non-2xx body carries both message and messageZh", async () => {
     const { POST } = await loadRoute();
     const scenarios: Array<[() => "owner" | "admin" | "member" | null, { data?: unknown; error?: { code?: string; message?: string } | null } | null, Record<string, unknown>]> = [

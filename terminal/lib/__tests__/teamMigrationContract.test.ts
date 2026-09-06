@@ -61,8 +61,7 @@ describe("0015 migration contract", () => {
     for (const p of ["ws_select", "ws_insert", "ws_update", "ws_delete"]) {
       expect(downBlock).toContain(p);
     }
-    expect(downBlock).toMatch(/workspace_settings_user_key/);
-    expect(downBlock).toMatch(/workspace_settings_team_key/);
+    expect(downBlock).toMatch(/workspace_settings_scope_owner_key/);
     expect(downBlock).toContain("drop table if exists public.workspace_settings");
     expect(downBlock).toContain("drop function if exists public.accept_team_invite(text)");
   });

@@ -203,6 +203,7 @@ describe("0014 DDL contract", () => {
 import {
   ACCEPT_INVITE_FN,
   INVITE_MESSAGES,
+  WORKSPACE_SETTINGS_TABLE,
   type InviteCode,
   acceptInvite,
   createInvite,
@@ -224,8 +225,45 @@ function fakeTenancyDb(opts: {
   selectRows?: Row2[];
   selectError?: { code?: string; message?: string } | null;
   rpcResult?: { data?: unknown; error?: { code?: string; message?: string } | null };
+  store?: Row2[];
 }): TenancyRpcDb {
   const make = (table: string): any => {
+    if (opts.store && table === WORKSPACE_SETTINGS_TABLE) {
+      // Real conflict-target semantics (scope, owner_id, key) so distinctness is *proven* by the
+      // fake's own storage, not asserted from test-authored literals -- owner_id mirrors 0015's
+      // generated column: coalesce(team_id, user_id).
+      const filters: Array<[string, unknown]> = [];
+      const ownerId = (r: Row2) => (r.team_id ?? r.user_id) as unknown;
+      const q: any = {
+        select: () => q,
+        eq: (col: string, val: unknown) => {
+          filters.push([col, val]);
+          return q;
+        },
+        in: () => q,
+        order: () => q,
+        limit: () => q,
+        upsert: (row: Row2) => ({
+          select: () => ({
+            maybeSingle: async () => {
+              if (opts.upsertError) return { data: null, error: opts.upsertError };
+              const idx = opts.store!.findIndex(
+                (r) => r.scope === row.scope && ownerId(r) === ownerId(row) && r.key === row.key,
+              );
+              const saved = { ...row, updated_at: (row.updated_at as string) ?? new Date().toISOString() };
+              if (idx >= 0) opts.store![idx] = saved;
+              else opts.store!.push(saved);
+              return { data: saved, error: null };
+            },
+          }),
+        }),
+        then: (resolve: (v: unknown) => unknown) => {
+          const rows = opts.store!.filter((r) => filters.every(([c, v]) => r[c] === v));
+          return Promise.resolve({ data: rows, error: opts.selectError ?? null }).then(resolve);
+        },
+      };
+      return q;
+    }
     const q: any = {
       select: () => q,
       eq: () => q,
@@ -351,30 +389,32 @@ describe("acceptInvite (MO-PAID-081)", () => {
 
 describe("MO-PAID-083 workspace vs user setting distinctness", () => {
   it("writing the workspace-scoped row leaves the user-scoped row for the same key unchanged, and vice versa", async () => {
-    const userRow = { scope: "user", team_id: null, key: "chart.density", value: "compact", updated_at: "2026-01-01T00:00:00Z" };
-    const wsRow = { scope: "workspace", team_id: "t1", key: "chart.density", value: "comfortable", updated_at: "2026-01-02T00:00:00Z" };
+    // A single shared store stands in for the real (scope, owner_id, key) unique index --
+    // upsert() and select() both go through it, so this proves persistence + distinctness
+    // rather than echoing test-authored literals back (the bug the previous version had).
+    const store: Row2[] = [];
+    const db = fakeWithCallerRole("owner", { store });
 
-    const dbUser = fakeTenancyDb({ upsertRow: userRow });
-    const wUser = await writeSetting(dbUser, "u1", { scope: "user", key: "chart.density", value: "compact" });
+    const wUser = await writeSetting(db, "u1", { scope: "user", key: "chart.density", value: "compact" });
     expect(wUser.ok).toBe(true);
 
-    const dbWs = fakeTenancyDb({ upsertRow: wsRow });
-    const wWs = await writeSetting(dbWs, "u1", { scope: "workspace", teamId: "t1", key: "chart.density", value: "comfortable" });
+    const wWs = await writeSetting(db, "u1", { scope: "workspace", teamId: "t1", key: "chart.density", value: "comfortable" });
     expect(wWs.ok).toBe(true);
 
-    const dbReadUser = fakeTenancyDb({ selectRows: [userRow] });
-    const readUser = await readSettings(dbReadUser, "u1", { scope: "user" });
+    // changing the workspace row again must not disturb the user row for the same key
+    const wWs2 = await writeSetting(db, "u1", { scope: "workspace", teamId: "t1", key: "chart.density", value: "cozy" });
+    expect(wWs2.ok).toBe(true);
+
+    const readUser = await readSettings(db, "u1", { scope: "user" });
     expect(readUser.ok).toBe(true);
-    if (readUser.ok) expect(readUser.settings[0].value).toBe("compact");
+    if (readUser.ok) expect(readUser.settings[0]?.value).toBe("compact");
 
-    const dbReadWs = fakeWithCallerRole("owner", { selectRows: [wsRow] });
-    const readWs = await readSettings(dbReadWs, "u1", { scope: "workspace", teamId: "t1" });
+    const readWs = await readSettings(db, "u1", { scope: "workspace", teamId: "t1" });
     expect(readWs.ok).toBe(true);
-    if (readWs.ok) expect(readWs.settings[0].value).toBe("comfortable");
+    if (readWs.ok) expect(readWs.settings[0]?.value).toBe("cozy");
 
-    // Both rows exist independently and neither call mutated the other's value.
-    expect(userRow.value).toBe("compact");
-    expect(wsRow.value).toBe("comfortable");
+    // Exactly two rows persisted -- one per scope, keyed distinctly by owner_id.
+    expect(store).toHaveLength(2);
   });
 });
 

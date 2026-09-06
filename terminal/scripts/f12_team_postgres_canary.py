@@ -78,6 +78,8 @@ def expect_database_error(fn, sqlstate: str | None = None) -> bool:
 def bootstrap(conn: "psycopg.Connection") -> None:
     with conn.cursor() as cur:
         cur.execute("create schema if not exists auth")
+        cur.execute("create schema if not exists extensions")
+        cur.execute("create extension if not exists pgcrypto with schema extensions")
         cur.execute(
             "create table if not exists auth.users (id uuid primary key default gen_random_uuid(), email text,"
             " raw_user_meta_data jsonb not null default '{}'::jsonb)"
@@ -91,8 +93,7 @@ def bootstrap(conn: "psycopg.Connection") -> None:
         cur.execute("grant select on auth.users to anon, authenticated")
 
 
-def apply_migrations(conn: "psycopg.Connection", migrations_dir: Path) -> list[dict]:
-    applied = []
+def apply_migrations(conn: "psycopg.Connection", migrations_dir: Path, applied: list[dict]) -> None:
     for path in sorted(migrations_dir.glob("*.sql")):
         sql = path.read_text()
         sha = hashlib.sha256(sql.encode("utf8")).hexdigest()
@@ -100,7 +101,6 @@ def apply_migrations(conn: "psycopg.Connection", migrations_dir: Path) -> list[d
             cur.execute(sql)
         applied.append({"file": path.name, "sha256": sha})
         print(f"::notice title=f12-team-canary::applied {path.name}", flush=True)
-    return applied
 
 
 def main() -> int:
@@ -113,10 +113,33 @@ def main() -> int:
 
     dsn = env("F12_TEAM_DATABASE_URL")
     proof = Proof()
+    applied: list[dict] = []
 
-    admin = admin_connection(dsn)
-    bootstrap(admin)
-    applied = apply_migrations(admin, Path(args.migrations))
+    def _receipt(failed: bool, migration_error: str | None = None) -> dict:
+        r = {
+            "database_url_host": dsn.split("@")[-1] if "@" in dsn else "local",
+            "expected_commit": os.environ.get("F12_TEAM_EXPECTED_COMMIT"),
+            "expected_image": os.environ.get("F12_TEAM_EXPECTED_IMAGE"),
+            "expected_postgres": os.environ.get("F12_TEAM_EXPECTED_POSTGRES"),
+            "run_id": os.environ.get("F12_TEAM_GITHUB_RUN_ID"),
+            "run_attempt": os.environ.get("F12_TEAM_GITHUB_RUN_ATTEMPT"),
+            "job": os.environ.get("F12_TEAM_GITHUB_JOB"),
+            "applied_migrations": applied,
+            "proofs": proof.rows,
+            "failed": failed,
+        }
+        if migration_error is not None:
+            r["migration_error"] = migration_error
+        return r
+
+    try:
+        admin = admin_connection(dsn)
+        bootstrap(admin)
+        apply_migrations(admin, Path(args.migrations), applied)
+    except Exception as exc:  # noqa: BLE001 - report PARTIAL via receipt, acceptance #7
+        Path(args.receipt).write_text(json.dumps(_receipt(True, str(exc)), indent=2))
+        print(f"::error title=f12-team-canary::migration application failed: {exc}", flush=True)
+        return 1
 
     with admin.cursor() as cur:
         cur.execute("select relrowsecurity, count(p.polname) from pg_class c left join pg_policy p on p.polrelid=c.oid where c.relnamespace='public'::regnamespace and c.relname='workspace_settings' group by 1")
@@ -180,24 +203,41 @@ def main() -> int:
         team_b = cur.fetchone()[0]
         cur.execute("insert into public.workspace_settings (scope, team_id, user_id, key, value) values ('workspace', %s, %s, 'k', '\"vb\"'::jsonb)", (team_b, a_owner))
 
+    with admin.cursor() as cur:
+        cur.execute(
+            "insert into public.workspace_settings (scope, team_id, user_id, key, value) values"
+            " ('user', null, %s, 'view_density', '\"compact\"'::jsonb),"
+            " ('workspace', %s, %s, 'view_density', '\"comfortable\"'::jsonb)"
+            " on conflict (scope, owner_id, key) do update set value = excluded.value",
+            (a_owner, team_a, a_owner),
+        )
+        cur.execute("select value from public.workspace_settings where scope='user' and user_id=%s and key='view_density'", (a_owner,))
+        user_val = cur.fetchone()[0]
+        cur.execute("select value from public.workspace_settings where scope='workspace' and team_id=%s and key='view_density'", (team_a,))
+        ws_val = cur.fetchone()[0]
+    proof.check(
+        "settings:user_and_workspace_are_distinct",
+        user_val == "compact" and ws_val == "comfortable" and user_val != ws_val,
+        f"user={user_val} ws={ws_val}",
+    )
+
+    with admin.cursor() as cur:
+        cur.execute("set role postgres")
+        cur.execute("select count(*) from public.workspace_settings where team_id=%s", (team_b,))
+        postgres_count = cur.fetchone()[0]
+        cur.execute("reset role")
+    proof.check(
+        "control:set_role_postgres_sees_team_b_row",
+        postgres_count >= 1,
+        f"postgres saw {postgres_count} rows for team_b (proves the member-scoped emptiness below is RLS, not an empty table)",
+    )
+
     with b_conn.cursor() as cur:
         cur.execute("select * from public.workspace_settings where team_id=%s", (team_b,))
         rows_b = cur.fetchall()
     proof.check("rls:cross_tenant_settings", len(rows_b) == 0, f"A member saw {len(rows_b)} of B's rows")
 
-    receipt = {
-        "database_url_host": dsn.split("@")[-1] if "@" in dsn else "local",
-        "expected_commit": os.environ.get("F12_TEAM_EXPECTED_COMMIT"),
-        "expected_image": os.environ.get("F12_TEAM_EXPECTED_IMAGE"),
-        "expected_postgres": os.environ.get("F12_TEAM_EXPECTED_POSTGRES"),
-        "run_id": os.environ.get("F12_TEAM_GITHUB_RUN_ID"),
-        "run_attempt": os.environ.get("F12_TEAM_GITHUB_RUN_ATTEMPT"),
-        "job": os.environ.get("F12_TEAM_GITHUB_JOB"),
-        "applied_migrations": applied,
-        "proofs": proof.rows,
-        "failed": proof.failed,
-    }
-    Path(args.receipt).write_text(json.dumps(receipt, indent=2))
+    Path(args.receipt).write_text(json.dumps(_receipt(proof.failed), indent=2))
     print(f"::notice title=f12-team-canary::receipt written to {args.receipt}", flush=True)
     return 1 if proof.failed else 0
 

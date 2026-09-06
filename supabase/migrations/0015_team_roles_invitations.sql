@@ -66,14 +66,18 @@ create table if not exists public.workspace_settings (
   scope      text not null check (scope in ('user','workspace')),
   team_id    uuid references public.teams(id) on delete cascade,
   user_id    uuid not null references auth.users(id) on delete cascade,
+  -- owner_id collapses the two scopes into one conflict target: for scope='user' it is the
+  -- user, for scope='workspace' it is the team. PostgREST's upsert ON CONFLICT(columns) cannot
+  -- infer a *partial* unique index (SQLSTATE 42P10) -- a non-partial index on
+  -- (scope, owner_id, key) is required so one onConflict target works for both scopes.
+  owner_id   uuid generated always as (coalesce(team_id, user_id)) stored,
   key        text not null check (key ~ '^[a-z][a-z0-9_.]{0,63}$'),
   value      jsonb not null,
   updated_at timestamptz not null default now(),
   constraint workspace_settings_scope_shape check (
     (scope = 'workspace' and team_id is not null) or (scope = 'user' and team_id is null))
 );
-create unique index if not exists workspace_settings_user_key on public.workspace_settings(user_id, key) where scope = 'user';
-create unique index if not exists workspace_settings_team_key on public.workspace_settings(team_id, key) where scope = 'workspace';
+create unique index if not exists workspace_settings_scope_owner_key on public.workspace_settings(scope, owner_id, key);
 alter table public.workspace_settings enable row level security;
 
 drop policy if exists ws_select on public.workspace_settings;
@@ -109,8 +113,7 @@ commit;
 --   drop policy if exists ws_insert on public.workspace_settings;
 --   drop policy if exists ws_update on public.workspace_settings;
 --   drop policy if exists ws_delete on public.workspace_settings;
---   drop index if exists public.workspace_settings_user_key;
---   drop index if exists public.workspace_settings_team_key;
+--   drop index if exists public.workspace_settings_scope_owner_key;
 --   drop table if exists public.workspace_settings;
 --   drop function if exists public.accept_team_invite(text);
 
