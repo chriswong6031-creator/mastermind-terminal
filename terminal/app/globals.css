@@ -2350,7 +2350,11 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .app.fs .chart-body{height:auto;flex:1}
 
 /* ===== mobile top bar + symbol bar + drawer (hidden on desktop) ===== */
-.mobilebar{display:none;position:relative;align-items:center;height:52px;padding:0 8px;border-bottom:1px solid var(--line);background:var(--bg);gap:2px;flex:none;z-index:30}
+/* z-index:95 (not the historical 30): must outrank .fin-pane's fixed full-screen overlay
+ * (z-index:90, app/fin.css) so the hamburger stays hit-testable at <=860px while a workspace
+ * pane (e.g. Company Intelligence) is open full-screen underneath it — see terminal/e2e/
+ * company-intelligence-rctx.spec.ts "Menu" click. Still below every app-modal scrim (100+). */
+.mobilebar{display:none;position:relative;align-items:center;height:52px;padding:0 8px;border-bottom:1px solid var(--line);background:var(--bg);gap:2px;flex:none;z-index:95}
 .m-ic{width:38px;height:38px;border-radius:var(--r-md);display:grid;place-items:center;color:var(--text-2)}
 .m-ic:active,.m-ic:hover{background:var(--panel-2);color:var(--text)}.m-ic svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.9}
 /* prominent mobile "back to dashboard" pill (left slot when the user came from macro) */

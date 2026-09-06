@@ -225,16 +225,14 @@ test("the real Analysis shell hosts one-turn exact source sends in the existing 
     await appNavChart.click();
   } else {
     // PRODUCT FINDING (pre-existing, not caused by this repair or by BrainWidget/AppShell —
-    // see the review-repair report): on THIS page, `.fin-pane--workspace` (the Company
-    // Intelligence workspace pane) is `position:fixed; top:0` covering the full viewport,
-    // which visually and pointer-wise overlaps AppShell's `.mobilebar` hamburger at <=860px
-    // (globals.css breakpoint) even though the hamburger is later in paint order. A plain
-    // click on the real "Menu" button times out here with "<div class='fin-head'>...
-    // intercepts pointer events". Reaching the real MobileNav drawer link therefore needs a
-    // programmatic .click() on the actual button element (bypasses hit-testing, still fires
-    // the real React onClick -> setDrawer(true) -> the real <Link href="/terminal">), not a
-    // synthetic navigation of our own.
-    await page.getByRole("button", { name: "Menu" }).evaluate((el: HTMLElement) => el.click());
+    // see the review-repair report), now FIXED: `.fin-pane--workspace` (the Company
+    // Intelligence workspace pane) is `position:fixed; top:0; z-index:90` covering the full
+    // viewport at <=860px, which used to outrank AppShell's `.mobilebar` (z-index:30) despite
+    // the hamburger being later in paint order, so a real click on "Menu" intercepted pointer
+    // events on `.fin-pane`'s own content instead. `.mobilebar` is now `z-index:95`
+    // (globals.css) so it outranks the workspace overlay; the click below is the real user
+    // gesture, not a hit-test bypass.
+    await page.getByRole("button", { name: "Menu" }).click();
     await page.locator(".m-nav").getByRole("link", { name: "Chart" }).click();
   }
   await expect(page).toHaveURL(/\/terminal(?:\?.*)?$/);
