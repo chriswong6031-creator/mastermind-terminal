@@ -15,6 +15,23 @@ import type {
   ThesisSummary,
   ThesisVersion,
 } from "@/lib/theses";
+import {
+  RMS_VIEWS,
+  RMS_DEFAULT_VIEW,
+  RMS_COPY,
+  coverageRows,
+  ideaRows,
+  thesisRows,
+  reviewRows,
+  catalystRows,
+  riskRows,
+  noteRows,
+  selectHydrationIds,
+  hydrationScope,
+  conditionLine,
+  readConditionStates,
+} from "@/lib/rmsViews";
+import type { RmsViewDef, RmsViewId, CoverageRow } from "@/lib/rmsViews";
 import styles from "./ThesisWorkspace.module.css";
 
 export interface ThesisWorkspaceProps {
@@ -399,10 +416,21 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   const [inspectedVersion, setInspectedVersion] = useState<number | null>(null);
   const [routeInvalid, setRouteInvalid] = useState(invalidLink);
   const [mobilePane, setMobilePane] = useState<MobilePane>(initialThesisId || seededSymbol ? "detail" : "list");
+  const [view, setView] = useState<RmsViewId>(RMS_DEFAULT_VIEW);
+  const [subjectFilterKey, setSubjectFilterKey] = useState<string | null>(null);
+  const [hydratedDetails, setHydratedDetails] = useState<Map<string, ThesisDetail>>(new Map());
+  const [hydrating, setHydrating] = useState(false);
+  const [hydrationUnavailable, setHydrationUnavailable] = useState(false);
+  const [missingIds, setMissingIds] = useState<Set<string>>(new Set());
+  const lensRefs = useRef<Partial<Record<RmsViewId, HTMLButtonElement | null>>>({});
   const detailRequest = useRef(0);
   const routeDiscardAuthorized = useRef(false);
   const historyPositionRef = useRef(0);
   const restoringPop = useRef(false);
+  /** M4 (round-2 review): hydration is one automatic batch, ever, per mount — never a
+   *  chain. Without this, a batch that comes back all-`missing` (hydratedDetails stays
+   *  empty) kept re-firing the effect because `missingIds` grew and was in its deps. */
+  const autoHydrationAttempted = useRef(false);
   const pending = pendingQueue[0] ?? null;
   const isDirty = useMemo(
     () => subjectDraft !== baseline.subject || !draftEquals(draft, baseline.draft),
@@ -466,6 +494,162 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
     });
     return () => { active = false; };
   }, [copy.ambiguous, copy.carrierUnavailable, ownerKey]);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(`mm.thesis.lens.v1:${ownerKey}`);
+      if (stored && RMS_VIEWS.some((v) => v.id === stored)) setView(stored as RmsViewId);
+      else setView(RMS_DEFAULT_VIEW);
+    } catch {
+      setView(RMS_DEFAULT_VIEW);
+    }
+  }, [ownerKey]);
+
+  const selectView = useCallback((id: RmsViewId) => {
+    setView(id);
+    setSubjectFilterKey(null);
+    try {
+      window.localStorage.setItem(`mm.thesis.lens.v1:${ownerKey}`, id);
+    } catch {
+      /* per-viewer convenience only */
+    }
+  }, [ownerKey]);
+
+  const filterBySubject = useCallback((row: CoverageRow) => {
+    setSubjectFilterKey(row.key);
+    setView("theses");
+    try {
+      window.localStorage.setItem(`mm.thesis.lens.v1:${ownerKey}`, "theses");
+    } catch {
+      /* per-viewer convenience only */
+    }
+  }, [ownerKey]);
+
+  const onLensKeyDown = useCallback((event: React.KeyboardEvent<HTMLUListElement>) => {
+    const idx = RMS_VIEWS.findIndex((v) => v.id === view);
+    if (idx < 0) return;
+    const isNarrow = typeof window !== "undefined" && window.matchMedia("(max-width: 600px)").matches;
+    let nextIdx = idx;
+    if (event.key === "ArrowDown" || (isNarrow && event.key === "ArrowRight")) nextIdx = (idx + 1) % RMS_VIEWS.length;
+    else if (event.key === "ArrowUp" || (isNarrow && event.key === "ArrowLeft")) nextIdx = (idx - 1 + RMS_VIEWS.length) % RMS_VIEWS.length;
+    else if (event.key === "Home") nextIdx = 0;
+    else if (event.key === "End") nextIdx = RMS_VIEWS.length - 1;
+    else return;
+    event.preventDefault();
+    const nextId = RMS_VIEWS[nextIdx].id;
+    selectView(nextId);
+    requestAnimationFrame(() => lensRefs.current[nextId]?.focus());
+  }, [selectView, view]);
+
+  const hydrateBatch = useCallback(async (ids: string[]) => {
+    if (ids.length === 0) return;
+    setHydrating(true);
+    try {
+      const params = new URLSearchParams();
+      ids.forEach((id) => params.append("ids", id));
+      const response = await fetch(`/api/theses?${params.toString()}`, { cache: "no-store" });
+      if (!response.ok) {
+        setHydrationUnavailable(true);
+        return;
+      }
+      const payload = await response.json();
+      // The batch branch answers under a `batch` key, distinct from the list branch's
+      // `theses` (m4, round-2 review) — the two carry different item shapes.
+      if (!Array.isArray(payload.batch)) {
+        setHydrationUnavailable(true);
+        return;
+      }
+      setHydratedDetails((prev) => {
+        const next = new Map(prev);
+        for (const item of payload.batch as ThesisDetail[]) next.set(item.id, item);
+        return next;
+      });
+      if (Array.isArray(payload.missing) && payload.missing.length > 0) {
+        setMissingIds((prev) => {
+          const next = new Set(prev);
+          for (const id of payload.missing as string[]) next.add(id);
+          return next;
+        });
+      }
+      setHydrationUnavailable(false);
+    } catch {
+      setHydrationUnavailable(true);
+    } finally {
+      setHydrating(false);
+    }
+  }, []);
+
+  // m5 (round-2 review): catalystRows/riskRows/noteRows only ever surface `active`
+  // theses, so spending hydration budget on archived/invalidated rows returns details
+  // that can never add a line row while still advancing the scope sentence. Bound both
+  // the automatic batch and "Show more" to the active subset.
+  const activeTheses = useMemo(() => theses.filter((t) => t.lifecycleState === "active"), [theses]);
+
+  useEffect(() => {
+    const def = RMS_VIEWS.find((v) => v.id === view);
+    if (!def?.requiresContent || activeTheses.length === 0) return;
+    if (autoHydrationAttempted.current) return;
+    autoHydrationAttempted.current = true;
+    void hydrateBatch(selectHydrationIds(activeTheses, new Set([...hydratedDetails.keys(), ...missingIds])));
+    // Deliberately NOT depending on hydratedDetails/missingIds: this effect fires the
+    // one automatic batch (M4) and the ref above makes every later run a no-op —
+    // including a batch that comes back all-`missing`, which must never chain into a
+    // second automatic fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, activeTheses, hydrateBatch]);
+
+  const hydrateMore = useCallback(() => {
+    void hydrateBatch(selectHydrationIds(activeTheses, new Set([...hydratedDetails.keys(), ...missingIds])));
+  }, [activeTheses, hydratedDetails, missingIds, hydrateBatch]);
+
+  const rms = RMS_COPY[lang];
+  const activeViewDef: RmsViewDef = RMS_VIEWS.find((v) => v.id === view) ?? RMS_VIEWS[0];
+  const detailListRows = useMemo(() => Array.from(hydratedDetails.values()), [hydratedDetails]);
+  const scope = useMemo(() => hydrationScope(activeTheses, new Set([...hydratedDetails.keys(), ...missingIds])), [activeTheses, hydratedDetails, missingIds]);
+  const conditions = useMemo(() => readConditionStates(theses.map((t) => t.id)), [theses]);
+  const coverageViewRows = useMemo(() => coverageRows(theses), [theses]);
+  const ideaViewRows = useMemo(() => ideaRows(theses), [theses]);
+  const allThesesViewRows = useMemo(() => thesisRows(theses), [theses]);
+  const thesesViewRows = useMemo(
+    () => (subjectFilterKey ? allThesesViewRows.filter((r) => r.subjectGroupKey === subjectFilterKey) : allThesesViewRows),
+    [allThesesViewRows, subjectFilterKey],
+  );
+  // M3 (round-2 review): the subject a Coverage row filtered to, for the chip + the
+  // lens-head sentence. Read from the unfiltered rows so it resolves even if the
+  // filtered set is empty.
+  const filteredSubjectDisplay = useMemo(
+    () => (subjectFilterKey ? allThesesViewRows.find((r) => r.subjectGroupKey === subjectFilterKey)?.subjectDisplay ?? null : null),
+    [allThesesViewRows, subjectFilterKey],
+  );
+  const clearSubjectFilter = useCallback(() => setSubjectFilterKey(null), []);
+  const reviewViewRows = useMemo(() => reviewRows(theses, new Date(), conditions), [theses, conditions]);
+  const catalystViewRows = useMemo(() => catalystRows(detailListRows), [detailListRows]);
+  const riskViewRows = useMemo(() => riskRows(detailListRows), [detailListRows]);
+  const noteViewRows = useMemo(() => noteRows(detailListRows), [detailListRows]);
+  const lensCount = useCallback((v: RmsViewDef): number | string => {
+    // m1 (round-2 review): once hydration scope is complete, the content-lens counts
+    // are exactly knowable — stop showing "—" forever.
+    if (v.requiresContent) {
+      if (!scope.complete) return rms.countUnknown;
+      switch (v.id) {
+        case "catalysts": return catalystViewRows.length;
+        case "risks": return riskViewRows.length;
+        case "notes": return noteViewRows.length;
+        default: return rms.countUnknown;
+      }
+    }
+    switch (v.id) {
+      case "coverage": return coverageViewRows.length;
+      case "ideas": return ideaViewRows.length;
+      case "theses": return thesesViewRows.length;
+      case "reviews": return reviewViewRows.length;
+      default: return 0;
+    }
+  }, [rms.countUnknown, coverageViewRows, ideaViewRows, thesesViewRows, reviewViewRows, scope.complete, catalystViewRows, riskViewRows, noteViewRows]);
+  const scopeSentence = scope.complete
+    ? rms.scopeComplete.replace("{total}", String(scope.total))
+    : rms.scope.replace("{loaded}", String(scope.loaded)).replace("{total}", String(scope.total));
+  const detailCondition = detail ? (readConditionStates([detail.id]).get(detail.id) ?? { source: "unavailable" as const }) : { source: "unavailable" as const };
 
   useEffect(() => {
     if (!isDirty && !pending) return;
@@ -917,17 +1101,99 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
       ) : (
         <div className={styles.workspaceGrid}>
           <aside className={styles.rail} aria-label={copy.list} data-testid="thesis-list-pane">
-            <div className={styles.railHeading}><h2>{copy.list}</h2><span>{theses.length}</span></div>
-            {listState === "loading" && <p className={styles.muted} role="status">{copy.loading}</p>}
-            {listState === "unavailable" && <div className={styles.railState} role="status"><strong>{copy.unavailable}</strong><p>{copy.unavailableBody}</p><button onClick={() => { setListState("loading"); void loadList(); }}>{copy.retry}</button></div>}
-            {listState === "ready" && theses.length === 0 && <div className={styles.railState} data-testid="thesis-empty"><strong>{copy.empty}</strong><p>{copy.emptyBody}</p></div>}
-            <div className={styles.thesisList}>
-              {theses.map((thesis) => (
-                <button key={thesis.id} type="button" disabled={carrierLocked} className={selectedId === thesis.id ? styles.selected : ""} onClick={() => beginDetailLoad(thesis.id)}>
-                  <span><b>{thesis.subject.key}</b><i data-state={thesis.lifecycleState}>{statusLabel(thesis.lifecycleState, copy)}</i></span>
-                  <strong>{thesis.title}</strong><small>{copy.version} {thesis.currentVersion}</small>
+            <nav className={styles.lensRail} aria-label={rms.lensRailLabel} data-testid="thesis-lens-rail">
+              <ul role="tablist" aria-orientation="vertical" onKeyDown={onLensKeyDown}>
+                {RMS_VIEWS.map((v) => (
+                  <li key={v.id}>
+                    <button type="button" role="tab" id={`rms-lens-${v.id}`} aria-controls="rms-lens-panel"
+                      aria-selected={view === v.id} tabIndex={view === v.id ? 0 : -1}
+                      ref={(el) => { lensRefs.current[v.id] = el; }}
+                      className={styles.lens} data-selected={view === v.id || undefined}
+                      data-grain={v.grain} data-view={v.id} disabled={carrierLocked}
+                      onClick={() => selectView(v.id)}>
+                      <span>{rms.name[v.id]}</span>
+                      <span className={styles.lensCount}>{lensCount(v)}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+
+            <div className={styles.lensHead}>
+              <h2>{rms.name[view]}</h2>
+              {/* M3 (round-2 review): under a subject filter this lens does not hold
+                  "everything you have written" — say what is actually filtered, and
+                  give a visible, labeled way back to the unfiltered lens. */}
+              <p className={styles.lensWhat}>
+                {view === "theses" && subjectFilterKey && filteredSubjectDisplay
+                  ? rms.filteredBySubject.replace("{subject}", filteredSubjectDisplay)
+                  : rms.what[view]}
+              </p>
+              {view === "theses" && subjectFilterKey && (
+                <button type="button" className={styles.subjectChip} data-testid="rms-subject-chip" onClick={clearSubjectFilter}>
+                  {filteredSubjectDisplay ?? ""} · {rms.clearFilter}
                 </button>
-              ))}
+              )}
+              {activeViewDef.requiresContent && (
+                <p className={styles.scopeNote} data-testid="rms-scope">{scopeSentence}</p>
+              )}
+            </div>
+
+            <div id="rms-lens-panel" role="tabpanel" aria-labelledby={`rms-lens-${view}`}
+              className={styles.lensPanel} data-grain={activeViewDef.grain} data-testid="rms-lens-panel">
+              {listState === "loading" && <p className={styles.muted} role="status">{copy.loading}</p>}
+              {listState === "unavailable" && (
+                <div className={styles.railState} role="status" data-testid="rms-unavailable">
+                  <strong>{copy.unavailable}</strong><p>{rms.unavailableLens}</p>
+                  <button onClick={() => { setListState("loading"); void loadList(); }}>{copy.retry}</button>
+                </div>
+              )}
+              {listState === "ready" && activeViewDef.requiresContent && hydrationUnavailable && (
+                <div className={styles.railState} role="status" data-testid="rms-hydration-unavailable">
+                  <strong>{copy.unavailable}</strong><p>{rms.unavailableLens}</p>
+                </div>
+              )}
+              {listState === "ready" && view === "coverage" && (
+                coverageViewRows.length === 0
+                  ? <div className={styles.emptyLens} data-testid="rms-empty"><p>{rms.empty.coverage}</p></div>
+                  : coverageViewRows.map((row) => (
+                    <button key={row.key} type="button" className={styles.subjectRow} onClick={() => filterBySubject(row)}>
+                      <span><strong>{row.display}</strong><i data-state={row.active > 0 ? "active" : "idle"} /></span>
+                      {/* m3 (round-2 review): words, not a bare ratio (plain-language law). */}
+                      <small>{rms.coverageRatio.replace("{active}", String(row.active)).replace("{theses}", String(row.theses))}</small>
+                    </button>
+                  ))
+              )}
+              {listState === "ready" && (view === "ideas" || view === "theses" || view === "reviews") && (
+                (view === "ideas" ? ideaViewRows : view === "reviews" ? reviewViewRows : thesesViewRows).length === 0
+                  ? <div className={styles.emptyLens} data-testid="rms-empty"><p>{rms.empty[view]}</p></div>
+                  : <div className={styles.thesisList}>
+                    {(view === "ideas" ? ideaViewRows : view === "reviews" ? reviewViewRows : thesesViewRows).map((row) => (
+                      <button key={row.id} type="button" disabled={carrierLocked} className={selectedId === row.id ? styles.selected : ""} onClick={() => beginDetailLoad(row.id)}>
+                        <span><b>{row.subjectKey}</b><i data-state={row.lifecycleState}>{statusLabel(row.lifecycleState, copy)}</i></span>
+                        <strong>{row.title}</strong><small>{copy.version} {row.currentVersion}</small>
+                        {row.reason && <em className={styles.rowReason}>{rms.reason[row.reason]}</em>}
+                      </button>
+                    ))}
+                  </div>
+              )}
+              {listState === "ready" && !hydrationUnavailable && (view === "catalysts" || view === "risks" || view === "notes") && (
+                (view === "catalysts" ? catalystViewRows : view === "risks" ? riskViewRows : noteViewRows).length === 0
+                  ? (hydrating && detailListRows.length === 0
+                    ? <p className={styles.muted} role="status">{copy.loading}</p>
+                    : <div className={styles.emptyLens} data-testid="rms-empty"><p>{rms.empty[view]}</p></div>)
+                  : (view === "catalysts" ? catalystViewRows : view === "risks" ? riskViewRows : noteViewRows).map((row) => (
+                    <article key={`${row.thesisId}-${row.index}`} className={styles.lineRow} data-testid="rms-line-row">
+                      <p className={styles.lineText}>{row.text}</p>
+                      <button type="button" className={styles.lineOwner} disabled={carrierLocked} onClick={() => beginDetailLoad(row.thesisId)}>
+                        <b>{row.subjectKey}</b><span>{row.thesisTitle}</span><time dateTime={row.at}>{new Date(row.at).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-CA")}</time>
+                      </button>
+                    </article>
+                  ))
+              )}
+              {activeViewDef.requiresContent && !scope.complete && !hydrationUnavailable && (
+                <button type="button" className={styles.showMore} onClick={hydrateMore} disabled={hydrating}>{rms.showMore}</button>
+              )}
             </div>
             {truncated && <p className={styles.muted}>{copy.moreTheses}</p>}
           </aside>
@@ -942,6 +1208,11 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
                       <div><small>{detail ? statusLabel(lifecycle, copy) : copy.newThesis}</small><h1>{detail ? (detail.subject.identityState === "listing_scoped" ? `${detail.subject.key} · ${copy.listingScoped}` : detail.subject.display) : (subjectDraft || copy.newThesis)}</h1><p>{detail?.subject.identityState === "listing_scoped" || !detail ? copy.listingScoped : detail.subject.owner}</p></div>
                       {detail && <span className={styles.versionBadge}>{copy.version} {detail.currentVersion} · {copy.current}</span>}
                     </div>
+                    <p className={styles.conditionLine} data-testid="thesis-condition"
+                      data-source={detailCondition.source}
+                      data-state={detailCondition.source === "monitor" ? detailCondition.state : undefined}>
+                      {conditionLine(detailCondition, lang)}
+                    </p>
                     {conflict && <div className={styles.conflict} role="alert" data-testid="thesis-conflict"><div><strong>{copy.conflict}</strong><p>{copy.conflictBody} {copy.current}: {copy.version} {conflict.currentVersion} · {statusLabel(conflict.lifecycleState, copy)}</p></div><div><button onClick={reloadAfterConflict}>{copy.reload}</button><button onClick={() => void copyDraft()}>{copy.copyDraft}</button></div></div>}
                     {message && <p className={styles.message} role="status">{message}</p>}
                     {isDirty && !pending && <div className={styles.dirtyDraft} role="status" data-testid="thesis-dirty-draft"><div><strong>{copy.unsaved}</strong><p>{copy.unsavedBody}</p></div><button type="button" onClick={() => void copyDraft()}>{copy.copyDraft}</button></div>}

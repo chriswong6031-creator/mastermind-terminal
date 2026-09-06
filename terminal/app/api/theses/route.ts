@@ -56,6 +56,40 @@ export async function GET(request: Request) {
     return jsonError("thesis_store_unavailable", 503);
   }
 
+  const batch = search.getAll("ids");
+  if (batch.length > 0) {
+    if (
+      ids.length > 0 ||
+      search.getAll("subjectOwner").length > 0 ||
+      search.getAll("subjectKind").length > 0 ||
+      search.getAll("subjectKey").length > 0
+    ) {
+      return jsonError("invalid_query", 400);
+    }
+    if (
+      batch.length > 10 ||
+      batch.some((v) => !isUuid(v)) ||
+      new Set(batch.map((v) => v.toLowerCase())).size !== batch.length
+    ) {
+      return jsonError("invalid_thesis_ids", 400);
+    }
+    const batchResults: unknown[] = [];
+    const missing: string[] = [];
+    for (const id of batch) {
+      const result = await readThesis(session.db, session.userId, id);
+      if (result.ok) batchResults.push(result.thesis);
+      else if (result.status === "not_found") missing.push(id);
+      else {
+        console.error("thesis GET batch failed:", result.error);
+        return jsonError("thesis_store_unavailable", 503);
+      }
+    }
+    // `batch` is a distinct key from the list branch's `theses` (summaries) — the two
+    // responses carry different item shapes (ThesisDetail[] vs ThesisSummary[]) and a
+    // shared key let a client conflate them (m4, round-2 review).
+    return NextResponse.json({ batch: batchResults, missing });
+  }
+
   const owner = search.getAll("subjectOwner");
   const kind = search.getAll("subjectKind");
   const key = search.getAll("subjectKey");
