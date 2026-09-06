@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createClient } from "@/lib/supabase/client";
 import { useT } from "@/lib/i18n";
+import { sanitizeStashTrial } from "@/lib/billingReceipt";
+import { invalidateEntitlement } from "@/lib/entitlementStore";
 import type {
   OnboardMode, OnboardingSheetProps, OnboardPrefs, PlanKey, Period, PendingPrefs, WizardStash,
 } from "./types";
@@ -57,9 +59,18 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
   const [plan, setPlan] = useState<PlanKey>(stash?.plan ?? props.initialPlan ?? "pro");
   const [period, setPeriod] = useState<Period>(stash?.period ?? props.initialPeriod ?? "annual");
   const [confirmPending, setConfirmPending] = useState(stash?.confirmPending ?? false);
+  // Fix round 1 (MAJOR-1) — the persisted stash is a second, unguarded input into the same
+  // "trial is live" UI claim the network receipt is fail-closed for; read it through the identical
+  // guard so {trialActive:true, trialEnd:null} (or an implausible trialEnd — 0, milliseconds, a
+  // negative) can never survive into state.
+  const stashTrial = sanitizeStashTrial(stash?.trialActive ?? false, stash?.trialEnd ?? null);
   // W2: an in-sheet Stripe trial has started (drives the Done "trial live" copy + rail chip).
-  const [trialActive, setTrialActive] = useState(stash?.trialActive ?? false);
-  const [trialEnd, setTrialEnd] = useState<number | null>(stash?.trialEnd ?? null);
+  const [trialActive, setTrialActive] = useState(stashTrial.trialActive);
+  const [trialEnd, setTrialEnd] = useState<number | null>(stashTrial.trialEnd);
+  // Fix round 1 (BLOCKER-1): a genuine no-trial purchase completed this session (essential,
+  // plans.yml trial_days: 0). Session-local only — not persisted to the stash, since it only
+  // matters for the terminal Done screen reached in the same pass.
+  const [planActivated, setPlanActivated] = useState(false);
   // D5: the authoritative preference write has not been acknowledged yet. The flow still moves
   // forward (one slow metadata request must not make onboarding feel stuck), but the UI does not
   // get to imply the choice was saved when it wasn't — the outbox keeps retrying behind this.
@@ -216,6 +227,17 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
   // so reaching Done with trialActive now always carries a real first-charge date.
   function billingTrialStarted(end: number) { setTrialActive(true); setTrialEnd(end); setStep(STEP_DONE); }
   function billingAlreadyActive() { setStep(STEP_DONE); }       // 409 — plan already active, no in-sheet trial
+  // Fix round 1 (BLOCKER-1): a genuine no-trial purchase (e.g. essential) completed — the
+  // entitlement changed (a brand-new paid subscription), so the canonical /api/me store must
+  // re-read, exactly as a trial start would trigger once invalidateEntitlement() is wired through
+  // this flow.
+  function billingPurchaseActive() {
+    invalidateEntitlement();
+    setPlanActivated(true);
+    setTrialActive(false);
+    setTrialEnd(null);
+    setStep(STEP_DONE);
+  }
   function billingContinueToDone() { setStep(STEP_DONE); }       // confirm-first blocker escape
 
   // ── Snapshot for the rail account card ────────────────────────────────────────
@@ -317,6 +339,7 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
                     tier={plan}
                     period={period}
                     onTrialStarted={billingTrialStarted}
+                    onPurchaseActive={billingPurchaseActive}
                     onAlreadyActive={billingAlreadyActive}
                     onFree={chooseFree}
                     needsConfirmFirst={billingNeedsConfirmFirst}
@@ -326,7 +349,8 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
                 {step === STEP_DONE && (
                   <StepDone firstName={firstName} email={effEmail}
                     confirmPending={confirmPending} trialActive={trialActive}
-                    trialEnd={trialEnd} plan={plan} prefsPending={prefsPending} />
+                    trialEnd={trialEnd} plan={plan} planActivated={planActivated}
+                    prefsPending={prefsPending} />
                 )}
               </div>
 

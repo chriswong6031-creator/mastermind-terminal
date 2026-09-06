@@ -5,7 +5,7 @@ import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-
 import { useLang, useT } from "@/lib/i18n";
 import type { PlanKey, Period } from "./types";
 import { perMonth, annualBilled, firstInvoiceTotal, TRIAL_DAYS } from "./plans";
-import { parseTrialReceipt } from "@/lib/billingReceipt";
+import { parseSubscribeReceipt } from "@/lib/billingReceipt";
 
 // Tier hue CSS var per plan key — mirrors onboarding.css tokens.
 const HUE: Record<PlanKey, string> = {
@@ -58,7 +58,12 @@ export interface StepBillingProps {
   /** Advance to Done carrying the VERIFIED trial outcome. Never null: an unverifiable
    *  receipt keeps the user on Billing rather than claiming a trial started (D7). */
   onTrialStarted: (trialEnd: number) => void;
-  /** Skip straight to Done for an already-active plan (no trial started here). */
+  /** Fix round 1 (BLOCKER-1): a genuine no-trial purchase completed (e.g. essential,
+   *  plans.yml trial_days: 0 — Stripe answers status:"active", trial_end:null). Charged,
+   *  plan live, no trial to claim — distinct from onAlreadyActive (a PRE-existing plan). */
+  onPurchaseActive: () => void;
+  /** Skip straight to Done for an already-active plan (no trial started here). Also used for the
+   *  409 "already subscribed" outcome from /complete (fix round 1, MAJOR-2). */
   onAlreadyActive: () => void;
   /** The quiet "or continue with Free" escape — flips plan to free and skips to Done. */
   onFree: () => void;
@@ -176,6 +181,8 @@ export default function StepBilling(props: StepBillingProps) {
             tier={tier}
             period={period}
             onTrialStarted={props.onTrialStarted}
+            onPurchaseActive={props.onPurchaseActive}
+            onAlreadyActive={props.onAlreadyActive}
             onFree={props.onFree}
           />
         </Elements>
@@ -232,11 +239,13 @@ function BillingSkeleton({ label }: { label: string }) {
 
 // ── The PaymentElement + submit, inside <Elements> so the hooks are available ──
 function PaymentForm({
-  tier, period, onTrialStarted, onFree,
+  tier, period, onTrialStarted, onPurchaseActive, onAlreadyActive, onFree,
 }: {
   tier: Exclude<PlanKey, "free">;
   period: Period;
   onTrialStarted: (trialEnd: number) => void;
+  onPurchaseActive: () => void;
+  onAlreadyActive: () => void;
   onFree: () => void;
 }) {
   const t = useT();
@@ -268,22 +277,34 @@ function PaymentForm({
       return;
     }
 
-    // Card attached → tell the gateway to start the trial subscription.
+    // Card attached → tell the gateway to start/complete the subscription.
     try {
       const res = await fetch("/api/billing/subscribe/complete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ setup_intent_id: setupIntent.id, tier, interval: period }),
       });
-      if (!res.ok) { setErr(t("obBillErr")); setBusy(false); return; }
+      // Fix round 1 (MAJOR-2) — the card is already attached at this point, so a generic "checkout
+      // failed" is the wrong cause for the one status the gateway uses to mean "you already have
+      // this": route it to the same landing as the init-phase 409, with no error string at all.
+      if (res.status === 409) { onAlreadyActive(); return; }
+      // Any OTHER non-2xx: the charge attempt's outcome is genuinely unknown (it may have created
+      // the subscription and then failed to answer) — say that honestly rather than repeating the
+      // malformed-2xx copy, which asserts "you have not been charged".
+      if (!res.ok) { setErr(t("obBillErrUnknown")); setBusy(false); return; }
       // D7 — fail closed. This used to accept ANY 2xx: it parsed whatever arrived, took trial_end
       // if it happened to be a number, and called onTrialStarted() unconditionally, so
       // `HTTP 200 {}` was enough to tell a user their paid trial had started (and StepDone then
       // invented a first-charge date). On a money surface a malformed success is a failure.
+      //
+      // Fix round 1 (BLOCKER-1) — a receipt is EITHER a trial OR a genuine no-trial "active"
+      // purchase (essential, plans.yml trial_days: 0 -> Stripe answers status:"active",
+      // trial_end:null). Only a receipt that fails BOTH shapes is refused.
       const data = await res.json().catch(() => null);
-      const receipt = parseTrialReceipt(data);
+      const receipt = parseSubscribeReceipt(data);
       if (!receipt) { setErr(t("obBillErrIncomplete")); setBusy(false); return; }
-      onTrialStarted(receipt.trialEnd);
+      if (receipt.kind === "trial") { onTrialStarted(receipt.trialEnd); return; }
+      onPurchaseActive();
     } catch {
       setErr(t("obBillErr"));
       setBusy(false);
