@@ -18,6 +18,10 @@ function makeFakeTransport() {
     team_members: [] as Row[],
     team_invites: [] as Row[],
     fault: null as { code: string } | null,
+    // Scoped to the insert step only (unlike `fault`, which also breaks the caller-role read
+    // every write does first) — lets a test simulate a write-time-only Postgres error (22P02
+    // malformed uuid, 23503 FK violation) without also faulting the preceding role lookup.
+    insertFault: null as { code: string } | null,
     seq: 0,
   };
   const nextId = (prefix: string) => `${prefix}-${++state.seq}`;
@@ -39,6 +43,7 @@ function makeFakeTransport() {
       const result = () => {
         if (state.fault) return { data: null, error: { code: state.fault.code, message: "fault" } };
         if (pendingInsert) {
+          if (state.insertFault) return { data: null, error: { code: state.insertFault.code, message: "fault" } };
           const values = Array.isArray(pendingInsert) ? pendingInsert : [pendingInsert];
           const inserted: Row[] = [];
           for (const v of values) {
@@ -138,7 +143,7 @@ describe("/api/teams and /api/teams/[id]/members", () => {
     H.user = { id: "u1" };
     const r = await GET();
     expect(r.status).toBe(200);
-    expect(await r.json()).toEqual({ teams: [] });
+    expect(await r.json()).toEqual({ teams: [], truncated: false });
   });
 
   it("create team -> 201, owner, exactly one team_members row", async () => {
@@ -219,19 +224,57 @@ describe("/api/teams and /api/teams/[id]/members", () => {
     expect(dup.status).toBe(409);
   });
 
-  it("invite by email -> 201 with invite+token, stored row has token_hash and no plaintext", async () => {
+  it("invite by email -> 422, plain sentence, writes NO invite row (MO-PAID-081 not absorbed)", async () => {
     H.user = { id: "a" };
     const created = await (await POST(req({ name: "A-desk" }))).json();
     const r = await MPOST(
       new Request("http://x", { method: "POST", body: JSON.stringify({ email: "b@example.com" }) }),
       ctx(created.team.id),
     );
-    expect(r.status).toBe(201);
+    expect(r.status).toBe(422);
     const body = await r.json();
-    expect(typeof body.token).toBe("string");
-    const stored = transport.state.team_invites.find((i) => i.email === "b@example.com")!;
-    expect(stored.token_hash).toBeTruthy();
-    expect(JSON.stringify(stored)).not.toContain(body.token);
+    expect(body.error).toBe("INVALID");
+    expect(body.message).toBe(
+      "Invitations by email are not available yet. Ask them to sign in to Mastermind first, then add them by their account.",
+    );
+    expect(transport.state.team_invites).toHaveLength(0);
+  });
+
+  it("neither userId nor email -> 400 with a plain sentence, not the raw lib string", async () => {
+    H.user = { id: "a" };
+    const created = await (await POST(req({ name: "A-desk" }))).json();
+    const r = await MPOST(new Request("http://x", { method: "POST", body: JSON.stringify({}) }), ctx(created.team.id));
+    expect(r.status).toBe(400);
+    expect((await r.json()).message).toBe("Provide a user id or an email address.");
+  });
+
+  it("invalid role -> 400 with a plain sentence", async () => {
+    H.user = { id: "a" };
+    const created = await (await POST(req({ name: "A-desk" }))).json();
+    const r = await MPOST(
+      new Request("http://x", { method: "POST", body: JSON.stringify({ userId: "z", role: "superuser" }) }),
+      ctx(created.team.id),
+    );
+    expect(r.status).toBe(400);
+    expect((await r.json()).message).toBe("Choose a role: admin or member.");
+  });
+
+  it("malformed uuid (22P02) -> 400 'That user id is not valid.'", async () => {
+    H.user = { id: "a" };
+    const created = await (await POST(req({ name: "A-desk" }))).json();
+    transport.state.insertFault = { code: "22P02" };
+    const r = await MPOST(new Request("http://x", { method: "POST", body: JSON.stringify({ userId: "not-a-uuid" }) }), ctx(created.team.id));
+    expect(r.status).toBe(400);
+    expect((await r.json()).message).toBe("That user id is not valid.");
+  });
+
+  it("well-formed but nonexistent userId (23503 FK) -> 400 'We could not find that person...'", async () => {
+    H.user = { id: "a" };
+    const created = await (await POST(req({ name: "A-desk" }))).json();
+    transport.state.insertFault = { code: "23503" };
+    const r = await MPOST(new Request("http://x", { method: "POST", body: JSON.stringify({ userId: "ghost" }) }), ctx(created.team.id));
+    expect(r.status).toBe(400);
+    expect((await r.json()).message).toBe("We could not find that person. Ask them to sign in to Mastermind first.");
   });
 
   it("fault: absent tables -> 503 READ_UNAVAILABLE everywhere, never 500, never empty 200", async () => {

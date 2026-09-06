@@ -163,6 +163,22 @@ describe("0014 DDL contract", () => {
     expect(raw).toContain("-- down:");
     expect(raw).toContain("-- readback:");
   });
+  it("team_invites has a partial unique index on (team_id, lower(email)) where accepted_at is null, not a column-level unique", () => {
+    expect(flat).not.toContain("unique (team_id, email)");
+    expect(flat).toContain(
+      "create unique index if not exists team_invites_team_email_pending on public.team_invites(team_id, lower(email)) where accepted_at is null;",
+    );
+  });
+  it("tm_update_admin (M1) blocks admin self-promotion to owner and blocks touching an existing owner row unless the caller is the owner", () => {
+    expect(flat).toContain(
+      "create policy tm_update_admin on public.team_members for update to authenticated using (public.team_role(team_id) in ('owner','admin') and (role <> 'owner' or public.team_role(team_id) = 'owner')) with check (role in ('admin','member') and public.team_role(team_id) in ('owner','admin'));",
+    );
+  });
+  it("tm_delete_admin (M1) blocks deleting a row whose role is owner", () => {
+    expect(flat).toContain(
+      "create policy tm_delete_admin on public.team_members for delete to authenticated using (public.team_role(team_id) in ('owner','admin') and role <> 'owner');",
+    );
+  });
   it("every create table is if not exists and every create policy preceded by drop policy if exists", () => {
     const tableStatements = [...noComments.matchAll(/create table[^;]*;/g)];
     for (const t of tableStatements) expect(t[0]).toContain("if not exists");

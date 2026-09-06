@@ -72,11 +72,16 @@ def admin_row(conn: psycopg.Connection, query: str, params: tuple = ()) -> tuple
         return cur.fetchone()
 
 
-def expect_database_error(fn) -> bool:
+def expect_database_error(fn, sqlstate: str | None = None) -> bool:
+    """Runs `fn`, returning True only when it raises a `psycopg.Error`. When `sqlstate` is given,
+    the raised error's SQLSTATE must match exactly — a negative probe that raises the WRONG error
+    (e.g. a typo instead of a permission denial) must not read as a pass."""
     try:
         fn()
-    except psycopg.Error:
-        return True
+    except psycopg.Error as exc:
+        if sqlstate is None:
+            return True
+        return getattr(exc, "sqlstate", None) == sqlstate
     return False
 
 
@@ -98,6 +103,11 @@ def bootstrap(conn: psycopg.Connection) -> None:
         )
         cur.execute("do $$ begin if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if; end $$;")
         cur.execute("do $$ begin if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if; end $$;")
+        # service_role: 0006_lock_is_pro.sql and 0010_search_event_stats.sql (master) both
+        # reference it (0010 grants execute on search_event_stats() to it), so migration replay
+        # fails with UndefinedObject before ever reaching 0014 unless it exists here too. Real
+        # Supabase project service_role is nologin + bypassrls; mirror both attributes.
+        cur.execute("do $$ begin if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if; end $$;")
         cur.execute("grant usage on schema public, auth to anon, authenticated")
         cur.execute("grant select on auth.users to anon, authenticated")
 
@@ -111,10 +121,6 @@ def apply_migrations(conn: psycopg.Connection, migrations_dir: Path) -> list[dic
             cur.execute(text)
         applied.append({"file": path.name, "sha256": digest})
     return applied
-
-
-def inspect_catalog(conn: psycopg.Connection) -> None:
-    pass
 
 
 def main() -> int:
@@ -246,11 +252,64 @@ def main() -> int:
     )
     proof.check("rls:admin_can_add", row == (1,), f"row={row}")
 
-    # 9. anon: 0 rows on select, insert raises
-    with conn_anon.cursor() as cur:
-        for table in ("teams", "team_members", "team_invites"):
+    # 8b. M1: admin (B) cannot self-promote to owner. tm_update_admin's WITH CHECK restricts the
+    # new role to admin/member only — owner transfer is out of scope for V1.
+    def b_admin_self_promotes():
+        with conn_b.cursor() as cur:
+            cur.execute(
+                "update public.team_members set role = 'owner' where team_id = %s and user_id = %s",
+                (team_id, user_ids["b"]),
+            )
+
+    proof.check(
+        "rls:admin_cannot_self_promote",
+        expect_database_error(b_admin_self_promotes),
+        "admin self-promotion to owner did not raise",
+    )
+
+    # 8c. M1: admin (B) cannot demote the owner (A). tm_update_admin's USING clause blocks any
+    # target row whose role is 'owner' unless the caller is themselves the owner.
+    def b_admin_demotes_owner():
+        with conn_b.cursor() as cur:
+            cur.execute(
+                "update public.team_members set role = 'member' where team_id = %s and user_id = %s",
+                (team_id, user_ids["a"]),
+            )
+
+    proof.check(
+        "rls:admin_cannot_demote_owner",
+        expect_database_error(b_admin_demotes_owner),
+        "admin demoting the owner did not raise",
+    )
+
+    # 8d. M1: admin (B) cannot delete the owner (A)'s membership row. tm_delete_admin's USING
+    # clause excludes any row whose role is 'owner' — owners are not deletable in V1.
+    def b_admin_deletes_owner():
+        with conn_b.cursor() as cur:
+            cur.execute(
+                "delete from public.team_members where team_id = %s and user_id = %s",
+                (team_id, user_ids["a"]),
+            )
+
+    proof.check(
+        "rls:admin_cannot_delete_owner",
+        expect_database_error(b_admin_deletes_owner),
+        "admin deleting the owner did not raise",
+    )
+
+    # 9. anon: no privilege at all on any tenancy table (0014 revokes all from anon and grants
+    # nothing back), so every select/insert must raise 42501 InsufficientPrivilege specifically —
+    # any other error would be a false pass (B2).
+    def anon_select(table: str):
+        with conn_anon.cursor() as cur:
             cur.execute(sql.SQL("select * from public.{}").format(sql.Identifier(table)))
-            proof.check(f"anon:select_{table}", len(cur.fetchall()) == 0, f"anon saw rows in {table}")
+
+    for table in ("teams", "team_members", "team_invites"):
+        proof.check(
+            f"anon:select_{table}",
+            expect_database_error(lambda t=table: anon_select(t), sqlstate="42501"),
+            f"anon select on {table} did not raise 42501 InsufficientPrivilege",
+        )
 
     def anon_insert():
         with conn_anon.cursor() as cur:
@@ -259,7 +318,11 @@ def main() -> int:
                 ("anon-team", user_ids["a"]),
             )
 
-    proof.check("anon:insert_raises", expect_database_error(anon_insert), "anon insert did not raise")
+    proof.check(
+        "anon:insert_raises",
+        expect_database_error(anon_insert, sqlstate="42501"),
+        "anon insert did not raise 42501 InsufficientPrivilege",
+    )
 
     # 10. non-admin member cannot select team_invites; token_hash uniqueness rejects duplicate
     with conn_a.cursor() as cur:
@@ -267,18 +330,27 @@ def main() -> int:
             "insert into public.team_invites (team_id, email, role, token_hash, invited_by, expires_at) values (%s, %s, 'member', %s, %s, now() + interval '14 days')",
             (team_id, "invitee@example.com", "deadbeef" * 8, user_ids["a"]),
         )
-    with conn_b.cursor() as cur:
-        # B is now admin, so per policy this SHOULD succeed for B; use a plain member instead.
-        pass
-    with conn_a.cursor() as cur:
-        cur.execute(
-            "update public.team_members set role = 'member' where team_id = %s and user_id = %s",
-            (team_id, user_ids["c"]),
-        )
+    # C is still a plain member (added at step 8) — a member, unlike admin/owner, must not see
+    # team_invites at all.
     conn_c = actor_connection(dsn, user_ids["c"])
     with conn_c.cursor() as cur:
         cur.execute("select * from public.team_invites where team_id = %s", (team_id,))
         proof.check("rls:member_cannot_read_invites", len(cur.fetchall()) == 0, "member read invites")
+
+    # 10b. M1: the owner (A) CAN change a member (C) to admin — the update policy only blocks
+    # the *new* role from being 'owner' and blocks touching rows whose *current* role is 'owner';
+    # member -> admin by the owner is squarely inside what should still work.
+    with conn_a.cursor() as cur:
+        cur.execute(
+            "update public.team_members set role = 'admin' where team_id = %s and user_id = %s",
+            (team_id, user_ids["c"]),
+        )
+    row = admin_row(
+        admin,
+        "select role from public.team_members where team_id = %s and user_id = %s",
+        (team_id, user_ids["c"]),
+    )
+    proof.check("rls:owner_can_promote_member_to_admin", row == ("admin",), f"row={row}")
 
     def dup_token():
         with conn_a.cursor() as cur:

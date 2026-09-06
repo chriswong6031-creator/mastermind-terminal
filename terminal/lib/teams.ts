@@ -84,13 +84,26 @@ export function inviteTokenHash(token: string): string {
 }
 
 export type ReadFail = { ok: false; reason: "unavailable" | "failed"; error: string };
-export type TeamsRead = { ok: true; teams: Team[] } | ReadFail;
+// `truncated` (house idiom — lib/aggTrend.ts, lib/searchEvents.ts): true when the result hit
+// MAX_TEAMS/MAX_MEMBERS, so a 200th team is never silently indistinguishable from "you have
+// exactly 200 teams" (m1).
+export type TeamsRead = { ok: true; teams: Team[]; truncated: boolean } | ReadFail;
 export type MembersRead =
-  | { ok: true; members: Member[]; callerRole: TeamRole }
+  | { ok: true; members: Member[]; callerRole: TeamRole; truncated: boolean }
   | { ok: false; reason: "unavailable" | "failed" | "forbidden" | "not_found"; error: string };
+// `code` is the STABLE, internal reason a caller-side "invalid"/"duplicate" failed — plain-language
+// law (Chairman ruling, M3): the route maps `code` to a complete-sentence `message`, and `error`
+// (free-text, may embed a raw Postgres message) never reaches the HTTP response body directly.
+export type InvalidCode = "invalid_role" | "invalid_user_id" | "user_not_found" | "email_not_supported" | "missing_target";
 export type WriteResult<T> =
   | { ok: true; value: T }
-  | { ok: false; reason: "unavailable" | "failed" | "forbidden" | "not_found" | "invalid" | "duplicate"; error: string; status: number };
+  | {
+      ok: false;
+      reason: "unavailable" | "failed" | "forbidden" | "not_found" | "invalid" | "duplicate";
+      error: string;
+      code?: InvalidCode;
+      status: number;
+    };
 
 function classifyReadError(result: DbResult): ReadFail | null {
   if (result.error) {
@@ -117,7 +130,10 @@ export async function listTeams(db: TenancyDb, userId: string): Promise<TeamsRea
   const memberFail = classifyReadError(memberResult);
   if (memberFail) return memberFail;
   const memberRows = memberResult.data as DbRow[];
-  if (memberRows.length === 0) return { ok: true, teams: [] };
+  // Hitting the limit means there may be more rows beyond it we never fetched — the caller is
+  // told, rather than a 201st team silently reading identically to "you have exactly 200".
+  const truncated = memberRows.length === MAX_TEAMS;
+  if (memberRows.length === 0) return { ok: true, teams: [], truncated };
 
   const roleByTeam = new Map<string, TeamRole>();
   const ids: string[] = [];
@@ -128,7 +144,7 @@ export async function listTeams(db: TenancyDb, userId: string): Promise<TeamsRea
     roleByTeam.set(teamId, role);
     ids.push(teamId);
   }
-  if (ids.length === 0) return { ok: true, teams: [] };
+  if (ids.length === 0) return { ok: true, teams: [], truncated };
 
   const teamsResult = await db
     .from(TEAMS_TABLE)
@@ -149,7 +165,7 @@ export async function listTeams(db: TenancyDb, userId: string): Promise<TeamsRea
       return { id, name, role, createdAt: typeof row.created_at === "string" ? row.created_at : null };
     })
     .filter((t): t is Team => t !== null);
-  return { ok: true, teams };
+  return { ok: true, teams, truncated };
 }
 
 export async function createTeam(db: TenancyDb, userId: string, name: string): Promise<WriteResult<Team>> {
@@ -192,8 +208,14 @@ export async function getCallerRole(
     .eq("team_id", teamId)
     .eq("user_id", userId)
     .maybeSingle();
-  const fail = classifyReadError({ data: result.data === undefined ? [] : result.data, error: result.error });
-  if (result.error) return fail as ReadFail;
+  // classifyReadError() is built for array-shaped results (`.limit()` queries) and would call a
+  // `maybeSingle()` object malformed on every no-error response — do not reuse it here, and do not
+  // compute an "isAbsentTableError vs other" guard only to discard it on the success path.
+  if (result.error) {
+    return isAbsentTableError(result.error)
+      ? { ok: false, reason: "unavailable", error: result.error.message || "table unavailable" }
+      : { ok: false, reason: "failed", error: result.error.message || "read failed" };
+  }
   const row = result.data as DbRow | null;
   // A missing row is indistinguishable from "team does not exist" under RLS — both are `role:null`.
   return { ok: true, role: row ? toRoleOrNull(row.role) : null };
@@ -226,7 +248,7 @@ export async function listMembers(db: TenancyDb, userId: string, teamId: string)
       };
     })
     .filter((m): m is Member => m !== null);
-  return { ok: true, members, callerRole: roleResult.role };
+  return { ok: true, members, callerRole: roleResult.role, truncated: rows.length === MAX_MEMBERS };
 }
 
 export async function addMember(
@@ -248,10 +270,10 @@ export async function addMember(
   }
 
   const addRole = normalizeAddRole(input.role);
-  if (!addRole) return { ok: false, reason: "invalid", error: "invalid role", status: 400 };
+  if (!addRole) return { ok: false, reason: "invalid", error: "invalid role", code: "invalid_role", status: 400 };
 
   const targetUserId = typeof input.userId === "string" ? input.userId.trim() : "";
-  const email = input.email !== undefined ? normalizeEmail(input.email) : null;
+  const emailProvided = input.email !== undefined && input.email !== null && input.email !== "";
 
   if (targetUserId) {
     const insertResult = await db
@@ -265,12 +287,12 @@ export async function addMember(
       if (code === "23503") {
         // Foreign key to auth.users: a well-formed but nonexistent userId. Caller error, not a
         // server fault — do not surface this as a 500.
-        return { ok: false, reason: "invalid", error: "that user does not exist", status: 400 };
+        return { ok: false, reason: "invalid", error: "that user does not exist", code: "user_not_found", status: 400 };
       }
       if (code === "22P02") {
         // Malformed uuid literal (e.g. not even shaped like a uuid). Caller error, not a server
         // fault — do not surface this as a 500.
-        return { ok: false, reason: "invalid", error: "invalid userId", status: 400 };
+        return { ok: false, reason: "invalid", error: "invalid userId", code: "invalid_user_id", status: 400 };
       }
       if (isAbsentTableError(insertResult.error)) {
         return { ok: false, reason: "unavailable", error: insertResult.error.message || "unavailable", status: 503 };
@@ -287,33 +309,20 @@ export async function addMember(
     return { ok: true, value: { member } };
   }
 
-  if (email) {
-    const token = newInviteToken();
-    const tokenHash = inviteTokenHash(token);
-    const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    const insertResult = await db
-      .from(TEAM_INVITES_TABLE)
-      .insert({ team_id: teamId, email, role: addRole, token_hash: tokenHash, invited_by: userId, expires_at: expiresAt })
-      .select("id,email,role,expires_at,accepted_at")
-      .maybeSingle();
-    if (insertResult.error) {
-      const code = (insertResult.error as { code?: string }).code;
-      if (code === "23505") return { ok: false, reason: "duplicate", error: "already invited", status: 409 };
-      if (isAbsentTableError(insertResult.error)) {
-        return { ok: false, reason: "unavailable", error: insertResult.error.message || "unavailable", status: 503 };
-      }
-      return { ok: false, reason: "failed", error: insertResult.error.message || "insert failed", status: 500 };
-    }
-    const row = (Array.isArray(insertResult.data) ? insertResult.data[0] : insertResult.data) as DbRow | null;
-    const invite: Invite = {
-      id: row && typeof row.id === "string" ? row.id : "",
-      email,
-      role: addRole,
-      expiresAt,
-      acceptedAt: null,
+  if (emailProvided) {
+    // MO-PAID-081 (invite-by-email delivery) is explicitly NOT absorbed by this packet (M2
+    // ruling) — team_invites stays a schema-only foundation. There is no email->account lookup
+    // (no service-role key, no secret store — TWO-ORGANISMS LAW), so every email input here is
+    // "does not match an existing account" by construction, and this path writes NO row: an
+    // unimplemented feature must fail loudly, never fall through to a silent no-op invite.
+    return {
+      ok: false,
+      reason: "invalid",
+      error: "email invites are not available yet",
+      code: "email_not_supported",
+      status: 422,
     };
-    return { ok: true, value: { invite, token } };
   }
 
-  return { ok: false, reason: "invalid", error: "userId or email required", status: 400 };
+  return { ok: false, reason: "invalid", error: "userId or email required", code: "missing_target", status: 400 };
 }

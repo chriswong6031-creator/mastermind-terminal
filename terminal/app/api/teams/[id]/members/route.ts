@@ -1,8 +1,21 @@
-export const runtime = "nodejs";
-
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { addMember, listMembers, type TenancyDb } from "@/lib/teams";
+import { addMember, listMembers, type InvalidCode, type TenancyDb } from "@/lib/teams";
+
+export const runtime = "nodejs";
+
+// Plain-language law (Chairman ruling, M3): lib/teams.ts returns a stable internal `code`, never
+// a raw Postgres/lib message, as the response `message` — every string below is a complete
+// sentence, never a lowercase fragment or an internal identifier.
+const INVALID_MESSAGES: Record<InvalidCode, string> = {
+  invalid_role: "Choose a role: admin or member.",
+  invalid_user_id: "That user id is not valid.",
+  user_not_found: "We could not find that person. Ask them to sign in to Mastermind first.",
+  email_not_supported:
+    "Invitations by email are not available yet. Ask them to sign in to Mastermind first, then add them by their account.",
+  missing_target: "Provide a user id or an email address.",
+};
+const FALLBACK_INVALID_MESSAGE = "That request is not valid.";
 
 async function resolveDb(): Promise<{ db: TenancyDb; userId: string } | null> {
   const supabase = await createClient();
@@ -13,7 +26,7 @@ async function resolveDb(): Promise<{ db: TenancyDb; userId: string } | null> {
 
 const unauthenticated = () =>
   NextResponse.json({ error: "UNAUTHENTICATED", message: "You are not signed in." }, { status: 401 });
-const invalid = (message: string) => NextResponse.json({ error: "INVALID", message }, { status: 400 });
+const invalid = (message: string, status = 400) => NextResponse.json({ error: "INVALID", message }, { status });
 const forbidden = (message: string) => NextResponse.json({ error: "FORBIDDEN", message }, { status: 403 });
 const notFound = () =>
   NextResponse.json({ error: "NOT_FOUND", message: "We could not find that team." }, { status: 404 });
@@ -42,7 +55,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     console.error("team members GET failed:", result.error);
     return readFail(result.reason, result.error);
   }
-  return NextResponse.json({ members: result.members, callerRole: result.callerRole });
+  return NextResponse.json({ members: result.members, callerRole: result.callerRole, truncated: result.truncated });
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -63,20 +76,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     if (result.reason === "forbidden") return forbidden("Only a team owner or admin can add people.");
     if (result.reason === "not_found") return notFound();
     if (result.reason === "duplicate") return duplicate();
-    if (result.reason === "invalid") return invalid(result.error || "userId or email required.");
+    if (result.reason === "invalid") {
+      return invalid(result.code ? INVALID_MESSAGES[result.code] : FALLBACK_INVALID_MESSAGE, result.status);
+    }
     if (result.reason === "unavailable") return readFail("unavailable", result.error);
     console.error("team members POST failed:", result.error);
     return writeFail();
   }
-  if (result.value.member) {
-    return NextResponse.json({ member: result.value.member }, { status: 201 });
-  }
-  return NextResponse.json(
-    {
-      invite: result.value.invite,
-      token: result.value.token,
-      note: "We cannot look up a person by email address from here, so we recorded an invitation instead. Share this link with them.",
-    },
-    { status: 201 },
-  );
+  // MO-PAID-081 (invite-by-email) is not absorbed by this packet — addMember's only success path
+  // is adding an existing account by user id; there is no invite/token branch to handle here.
+  return NextResponse.json({ member: result.value.member }, { status: 201 });
 }

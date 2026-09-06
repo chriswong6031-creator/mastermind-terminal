@@ -1,8 +1,8 @@
-export const runtime = "nodejs";
-
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createTeam, listTeams, normalizeTeamName, type TenancyDb } from "@/lib/teams";
+
+export const runtime = "nodejs";
 
 // Owner-scoped tenancy API (F12). Same shape as app/api/watchlist and app/api/portfolio:
 // resolveDb() -> RLS'd client, GET reads the whole owner-scoped inventory, POST switches on
@@ -40,7 +40,7 @@ export async function GET() {
     console.error("teams GET failed:", result.error);
     return readFail(result.reason, result.error);
   }
-  return NextResponse.json({ teams: result.teams });
+  return NextResponse.json({ teams: result.teams, truncated: result.truncated });
 }
 
 export async function POST(req: Request) {

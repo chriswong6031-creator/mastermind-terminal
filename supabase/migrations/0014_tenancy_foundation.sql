@@ -35,13 +35,17 @@ create table if not exists public.team_invites (
   invited_by  uuid not null references auth.users(id) on delete cascade,
   expires_at  timestamptz not null,
   accepted_at timestamptz,
-  created_at  timestamptz not null default now(),
-  unique (team_id, email)
+  created_at  timestamptz not null default now()
 );
 create index if not exists team_members_user  on public.team_members(user_id, team_id);
 create index if not exists team_members_team  on public.team_members(team_id, role);
 create index if not exists team_invites_team  on public.team_invites(team_id, expires_at desc);
 create unique index if not exists team_invites_token on public.team_invites(token_hash);
+-- Partial, not a plain column unique: an expired/declined invite (accepted_at still null forever
+-- in this packet, since there is no accept route yet — but a future one will set it) must not
+-- permanently block re-inviting the same address, and the comparison is case-insensitive.
+create unique index if not exists team_invites_team_email_pending
+  on public.team_invites(team_id, lower(email)) where accepted_at is null;
 
 -- Recursion guard: two SECURITY DEFINER helpers, fixed search_path, neither takes a user id — both
 -- read auth.uid() internally, so neither can be used to probe someone else's role.
@@ -80,10 +84,17 @@ drop policy if exists tm_select_member on public.team_members;
 create policy tm_select_member    on public.team_members for select to authenticated using (public.is_team_member(team_id));
 drop policy if exists tm_insert_admin on public.team_members;
 create policy tm_insert_admin     on public.team_members for insert to authenticated with check (public.team_role(team_id) in ('owner','admin'));
+-- Owner transfer and owner eviction are OUT OF SCOPE for V1 (M1 ruling): the caller must be
+-- owner/admin (USING), the row being touched must not currently be 'owner' unless the caller IS
+-- the owner (USING), and the row can never be written to 'owner' by this policy at all (WITH
+-- CHECK) — so an admin can neither self-promote nor demote/evict the owner, and no path here can
+-- ever create a second owner.
 drop policy if exists tm_update_admin on public.team_members;
-create policy tm_update_admin     on public.team_members for update to authenticated using (public.team_role(team_id) in ('owner','admin')) with check (public.team_role(team_id) in ('owner','admin'));
+create policy tm_update_admin     on public.team_members for update to authenticated
+  using (public.team_role(team_id) in ('owner','admin') and (role <> 'owner' or public.team_role(team_id) = 'owner'))
+  with check (role in ('admin','member') and public.team_role(team_id) in ('owner','admin'));
 drop policy if exists tm_delete_admin on public.team_members;
-create policy tm_delete_admin     on public.team_members for delete to authenticated using (public.team_role(team_id) in ('owner','admin'));
+create policy tm_delete_admin     on public.team_members for delete to authenticated using (public.team_role(team_id) in ('owner','admin') and role <> 'owner');
 drop policy if exists ti_select_admin on public.team_invites;
 create policy ti_select_admin     on public.team_invites for select to authenticated using (public.team_role(team_id) in ('owner','admin'));
 drop policy if exists ti_insert_admin on public.team_invites;
