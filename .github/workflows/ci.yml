@@ -66,6 +66,19 @@ jobs:
           timeout 480 npx playwright install --with-deps chromium \
             || { echo "::warning::apt/--with-deps stalled or failed — installing the browser only"; \
                  npx playwright install chromium; }
+      # Quarantined journeys are disclosed on EVERY run: a green matrix must never be read as
+      # full coverage. Bare `echo`, never a logger — a logger prefix pushes `::warning` off the
+      # start of the line and GitHub silently drops the annotation.
+      - name: Disclose quarantined e2e journeys
+        run: |
+          if [ ! -f e2e/QUARANTINE.md ]; then
+            echo "::error title=e2e-quarantine::terminal/e2e/QUARANTINE.md is missing"
+            exit 1
+          fi
+          awk -F'|' '/^\| *terminal\/e2e\// {
+            for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) }
+            print "::warning title=e2e-quarantine::" $2 " — " $3 " — owner: " $6 " — evidence: " $5
+          }' e2e/QUARANTINE.md
       - run: npm run test:e2e:responsive
       - name: Upload responsive QA screenshots
         if: always()
