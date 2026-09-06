@@ -307,13 +307,32 @@ function PaymentForm({
       if (outcome.kind === "trial") { onTrialStarted(outcome.trialEnd); return; }
       onPurchaseActive();
     } catch {
-      // Round 2 review (MINOR-1) — this exception fires strictly AFTER the POST above was
-      // dispatched (a network drop or timeout while awaiting/reading the response), so the charge's
-      // outcome is genuinely unknown — never a proof nothing happened. A failure BEFORE any request
-      // to our own gateway is sent (the Stripe confirmSetup step above, outside this try) keeps the
-      // honest not-charged copy (obBillErr) instead.
+      // Round 2 review (MINOR-1, latest-round correction) — this catch covers BOTH a genuine
+      // network drop/timeout on the response leg AFTER the POST reached the network, AND a `fetch`
+      // that never dispatched at all (offline, DNS failure, a CSP/extension block all reject with
+      // a TypeError before any bytes leave the browser) — the two are not distinguishable from
+      // here. Either way we cannot prove the charge did not land, so this stays "unknown", never
+      // the not-charged copy. A failure BEFORE this fetch is even called (the Stripe confirmSetup
+      // step above, outside this try) is the one place that keeps the honest not-charged copy
+      // (obBillErr) — that request never reached our own gateway at all.
       const outcome = classifySubscribeAttempt({ phase: "exception" });
-      if (outcome.kind === "unknown") setErr(t("obBillErrUnknown"));
+      // Round 2 review (MINOR-3) — classifySubscribeAttempt returns {kind:"unknown"} unconditionally
+      // for phase:"exception" (see its own guard), so a bare `if (outcome.kind === "unknown")` could
+      // never be false — but silently doing nothing is the wrong failure mode on a money screen: a
+      // future classifier change would leave the form busy with no message. This switch is
+      // exhaustive over every SubscribeOutcome kind so that can never happen silently.
+      switch (outcome.kind) {
+        case "unknown":
+          setErr(t("obBillErrUnknown"));
+          break;
+        case "already":
+        case "trial":
+        case "active":
+          // Not reachable from phase:"exception" today — still surface a message rather than
+          // leaving the form silently busy if that ever changes.
+          setErr(t("obBillErrUnknown"));
+          break;
+      }
       setBusy(false);
     }
   }

@@ -1831,7 +1831,7 @@ export const LEX: Record<string, [string, string]> = {
   // uncertainty rather than guessing either way.
   obBillErrUnknown: [
     "We couldn't confirm the result of that payment — check Settings → Billing before trying again.",
-    "我们无法确认这笔付款的结果——请在重试前查看 设置 → 账单。",
+    "我们无法确认这笔付款的结果——请在重试前查看设置 → 账单。",
   ],
   obBillAlready: ["You already have an active plan", "你已有一个有效方案"],
   obBillAlreadySub: ["Nothing more to do here — jump into the Terminal.", "这里无需其他操作——直接进入终端。"],
@@ -1855,9 +1855,16 @@ export const LEX: Record<string, [string, string]> = {
   // Fix round 1 (BLOCKER-1) — a genuine no-trial purchase (e.g. essential, plans.yml trial_days:
   // 0) completed: charged, plan active, no trial to mention. Distinct from obDoneReady so the
   // screen names the plan and confirms it is live, without implying a trial exists.
+  //
+  // Round 2 review (MAJOR-1, round 2 of round 2) — this line renders regardless of
+  // confirmPending (selectDoneBillingLine, MINOR-2), including stacked directly under
+  // obDoneConfirm ("confirm your email to activate your account"). It must never say "you're all
+  // set" / "一切就绪" in that state — the account is emphatically NOT all set until the email is
+  // confirmed, and the two lines would otherwise contradict each other in adjacent paragraphs. The
+  // plan-is-active fact stands alone; it does not imply the account overall is ready.
   obDonePlanActive: [
-    "Your {tier} plan is now active — you're all set.",
-    "你的 {tier} 方案现已生效——一切就绪。",
+    "Your {tier} plan is now active.",
+    "你的 {tier} 方案现已生效。",
   ],
   // rail account card trial chip
   obTrialChip: ["trial", "试用"],

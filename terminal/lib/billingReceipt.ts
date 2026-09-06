@@ -111,8 +111,10 @@ export function sanitizeStashTrial(
  *   - a 2xx response whose body doesn't parse into either successful receipt shape (MAJOR-1) — the
  *     gateway accepted the request, so a subscription may well have been created; this consumer
  *     simply cannot prove it either way.
- *   - an exception thrown while awaiting/reading the response to a POST that was already sent
- *     (MINOR-1) — a network drop or timeout AFTER dispatch carries the identical uncertainty.
+ *   - an exception thrown by the `subscribe/complete` fetch call itself (MINOR-1) — a network
+ *     drop or timeout AFTER the request reached the network carries the identical uncertainty, and
+ *     `fetch()` throwing before anything was ever sent (offline, DNS failure, a CSP/extension
+ *     block) is not distinguishable from here either, so both land on the same conservative side.
  *
  * Both are the same "we don't know" class the non-2xx branch already routes to `obBillErrUnknown`
  * (fix round 1, MAJOR-2) — asserting "not charged" here would repeat the exact defect that branch

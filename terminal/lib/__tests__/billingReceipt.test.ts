@@ -244,3 +244,30 @@ describe("MINOR-2 — the plan-active confirmation renders regardless of confirm
       .toBe("ready");
   });
 });
+
+// ── Round 2 review, this round — MAJOR-1 ──────────────────────────────────────────────────────
+//
+// selectDoneBillingLine("planActive") now renders regardless of confirmPending (MINOR-2 above),
+// which means it can land stacked directly under obDoneConfirm ("confirm your email to activate
+// your account — we sent a link to {email}"). obDonePlanActive must never assert the account is
+// "all set" in that composed state — that is the exact false claim the confirmPending gate on the
+// generic "ready" line exists to prevent, and the copy previously reintroduced it verbatim ("you're
+// all set" / "一切就绪"). This is a RED-first test against the LEX copy itself: it fails on
+// 8f816b6e (the pre-fix head for this round) and passes once the copy drops the claim.
+describe("MAJOR-1 (this round) — obDonePlanActive never claims the account is 'all set'", () => {
+  it("EN never claims 'all set' while still naming the plan as active", async () => {
+    const { LEX } = await import("@/lib/i18n");
+    const [en] = LEX.obDonePlanActive;
+    expect(en.toLowerCase()).not.toContain("all set");
+    expect(en).toContain("{tier}");
+    expect(en.toLowerCase()).toContain("active");
+  });
+
+  it("ZH never claims readiness ('一切就绪') while still naming the plan as active", async () => {
+    const { LEX } = await import("@/lib/i18n");
+    const [, zh] = LEX.obDonePlanActive;
+    expect(zh).not.toContain("一切就绪");
+    expect(zh).toContain("{tier}");
+    expect(zh).toContain("生效");
+  });
+});
