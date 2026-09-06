@@ -15,10 +15,18 @@ type SnapshotFrame = {
   pixels: Uint8ClampedArray;
 };
 
+type VisualReadyDetail = {
+  symbol: string;
+  timeframe: string;
+  generation: number;
+  state: "data" | "empty";
+};
+
 declare global {
   interface Window {
     __mmSnapshotFrames: SnapshotFrame[];
-    __mmTerminalReady: boolean;
+    __mmTerminalReady: VisualReadyDetail | null;
+    __mmTerminalReadyEvents: VisualReadyDetail[];
   }
 }
 
@@ -100,13 +108,34 @@ async function compareSnapshotFrames(
 
 test("snapshot export includes custom SVG and dashboard indicator layers", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Snapshot composition is shared; desktop gives a stable pixel canvas.");
+  // This test does three full snapshot-capture round trips (baseline, Trend Engine overlay, Market
+  // Dashboard card) plus several UI interactions, each gated on the app's own async readiness
+  // signals. The "fixture OHLC should finish rendering" poll below was timing out in CI at its
+  // (default, unset) 5s budget with the rest of the page already fully painted per the CI
+  // screenshot/DOM snapshot — chart, sidebar, watchlist, dashboard cards all populated with real
+  // data — meaning `mm:terminal-visual-ready` just hadn't fired yet, the same class of CPU-
+  // contention-starved readiness event diagnosed in crosshair-price-label.spec.ts (see that file's
+  // comment for the full repro). Give both the poll and the overall test explicit, generous budgets
+  // instead of the tight defaults.
+  test.setTimeout(90_000);
 
   await page.addInitScript(() => {
     const nativeToBlob = HTMLCanvasElement.prototype.toBlob;
+    localStorage.setItem("mm.inds", "[]");
+    localStorage.setItem("mm.startTf", JSON.stringify("D"));
     window.__mmSnapshotFrames = [];
-    window.__mmTerminalReady = false;
-    window.addEventListener("mm:terminal-visual-ready", () => {
-      window.__mmTerminalReady = true;
+    window.__mmTerminalReady = null;
+    window.__mmTerminalReadyEvents = [];
+    window.addEventListener("mm:terminal-visual-ready", (event) => {
+      const detail = (event as CustomEvent<VisualReadyDetail>).detail;
+      window.__mmTerminalReadyEvents.push(detail);
+      if (detail?.symbol === "NVDA"
+        && detail.timeframe === "D"
+        && detail.state === "data"
+        && Number.isInteger(detail.generation)
+        && detail.generation > 0) {
+        window.__mmTerminalReady = detail;
+      }
     });
 
     HTMLCanvasElement.prototype.toBlob = function patchedToBlob(callback, type, quality) {
@@ -131,9 +160,27 @@ test("snapshot export includes custom SVG and dashboard indicator layers", async
   await expect(page.locator(".workspace")).toBeVisible();
   await expect(page.locator(".chart-wrap canvas").first()).toBeVisible();
   await expect.poll(
-    () => page.evaluate(() => window.__mmTerminalReady),
-    { message: "fixture OHLC should finish rendering before the baseline export" },
-  ).toBe(true);
+    () => page.evaluate(() => {
+      const signalLayer = document.querySelector("[data-sig-layer]");
+      return {
+        ready: window.__mmTerminalReady !== null,
+        detail: window.__mmTerminalReady,
+        events: window.__mmTerminalReadyEvents,
+        requestedIndicators: localStorage.getItem("mm.inds"),
+        canvasCount: document.querySelectorAll(".chart-wrap canvas").length,
+        signalLayerAttached: signalLayer !== null,
+        signalChildren: signalLayer?.childElementCount ?? -1,
+        indicatorNames: [...document.querySelectorAll(".ind-name")]
+          .map((node) => node.textContent?.trim() ?? ""),
+      };
+    }),
+    { message: "fixture OHLC should finish rendering before the baseline export", timeout: 20_000 },
+  ).toMatchObject({ ready: true });
+  expect(await page.evaluate(() => window.__mmTerminalReady)).toMatchObject({
+    symbol: "NVDA",
+    timeframe: "D",
+    state: "data",
+  });
 
   const baseline = await captureDownloadedSnapshot(page, testInfo, "baseline-indicator-snapshot.png");
 
