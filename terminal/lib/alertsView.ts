@@ -262,6 +262,12 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
   "outage.action": ["Retry", "重试"],
   "listUnavailable.body": ["We could not confirm your alert list just now. Try again in a few minutes.", "我们刚才无法确认你的警报列表，请几分钟后再试。"],
   "noCoverage.body": ["We cannot read prices for {n} of your symbols, so those conditions were not checked.", "有 {n} 个代码我们读不到价格，这些条件未被检查。"],
+  // Major (round-5 review): the no-coverage module answers "what could we not watch" but, at
+  // zero timeline rows, said nothing about activity at all — a page that only ever mentions
+  // what failed, never what happened. This pair renders alongside CouldNotWatch whenever
+  // timelineRows is empty in the no-coverage state, so the activity answer is never silent.
+  "activity.empty": ["Nothing has fired yet.", "尚未触发任何提醒。"],
+  "activity.lastSuccess": ["Last successful check {t}.", "上次成功检查 {t}。"],
   "folded.note": ["Duplicate rows folded ({n})", "已合并重复记录（{n}）"],
   "resolution.armed": ["Armed — still watching", "已启用 —— 仍在监控"],
   "resolution.resolved": ["Resolved", "已解决"],

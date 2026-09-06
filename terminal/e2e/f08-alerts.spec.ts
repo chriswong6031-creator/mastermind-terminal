@@ -71,6 +71,10 @@ test("outage state renders unavailable, never a lie about zero", async ({ page }
   await installFixtures(page, { alertsStatus: 503, runsState: "READ_UNAVAILABLE" });
   await page.goto("/alerts");
   await expect(dataState(page, "unavailable")).toBeVisible({ timeout: 45_000 });
+  // Minor 2 (round-5 review): assert the actual rendered module too — the spine's
+  // data-cockpit-state alone would still pass even if the intended module never rendered
+  // (the exact `.first()` masking bug minor 4/round-3 fixed for the crop-gate assertions).
+  await expect(page.locator('[data-alerts-module="outage"]').first()).toBeVisible({ timeout: 45_000 });
 });
 
 test("fired alert with no outbox row renders pending, never delivered", async ({ page }) => {
@@ -105,6 +109,8 @@ test("a zero-alert user gets calm copy, never 'cannot read'", async ({ page }) =
   await page.goto("/alerts");
   await expect(page.locator('[data-monitor-state="watching"]')).toBeVisible({ timeout: 45_000 });
   await expect(dataState(page, "calm-empty")).toBeVisible({ timeout: 45_000 });
+  // Minor 2 (round-5 review): the module attribute, not just the always-present wrapper.
+  await expect(page.locator('[data-alerts-module="calm-empty"]').first()).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText("You are not watching anything yet.")).toBeVisible();
   await expect(page.getByText("cannot read")).toHaveCount(0);
 });
@@ -123,6 +129,8 @@ test("a zero-alert user with a stale/never-ran engine still gets calm copy, neve
   await page.goto("/alerts");
   await expect(page.locator('[data-monitor-state="degraded"]')).toBeVisible({ timeout: 45_000 });
   await expect(dataState(page, "calm-empty")).toBeVisible({ timeout: 45_000 });
+  // Minor 2 (round-5 review): the module attribute, not just the always-present wrapper.
+  await expect(page.locator('[data-alerts-module="calm-empty"]').first()).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText("You are not watching anything yet.")).toBeVisible();
   await expect(page.getByText("Check again")).toHaveCount(0);
   // META-CEO ruling (round-2, B1 reach): calm-zero must not go silent about engine health —
@@ -137,6 +145,8 @@ test("a zero-alert user with a never-ran engine gets the calm copy plus one hone
   await page.goto("/alerts");
   await expect(page.locator('[data-monitor-state="never_ran"]')).toBeVisible({ timeout: 45_000 });
   await expect(dataState(page, "calm-empty")).toBeVisible({ timeout: 45_000 });
+  // Minor 2 (round-5 review): the module attribute, not just the always-present wrapper.
+  await expect(page.locator('[data-alerts-module="calm-empty"]').first()).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText("You are not watching anything yet.")).toBeVisible();
   await expect(page.getByText("We have not checked yet.")).toBeVisible();
 });
@@ -255,6 +265,9 @@ async function crop(page: Page, width: number, name: string) {
     const pg = document.querySelector(".pg") as HTMLElement | null;
     return (pg?.scrollHeight ?? 0) - (pg?.clientHeight ?? 0);
   });
+  // Minor 3 (round-5 review): report the actual slack, not just a pass/fail — the tall states
+  // (fired-delivery, drillback) are the ones nearest the 2px gate.
+  console.log(`crop ${name}: .pg scrollHeight-clientHeight slack = ${overflow}px`);
   expect(overflow, `${name}: .pg content is ${overflow}px taller than its box — fullPage would clip it`).toBeLessThanOrEqual(2);
   await page.screenshot({ path: `${PROOF_DIR}/${name}.png`, fullPage: true });
 }

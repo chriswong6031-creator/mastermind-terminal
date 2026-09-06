@@ -161,6 +161,18 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
     document.getElementById("alerts-manage")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
+  // Minute-precision last-successful-check sentence, shared by the degraded module and the
+  // no-coverage-empty activity module below — same honest-null handling as AnswerLine's own
+  // fmtTime (cannotRead vs notRecorded), never a bare toLocaleTimeString() (minor: seconds in
+  // a user-facing timestamp).
+  const fmtLastSuccess = useCallback((): string => {
+    if (view.lastSuccessAt) {
+      const d = new Date(view.lastSuccessAt);
+      if (!Number.isNaN(d.getTime())) return d.toLocaleTimeString(L === "zh" ? "zh-CN" : "en-US", { hour: "2-digit", minute: "2-digit" });
+    }
+    return copy(view.lastSuccessState === "READ_UNAVAILABLE" ? "null.cannotRead" : "null.notRecorded", L);
+  }, [view.lastSuccessAt, view.lastSuccessState, L]);
+
   return (
     // `data-cockpit-state` (never `data-alerts-state`) — the existing-alerts management panel
     // (AlertsView.tsx, mounted below as `children`) already owns `data-alerts-state` for ITS
@@ -215,7 +227,7 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
               ("16:05:00"), contradicting AnswerLine's own fmtTime (minute precision, "16:05")
               rendered a few lines above it. Plain-language law: a human reads a time, never a
               machine timestamp with seconds — force the same minute precision here. */}
-          <p className={s.degradedBody}>{copy("degraded.body", L, { t: view.lastSuccessAt ? new Date(view.lastSuccessAt).toLocaleTimeString(L === "zh" ? "zh-CN" : "en-US", { hour: "2-digit", minute: "2-digit" }) : copy(view.lastSuccessState === "READ_UNAVAILABLE" ? "null.cannotRead" : "null.notRecorded", L) })}</p>
+          <p className={s.degradedBody}>{copy("degraded.body", L, { t: fmtLastSuccess() })}</p>
           <button type="button" className={`btn btn-ghost ${s.emptyAction}`} onClick={load}>{copy("degraded.action", L)}</button>
         </div>
       )}
@@ -226,6 +238,19 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
         </div>
       )}
       <AlertTimeline rows={timelineRows} lang={L} onOpen={setOpenId} />
+      {/* Major (round-5 review): the dataState ladder puts "no-coverage" ahead of the
+          zero-rows "calm-empty" fallback (kept as-is — see the ladder above), so an account
+          with >=1 active alert, an unevaluable symbol, and zero fired rows used to show ONLY
+          "What we could not watch today" — an activity question that went completely
+          unanswered. AlertTimeline already returns null for zero rows, so this compact module
+          renders in its place whenever the timeline is empty in the no-coverage state, always
+          alongside CouldNotWatch below. */}
+      {dataState === "no-coverage" && timelineRows.length === 0 && (
+        <div className={s.module} data-alerts-module="recent-activity">
+          <p className={s.calmBody}>{copy("activity.empty", L)}</p>
+          <p className={s.calmBody}>{copy("activity.lastSuccess", L, { t: fmtLastSuccess() })}</p>
+        </div>
+      )}
       <WatchingList
         rows={(alerts || []).filter((a) => a.active).map((a) => ({ id: a.id, symbol: a.symbol || "—", label: conditionText(a.condition, a.symbol, L), state: "armed" as const }))}
         unavailable={listUnavailable}

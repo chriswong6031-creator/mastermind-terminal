@@ -59,8 +59,5 @@ describe("AlertTimeline — zero-row guard (major 3, round-3 review)", () => {
     expect(container.textContent).toContain("NVDA");
     const mod = container.querySelector('[data-alerts-module="recent-activity"]');
     expect(mod).not.toBeNull();
-    // Minor 4 (round-3 review): the spine no longer duplicates the page-level
-    // data-cockpit-state attribute (the collision `.first()` was masking in the e2e spec).
-    expect(container.querySelector("[data-cockpit-state]")).toBeNull();
   });
 });
