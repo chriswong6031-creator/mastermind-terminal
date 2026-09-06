@@ -10,7 +10,7 @@
 .stanceDegraded { color: var(--warn); border-left: 3px solid var(--warn); padding-left: 8px; }
 .stanceMuted { color: var(--muted); border-left: 3px solid var(--line-3); padding-left: 8px; }
 .facts { display: flex; gap: 18px; font: 500 var(--fs-label)/1 var(--font-ui); color: var(--muted); flex: 1; }
-.factNum { font-family: var(--font-num); font-variant-numeric: tabular-nums; color: var(--fg); }
+.factNum { font-family: var(--font-num); font-variant-numeric: tabular-nums; color: var(--text); }
 .coverage { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-weight: 650; }
 
 .module { margin-top: 12px; }
@@ -24,7 +24,7 @@
 .dot { position: absolute; left: -14px; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .time { font-family: var(--font-num); font-variant-numeric: tabular-nums; color: var(--muted); width: 52px; flex-shrink: 0; }
 .subject { font-weight: 650; max-width: 120px; }
-.verdict { flex: 1; color: var(--fg-2, var(--fg)); }
+.verdict { flex: 1; color: var(--text-2, var(--text)); }
 .actions { display: flex; gap: 8px; }
 
 .chip {
@@ -57,17 +57,6 @@
   .subject { max-width: none; }
 }
 
-/* ── LIGHT TREATMENT (specification; not yet live — shell has no light branch). Tokens
-   only: --shadow-card/--line/--up/--warn are existing globals.css tokens, no new hex
-   literals introduced by this block. ── */
-:global(html[data-theme="light"]) .answerLine {
-  background: #fff; box-shadow: var(--shadow-card); border-bottom: 1px solid var(--line);
-}
-:global(html[data-theme="light"]) .stanceWatching { text-shadow: none; border-left: 3px solid var(--up); padding-left: 8px; }
-:global(html[data-theme="light"]) .stanceDegraded { border-left: 3px solid var(--warn); }
-:global(html[data-theme="light"]) .chip {
-  background: color-mix(in srgb, var(--hue) 12%, #fff);
-  border: 1px solid color-mix(in srgb, var(--hue) 46%, transparent);
-}
-:global(html[data-theme="light"]) .spine::before { background: var(--line); }
-:global(html[data-theme="light"]) .row { border-top: 1px solid var(--line); margin-left: 12px; padding-left: 12px; }
+/* Dark-only by construction (DEC:TERMINAL-SHELL-IS-DARK-ONLY-EVIDENCE-MATRIX-2026-09-06): the
+   Terminal shell has no light theme branch anywhere else, so this module carries none either —
+   no guarded `html[data-theme="light"]` block, no parallel light palette. */

@@ -1,14 +1,18 @@
 "use client";
 import s from "./alerts.module.css";
+import { copy } from "@/lib/alertsView";
 
 export interface WatchingRow { id: string; symbol: string; label: string; state: "armed" | "paused" }
 
-export default function WatchingList({ rows, lang }: { rows: WatchingRow[]; lang: "en" | "zh" }) {
+// `unavailable` means the underlying /api/alerts read itself failed — a genuinely different fact
+// from "you have zero alerts". Printing "0 conditions" for both is the fabricated-zero bug this
+// prop exists to prevent: an honest unknown must never look like a confirmed empty list.
+export default function WatchingList({ rows, lang, unavailable }: { rows: WatchingRow[]; lang: "en" | "zh"; unavailable?: boolean }) {
   return (
     <div className={s.module}>
       <div className={s.moduleHead}>
         <span>{lang === "zh" ? "正在为你监控" : "What we're watching for you"}</span>
-        <span className={s.moduleCount}>{rows.length} {lang === "zh" ? "项条件" : "conditions"}</span>
+        <span className={s.moduleCount}>{unavailable ? copy("null.cannotRead", lang) : `${rows.length} ${lang === "zh" ? "项条件" : "conditions"}`}</span>
       </div>
       <div>
         {rows.map((r) => (

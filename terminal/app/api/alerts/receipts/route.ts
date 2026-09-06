@@ -51,6 +51,10 @@ export async function GET() {
     last_success_at: successState === "READ_UNAVAILABLE" || !successRows?.[0]
       ? null
       : (successRows[0] as { concluded_at: string | null }).concluded_at,
+    // Distinct from last_success_at itself: a null time means EITHER "never had a successful
+    // run" (successState READ_OK_ZERO) or "could not confirm one way or the other" (successState
+    // READ_UNAVAILABLE) — the client must not render the same "not recorded" copy for both.
+    last_success_state: successState,
     outbox: outboxState === "READ_UNAVAILABLE" ? undefined : (outboxRows || []),
     outbox_state: outboxState,
   });
