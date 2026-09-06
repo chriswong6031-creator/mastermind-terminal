@@ -453,7 +453,7 @@ export default function PortfolioView(
  *  apply) — each segment is a plain div with a genuinely data-dependent inline `width`, the only
  *  inline style this surface uses. Uncovered segments render as a hatched neutral material, never
  *  a color with direction semantics (never --up/--down/--warn). */
-type LegendRow = { key: string; label: { en: string; zh: string }; weightPct: number; covered: boolean };
+type LegendRow = { key: string; label: { en: string; zh: string }; weightPct: number; covered: boolean; muted?: boolean };
 
 function Bar({ rows, lang }: { rows: LegendRow[]; lang: Lang }) {
   const ariaLabel = rows.map((r) => `${lang === "zh" ? r.label.zh : r.label.en} ${r.weightPct}%`).join(", ");
@@ -464,8 +464,8 @@ function Bar({ rows, lang }: { rows: LegendRow[]; lang: Lang }) {
           key={r.key}
           aria-hidden="true"
           data-covered={r.covered ? "true" : "false"}
-          data-slot={r.covered ? i % 5 : undefined}
-          className={`${s.seg} ${r.covered ? "" : s.segUncovered}`}
+          data-slot={r.covered && !r.muted ? i % 5 : undefined}
+          className={`${s.seg} ${r.covered ? "" : s.segUncovered} ${r.muted ? s.segMuted : ""}`}
           style={{ width: `${r.weightPct}%` }}
         />
       ))}
@@ -483,8 +483,8 @@ function Legend({ rows, lang }: { rows: LegendRow[]; lang: Lang }) {
       {rows.map((r, i) => (
         <div key={r.key} className={s.legendRow}>
           <span
-            className={s.legendSwatch}
-            data-slot={r.covered ? i % 5 : undefined}
+            className={`${s.legendSwatch} ${r.muted ? s.legendSwatchMuted : ""}`}
+            data-slot={r.covered && !r.muted ? i % 5 : undefined}
             aria-hidden="true"
           />
           <span className={s.legendLabel}>{lang === "zh" ? r.label.zh : r.label.en}</span>
@@ -562,7 +562,7 @@ function PortfolioRiskReadout({ risk, lang }: { risk: PortfolioRisk; lang: Lang 
       </div>
 
       {!!c.gapLines.length && (
-        <details className={s.gaps} data-testid="shape-gaps" open>
+        <details className={s.gaps} data-testid="shape-gaps" open={c.gapLines.length <= 8}>
           <summary className={s.gapsSummary}>{pick(c.gapsSummary)}</summary>
           <ul className={s.gapList}>
             {c.gapLines.map((g) => (
@@ -572,6 +572,11 @@ function PortfolioRiskReadout({ risk, lang }: { risk: PortfolioRisk; lang: Lang 
               </li>
             ))}
           </ul>
+          {c.gapLinesOverflow > 0 && (
+            <p className={s.gapWhy} data-testid="shape-gaps-overflow">
+              {lang === "zh" ? `还有 ${c.gapLinesOverflow} 项未显示` : `+${c.gapLinesOverflow} more not shown`}
+            </p>
+          )}
         </details>
       )}
     </section>

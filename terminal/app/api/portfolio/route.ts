@@ -142,6 +142,26 @@ async function buildRisk(positions: readonly Position[]): Promise<PortfolioRisk>
   );
 }
 
+// MAJOR 5 (review repair): buildRisk can fan out up to ARTIFACT_FANOUT_CAP tickers across
+// several concurrency waves — in the worst case, tens of seconds. That must never become
+// latency (or an outright function-timeout kill) on the primary holdings read: a good,
+// SSR-seeded book must never be able to flip into "we could not read your book" just
+// because the NEW risk readout was slow. So the readout is capped to a hard time budget and
+// degrades to `risk: null` (rendered as the normal per-card "not covered yet" states) rather
+// than ever blocking — or endangering — the `positions` response.
+const RISK_BUDGET_MS = 4000;
+
+async function buildRiskBounded(positions: readonly Position[]): Promise<PortfolioRisk | null> {
+  try {
+    return await Promise.race([
+      buildRisk(positions),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), RISK_BUDGET_MS)),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
 export async function GET() {
   const session = await resolveDb();
   if (!session) return unauthenticated();
@@ -150,7 +170,7 @@ export async function GET() {
     console.error("portfolio GET failed:", read.error);
     return fail("portfolio unavailable", 503);
   }
-  const risk = await buildRisk(read.positions);
+  const risk = await buildRiskBounded(read.positions);
   return NextResponse.json({ positions: read.positions, risk });
 }
 

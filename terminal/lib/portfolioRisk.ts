@@ -206,8 +206,14 @@ export function computePortfolioRisk(
       sizeCostByBucket.set(bucket, (sizeCostByBucket.get(bucket) ?? 0) + s.cost);
     }
 
+    // NOTE (review repair, MAJOR 2): thinlyTraded is a permanent structural null today (no
+    // such field exists on the artifact yet — see route.ts fetchArtifact), so pushing a
+    // per-ticker "no_thickness" gap here fired for EVERY sized position, contradicting
+    // "Read N of N holdings" with "N holdings we could not fully read" in the same summary.
+    // Card 4 (T_C4_UNREAD below) already discloses this honestly as ONE system-level
+    // sentence; it must not also inflate the per-ticker gap list.
     if (facts.thinlyTraded == null) {
-      gaps.push({ ticker: s.ticker, reason: "no_thickness" });
+      // no gap row: see note above.
     } else {
       liquidityReadCost += s.cost;
       liquidityReadCount += 1;
@@ -305,9 +311,10 @@ export function riskCopy(risk: PortfolioRisk): {
   cards: { key: "concentration" | "industries" | "size" | "thickness";
     label: Bilingual; question: Bilingual; value: Bilingual | null;
     sub: Bilingual | null; unread: Bilingual | null }[];
-  legend: { key: string; label: Bilingual; weightPct: number; covered: boolean }[][];
+  legend: { key: string; label: Bilingual; weightPct: number; covered: boolean; muted?: boolean }[][];
   gapsSummary: Bilingual | null;
   gapLines: { ticker: string; text: Bilingual }[];
+  gapLinesOverflow: number;
 } {
   const c = risk.concentration;
   const card1 = c
@@ -343,7 +350,7 @@ export function riskCopy(risk: PortfolioRisk): {
   const legend0 = c
     ? [
       { key: c.top1!.ticker, label: { en: c.top1!.ticker, zh: c.top1!.ticker }, weightPct: c.top1!.weightPct, covered: true },
-      { key: "rest", label: T_REST, weightPct: Math.round((100 - c.top1!.weightPct) * 10) / 10, covered: true },
+      { key: "rest", label: T_REST, weightPct: Math.round((100 - c.top1!.weightPct) * 10) / 10, covered: true, muted: true },
     ]
     : [];
   const legend1 = [
@@ -359,13 +366,15 @@ export function riskCopy(risk: PortfolioRisk): {
   const gapsSummary = distinctGapTickers.size
     ? fill(T_GAPS_SUMMARY, { n: String(distinctGapTickers.size) })
     : null;
-  const gapLines = risk.gaps.map((g) => ({ ticker: g.ticker, text: GAP_REASON_COPY[g.reason] }));
+  const GAP_LINES_CAP = 20;
+  const gapLines = risk.gaps.slice(0, GAP_LINES_CAP).map((g) => ({ ticker: g.ticker, text: GAP_REASON_COPY[g.reason] }));
+  const gapLinesOverflow = Math.max(0, risk.gaps.length - GAP_LINES_CAP);
 
   return {
     title: T_TITLE, standing: T_STANDING, basis: T_BASIS,
     coverage: fill(T_COVERAGE, { read: String(risk.counts.read), total: String(risk.counts.total) }),
     cards: [card1, card2, card3, card4],
     legend: [legend0, legend1, legend2, []],
-    gapsSummary, gapLines,
+    gapsSummary, gapLines, gapLinesOverflow,
   };
 }

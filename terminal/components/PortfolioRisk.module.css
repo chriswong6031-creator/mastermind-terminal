@@ -116,6 +116,11 @@
 .seg[data-slot="3"] { background: var(--cat-4, #d98a3d); }
 .seg[data-slot="4"] { background: var(--cat-5, #b23fae); }
 
+.segMuted {
+  background: var(--muted, #717a8e) !important;
+  box-shadow: none;
+}
+
 .segUncovered {
   background-color: var(--panel-3, #1f222b);
   background-image: repeating-linear-gradient(45deg, transparent 0 3px, rgba(255,255,255,.085) 3px 4px);
@@ -154,6 +159,10 @@
 .legendSwatch[data-slot="2"] { background: var(--cat-3, #22b8b0); }
 .legendSwatch[data-slot="3"] { background: var(--cat-4, #d98a3d); }
 .legendSwatch[data-slot="4"] { background: var(--cat-5, #b23fae); }
+
+.legendSwatchMuted {
+  background: var(--muted, #717a8e) !important;
+}
 
 .legendLabel {
   flex: 1 1 auto;
@@ -214,6 +223,10 @@
 
 @media (max-width: 900px) {
   .hero { font-size: var(--fs-num, 20px); }
+}
+
+@media (max-width: 640px) {
+  .grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 480px) {
