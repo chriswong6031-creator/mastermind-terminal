@@ -162,12 +162,21 @@ export default function EventImpactPanel({ positions, holdingsUnreadable }: Even
             return;
           }
         } catch {
-          // Unparseable 503 body: fall through to the generic http_503 disclosure below.
+          // Unparseable 503 body: fall through to `upstream_locked` below — same reasoning as the
+          // other unhandled-status branch immediately below.
         }
       }
-      setRead({ state: "calendar_unreadable", detail: `http_${res.status}` });
+      // Any other outcome (429 rate-limit from the route's own `rateLimit`/`tooMany` — fired
+      // before the route ever reads positions — an unparseable 503 body, or an unexpected
+      // non-503/401 status) is NOT one of the route's typed, positions-were-actually-read
+      // outcomes. Rendering it as `calendar_unreadable` would show "Your positions are fine" for
+      // a request that never established that (minor, review r5 — same family as the withdrawn r2
+      // string, one state over). `upstream_locked` is the honest "can't say anything yet" state.
+      setRead({ state: "upstream_locked" });
     } catch {
-      setRead({ state: "calendar_unreadable", detail: "network" });
+      // A network failure (fetch threw) is the same "we don't know" case — never claim the
+      // positions were read when the request never even completed.
+      setRead({ state: "upstream_locked" });
     } finally {
       setBusy(false);
     }

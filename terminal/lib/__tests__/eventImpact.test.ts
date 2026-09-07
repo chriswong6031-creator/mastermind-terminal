@@ -327,7 +327,12 @@ describe("eventImpact join", () => {
     expect(keyed.size).toBe(18);
 
     const bannedEn = /\bunaffected\b|\bfine\b/i;
-    const bannedZh = /不受影响/;
+    // "没有问题" ("no problem") is the ZH twin of EN "fine" — it is the literal phrasing
+    // `eiCalendarUnreadable`'s own retained-exception sentence uses (line 53 of the panel), so it
+    // must be banned everywhere else exactly like "不受影响" is (minor 1, review r5): without it,
+    // re-authoring the withdrawn r2 defect in ZH register ("...你的持仓没有问题。") on any other
+    // state would pass this guard while its EN twin ("fine") would not.
+    const bannedZh = /不受影响|没有问题/;
 
     const upstreamLocked = keyed.get("eiUpstreamLocked");
     expect(upstreamLocked).toBeDefined();
@@ -343,5 +348,37 @@ describe("eventImpact join", () => {
       expect(bannedEn.test(en)).toBe(false);
       expect(bannedZh.test(zh)).toBe(false);
     }
+  });
+
+  it("16. the three unreadable/locked states carry mutually distinct sentences in EN and ZH (MAJOR 1, review r5)", () => {
+    // RULING's own reviewer criterion (Meta-CEO B r4): "the three unreadable/locked states each
+    // carry a distinct, truthful sentence in EN and ZH and the tests pin them." Test 15 pins
+    // truthfulness (no state claims positions are fine except the one that read them). This test
+    // pins distinctness: nothing stops `eiHoldingsUnreadable`'s ZH half from being copy-pasted
+    // onto `eiUpstreamLocked`, or two states being made identical, without this failing — case 11
+    // only requires each tuple be non-empty, never that DIFFERENT states say DIFFERENT things.
+    const file = fs.readFileSync(
+      path.join(process.cwd(), "components", "EventImpactPanel.tsx"),
+      "utf8"
+    );
+    const copyMatch = file.match(/const COPY: Record<string, \[string, string\]> = \{([\s\S]*?)\n\};/);
+    expect(copyMatch).not.toBeNull();
+    const body = copyMatch![1];
+    const keyed = new Map<string, [string, string]>();
+    for (const m of body.matchAll(/(\w+):\s*\[\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,?\s*\]/g)) {
+      keyed.set(m[1], [m[2], m[3]]);
+    }
+    const states = ["eiHoldingsUnreadable", "eiCalendarUnreadable", "eiUpstreamLocked"] as const;
+    for (const key of states) expect(keyed.get(key)).toBeDefined();
+    const [holdings, calendar, upstream] = states.map((k) => keyed.get(k)!);
+
+    // Pairwise distinct, EN half.
+    expect(holdings[0]).not.toBe(calendar[0]);
+    expect(holdings[0]).not.toBe(upstream[0]);
+    expect(calendar[0]).not.toBe(upstream[0]);
+    // Pairwise distinct, ZH half.
+    expect(holdings[1]).not.toBe(calendar[1]);
+    expect(holdings[1]).not.toBe(upstream[1]);
+    expect(calendar[1]).not.toBe(upstream[1]);
   });
 });

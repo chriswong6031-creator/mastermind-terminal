@@ -10,8 +10,14 @@ import React, { act } from "react";
 import type { EventImpactRead } from "@/lib/eventImpact";
 import type { Position } from "@/lib/portfolio";
 
+// A mutable box so individual tests can render in "zh" (MAJOR 1, review r5: every test in this
+// file used to hard-mock "en", so ZH copy for the three unreadable/locked states was never
+// rendered or asserted anywhere — only checked NEGATIVELY (no 您, banned-word scan on the raw
+// source). `vi.hoisted` is required because `vi.mock`'s factory is hoisted above this file's own
+// top-level statements, so a plain `const` here would still be in the TDZ when the factory runs.
+const { langBox } = vi.hoisted(() => ({ langBox: { lang: "en" as "en" | "zh" } }));
 vi.mock("@/lib/i18n", () => ({
-  useLang: () => ({ lang: "en", setLang: () => {} }),
+  useLang: () => ({ lang: langBox.lang, setLang: () => {} }),
 }));
 
 const fetchMock = vi.fn();
@@ -30,6 +36,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
+  langBox.lang = "en";
 });
 
 async function renderWith(
@@ -122,6 +129,40 @@ describe("EventImpactPanel render (acceptance 2)", () => {
     expect(node?.textContent).not.toContain("Your positions are unaffected");
   });
 
+  // Minor (review r5): a 429 (the route's own rate limit, fired BEFORE positions are ever read),
+  // an unexpected/unparseable status, or a network failure must never render the
+  // `calendar_unreadable` sentence ("Your positions are fine") — that claim was never
+  // established. RED before the fix: these all fell into `calendar_unreadable` with a synthetic
+  // `http_${status}`/"network" detail, the same family of defect as the withdrawn r2 string, one
+  // state over.
+  it("renders upstream-locked, never a fine/unaffected claim, on a 429 rate limit", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 429 }));
+    const { default: EventImpactPanel } = await import("@/components/EventImpactPanel");
+    root = createRoot(container);
+    await act(async () => {
+      root.render(React.createElement(EventImpactPanel, { positions: [], holdingsUnreadable: false }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.querySelector('[data-testid="event-impact-upstream-locked"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="event-impact-calendar-unreadable"]')).toBeNull();
+    expect(container.textContent).not.toContain("Your positions are fine");
+  });
+
+  it("renders upstream-locked, never a fine/unaffected claim, on a fetch/network failure", async () => {
+    fetchMock.mockRejectedValue(new Error("network down"));
+    const { default: EventImpactPanel } = await import("@/components/EventImpactPanel");
+    root = createRoot(container);
+    await act(async () => {
+      root.render(React.createElement(EventImpactPanel, { positions: [], holdingsUnreadable: false }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.querySelector('[data-testid="event-impact-upstream-locked"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="event-impact-calendar-unreadable"]')).toBeNull();
+    expect(container.textContent).not.toContain("Your positions are fine");
+  });
+
   it("renders a stale disclosure when the route served a cached-past-outage copy", async () => {
     const body: EventImpactRead = {
       state: "no_events",
@@ -165,8 +206,45 @@ describe("EventImpactPanel render (acceptance 2)", () => {
     await renderWith({ state: "ok", asof: "x", heldTickers: 0, heldPositions: 0, unjoinable: [], events: [] }, 200, {
       holdingsUnreadable: true,
     });
-    expect(container.querySelector('[data-testid="event-impact-holdings-unreadable"]')).toBeTruthy();
+    const node = container.querySelector('[data-testid="event-impact-holdings-unreadable"]');
+    expect(node).toBeTruthy();
+    // MAJOR 1 (review r5): this used to assert only that the testid element exists — a truthiness
+    // check alone would pass even if the wrong sentence (or an empty one) rendered here.
+    expect(node?.textContent).toContain("We can't read your positions right now");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // MAJOR 1 (review r5): every test above hard-mocks lang "en", so the ZH half of the three
+  // unreadable/locked sentences was never rendered or asserted anywhere in this suite — only
+  // checked negatively (no 您, banned-word scan over the raw source in eventImpact.test.ts). These
+  // three assert the actual DOM text a ZH-lang user sees, matching the EN assertions above.
+  describe("ZH-lang render of the three unreadable/locked states", () => {
+    it("holdings_unreadable renders its ZH sentence", async () => {
+      langBox.lang = "zh";
+      await renderWith({ state: "ok", asof: "x", heldTickers: 0, heldPositions: 0, unjoinable: [], events: [] }, 200, {
+        holdingsUnreadable: true,
+      });
+      const node = container.querySelector('[data-testid="event-impact-holdings-unreadable"]');
+      expect(node?.textContent).toContain("我们暂时读不到你的持仓");
+      expect(node?.textContent).not.toMatch(/We can't read/);
+    });
+
+    it("calendar_unreadable renders its ZH sentence", async () => {
+      langBox.lang = "zh";
+      await renderWith({ state: "calendar_unreadable", detail: "bad schema" });
+      const node = container.querySelector('[data-testid="event-impact-calendar-unreadable"]');
+      expect(node?.textContent).toContain("缺的是事件列表");
+      expect(node?.textContent).not.toMatch(/event list is the part/);
+    });
+
+    it("upstream_locked renders its ZH sentence, never the ZH 'unaffected' claim", async () => {
+      langBox.lang = "zh";
+      await renderWith({ state: "upstream_locked" });
+      const node = container.querySelector('[data-testid="event-impact-upstream-locked"]');
+      expect(node?.textContent).toContain("暂时无法判断你的持仓是否受影响");
+      expect(node?.textContent).not.toContain("不受影响");
+      expect(node?.textContent).not.toMatch(/We couldn't check/);
+    });
   });
 
   // m2 (review r2): the initial paint must never claim "you hold nothing" before the fetch has
