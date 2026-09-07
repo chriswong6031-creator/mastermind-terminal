@@ -9,7 +9,7 @@
 // Precedent for __dirname in these suites: terminal/lib/__tests__/plainLabelsCallSites.test.ts.
 
 import { describe, it, expect } from "vitest";
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,16 +30,29 @@ function redactAnnotations(s: string): string {
 
 const scriptPath = join(__dirname, "../../scripts/check_plain_language.mjs");
 
+// stdout and stderr are captured SEPARATELY, on both the success and the
+// failure (non-zero exit) path — per the ruling, `--json` mode prints ONLY
+// the JSON document on stdout (every notice/diagnostic goes to stderr), so
+// a caller can `JSON.parse(res.stdout.trim())` directly, with no need to
+// search for the JSON line among other text. `stdout` is what test
+// assertions below parse; `stderr` is available for the handful of
+// non-JSON tests that still want to see the human-readable notices.
+// spawnSync (not execFileSync) is used deliberately: execFileSync's return
+// value on a SUCCESSFUL (exit 0) run carries stdout only — there is no way
+// to recover that run's stderr from it — which would blind test 24 to the
+// overlay-absent notice on exactly the success path it needs to check.
 function run(args: string[], opts: { input?: string } = {}) {
-  try {
-    const stdout = execFileSync(process.execPath, [scriptPath, ...args], {
-      encoding: "utf8",
-      input: opts.input,
-    });
-    return { status: 0, stdout };
-  } catch (e: any) {
-    return { status: e.status ?? 1, stdout: (e.stdout ?? "").toString() + (e.stderr ?? "").toString() };
-  }
+  const r = spawnSync(process.execPath, [scriptPath, ...args], {
+    encoding: "utf8",
+    input: opts.input,
+  });
+  return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+
+// Parses a `--json` run's stdout WHOLE (no `.split("\n").pop()` line
+// scavenging) — stdout must be exactly one JSON document, per the ruling.
+function parseJson(res: { stdout: string }) {
+  return JSON.parse(res.stdout.trim());
 }
 
 function makeFixtureRoot() {
@@ -87,8 +100,7 @@ describe("check_plain_language.mjs", () => {
 
     const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
     expect(res.status).toBe(1);
-    const jsonLine = res.stdout.trim().split("\n").pop()!;
-    const parsed = JSON.parse(jsonLine);
+    const parsed = parseJson(res);
     expect(parsed.counts.blocking).toBeGreaterThanOrEqual(2);
     for (const f of parsed.findings.filter((x: any) => x.blocking)) {
       expect(typeof f.path).toBe("string");
@@ -120,8 +132,7 @@ describe("check_plain_language.mjs", () => {
 
     const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
     expect(res.status).toBe(0);
-    const jsonLine = res.stdout.trim().split("\n").pop()!;
-    const parsed = JSON.parse(jsonLine);
+    const parsed = parseJson(res);
     expect(parsed.counts.blocking).toBe(0);
     rmSync(root, { recursive: true, force: true });
   });
@@ -171,7 +182,7 @@ describe("check_plain_language.mjs", () => {
 
     const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
     expect(res.status).toBe(0);
-    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const parsed = parseJson(res);
     expect(parsed.scannedFiles).toBeGreaterThanOrEqual(2);
     const legacyHit = parsed.findings.find(
       (f: any) => f.path === untouchedRelPath && f.rule === "raw_state_enum" && !f.blocking
@@ -195,7 +206,7 @@ describe("check_plain_language.mjs", () => {
     writeFileSync(diffFile1, diff1);
     const res1 = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile1, "--json"]);
     expect(res1.status).toBe(1);
-    const parsed1 = JSON.parse(res1.stdout.trim().split("\n").pop()!);
+    const parsed1 = parseJson(res1);
     expect(parsed1.findings.some((f: any) => f.rule === "missing_zh" && f.blocking)).toBe(true);
 
     const relPath2 = "terminal/components/Literal.tsx";
@@ -206,7 +217,7 @@ describe("check_plain_language.mjs", () => {
     writeFileSync(diffFile2, diff2);
     const res2 = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile2, "--json"]);
     expect(res2.status).toBe(1);
-    const parsed2 = JSON.parse(res2.stdout.trim().split("\n").pop()!);
+    const parsed2 = parseJson(res2);
     expect(parsed2.findings.some((f: any) => f.rule === "missing_zh" && f.blocking)).toBe(true);
     rmSync(root, { recursive: true, force: true });
   });
@@ -281,7 +292,7 @@ describe("check_plain_language.mjs", () => {
     writeFileSync(diffFile, diff);
     const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
     expect(res.status).toBe(1);
-    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const parsed = parseJson(res);
     expect(parsed.counts.blocking).toBeGreaterThan(0);
     rmSync(root, { recursive: true, force: true });
 
@@ -299,7 +310,7 @@ describe("check_plain_language.mjs", () => {
     writeFileSync(diffFile2, diff2);
     const res2 = run(["--mode", "enforce-added", "--root", root2, "--diff-file", diffFile2, "--json"]);
     expect(res2.status).toBe(1);
-    const parsed2 = JSON.parse(res2.stdout.trim().split("\n").pop()!);
+    const parsed2 = parseJson(res2);
     expect(parsed2.findings.some((f: any) => f.rule === "raw_slug_interpolation" && f.blocking)).toBe(true);
     rmSync(root2, { recursive: true, force: true });
   });
@@ -328,7 +339,7 @@ describe("check_plain_language.mjs", () => {
     writeFileSync(diffFile, diff);
 
     const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
-    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const parsed = parseJson(res);
     const enumFindings = parsed.findings.filter((f: any) => f.rule === "raw_state_enum");
     expect(enumFindings).toEqual([]);
     rmSync(root, { recursive: true, force: true });
@@ -354,7 +365,7 @@ describe("check_plain_language.mjs", () => {
 
     const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
     expect(res.status).toBe(1);
-    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const parsed = parseJson(res);
     const hit = parsed.findings.find(
       (f: any) => f.rule === "raw_state_enum" && f.token === "BOTTOM_WATCH" && f.blocking
     );
@@ -371,7 +382,7 @@ describe("check_plain_language.mjs", () => {
     const diffFile = join(root, "diff.patch");
     writeFileSync(diffFile, diff);
     const res = run(["--root", root, "--diff-file", diffFile, "--json"]);
-    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const parsed = parseJson(res);
     expect(Object.keys(parsed).sort()).toEqual(
       ["version", "mode", "base", "baseResolved", "vocabulary", "scannedFiles", "findings", "counts", "nulls"].sort()
     );
@@ -405,7 +416,7 @@ describe("check_plain_language.mjs", () => {
     const diffFile = join(root, "diff.patch");
     writeFileSync(diffFile, diff);
     const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
-    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const parsed = parseJson(res);
     expect(parsed.vocabulary.overlayPresent).toBe(true);
     // "profile-card" contains the harvested overlay key "pro" as a bare
     // substring — the guard must NOT treat that as a plain-helper routing
@@ -426,7 +437,7 @@ describe("check_plain_language.mjs", () => {
     writeFileSync(diffFile, diff);
     const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
     expect(res.status).toBe(0);
-    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const parsed = parseJson(res);
     // "Globe" contains the study slug "lobe" as a bare substring — plain
     // English must never be flagged as an internal_study_slug.
     expect(parsed.findings.length).toBe(0);
@@ -451,7 +462,7 @@ describe("check_plain_language.mjs", () => {
     writeFileSync(diffFile, diff);
     const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
     expect(res.status).toBe(1);
-    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const parsed = parseJson(res);
     const missingZh = parsed.findings.filter((f: any) => f.rule === "missing_zh" && f.blocking);
     // Both the comma-containing single-line entry AND the multi-line entry
     // must be caught — the old naive `.split(",")` + single-line regex
@@ -483,7 +494,7 @@ describe("check_plain_language.mjs", () => {
     const diffFile = join(root, "diff.patch");
     writeFileSync(diffFile, diff);
     const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
-    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const parsed = parseJson(res);
     // The KEY "BOTTOM_WATCH" must never be flagged — it is the object's KEY
     // (the raw enum being translated FROM), not a copy-dict VALUE. Before
     // this fix every string literal in a *_COPY file was swept in,
@@ -505,7 +516,7 @@ describe("check_plain_language.mjs", () => {
     writeFileSync(diffFile, diff);
     const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
     expect(res.status).toBe(1);
-    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const parsed = parseJson(res);
     // Before this fix, listScanFiles() never opened a plain .ts file at
     // all (walk() only pushes .tsx), so this file's raw enum VALUE was
     // silently invisible to the guard — scannedFiles never included it.
@@ -513,6 +524,165 @@ describe("check_plain_language.mjs", () => {
       (f: any) => f.path === relPath && f.rule === "raw_state_enum" && f.token === "BOTTOM_WATCH" && f.blocking
     );
     expect(hit).toBeTruthy();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // Round-2 review fixture set: the three React idioms the review named
+  // (ternary, logical-and, attribute literal) must each be flagged now that
+  // computeVisibleSpans recurses through conditional/logical wrapping to
+  // find a literal leaf; a className string, a bare property-access
+  // interpolation, and a template literal inside a `throw` must each stay
+  // unflagged — none of them is ever a genuine visible-text position.
+
+  it("18. ternary idiom: a string literal behind `cond ? a : b` as a JSX child is flagged", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/components/Ternary.tsx";
+    const content = [
+      "export function Ternary({ active }: any) {",
+      '  return <span>{active ? "BOTTOM_WATCH" : "ok"}</span>;',
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [2]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    expect(res.status).toBe(1);
+    const parsed = parseJson(res);
+    expect(
+      parsed.findings.some(
+        (f: any) => f.rule === "raw_state_enum" && f.token === "BOTTOM_WATCH" && f.blocking
+      )
+    ).toBe(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("19. logical-and idiom: a string literal behind `cond && value` as a JSX child is flagged", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/components/LogicalAnd.tsx";
+    const content = [
+      "export function LogicalAnd({ show }: any) {",
+      '  return <span>{show && "iv_rank"}</span>;',
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [2]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    expect(res.status).toBe(1);
+    const parsed = parseJson(res);
+    expect(
+      parsed.findings.some(
+        (f: any) => f.rule === "untranslated_stat_token" && f.token === "iv_rank" && f.blocking
+      )
+    ).toBe(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("20. attribute-literal idiom: a ternary behind title={...} is flagged", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/components/AttrLiteral.tsx";
+    const content = [
+      "export function AttrLiteral({ active }: any) {",
+      '  return <button title={active ? "BOTTOM_WATCH" : "OK"}>Go</button>;',
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [2]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    expect(res.status).toBe(1);
+    const parsed = parseJson(res);
+    expect(
+      parsed.findings.some(
+        (f: any) => f.rule === "raw_state_enum" && f.token === "BOTTOM_WATCH" && f.blocking
+      )
+    ).toBe(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("21. NOT flagged: className is not a visible attribute, even behind the same ternary", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/components/ClassName.tsx";
+    const content = [
+      "export function ClassNameCase({ active }: any) {",
+      '  return <div className={active ? "BOTTOM_WATCH" : "ok"}>Text</div>;',
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [2]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    expect(res.status).toBe(0);
+    const parsed = parseJson(res);
+    expect(parsed.findings.length).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("22. NOT flagged: a bare property access (`trade.dte`) as a JSX child is never rendered TEXT", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/components/Dte.tsx";
+    const content = [
+      "export function Dte({ trade }: any) {",
+      "  return <span>{trade.dte}</span>;",
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [2]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    expect(res.status).toBe(0);
+    const parsed = parseJson(res);
+    expect(parsed.findings.length).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("23. NOT flagged: a template literal inside a `throw` is not a JSX position at all", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/components/Thrower.tsx";
+    const content = [
+      "export function Thrower({ value }: any) {",
+      "  if (value == null) {",
+      "    throw new Error(`Unsupported dte value: ${value}`);",
+      "  }",
+      "  return <div>OK</div>;",
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [3]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    expect(res.status).toBe(0);
+    const parsed = parseJson(res);
+    expect(parsed.findings.length).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("24. --json prints ONLY the JSON document on stdout; stderr carries the overlay-absent notice", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/components/Good2.tsx";
+    const content = ["export function Good2() {", '  return <span>{t("hi")}</span>;', "}", ""].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [2]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--root", root, "--diff-file", diffFile, "--json"]);
+    // Whole-stdout parse must succeed with no trimming/splitting beyond one
+    // trailing newline — a leaked notice line before/after the JSON would
+    // make this throw.
+    expect(() => JSON.parse(res.stdout.trim())).not.toThrow();
+    expect(res.stderr).toContain("vocabulary overlay ABSENT");
     rmSync(root, { recursive: true, force: true });
   });
 });

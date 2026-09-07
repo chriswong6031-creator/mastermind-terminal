@@ -341,3 +341,153 @@ lib/\*\*/\*copy\*.ts or exporting \*\_COPY)."*
   observed while re-measuring).
 - Full suite: 18/18 passing (`npx vitest run
   lib/__tests__/plainLanguageGuard.test.ts`); `npx tsc --noEmit` clean.
+
+## 11. Review fixes (round 4, PR #530) — META-CEO B ruling 2026-09-07 01:40Z
+
+The ruling text for this round restated the acceptance so it could not be
+re-scoped: *"EVERY rule (R1-R5) decides visibility from the SAME AST span set
+computed by computeVisibleSpans (JsxText; string literals that are JSX
+children, including inside conditional/logical/ternary JsxExpressions;
+title/aria-label/placeholder/alt attribute literals; values in copy
+dictionaries lib/\*\*/\*copy\*.ts or exporting \*\_COPY); no rule may test rawLine
+with a regex for visibility; delete enLitRe and every `>…<` shape. R3 ... and
+R4 ... fire ONLY inside visible spans and R4 matches rendered text tokens,
+never property/identifier names."*
+
+- **Ternary/logical-and literals were invisible to every rule.** A string
+  literal nested behind a ternary or `&&` as a JSX child — `{cond ?
+  "BOTTOM_WATCH" : "ok"}`, `{show && "iv_rank"}`, or the same behind
+  `title={...}` — has its own AST `.parent` set to the
+  `ConditionalExpression`/`BinaryExpression`, never the `JsxExpression`
+  itself, so the round-3 direct-parent-only check could never see it as a
+  visible span; the literal was silently invisible to R1/R4/R5b. Fixed:
+  `computeVisibleSpans` now recurses through `ConditionalExpression` (both
+  branches), `&&` (right operand only — the left is the non-rendered guard),
+  `||` (either operand), and parenthesized wrapping (`collectStringLeaves`)
+  to find every string-literal LEAF reachable this way, and adds each as a
+  `kind: "literal"` text span. Tests 18-20 lock in the three idioms the
+  ruling named (ternary, logical-and, attribute-literal), each now flagged.
+- **R3 (`raw_slug_interpolation`) had NO visibility gate at all.** Unlike
+  every other rule, R3's loop tested only `interpRe.test(line) &&
+  !hasPlainHelperOnLine(...)` — it could fire on a `.regime`/`.state`/etc.
+  interpolation pattern anywhere in the file, including inside a comment, a
+  type definition, or ordinary non-JSX code, since the `visible` AST check
+  was simply never consulted. Fixed: R3 now requires `lineIsVisible(spans,
+  ...)` too, using the FULL span set (not just text spans) — because its
+  target, a bare property access like `{row.regime}`, is never itself
+  string-literal text, `computeVisibleSpans` also tags the outer range of
+  ANY JSX-child/visible-attribute expression as a `kind: "expr"` span
+  regardless of its inner node type, and R3 is the only rule that consults
+  those. R1/R2/R4/R5b never do (see next bullet), so this widening cannot
+  reintroduce a property-access false positive into any of them.
+- **R4 (`untranslated_stat_token`) matched the whole raw line, not the
+  visible text itself.** `tokRe.test(line) && visible && ...` could match a
+  stat token appearing ANYWHERE on a visible line — including inside a
+  property access like `item.dte` sharing a line with unrelated visible
+  text. Fixed: R4 (and, for the same reason, R1 and R2) now iterate ONLY
+  `textSpans` — the narrow, literal-content subset of the span set (JsxText
+  / a JSX-child or attribute string literal / a copy-dict value; "expr"
+  spans are filtered out) — and test each span's own sliced text, the same
+  token-precise shape R1 already used. A bare property access is never a
+  text span, so it can never satisfy R1/R2/R4/R5b regardless of what else
+  shares its line. Test 22 locks in the exact case the ruling named
+  (`{trade.dte}` produces zero findings); test 21 locks in that `className`
+  — not a visible attribute — stays unflagged even behind the identical
+  ternary; test 23 locks in that a template literal inside a `throw` (no
+  JSX position at all) produces zero findings.
+- **`enLitRe` (the `[">]...[<"]` rawLine regex) deleted.** R5b
+  (`missing_zh`) is rewritten to iterate `textSpans` exactly like R1/R2/R4:
+  for each literal span, decode its content (strip the delimiting quote
+  characters for a string-literal span; trim for a JsxText span), then apply
+  the same 2-plus-Latin-word / 6-plus-character test as before. This is not
+  merely a different way to find the same lines — the old regex required
+  the `>`/`<`/`"` boundary characters to sit on the SAME PHYSICAL LINE as the
+  text, which silently missed the (very common) case of a multi-line JsxText
+  node or a literal reached only via the new ternary/logical leaf
+  collection; the span-based rewrite catches both.
+- **`.ts` files were always parsed as TSX regardless of extension.**
+  `ts.createSourceFile` was hardcoded to `ts.ScriptKind.TSX`. Fixed: a
+  `.tsx` path parses as TSX, every other extension (`.ts`) parses as TS.
+- **`nulls` was emitted for every scanned file, not files a rule could not
+  run on.** The old gate (`visibleAddedCount === 0`) is trivially true for
+  the ~230 of ~231 scanned files a typical PR's diff never touches at all —
+  every one of them got the same "not evaluable" null as a genuinely
+  limited check. Fixed: a null is now emitted only when the file is BOTH
+  touched by the diff (`added.size > 0` for that path) AND produced zero
+  findings and zero visible added lines — i.e. reserved for files the diff
+  changed but that gave the guard nothing checkable, never the majority of
+  files the diff never opened at all. Real-tree measurement below: `nulls:
+  []` (0), against 231 scanned files.
+- **`--json` no longer leaks notices onto stdout.** The overlay-absent
+  disclosure, the `--root`/`--diff-file` hard-error lines, and the
+  unresolvable-base warning were all written to stdout unconditionally,
+  ahead of the JSON document itself — a `--json` consumer had to
+  `.split("\n").pop()` to find the JSON line among them. Fixed: a `notice()`
+  helper routes every one of these to stderr when `--json` is set (stdout
+  is untouched, unchanged, for the human-readable non-JSON invocations).
+  `plainLanguageGuard.test.ts`'s harness now uses `spawnSync` (not
+  `execFileSync`, whose success-path return value carries no stderr at all)
+  so it can capture stdout and stderr separately on every run; every test
+  that parses the JSON result now calls a shared `parseJson(res)` that does
+  `JSON.parse(res.stdout.trim())` directly — no more line-scavenging. Test
+  24 locks this in: `JSON.parse(res.stdout.trim())` never throws, and
+  `res.stderr` carries the overlay-absent notice on that same successful
+  run.
+
+### Real-tree measurement (this round)
+
+`node terminal/scripts/check_plain_language.mjs --root . --diff-file
+<(empty patch) --json | jq` and, separately, `--since origin/master` (this
+PR's own actual diff) — both give the identical count, since this PR's own
+changes touch only `terminal/scripts/`, `terminal/lib/__tests__/`, and
+`docs/`, none of which fall under `SCAN_GLOBS`:
+
+```
+scannedFiles: 231
+counts: { blocking: 0, legacyReported: 264, waived: 0 }
+nulls: []
+byRule: { missing_zh: 224, raw_slug_interpolation: 22, untranslated_stat_token: 18 }
+raw_state_enum: 0, internal_study_slug: 0
+```
+
+**Blocking (this PR's own gate) is 0 — the "total findings must be <= 5"
+gate, read as the blocking count on this PR's own diff, is satisfied.** The
+264 legacy findings are real, pre-existing product debt now surfaced far
+more completely than round 3's `enLitRe`-based scan (which measured 67
+`missing_zh`/`raw_slug_interpolation`/`untranslated_stat_token` legacy
+findings on the same tree) — the old rawLine regex required the JSX
+tag/quote boundary to sit on the exact same physical line as the text and
+silently missed the common multi-line-JsxText case; the new span-based scan
+does not. None of the 264 are blocking (`blocking: 0` — this PR adds no new
+violation), so per the ruling's own carve-out ("if genuine legacy defects
+exceed 5, they are emitted under a separate `legacy` bucket that does NOT
+count") they are disclosed here for the F-owners rather than remediated by
+this packet, which owns the checker/tests/doc only, not app copy:
+
+- `missing_zh` (224): overwhelmingly genuine, previously-invisible
+  hardcoded English UI copy with no zh routing — e.g.
+  `terminal/app/login/LoginFormLegacy.tsx:46` ("Sign in to Mastermind"),
+  `terminal/app/global-error.tsx:59` ("Something went wrong"),
+  `terminal/components/GuidePanel.tsx` (multiple long descriptive strings),
+  `terminal/components/ChartConductor.tsx:236` ("Mastermind AI"). Full list
+  reproducible via the command above.
+- `raw_slug_interpolation` (22): bare `.tier`/`.kind`/`.verdict`/`.state`/
+  `.status`/`.regime`/`.type` interpolations across
+  `GuidePanel.tsx`/`ScreenerView.tsx`/`SearchModal.tsx`/`StockAnalysis.tsx`/
+  `TerminalShell.tsx`/`fin/*.tsx`/`flowdesk/FlowDeskView.tsx`/
+  `gexdesk/ExposureMatrix.tsx`/`workspaces/ThesisWorkspace.tsx` — genuine
+  pre-existing instances of exactly the pattern this rule targets.
+- `untranslated_stat_token` (18): mostly `oi` inside
+  `terminal/components/OptionsHubView.tsx` (and a few sibling flow/options
+  views) — **one disclosed limitation, not a guard bug**: several of these
+  sit inside an already-hand-rolled `lang === "zh" ? "…" : "vol>OI"`
+  ternary — a real, working zh/en branch that simply isn't spelled through
+  the designated `t()`/`tPlain()`/`pick()`/`LEX[` helpers `hasPlainHelperOnLine`
+  recognizes as "already routed". These are true findings under the rule's
+  own stated criterion (no recognized helper on the line) but are lower
+  priority than an un-routed literal, since the code is already manually
+  bilingual; noted here rather than special-cased, since the ruling does
+  not authorize a new helper-recognition carve-out.
+
+Full suite: 25/25 passing (`npx vitest run
+lib/__tests__/plainLanguageGuard.test.ts`); `npx tsc --noEmit` clean.

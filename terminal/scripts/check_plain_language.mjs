@@ -270,48 +270,108 @@ function isCopyDictValueNode(node, copyInfo, sourceFile) {
 }
 
 // isUserVisiblePosition (AST-based): the set of AST node kinds treated as a
-// genuine user-visible position, per the binding ruling on Terminal #530 —
+// genuine user-visible position, per the binding round-2 ruling on Terminal
+// #530 — EVERY rule (R1-R5) decides visibility from this SAME span set:
 //   - JsxText nodes (non-whitespace)
-//   - string literals that are direct JSX children (`{"..."}` as a child of
-//     a JsxElement/JsxFragment, not as an argument to a call inside one)
-//   - string literals that are `{...}` expression VALUES of a
-//     title/aria-label/placeholder/alt JSX attribute (or the bare string
-//     literal form, `alt="..."`)
+//   - string literals that are JSX children, INCLUDING when nested inside a
+//     conditional (`cond ? "A" : "B"`) or logical `&&`/`||` JsxExpression —
+//     see collectStringLeaves below. A literal behind a ternary/logical has
+//     its own AST `.parent` set to the ConditionalExpression/BinaryExpression,
+//     never the JsxExpression itself, so a direct-parent-only check (the
+//     round-1 shape) can never see it; collectStringLeaves recurses through
+//     that wrapping to find the literal leaves that are actually rendered.
+//   - string literals that are `{...}` expression VALUES (or the bare
+//     literal form) of a title/aria-label/placeholder/alt JSX attribute,
+//     including the same ternary/logical nesting
 //   - string literal VALUES inside a bilingual copy dictionary file/region
 //     (findCopyRegions/isCopyDictValueNode above — never a property KEY,
 //     never an import/export module specifier)
-// Everything else — a bare identifier used as a style/prop value
-// (`style={LEGEND_ITEM}`), a string literal passed as an i18n KEY
-// (`t("marketCalm")` — "marketCalm" is a lookup key, not display text), a
-// comparison or arrow function in ordinary code (`=>`, `<=`) — is walked by
-// the AST but never produces a span, so it can never be mistaken for a
-// visible position. This replaces the old `>[^<>]*<` substring heuristic,
-// which matched `=>`/`<=` operators and any bare identifier sharing a line
-// with real JSX markup.
+// Each span carries `kind`: "jsxtext" or "literal" for the text-bearing
+// spans above (what R1/R2/R4/R5b scan for actual rendered-text content), or
+// "expr" for the outer range of ANY JSX-child/visible-attribute expression
+// regardless of its inner node type (property access, call, ternary,
+// whatever) — this is what lets R3 (which targets a bare property-access
+// interpolation like `{row.regime}`, never a string literal) decide
+// visibility from this SAME span set rather than from a rawLine regex,
+// while R1/R2/R4/R5b — which only care about literal displayed TEXT — are
+// scoped to filter to the text-kind spans alone (see textSpans in
+// scanLines), so a property/identifier name inside an "expr" span (e.g.
+// `trade.dte`) can never be mistaken for rendered text.
+// A bare identifier used as a style/prop value (`style={LEGEND_ITEM}`), a
+// string literal passed as an i18n KEY (`t("marketCalm")` — a lookup key,
+// not display text), a comparison or arrow function in ordinary code
+// (`=>`, `<=`), or any expression outside a qualifying JSX/attribute
+// position (e.g. a template string inside a `throw new Error(...)`) is
+// walked by the AST but never produces a span of any kind. This replaces
+// the old `>[^<>]*<` substring heuristic entirely — no rule below tests
+// rawLine with a regex to decide visibility.
 function computeVisibleSpans(sourceFile, relPath) {
   const spans = [];
   const copyInfo = findCopyRegions(relPath, sourceFile);
   const isStringy = (node) => ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
-  const addSpan = (node) => spans.push({ start: node.getStart(sourceFile), end: node.getEnd() });
+  const addTextSpan = (node, kind) => spans.push({ start: node.getStart(sourceFile), end: node.getEnd(), kind });
+  const addExprSpan = (node) => spans.push({ start: node.getStart(sourceFile), end: node.getEnd(), kind: "expr" });
+
+  // Recurse through ConditionalExpression (both branches are potentially the
+  // rendered value), LogicalExpression (`&&`: only the RIGHT operand can be
+  // rendered — the left is the non-rendered guard; `||`: either operand
+  // could be rendered), and ParenthesizedExpression wrapping, collecting
+  // every string-literal LEAF reachable this way. Anything else (a bare
+  // identifier, a property access, a call, a JSX element) is not a string
+  // leaf and is simply not pushed here — it may still be visited elsewhere
+  // by the ordinary recursive walk (e.g. a nested JsxElement's own JsxText).
+  const collectStringLeaves = (node, out) => {
+    if (!node) return;
+    if (ts.isConditionalExpression(node)) {
+      collectStringLeaves(node.whenTrue, out);
+      collectStringLeaves(node.whenFalse, out);
+      return;
+    }
+    if (ts.isBinaryExpression(node)) {
+      const op = node.operatorToken.kind;
+      if (op === ts.SyntaxKind.AmpersandAmpersandToken) {
+        collectStringLeaves(node.right, out); // left is the guard, never rendered
+        return;
+      }
+      if (op === ts.SyntaxKind.BarBarToken) {
+        collectStringLeaves(node.left, out);
+        collectStringLeaves(node.right, out);
+        return;
+      }
+      return; // any other binary op (e.g. `+` concatenation): not a simple literal passthrough
+    }
+    if (ts.isParenthesizedExpression(node)) {
+      collectStringLeaves(node.expression, out);
+      return;
+    }
+    if (isStringy(node)) out.push(node);
+  };
 
   const visit = (node) => {
     if (ts.isJsxText(node)) {
-      if (node.text.trim().length > 0) addSpan(node);
-    } else if (isStringy(node)) {
+      if (node.text.trim().length > 0) addTextSpan(node, "jsxtext");
+    } else if (ts.isJsxExpression(node) && node.expression) {
       const parent = node.parent;
-      if (parent && ts.isJsxExpression(parent)) {
-        const grandparent = parent.parent;
-        if (grandparent && (ts.isJsxElement(grandparent) || ts.isJsxFragment(grandparent))) {
-          addSpan(node); // `{"..."}` as a direct JSX child
-        } else if (grandparent && ts.isJsxAttribute(grandparent)) {
-          const attrName = grandparent.name.getText(sourceFile).toLowerCase();
-          if (VISIBLE_ATTR_NAMES.has(attrName)) addSpan(node); // `attr={"..."}`
-        }
+      let qualifies = false;
+      if (parent && (ts.isJsxElement(parent) || ts.isJsxFragment(parent))) {
+        qualifies = true; // `{...}` as a direct JSX child
       } else if (parent && ts.isJsxAttribute(parent)) {
         const attrName = parent.name.getText(sourceFile).toLowerCase();
-        if (VISIBLE_ATTR_NAMES.has(attrName)) addSpan(node); // `attr="..."`
+        qualifies = VISIBLE_ATTR_NAMES.has(attrName); // `attr={...}`
+      }
+      if (qualifies) {
+        addExprSpan(node);
+        const leaves = [];
+        collectStringLeaves(node.expression, leaves);
+        for (const leaf of leaves) addTextSpan(leaf, "literal");
+      }
+    } else if (isStringy(node)) {
+      const parent = node.parent;
+      if (parent && ts.isJsxAttribute(parent)) {
+        const attrName = parent.name.getText(sourceFile).toLowerCase();
+        if (VISIBLE_ATTR_NAMES.has(attrName)) addTextSpan(node, "literal"); // bare `attr="..."`
       } else if (isCopyDictValueNode(node, copyInfo, sourceFile)) {
-        addSpan(node); // a genuine copy-dict VALUE — never a key or import specifier
+        addTextSpan(node, "literal"); // a genuine copy-dict VALUE — never a key or import specifier
       }
     }
     ts.forEachChild(node, visit);
@@ -320,10 +380,13 @@ function computeVisibleSpans(sourceFile, relPath) {
   return spans;
 }
 
-// Line-level visibility check for the rules that still reason per raw line
-// (R2/R4/R5b): a line "is visible" iff at least one AST-derived visible span
-// overlaps its character range. Coarser than R1's token-precise span check
-// (see scanLines below) but still strictly AST-driven — no more `>...<`
+// Line-level visibility check used ONLY by R3 (raw_slug_interpolation),
+// the one rule whose target — a bare property-access interpolation like
+// `{row.regime}` — is never itself string-literal text and so can never be
+// tested span-precisely the way R1/R2/R4/R5b are (see textSpans in
+// scanLines). A line "is visible" iff at least one AST-derived span (text
+// OR expr — the full set from computeVisibleSpans) overlaps its character
+// range. Strictly AST-driven, never a rawLine regex: no more `>...<`
 // substring matching, so `=>`/`<=` and bare identifiers on an otherwise-JSX
 // line no longer flip this true on their own.
 function lineIsVisible(spans, sourceFile, lineNo) {
@@ -390,10 +453,25 @@ function scanLines(relPath, text, addedLines, overlayTerms) {
   const isI18n = relPath.endsWith("terminal/lib/i18n.tsx");
 
   // ts.createSourceFile is lenient (produces error nodes rather than
-  // throwing) on malformed input, so a scanned .tsx file always yields a
+  // throwing) on malformed input, so a scanned file always yields a
   // sourceFile; spans is simply empty if nothing qualifies as visible.
-  const sourceFile = ts.createSourceFile(relPath, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  // Parse .tsx as TSX and every other extension (.ts) as plain TS — a
+  // TS-only file was previously always parsed as TSX regardless of its own
+  // extension, which is the wrong grammar for a file that legitimately uses
+  // TS-only syntax the TSX grammar treats differently (e.g. an angle-bracket
+  // type assertion, `<T>value`, is ambiguous with a JSX element under the
+  // TSX scanner).
+  const scriptKind = relPath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const sourceFile = ts.createSourceFile(relPath, text, ts.ScriptTarget.Latest, true, scriptKind);
   const spans = computeVisibleSpans(sourceFile, relPath);
+  // textSpans: the narrow, literal-text-bearing subset (JsxText / a
+  // JSX-child or attribute string literal / a copy-dict value) — what
+  // R1/R2/R4/R5b scan, since they only ever care about literal RENDERED
+  // TEXT, never a property/identifier name. `spans` (the full set,
+  // including "expr" spans covering non-literal JSX children like a bare
+  // `{row.regime}` property access) is used only by R3 below, which is the
+  // one rule whose target is never itself string-literal text.
+  const textSpans = spans.filter((s) => s.kind !== "expr");
 
   let visibleAddedCount = 0;
   for (let i = 0; i < lines.length; i++) {
@@ -401,14 +479,15 @@ function scanLines(relPath, text, addedLines, overlayTerms) {
     if (added.has(lineNo) && lineIsVisible(spans, sourceFile, lineNo)) visibleAddedCount += 1;
   }
 
-  // R1: raw_state_enum — token-precise. Scans ONLY the text inside genuinely
-  // visible AST spans (never a whole line), so an UPPER_SNAKE identifier
-  // used as a style/prop value or inside a comparison/arrow expression on
-  // the same line as real JSX text can never be mistaken for the visible
-  // text itself (the exact false-positive class the review measured on
+  // R1: raw_state_enum — token-precise, text spans only. Scans ONLY the
+  // text inside genuinely visible literal spans (never a whole line, never
+  // an "expr" span), so an UPPER_SNAKE identifier used as a style/prop
+  // value, a call argument, or inside a comparison/arrow expression on the
+  // same line as real JSX text can never be mistaken for the visible text
+  // itself (the exact false-positive class the review measured on
   // VolSkewPanel.tsx / HeatmapTable.tsx / OptionsHubView.tsx).
   const enumRe = /\b([A-Z][A-Z0-9]+(?:_[A-Z0-9]+)+)\b/g;
-  for (const span of spans) {
+  for (const span of textSpans) {
     const spanText = text.slice(span.start, span.end);
     enumRe.lastIndex = 0;
     let m;
@@ -425,67 +504,105 @@ function scanLines(relPath, text, addedLines, overlayTerms) {
     }
   }
 
-  lines.forEach((rawLine, idx) => {
-    const lineNo = idx + 1;
-    const line = rawLine;
-    const visible = lineIsVisible(spans, sourceFile, lineNo);
-    const waiverReason = parseWaiver(line);
-
-    // R2: internal_study_slug -- whole-word match only. The old
-    // `line.includes(slug)` bare substring test also fired on ordinary
-    // English words containing a slug as a substring, e.g. "lobe" inside
-    // "Globe" (MEASURED: <span>Globe</span> blocked as
-    // internal_study_slug "lobe").
+  // R2: internal_study_slug — whole-word, text spans only (same
+  // span-precision as R1, never a whole-line test). The old
+  // `line.includes(slug)` bare substring test also fired on ordinary
+  // English words containing a slug as a substring, e.g. "lobe" inside
+  // "Globe" (MEASURED: <span>Globe</span> blocked as
+  // internal_study_slug "lobe").
+  for (const span of textSpans) {
+    const spanText = text.slice(span.start, span.end);
     for (const slug of PLAIN_VOCABULARY.studySlugs) {
-      const slugRe = new RegExp(`\\b${escapeRegExp(slug)}\\b`);
-      if (slugRe.test(line) && visible) {
+      const slugRe = new RegExp(`\\b${escapeRegExp(slug)}\\b`, "g");
+      let m;
+      while ((m = slugRe.exec(spanText))) {
+        const absOffset = span.start + m.index;
+        const lineNo = sourceFile.getLineAndCharacterOfPosition(absOffset).line + 1;
+        const rawLine = lines[lineNo - 1] ?? "";
+        const waiverReason = parseWaiver(rawLine);
         findings.push(mkFinding(relPath, lineNo, "internal_study_slug", slug,
           "internal study/organ slug in a user-visible position",
           `<no plain phrase declared for ${slug} — add one to PLAIN_VOCABULARY, or route through lib/plainLabels.ts>`,
           added.has(lineNo), waiverReason));
       }
     }
+  }
 
-    // R3: raw_slug_interpolation — JSX interpolation of a slugFields field, no plain helper on line
-    for (const field of PLAIN_VOCABULARY.slugFields) {
-      const interpRe = new RegExp(`\\{[^}]*\\.${field}\\}`);
-      if (interpRe.test(line) && !hasPlainHelperOnLine(line, overlayTerms)) {
-        findings.push(mkFinding(relPath, lineNo, "raw_slug_interpolation", field,
-          `raw "${field}" field interpolated with no plain-language helper on the same line`,
-          `route through a plainLabels helper (e.g. regimeLabel/classicCategoryLabel) or lib/i18n t()`,
-          added.has(lineNo), waiverReason));
-      }
-    }
-
-    // R4: untranslated_stat_token — rendered as visible text, no gloss/LEX key on line
+  // R4: untranslated_stat_token — text spans only, matching a rendered TEXT
+  // token, never a property/identifier name. A bare `trade.dte` property
+  // access is never a text span (at most an "expr" span, filtered out
+  // above), so this loop can never mistake it for displayed text no matter
+  // what else shares its line.
+  for (const span of textSpans) {
+    const spanText = text.slice(span.start, span.end);
     for (const tok of PLAIN_VOCABULARY.statTokens) {
-      const tokRe = new RegExp(`\\b${tok}\\b`, "i");
-      if (tokRe.test(line) && visible && !hasPlainHelperOnLine(line, overlayTerms)) {
+      const tokRe = new RegExp(`\\b${tok}\\b`, "gi");
+      let m;
+      while ((m = tokRe.exec(spanText))) {
+        const absOffset = span.start + m.index;
+        const lineNo = sourceFile.getLineAndCharacterOfPosition(absOffset).line + 1;
+        const rawLine = lines[lineNo - 1] ?? "";
+        if (hasPlainHelperOnLine(rawLine, overlayTerms)) continue;
+        const waiverReason = parseWaiver(rawLine);
         findings.push(mkFinding(relPath, lineNo, "untranslated_stat_token", tok,
           "untranslated raw statistic token rendered as visible text",
           `add a gloss via lib/i18n t("${tok}") or an inline explanatory label`,
           added.has(lineNo), waiverReason));
       }
     }
+  }
 
-    // R5b: general files — English literal in a user-visible position with
-    // no zh routing. (R5a — the i18n.tsx LEX-arity check — runs in a
-    // separate multi-line-safe pass below, not per raw line.)
-    if (!isI18n) {
-      const enLitRe = /[">]\s*([A-Za-z][A-Za-z' -]{5,})\s*[<"]/;
-      const lm = enLitRe.exec(line);
-      if (lm && visible) {
-        const words = lm[1].trim().split(/\s+/).filter((w) => /[A-Za-z]/.test(w));
-        const latinWords = words.filter((w) => /^[A-Za-z'-]+$/.test(w));
-        if (latinWords.length >= 2 && lm[1].trim().length >= 6 && !hasPlainHelperOnLine(line, overlayTerms)) {
-          findings.push(mkFinding(relPath, lineNo, "missing_zh", lm[1].trim(),
-            "added English literal in a user-visible position with no zh routing (t(/tPlain(/pick(/LEX[)",
-            `route through t()/tPlain()/pick() with a LEX entry carrying an [en, zh] pair`,
-            added.has(lineNo), waiverReason));
-        }
+  // R3: raw_slug_interpolation — the one rule whose target (a bare
+  // property-access interpolation like `{row.regime}`) is never itself
+  // string-literal text, so it cannot be made span-precise the way
+  // R1/R2/R4/R5b are. It still decides visibility from the SAME AST span
+  // set computed by computeVisibleSpans (the full set, "expr" spans
+  // included — see lineIsVisible) rather than from a rawLine regex; the
+  // `interpRe` regex below identifies WHAT the finding is (a `.field`
+  // interpolation), never WHETHER the line is visible.
+  lines.forEach((rawLine, idx) => {
+    const lineNo = idx + 1;
+    const visible = lineIsVisible(spans, sourceFile, lineNo);
+    if (!visible) return;
+    const waiverReason = parseWaiver(rawLine);
+    for (const field of PLAIN_VOCABULARY.slugFields) {
+      const interpRe = new RegExp(`\\{[^}]*\\.${field}\\}`);
+      if (interpRe.test(rawLine) && !hasPlainHelperOnLine(rawLine, overlayTerms)) {
+        findings.push(mkFinding(relPath, lineNo, "raw_slug_interpolation", field,
+          `raw "${field}" field interpolated with no plain-language helper on the same line`,
+          `route through a plainLabels helper (e.g. regimeLabel/classicCategoryLabel) or lib/i18n t()`,
+          added.has(lineNo), waiverReason));
       }
     }
   });
+
+  // R5b: general files — literal text in a genuine visible position (text
+  // spans only — JsxText / a JSX-child or attribute string literal / a
+  // copy-dict value, including behind ternary/logical/paren wrapping) with
+  // no zh routing. (R5a — the i18n.tsx LEX-arity check — runs in a separate
+  // multi-line-safe pass below, not per span.) This replaces the old
+  // `enLitRe` rawLine regex (`[">]\s*(...)\s*[<"]`) entirely: that shape
+  // matched `=>`/`<=` operators and any bare identifier sharing a line with
+  // real JSX markup, and could never see a literal hidden behind a
+  // ternary/logical operand in the first place.
+  if (!isI18n) {
+    for (const span of textSpans) {
+      const raw = text.slice(span.start, span.end);
+      const literal = span.kind === "literal" ? (raw.length >= 2 ? raw.slice(1, -1) : raw) : raw.trim();
+      if (!literal) continue;
+      const words = literal.split(/\s+/).filter((w) => /[A-Za-z]/.test(w));
+      const latinWords = words.filter((w) => /^[A-Za-z'-]+$/.test(w));
+      if (latinWords.length < 2 || literal.length < 6) continue;
+      const lineNo = sourceFile.getLineAndCharacterOfPosition(span.start).line + 1;
+      const rawLine = lines[lineNo - 1] ?? "";
+      if (hasPlainHelperOnLine(rawLine, overlayTerms)) continue;
+      const waiverReason = parseWaiver(rawLine);
+      findings.push(mkFinding(relPath, lineNo, "missing_zh", literal,
+        "added English literal in a user-visible position with no zh routing (t(/tPlain(/pick(/LEX[)",
+        `route through t()/tPlain()/pick() with a LEX entry carrying an [en, zh] pair`,
+        added.has(lineNo), waiverReason));
+    }
+  }
 
   // R5a: LEX arity / zh-parity for terminal/lib/i18n.tsx — a dedicated
   // multi-line-safe, quote-aware pass over the whole file text, replacing
@@ -521,7 +638,7 @@ function scanLines(relPath, text, addedLines, overlayTerms) {
     }
   }
 
-  return { findings, visibleAddedCount };
+  return { findings, visibleAddedCount, touched: added.size > 0 };
 }
 
 // Split a LEX tuple's inner text (e.g. `"Hello, world", "..."`) on commas
@@ -688,9 +805,17 @@ function main() {
     else if (a === "--self-check") opts.selfCheck = true;
   }
 
+  // In --json mode, stdout carries ONLY the JSON document — every other
+  // notice/diagnostic (the overlay-absent disclosure, an unresolvable-base
+  // warning, a hard --root/--diff-file error) goes to stderr instead, so a
+  // consumer can `JSON.parse(stdout)` directly rather than having to find
+  // the JSON line among other text. Non-JSON invocations are unaffected —
+  // notices still print to stdout there, unchanged.
+  const notice = (line) => (opts.json ? process.stderr : process.stdout).write(line);
+
   const root = opts.root ? opts.root : findRepoRoot();
   if (opts.root && !existsSync(opts.root)) {
-    process.stdout.write(`::error title=plain-language::--root supplied but unreadable: ${opts.root}\n`);
+    notice(`::error title=plain-language::--root supplied but unreadable: ${opts.root}\n`);
     process.exit(2);
   }
 
@@ -712,18 +837,18 @@ function main() {
     PLAIN_VOCABULARY.allowTokens.length;
 
   if (!overlay.present) {
-    process.stdout.write(
+    notice(
       `plain-language guard — vocabulary overlay ABSENT: terminal/lib/plainLabels.ts not present on this tree; using the ${declaredTerms} declared terms only.\n`
     );
   }
 
   const diffResult = resolveDiff({ diffFile: opts.diffFile, since: opts.since, root });
   if (diffResult.error) {
-    process.stdout.write(`::error title=plain-language::${diffResult.error}\n`);
+    notice(`::error title=plain-language::${diffResult.error}\n`);
     process.exit(2);
   }
   if (!diffResult.baseResolved) {
-    process.stdout.write(
+    notice(
       `::warning title=plain-language::base ref '${opts.since}' is not resolvable in this checkout (shallow clone?) — no line counts as added, so nothing can block. Pass --diff-file with the PR's own diff.\n`
     );
     if (opts.json) {
@@ -747,8 +872,16 @@ function main() {
   let allFindings = [];
   const nulls = [];
   for (const f of scanFiles) {
-    const { findings, visibleAddedCount } = scanFile(root, f, addedLines, overlay.terms);
-    if (findings.length === 0 && visibleAddedCount === 0) {
+    const { findings, visibleAddedCount, touched } = scanFile(root, f, addedLines, overlay.terms);
+    // Null is capped to files the diff actually TOUCHED (added.size > 0 for
+    // that path) that still came back with nothing checkable — never every
+    // scanned file. Before this gate, a file the diff never touched at all
+    // (the overwhelming majority of the ~230+ scanned files on any given
+    // PR) got the exact same "not evaluable" null as a genuinely limited
+    // check, because `visibleAddedCount === 0` is trivially true for any
+    // untouched file — that is "a rule ran on every file", not "a rule
+    // could not run on a file it needed to check".
+    if (touched && findings.length === 0 && visibleAddedCount === 0) {
       // Honest null: this file had no user-visible ADDED lines at all, so
       // "no findings" cannot be hiding a missed zh-parity check — there was
       // nothing on the diff's side of this file to check in the first place.
