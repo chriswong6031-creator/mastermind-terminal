@@ -41,8 +41,9 @@ Two hard-won rules (see root `HANDOFF.md` §5): strip `--` comments first — th
 Cloudflare 1010 block.
 
 Because application is manual and per-file, **the files here can be applied out of numeric order,
-and have been.** Application status (baseline census 2026-08-21; the `0011` and `0012` rows were
-updated 2026-09-06 to record facts from that date):
+and have been.** Application status (baseline census 2026-08-21; the `0011`, `0012`, and `0013`
+rows were updated 2026-09-06 to record facts from that date, including `0013`'s merge to `master`
+as `be898be5` via PR #513):
 
 | file | object it creates | in production? |
 |---|---|---|
@@ -52,6 +53,7 @@ updated 2026-09-06 to record facts from that date):
 | `0010_search_event_stats.sql` | `search_event_stats()` + `search_events_created_at` | **yes** — applied 2026-08-21 |
 | `0011_analytics_eid.sql` | `analytics_events.eid` (nullable unique UUID column) + `analytics_events_eid_uniq` unique index | yes — DDL applied 2026-09-05; readback receipt posted 2026-09-06 (PR #507 comment `5557754941`) |
 | `0012_thesis_objects.sql` | `theses`, `thesis_versions` | yes — applied 2026-09-06 (Meta-CEO B; project fsldfzlxyavsuwqbceod; post-apply readback: both tables relrowsecurity=true, policies theses_select_own + thesis_versions_select_own, SELECT-only grant to authenticated, functions apply_thesis_version_v1 (security definer) + read_current_thesis_versions_v1 (security invoker), indexes theses_owner_updated_idx/theses_owner_subject_idx/thesis_versions_owner_thesis_idx) |
+| `0013_alert_runs_outbox.sql` | `alert_runs`, `alert_outbox` tables + RLS (Market Ontology F08 packet B-F08-2) | merged to `master` as `be898be5` (2026-09-06) — **not applied**, awaiting readback receipt |
 
 `0009` was applied two days before `0008`. The numbering records *when the DDL entered the repo*,
 not when an operator ran it — so **never infer application status from file order.** Ask the
@@ -156,7 +158,7 @@ amendment, only a README edit.
 |---|---|---|---|
 | `0011` | `analytics_eid` | PR #507 (DDL applied 2026-09-05; readback receipt posted 2026-09-06: https://github.com/mastermindx-market-intelligence/mastermind-terminal/pull/507#issuecomment-5557754941) | applied |
 | `0012` | `thesis_objects` | PR #502 (merged as `d4556962`; DDL applied 2026-09-06, readback receipt) | merged + applied 2026-09-06 |
-| `0013` | `alert_runs_outbox` | PR #513 (open PR, packet B-F08-2) | open PR |
+| `0013` | `alert_runs_outbox` | PR #513 (merged as `be898be5` on 2026-09-06, packet B-F08-2; not yet applied — awaiting readback receipt) | merged |
 | `0014` | `tenancy_foundation` | PR #514 (open PR, packet B-F12-1) | open PR |
 
 What the statuses mean: **reserved** — the number is claimed (for example, by a Meta-CEO B
@@ -169,12 +171,14 @@ history (merged first, applied later) is otherwise lost. (**released** is an ope
 status — see "Release path" above — for a claim that was stood down; it is not one of the
 ruling's own status words and no row currently carries it.)
 
-`0001`–`0012` have reached production: `0001`–`0010` per the application-status table above,
-`0011` via its corrective DDL applied live on 2026-09-05 via the management API (readback receipt
-posted 2026-09-06, recorded on PR #507, ahead of `0011`'s own file landing on `master`), and
-`0012` merged to `master` as `d4556962` with its DDL applied 2026-09-06 (Meta-CEO B, readback
-receipt). The "in production?" table above now covers `0001`–`0012`. `0013` (PR #513) and `0014`
-(PR #514) are open pull requests: merged = no, applied = no.
+`0001`–`0012` have reached production (DDL applied): `0001`–`0010` per the application-status
+table above, `0011` via its corrective DDL applied live on 2026-09-05 via the management API
+(readback receipt posted 2026-09-06, recorded on PR #507, ahead of `0011`'s own file landing on
+`master`), and `0012` merged to `master` as `d4556962` with its DDL applied 2026-09-06 (Meta-CEO B,
+readback receipt). `0013` (PR #513) merged to `master` as `be898be5` on 2026-09-06 (merged = yes)
+but its DDL has not yet been applied — awaiting readback receipt (applied = no). `0014` (PR #514)
+remains an open pull request (merged = no, applied = no). The "in production?" table above now
+covers `0001`–`0013`, contiguous through `0013`.
 
 This table is re-verified at merge time, not just at the moment this pull request opened. A later
 reader should re-run the same open-pull-request query rather than trust these owner cells past
