@@ -296,6 +296,14 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
   "condition.opt_0dte_spike": ["Same-day-expiry options spike", "当日到期期权异动"],
   "condition.opt_surface_pocket": ["Options surface pocket", "期权曲面异常点"],
   "condition.unknown": ["Condition", "条件"],
+  // Major 4 (round-6 review, follow-up): the drillback dialog's "what happened" field, for
+  // ZH, reused the SAME string as its own "Condition" field above it (both are conditionText),
+  // so a ZH viewer saw one fact printed twice under two different labels while EN kept two
+  // distinct facts (the threshold definition vs. the engine's real fired-event sentence). Used
+  // only as the ZH fallback when the alert's own fired stamp carries no crossing value to make
+  // the two fields concretely differ (see AlertDetail.tsx) — an honest, generic "this fired"
+  // notice, never a fabricated specific.
+  "condition.firedGeneric": ["Your condition was met.", "你设置的条件已被触发。"],
 };
 
 export function copy(key: string, lang: "en" | "zh", vars?: Record<string, string | number>): string {

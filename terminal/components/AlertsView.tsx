@@ -22,7 +22,7 @@ import {
 import { SUITE_DEFS } from "@/lib/suites/registry";
 import { useGateEntitlement } from "@/lib/entitlementStore";
 import { useShellIdentity } from "@/components/chrome/AppShell";
-import { ALERTS_CHANGED_EVENT } from "@/lib/alertsView";
+import { ALERTS_CHANGED_EVENT, conditionText } from "@/lib/alertsView";
 
 type Alert = { id: string; symbol: string; condition: any; active: boolean; created_at: string };
 
@@ -682,12 +682,21 @@ export default function AlertsView({ email, panelOnly, listOnly }: { email: stri
                 )}
                 <button className="icbtn" aria-label={t("remove")} onClick={() => setConfirmDel((c) => (c === a.id ? null : a.id))}><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13" /></svg></button>
                 {/* WHY it fired — was title=-only, invisible to touch and keyboard.
-                    The note is composed server-side by ingest/alerts_engine.py and stored
-                    as one English string, so it does NOT follow the UI language. Tagged
-                    lang="en" so assistive tech reads it correctly in the ZH view; making
-                    the engine emit a translated note is a separate contract change. */}
+                    The note is composed server-side by ingest/alerts_engine.py as one
+                    English string, so it does NOT follow the UI language (major, round-6
+                    review: this span was rendering raw English — "crossed · 100" — on
+                    the ZH page). EN keeps the engine's own note (tagged lang="en" for
+                    assistive tech); ZH never renders it — it renders the house
+                    per-condition-kind ZH template (conditionText, lib/alertsView.ts,
+                    the same one every other ZH module on this page already uses) instead,
+                    still followed by the real crossing value when the fired stamp
+                    carries one. Making the engine emit a translated note is a separate
+                    contract change. */}
                 {trig && note && (
-                  <span className="arow-note" lang="en">{note}{tval != null ? ` · ${tval}` : ""}</span>
+                  <span className="arow-note" lang={lang === "zh" ? "zh" : "en"}>
+                    {lang === "zh" ? conditionText(a.condition, a.symbol, "zh") : note}
+                    {tval != null ? ` · ${tval}` : ""}
+                  </span>
                 )}
                 {confirmDel === a.id && (
                   <span className="arow-confirm" role="group" aria-label={t("deleteAlertQ")}>

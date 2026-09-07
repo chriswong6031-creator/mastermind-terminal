@@ -10,6 +10,11 @@ export interface AlertDetailData {
   holdingSymbol: string | null;
   summaryPlain: string | null;
   conditionPlain: string | null;
+  // Major 4 (round-6 review, follow-up): the real crossing value from the alert's own fired
+  // stamp (`condition.triggered.value`) — never the condition's THRESHOLD (already shown in
+  // conditionText above). `null` when the alert has since been re-armed and lost its stamp, or
+  // never carried a numeric value to begin with (an honest unknown, never a fabricated one).
+  triggeredValue: number | null;
   firedAt: string | null;
   armedAt: string;
   evidenceUrl: string | null;
@@ -52,10 +57,16 @@ export default function AlertDetail({ data, lang, onClose }: { data: AlertDetail
       </div>
       {/* Minor 4 (round-6 review): summaryPlain/conditionPlain are the fired-event payload's own
           EN-only sentences (same source as the timeline verdict's condition_plain) — rendering
-          them unconditionally put raw English into the ZH drillback dialog. ZH instead reuses
-          `data.conditionText`, already lang-gated via verdictText (lib/alertsView.ts) to the
-          house ZH template for this condition kind. */}
-      <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "发生了什么" : "What changed"}</span><span>{lang === "zh" ? data.conditionText : (data.summaryPlain || data.conditionPlain || copy("null.notRecorded", lang))}</span></div>
+          them unconditionally put raw English into the ZH drillback dialog.
+          Major 4 (round-6 review, follow-up): the first fix reused `data.conditionText`
+          verbatim for ZH — byte-identical to the "Condition" field right above it, so a ZH
+          viewer saw one fact printed twice under two different labels while EN keeps two
+          distinct facts. ZH now adds the alert's own real crossing value (never the condition's
+          threshold, already shown above) when the fired stamp still carries one, so the field
+          describes an EVENT ("NVDA 价格低于 150 · 100") rather than repeating the definition;
+          when no crossing value survived (e.g. re-armed since), it falls back to an honest
+          generic "this fired" notice — still never the identical string, never fabricated. */}
+      <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "发生了什么" : "What changed"}</span><span>{lang === "zh" ? (data.triggeredValue != null ? `${data.conditionText} · ${data.triggeredValue}` : copy("condition.firedGeneric", lang)) : (data.summaryPlain || data.conditionPlain || copy("null.notRecorded", lang))}</span></div>
       <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "时间线" : "Timeframe"}</span><span>{data.firedAt ? (lang === "zh" ? `触发于 ${fmt(data.firedAt)}` : `Fired ${fmt(data.firedAt)}`) : copy("null.notRecorded", lang)}{lang === "zh" ? `，建立于 ${fmt(data.armedAt)}` : `, armed ${fmt(data.armedAt)}`}</span></div>
       <div className={s.detailFact}>
         <span className={s.detailLabel}>{lang === "zh" ? "证据" : "Evidence"}</span>

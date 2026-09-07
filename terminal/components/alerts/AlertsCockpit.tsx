@@ -101,6 +101,12 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
     const row = view.rows.find((r) => r.alertId === openId);
     const alert = alerts?.find((a) => a.id === openId);
     if (!row || !alert) return null;
+    // Major 4 (round-6 review, follow-up): the real crossing value from the alert's own fired
+    // stamp — distinct from the condition's threshold (already in conditionText) — so the ZH
+    // "what happened" field below can describe an event instead of repeating the definition.
+    // Absent (re-armed since, or the stamp never carried one) is an honest null, never a guess.
+    const triggered = alert.condition?.triggered;
+    const triggeredValue = typeof triggered === "object" && triggered !== null && typeof triggered.value === "number" ? triggered.value : null;
     return {
       // Minor 4 (round-6 review): same lang-aware gate as the timeline verdict above — the
       // EN-only fired-event payload never renders straight into the ZH drillback dialog.
@@ -111,6 +117,7 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
       holdingSymbol: alert.symbol ?? row.outboxRow?.payload?.ticker ?? null,
       summaryPlain: row.outboxRow?.payload?.summary_plain ?? null,
       conditionPlain: row.outboxRow?.payload?.condition_plain ?? null,
+      triggeredValue,
       firedAt: row.outboxRow?.payload?.fired_at ?? null,
       armedAt: alert.created_at,
       evidenceUrl: row.outboxRow?.payload?.evidence_url ?? null,

@@ -11,11 +11,16 @@
 // the activity timeline row, the drillback detail dialog it opens into, the watching list, and
 // the no-coverage / recent-activity (zero-rows) modules (also covering Minor 3's new moduleHead).
 //
-// Scope: assertions are scoped to the cockpit's own `[data-alerts-module]`/`[data-cockpit-state]`
-// subtrees, never the whole page — `#alerts-manage` (`NewAlertPanel`, the pre-existing
-// create-alert form from components/AlertsView.tsx) is a separate, out-of-scope surface this PR
-// does not own or touch, and is deliberately excluded from these checks (see prior review rounds'
-// "outside this round's owned scope" precedent).
+// Major (round-6 review, follow-up): the prior version of this test scoped every assertion to
+// the cockpit's own `[data-alerts-module]`/`[data-cockpit-state]` subtrees and never mounted
+// `children` at all — so the existing-alerts management panel (`AlertsView.tsx`, `listOnly`,
+// mounted as `children` — see app/(shell)/alerts/page.tsx) was absent from the test DOM
+// entirely, and its `.arow-note` span (round-6 review Major 1: raw English "crossed · 100"
+// leaking onto the ZH page) was never exercised. page.tsx composes
+// `<AlertsCockpitMount><AlertsViewMount listOnly /></AlertsCockpitMount>` — that panel is real,
+// always-visible, user-facing content on the SAME rendered ZH page. The "FULL composed page"
+// test below mounts `AlertsCockpit` with a real `AlertsView listOnly` child, exactly as page.tsx
+// does, and asserts over the WHOLE container with no subtree scoping and no exclusions.
 //
 // No @testing-library/react in this repo (vitest.config.ts's `include` is
 // lib/__tests__/**/*.test.ts only) — react-dom/client's createRoot + react's act, per the
@@ -25,6 +30,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import React from "react";
 import AlertsCockpit from "@/components/alerts/AlertsCockpit";
+import AlertsView from "@/components/AlertsView";
 import { LangProvider } from "@/lib/i18n";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -112,14 +118,19 @@ describe("AlertsCockpit — ZH render never leaks English condition text (minor 
     }) as typeof globalThis.fetch;
   }
 
-  async function mount() {
+  async function mount(opts?: { fullPage?: boolean }) {
+    // fullPage matches app/(shell)/alerts/page.tsx exactly: AlertsCockpit wraps a real
+    // AlertsView `listOnly` instance as `children` (`#alerts-manage`'s pre-existing
+    // create/pause/rearm/delete management panel) — never scoped away.
+    const child = opts?.fullPage ? React.createElement(AlertsView, { email: "test@example.com", listOnly: true }) : null;
     await act(async () => {
       root = createRoot(container);
-      root!.render(React.createElement(LangProvider, null, React.createElement(AlertsCockpit, { email: "test@example.com" })));
+      root!.render(React.createElement(LangProvider, null, React.createElement(AlertsCockpit, { email: "test@example.com" }, child)));
     });
-    // Flush the two sequential awaited fetches inside AlertsCockpit's own `load()`, plus the
+    // Flush the two sequential awaited fetches inside AlertsCockpit's own `load()` (and, in
+    // fullPage mode, AlertsView's own independent `loadAlerts()` + manifest read), plus the
     // LangProvider effect that reads the `data-lang` attribute set in beforeEach.
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
   }
 
   it("fired + delivered fixture (the exact e2e zh-calm/zh-drillback fixture): timeline row and drillback dialog are both English-free", async () => {
@@ -142,6 +153,43 @@ describe("AlertsCockpit — ZH render never leaks English condition text (minor 
     expect(dialog).not.toBeNull();
     assertNoLeakedEnglish(dialog!, "drillback dialog");
     expect((dialog!.textContent ?? "").toLowerCase()).not.toContain("crossed your price line");
+
+    // Major 4 (round-6 review, follow-up): the "Condition" fact and the "What happened" fact
+    // must not be the same string — the earlier fix reused `conditionText` for both, so a ZH
+    // viewer saw one fact printed twice under two different labels.
+    const conditionLabel = Array.from(dialog!.querySelectorAll("*")).find((el) => el.textContent === "条件" && el.children.length === 0);
+    const whatHappenedLabel = Array.from(dialog!.querySelectorAll("*")).find((el) => el.textContent === "发生了什么" && el.children.length === 0);
+    expect(conditionLabel, "expected a '条件' label in the drillback dialog").toBeTruthy();
+    expect(whatHappenedLabel, "expected a '发生了什么' label in the drillback dialog").toBeTruthy();
+    const conditionValue = conditionLabel!.nextElementSibling?.textContent ?? "";
+    const whatHappenedValue = whatHappenedLabel!.nextElementSibling?.textContent ?? "";
+    expect(conditionValue.length).toBeGreaterThan(0);
+    expect(
+      whatHappenedValue,
+      `"条件"="${conditionValue}" and "发生了什么"="${whatHappenedValue}" must not be identical`,
+    ).not.toBe(conditionValue);
+  });
+
+  it("the FULL composed /alerts page (AlertsCockpit + the real existing-alerts management panel mounted as `children`, exactly as app/(shell)/alerts/page.tsx composes it) is English-free EVERYWHERE, including #alerts-manage — no subtree is excluded", async () => {
+    mockFetch([FIRED_ALERT], {
+      run: FRESH_RUN, runs_state: "READ_OK", last_success_at: FRESH_RUN.concluded_at,
+      last_success_state: "READ_OK", outbox: SENT_OUTBOX, outbox_state: "READ_OK",
+    });
+    await mount({ fullPage: true });
+
+    // The existing-alerts management panel (AlertsView.tsx, `listOnly`, mounted as `children` —
+    // see page.tsx) is real, always-rendered content on the composed page. It is exactly where
+    // round-6 review Major 1 found raw English ("crossed · 100") leaking into the ZH page, via
+    // the `.arow-note` span that renders the alert's own fired-event note. Assert on it directly
+    // (never scoped away, never excluded) so this test actually exercises the fixed code path,
+    // not just a NewAlertPanel wrapper that would render even without the fix.
+    const note = container.querySelector(".arow-note");
+    expect(note, "expected the existing-alerts list's fired-note span (.arow-note) to render for the FIRED_ALERT fixture").not.toBeNull();
+    expect(note!.textContent ?? "").not.toContain("crossed");
+    assertNoLeakedEnglish(note!, "existing-alerts list fired-note (.arow-note)");
+
+    assertNoLeakedEnglish(container, "the full composed /alerts page");
+    expect((container.textContent ?? "").toLowerCase()).not.toContain("crossed your price line");
   });
 
   it("watching-only fixture (no fired rows): the watching-list module is English-free", async () => {
