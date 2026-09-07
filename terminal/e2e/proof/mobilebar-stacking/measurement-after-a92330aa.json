@@ -1,6 +1,7 @@
 {
-  "label": "AFTER-this-pr",
-  "port": 4790,
+  "label": "AFTER-a92330aa",
+  "port": 4791,
+  "capturedAtHead": "a92330aaf5c08737488342e47930c39e33091457",
   "viewports": {
     "1440x900": {
       "mobilebar": {
@@ -83,7 +84,7 @@
       },
       "mobilebarOverlapsFinPane": false,
       "finHeadCoveredByMobilebar": false,
-      "screenshot": "/private/tmp/claude-501/-Users-chriswong-Documents-Cluade-Macro-Dashboard--claude-worktrees-market-ontology-meta-ceo-b-fc4eef/7cd4fae1-1ed9-41c2-adb4-1e5c6b0fbc5b/scratchpad/pr490_measure/capture/AFTER-PENDING-1440x900.png"
+      "screenshot": "AFTER-a92330aa-1440x900.png"
     },
     "390x844": {
       "mobilebar": {
@@ -166,7 +167,7 @@
       },
       "mobilebarOverlapsFinPane": false,
       "finHeadCoveredByMobilebar": false,
-      "screenshot": "/private/tmp/claude-501/-Users-chriswong-Documents-Cluade-Macro-Dashboard--claude-worktrees-market-ontology-meta-ceo-b-fc4eef/7cd4fae1-1ed9-41c2-adb4-1e5c6b0fbc5b/scratchpad/pr490_measure/capture/AFTER-PENDING-390x844.png"
+      "screenshot": "AFTER-a92330aa-390x844.png"
     }
   }
 }

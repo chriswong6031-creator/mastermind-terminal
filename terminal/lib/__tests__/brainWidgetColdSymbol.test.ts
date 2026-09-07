@@ -269,3 +269,73 @@ describe("BrainWidget seeds MM_BRAIN_CFG even when window.MMBrain already exists
     expect(document.querySelectorAll('script[src*="mm_brain.js"]').length).toBe(0);
   });
 });
+
+// Round-9 review, MAJOR-3 (PR #490): the required `Terminal e2e desktop (shard)` check fails
+// deterministically on `e2e/company-intelligence-rctx.spec.ts:273` ("Analysis adopts an
+// existing document Brain host without racing a second widget script") — that spec pre-seeds
+// `window.MM_BRAIN_CFG = { symbol: () => "stale-preseed" }` and `window.MMBrain = { open() {} }`
+// BEFORE navigating to /analysis, then asserts `MM_BRAIN_CFG.symbol()` is STILL "stale-preseed"
+// after the real page mounts. CI reports `received "NVDA"` — a deterministic wrong-value
+// mismatch, not a timeout, so it cannot be the same "slow/loaded CI runner" flake this body
+// documents for the other three (unrelated-file) failures in that run.
+//
+// This block reproduces the exact mechanism at the unit level (no browser/e2e needed): the
+// `active`-dependent effect in BrainWidget.tsx unconditionally calls
+// `handoffMastermindBrainSymbol(active)` on every mount, and `handoffMastermindBrainSymbol`
+// (lib/mastermindBrain.ts) rewrites `host.MM_BRAIN_CFG.symbol` whenever `MM_BRAIN_CFG` already
+// exists — regardless of whether `window.MMBrain` was already present (i.e. regardless of
+// "adopting" vs. "installing fresh"). That is why a mount with `active="NVDA"` overwrites an
+// already-seeded "stale-preseed" getter with one resolving to "NVDA".
+//
+// This is confirmed, reproducible CURRENT behavior, not CI noise — and it is also the behavior
+// the test directly above this block (`brainWidgetColdSymbol`'s own "still wires cfg.symbol()"
+// case, and the `useShellBrainSymbol` re-hands-off suite earlier in this file) depends on: both
+// exist specifically because a mounted BrainWidget's symbol handoff must stay LIVE across
+// navigations (round-4's whole MAJOR-1 fix). Whether the company-intelligence-rctx.spec.ts
+// assertion ("adopting" should ALSO freeze the singleton's symbol) or this file's own tests
+// ("the shell's active symbol always wins once BrainWidget mounts") describes the *intended*
+// product behavior is a genuine, pre-existing conflict between two tests in this PR, not
+// something this pass decides — see the PR body's "Round-9 findings" for the disposition
+// request. No code fix is applied here; this test only pins the mechanism so it cannot be
+// silently misattributed to environment flakiness again.
+describe("BrainWidget's active-driven symbol handoff overwrites an adopted host's own pre-existing MM_BRAIN_CFG.symbol (round-9 review, MAJOR-3 root cause)", () => {
+  let container: HTMLDivElement;
+  let root: Root | undefined;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    act(() => {
+      root?.unmount();
+    });
+    root = undefined;
+    container.remove();
+    const w = window as unknown as MastermindBrainHost & Record<string, unknown>;
+    delete w.MMBrain;
+    delete w.MM_BRAIN_CFG;
+    delete w.__MM_BRAIN_ACTIVE_SYMBOL__;
+  });
+
+  it("mounting with active=\"NVDA\" replaces a pre-seeded MM_BRAIN_CFG.symbol() even though window.MMBrain already existed (adoption does not freeze the symbol)", () => {
+    const w = window as unknown as MastermindBrainHost;
+    // Exactly the company-intelligence-rctx.spec.ts fixture: a host that already has BOTH
+    // MMBrain and a working MM_BRAIN_CFG.symbol before this component ever mounts.
+    w.MM_BRAIN_CFG = { symbol: () => "stale-preseed" };
+    w.MMBrain = { open: () => undefined };
+
+    act(() => {
+      root = createRoot(container);
+      root!.render(React.createElement(BrainWidget, { active: "NVDA", onCommand: noop, onAnnotate: noop }));
+    });
+
+    // This is the observed CI value, reproduced here without a browser. If a future change
+    // makes "adoption" preserve the pre-existing symbol instead, this assertion — not a guess
+    // about CI flakiness — is what must be updated, deliberately, alongside that change.
+    expect(w.MM_BRAIN_CFG?.symbol?.()).toBe("NVDA");
+    // No second script is appended either way — that half of "adoption" is unaffected.
+    expect(document.querySelectorAll('script[src*="mm_brain.js"]').length).toBe(0);
+  });
+});

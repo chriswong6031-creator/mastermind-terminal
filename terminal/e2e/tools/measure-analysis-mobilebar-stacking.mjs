@@ -27,14 +27,18 @@
 // in the JSON so the artifact explains its own number instead of asserting it.
 //
 // Usage: node e2e/tools/measure-analysis-mobilebar-stacking.mjs <port> <label> <outDir>
-//   <label> is a free-text tag ("BEFORE-origin-master" / "AFTER-this-pr") embedded in the output
-//   filenames and JSON so the two runs cannot be confused after the fact. Keep it commit-sha-free
-//   — the PR body states the exact head sha for AFTER; a label baked into a committed filename
-//   goes stale on the very next round's re-push (round-5's did: "AFTER-f716d713" outlived that
-//   commit).
+//   <label> is a free-text tag ("BEFORE-<sha>" / "AFTER-<sha>") embedded in the output filenames
+//   and JSON so the two runs cannot be confused after the fact. Review round-10 (MAJOR-1): a
+//   commit-sha-free label ("AFTER-this-pr") went stale silently across rounds and left the
+//   reviewer no way to confirm a proof artifact's capture head equals the PR head — the label
+//   is now expected to carry the sha of `capturedAtHead` below (the caller renames the committed
+//   files to match after each run, since the sha of THIS round's own commit is not known until
+//   after it is made). The JSON's own `capturedAtHead` field is the authoritative source — read
+//   that, not just the filename, when checking provenance.
 import { chromium } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
+import { execFileSync } from "child_process";
 
 const [port, label, outDir] = process.argv.slice(2);
 if (!port || !label || !outDir) {
@@ -42,6 +46,23 @@ if (!port || !label || !outDir) {
   process.exit(1);
 }
 mkdirSync(outDir, { recursive: true });
+
+// Review round-10 (PR #490, MAJOR-1): the previous artifact carried no field identifying which
+// commit's tree it was captured against, so a reviewer could not confirm a proof artifact's
+// capture head equals the PR head. `git rev-parse HEAD`, run from this script's own directory,
+// answers that honestly: it is the committed tree's HEAD at capture time. When a run swaps one
+// file's contents in the working tree (the BEFORE side of this comparison always does — see the
+// PR body's "BEFORE = <sha>'s app/globals.css swapped in" methodology) the sha below still names
+// the real HEAD commit; it does not and cannot claim the working tree is byte-identical to that
+// commit — the PR body states which file was swapped and why the isolation is still valid.
+function currentGitHead() {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], { cwd: import.meta.dirname, encoding: "utf8" }).trim();
+  } catch {
+    return null;
+  }
+}
+const capturedAtHead = currentGitHead();
 
 const BRAIN_SCRIPT_SRC = "https://www.mastermind-x.com/mm_brain.js";
 const METRICS = {
@@ -150,7 +171,7 @@ const VIEWPORTS = [
 ];
 
 const browser = await chromium.launch();
-const results = { label, port: Number(port), viewports: {} };
+const results = { label, port: Number(port), capturedAtHead, viewports: {} };
 
 for (const vp of VIEWPORTS) {
   const ctx = await browser.newContext({ viewport: { width: vp.width, height: vp.height } });
@@ -158,6 +179,12 @@ for (const vp of VIEWPORTS) {
   await mockRoutes(page);
   await page.goto(`http://127.0.0.1:${port}/analysis?symbol=NVDA&page=intelligence`, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.locator(".fin-pane").first().waitFor({ state: "attached", timeout: 30_000 });
+  // Review round-10: waiting only for `.fin-pane` to attach (a structural skeleton element
+  // present before real content loads) let one run's screenshot capture a still-loading
+  // placeholder state — same DOM geometry, visibly different pixels, on a cold Turbopack
+  // compile after a cache clear. Wait for real Company-Intelligence content text too, not just
+  // the skeleton, before screenshotting.
+  await page.getByText("REPORTED CHANGE").first().waitFor({ state: "visible", timeout: 30_000 });
   // Let layout settle (webfonts, one paint frame) before reading computed geometry.
   await page.waitForTimeout(500);
 
@@ -183,8 +210,8 @@ for (const vp of VIEWPORTS) {
       }, { x: menuButton.rect.x + menuButton.rect.width / 2, y: menuButton.rect.y + menuButton.rect.height / 2 })
     : null;
 
-  const screenshotPath = join(outDir, `${label}-${vp.name}.png`);
-  await page.screenshot({ path: screenshotPath });
+  const screenshotFile = `${label}-${vp.name}.png`;
+  await page.screenshot({ path: join(outDir, screenshotFile) });
 
   results.viewports[vp.name] = {
     mobilebar,
@@ -199,7 +226,9 @@ for (const vp of VIEWPORTS) {
     menuHitTest,
     mobilebarOverlapsFinPane: rectsOverlap(mobilebar, finPane),
     finHeadCoveredByMobilebar: rectsOverlap(finHead, mobilebar),
-    screenshot: screenshotPath,
+    // Relative filename only — an absolute local path here would leak this machine's
+    // username and session directory into a committed artifact (review round-10, Minor 2).
+    screenshot: screenshotFile,
   };
 
   console.log(`[${label}] ${vp.name}`);

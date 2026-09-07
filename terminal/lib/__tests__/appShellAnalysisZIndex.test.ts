@@ -256,9 +256,9 @@ describe(".analysis-route .mobilebar really outranks the ambient-background rese
 // tie is real and worth removing regardless. This block pins that fix with a real
 // getComputedStyle cascade (not a string comparison) so a future rename back to `analysis-shell`
 // — or any other name that happens to
-// collide with a future company-intelligence.css single-class rule — fails here instead of
-// only in a browser nobody happened to check.
-describe("AppShell's outer .app2 route class does not collide with company-intelligence.css's own single-class rules", () => {
+// share a selector with a future company-intelligence.css single-class rule — fails here instead
+// of only in a browser nobody happened to check.
+describe("AppShell's outer .app2 route class does not share a selector with company-intelligence.css's own single-class rules", () => {
   it("AppShell's app2 root className literal is not (and does not contain as a bare token) 'analysis-shell'", () => {
     const rootClassName = APP_SHELL_TSX.match(/className=\{`[^`]*app2[^`]*`\}/);
     expect(rootClassName, "app2 root className template literal not found in AppShell.tsx").not.toBeNull();
