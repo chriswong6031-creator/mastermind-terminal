@@ -285,26 +285,43 @@ def main() -> int:
         "an owner/admin UPDATE must not be able to attribute a workspace setting to a different user_id",
     )
 
-    # ddl:writer_deletion_preserves_workspace_setting (round-2 review MAJOR-2): deleting the
-    # account that last wrote a workspace setting must not delete the setting itself -- ownership
-    # is team_id/owner_id, never the writer. Fresh actors/team so this does not disturb team_a's
-    # state used by the checks above.
-    e_owner = str(uuid.uuid4())
+    # ddl:writer_deletion_preserves_workspace_setting (round-2 review MAJOR-2; round-3 review
+    # BLOCKER-1 fix). The writer must NOT be `teams.created_by` -- 0014's
+    # `created_by uuid not null references auth.users(id) on delete cascade` means deleting the
+    # team's own creator cascades teams -> workspace_settings (via team_id's own `on delete
+    # cascade`) regardless of what user_id's ON DELETE rule is, which is a different, frozen 0014
+    # guarantee this PR does not touch and cannot weaken. So team E is created by a separate
+    # `e_creator` account, and the setting is written (and its writer later deleted) by a second,
+    # non-creator admin, `e_admin` -- the actor this check's guarantee actually describes. The
+    # honest scope of the guarantee: a team CREATOR's own account deletion still destroys the
+    # whole team and every workspace setting under it, by 0014's frozen `created_by` cascade
+    # (see 0015's `-- readback:` note); only a non-creator writer's deletion is survived.
+    e_creator = str(uuid.uuid4())
+    e_admin = str(uuid.uuid4())
     with admin.cursor() as cur:
-        cur.execute("insert into auth.users (id, email) values (%s, 'owner@e.example')", (e_owner,))
-        cur.execute("insert into public.teams (id, name, created_by) values (gen_random_uuid(),'Team E', %s) returning id", (e_owner,))
+        cur.execute("insert into auth.users (id, email) values (%s, 'creator@e.example')", (e_creator,))
+        cur.execute("insert into auth.users (id, email) values (%s, 'admin@e.example')", (e_admin,))
+        cur.execute("insert into public.teams (id, name, created_by) values (gen_random_uuid(),'Team E', %s) returning id", (e_creator,))
         team_e = cur.fetchone()[0]
         cur.execute(
-            "insert into public.workspace_settings (scope, team_id, user_id, key, value) values ('workspace', %s, %s, 'k', '\"ve\"'::jsonb)",
-            (team_e, e_owner),
+            "insert into public.team_members (team_id, user_id, role, invited_by) values (%s,%s,'admin',%s)",
+            (team_e, e_admin, e_creator),
         )
-        cur.execute("delete from auth.users where id=%s", (e_owner,))
+        cur.execute(
+            "insert into public.workspace_settings (scope, team_id, user_id, key, value) values ('workspace', %s, %s, 'k', '\"ve\"'::jsonb)",
+            (team_e, e_admin),
+        )
+        cur.execute("delete from auth.users where id=%s", (e_admin,))
         cur.execute("select user_id, value from public.workspace_settings where team_id=%s and key='k'", (team_e,))
         row = cur.fetchone()
+        cur.execute("select count(*) from public.teams where id=%s", (team_e,))
+        team_e_survives = cur.fetchone()[0] == 1
     proof.check(
         "ddl:writer_deletion_preserves_workspace_setting",
-        bool(row) and row[0] is None and row[1] == "ve",
-        f"row={row!r} (expected user_id=NULL, value preserved, after deleting the writer's auth.users row)",
+        bool(row) and row[0] is None and row[1] == "ve" and team_e_survives,
+        f"row={row!r} team_e_survives={team_e_survives} (expected user_id=NULL, value preserved, team"
+        " intact, after deleting a non-creator WRITER's auth.users row -- deleting the team's own"
+        " creator is a separate, frozen 0014 cascade this check does not exercise)",
     )
 
     Path(args.receipt).write_text(json.dumps(_receipt(proof.failed), indent=2))

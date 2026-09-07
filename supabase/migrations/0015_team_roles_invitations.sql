@@ -76,6 +76,15 @@ create table if not exists public.workspace_settings (
   -- WRITER for attribution only. Ownership is owner_id (below), which for a workspace-scope row
   -- is team_id, never the writer -- a workspace's settings must not be deleted just because the
   -- account that last wrote them is later deleted (round-2 review MAJOR-2, ruling 2026-09-07).
+  -- DISCLOSED CONSEQUENCE (round-3 review MAJOR-1): this same column and rule also cover
+  -- scope='user' rows, where user_id IS the sole owner (owner_id = user_id). Deleting that
+  -- user's account sets user_id to NULL, which makes owner_id NULL too -- every RLS policy below
+  -- keys off `user_id = auth.uid()` or a team, so a scope='user' row survives its owner's account
+  -- deletion as a permanently unreachable, un-owned orphan (no `authenticated` role can read,
+  -- write, or delete it again). The ruling's rationale (MAJOR-2) is workspace-scope survival
+  -- only; this is a known, disclosed trade-off of applying the same column/FK to both scopes,
+  -- not a fix -- a cleanup path (e.g. a service-role job, or a scope-specific delete rule) is
+  -- unresolved and owed as a follow-up decision, not silently redesigned here.
   user_id    uuid references auth.users(id) on delete set null,
   -- owner_id collapses the two scopes into one conflict target: for scope='user' it is the
   -- user, for scope='workspace' it is the team. PostgREST's upsert ON CONFLICT(columns) cannot
