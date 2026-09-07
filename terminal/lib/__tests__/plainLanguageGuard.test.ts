@@ -14,6 +14,20 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// Defuses the checker's own `::error`/`::warning`/`::notice` GitHub
+// workflow-command syntax before replaying it into THIS (successful)
+// test's stdout. GitHub mints a run-level annotation from ANY
+// `::error`/`::warning` line that starts a step's log, regardless of that
+// step's own exit code (see this repo's own convention, "GitHub
+// annotations must START the line") -- an unmodified replay of the
+// checker's receipt (test 8 below) mints a phantom failing annotation
+// naming a fixture path that does not exist in the repo, from a PASSING
+// `npm test` step. Indenting each line defeats the "starts the line"
+// requirement while keeping every character legible in the receipt.
+function redactAnnotations(s: string): string {
+  return s.replace(/^(::(?:error|warning|notice))/gm, "  $1");
+}
+
 const scriptPath = join(__dirname, "../../scripts/check_plain_language.mjs");
 
 function run(args: string[], opts: { input?: string } = {}) {
@@ -234,7 +248,7 @@ describe("check_plain_language.mjs", () => {
     writeFileSync(diffFile, diff);
     const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile]);
     process.stdout.write("\n--- plain-language guard receipt: flagged fixture ---\n");
-    process.stdout.write(res.stdout);
+    process.stdout.write(redactAnnotations(res.stdout));
     process.stdout.write("\n--- end receipt ---\n");
     expect(res.stdout).toContain("BOTTOM_WATCH");
 
@@ -246,7 +260,7 @@ describe("check_plain_language.mjs", () => {
     writeFileSync(diffFile2, diff2);
     const res2 = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile2]);
     process.stdout.write("\n--- plain-language guard receipt: legacy fixture ---\n");
-    process.stdout.write(res2.stdout);
+    process.stdout.write(redactAnnotations(res2.stdout));
     process.stdout.write("\n--- end receipt ---\n");
     expect(res2.stdout).toContain("legacy (pre-existing, not blocking)");
     rmSync(root, { recursive: true, force: true });
@@ -363,6 +377,88 @@ describe("check_plain_language.mjs", () => {
     );
     expect(typeof parsed.vocabulary.overlayPresent).toBe("boolean");
     expect(Array.isArray(parsed.nulls)).toBe(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("13. overlay-harvested bare label KEYS are whole-word matches, not substrings (PR #530 review BLOCKER 1)", () => {
+    const root = makeFixtureRoot();
+    writeFileSync(
+      join(root, "terminal/lib/plainLabels.ts"),
+      [
+        'export const TRUST_TIER_LABEL: Record<string, [string, string]> = {',
+        '  pro: ["Pro", "专业版"],',
+        '  free: ["Free", "免费"],',
+        "};",
+        "export function regimeLabel(t: any, v: string) { return v; }",
+        "",
+      ].join("\n")
+    );
+    const relPath = "terminal/components/Probe.tsx";
+    const content = [
+      "export function Probe({ row }: any) {",
+      '  return <div className="profile-card">{row.regime}</div>;',
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [2]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    expect(parsed.vocabulary.overlayPresent).toBe(true);
+    // "profile-card" contains the harvested overlay key "pro" as a bare
+    // substring — the guard must NOT treat that as a plain-helper routing
+    // for the untranslated `row.regime` interpolation on the same line.
+    expect(
+      parsed.findings.some((f: any) => f.rule === "raw_slug_interpolation" && f.token === "regime" && f.blocking)
+    ).toBe(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("14. R2 internal_study_slug matches whole words only, not English words containing a slug (PR #530 review MAJOR)", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/components/G.tsx";
+    const content = ["export function G() {", "  return <span>Globe</span>;", "}", ""].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [2]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    expect(res.status).toBe(0);
+    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    // "Globe" contains the study slug "lobe" as a bare substring — plain
+    // English must never be flagged as an internal_study_slug.
+    expect(parsed.findings.length).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("15. LEX arity check is comma-in-string-safe and multi-line-safe (PR #530 review BLOCKER 2)", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/lib/i18n.tsx";
+    const content = [
+      "export const LEX: Record<string, [string, string]> = {",
+      '  commaEn: ["Hello, world"],',
+      "  multi: [",
+      '    "Only english",',
+      "  ],",
+      "};",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [2, 3, 4, 5]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    expect(res.status).toBe(1);
+    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const missingZh = parsed.findings.filter((f: any) => f.rule === "missing_zh" && f.blocking);
+    // Both the comma-containing single-line entry AND the multi-line entry
+    // must be caught — the old naive `.split(",")` + single-line regex
+    // caught neither.
+    expect(missingZh.length).toBe(2);
+    // No false null: the file DID have new user-visible strings added.
+    expect(parsed.nulls.find((n: any) => n.path === relPath)).toBeUndefined();
     rmSync(root, { recursive: true, force: true });
   });
 });

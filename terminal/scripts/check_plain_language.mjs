@@ -284,7 +284,17 @@ function hasPlainHelperOnLine(line, overlayTerms) {
       const name = h.slice(0, -1);
       return new RegExp(`\\b${escapeRegExp(name)}\\(`).test(line);
     }
-    return line.includes(h);
+    if (h.endsWith("[")) {
+      const name = h.slice(0, -1);
+      return new RegExp(`\\b${escapeRegExp(name)}\\[`).test(line);
+    }
+    // Bare identifier harvested from the #519 overlay (e.g. a label-map KEY
+    // like "pro"/"technical"): must match as a WHOLE WORD, never a
+    // substring -- line.includes("pro") also matches "profile-card",
+    // silently suppressing R3/R4 on any line containing that substring.
+    // MEASURED on terminal/components/Probe.tsx: with the overlay present,
+    // {row.regime} inside a profile-card div stopped being flagged.
+    return new RegExp(`\\b${escapeRegExp(h)}\\b`).test(line);
   });
 }
 
@@ -354,9 +364,14 @@ function scanLines(relPath, text, addedLines, overlayTerms) {
     const visible = lineIsVisible(spans, sourceFile, lineNo);
     const waiverReason = parseWaiver(line);
 
-    // R2: internal_study_slug
+    // R2: internal_study_slug -- whole-word match only. The old
+    // `line.includes(slug)` bare substring test also fired on ordinary
+    // English words containing a slug as a substring, e.g. "lobe" inside
+    // "Globe" (MEASURED: <span>Globe</span> blocked as
+    // internal_study_slug "lobe").
     for (const slug of PLAIN_VOCABULARY.studySlugs) {
-      if (line.includes(slug) && visible) {
+      const slugRe = new RegExp(`\\b${escapeRegExp(slug)}\\b`);
+      if (slugRe.test(line) && visible) {
         findings.push(mkFinding(relPath, lineNo, "internal_study_slug", slug,
           "internal study/organ slug in a user-visible position",
           `<no plain phrase declared for ${slug} — add one to PLAIN_VOCABULARY, or route through lib/plainLabels.ts>`,
@@ -386,21 +401,10 @@ function scanLines(relPath, text, addedLines, overlayTerms) {
       }
     }
 
-    // R5a/R5b: only in i18n.tsx (LEX arity) or general (english literal not routed)
-    if (isI18n) {
-      const lexEntryRe = /^\s*[A-Za-z0-9_]+\s*:\s*\[([^\]]*)\]/;
-      const lm = lexEntryRe.exec(line);
-      if (lm) {
-        const parts = lm[1].split(",").map((s) => s.trim()).filter((s) => s.length > 0);
-        const zh = parts[1] ? parts[1].replace(/^["']|["']$/g, "") : "";
-        if (parts.length < 2 || zh === "") {
-          findings.push(mkFinding(relPath, lineNo, "missing_zh", "LEX",
-            "LEX entry has arity < 2 or an empty zh translation",
-            "add a non-empty zh translation as the tuple's second element",
-            added.has(lineNo), waiverReason));
-        }
-      }
-    } else {
+    // R5b: general files — English literal in a user-visible position with
+    // no zh routing. (R5a — the i18n.tsx LEX-arity check — runs in a
+    // separate multi-line-safe pass below, not per raw line.)
+    if (!isI18n) {
       const enLitRe = /[">]\s*([A-Za-z][A-Za-z' -]{5,})\s*[<"]/;
       const lm = enLitRe.exec(line);
       if (lm && visible) {
@@ -416,7 +420,107 @@ function scanLines(relPath, text, addedLines, overlayTerms) {
     }
   });
 
+  // R5a: LEX arity / zh-parity for terminal/lib/i18n.tsx — a dedicated
+  // multi-line-safe, quote-aware pass over the whole file text, replacing
+  // the old per-line `^...:\s*\[([^\]]*)\]` regex, which (a) split the
+  // tuple on EVERY comma — so `["Hello, world"]` misread the literal comma
+  // inside the English string as a tuple-element boundary — and (b)
+  // required the whole `key: [...]` on ONE physical line, so a LEX entry
+  // whose array spans multiple lines was never matched at all (a silent
+  // miss, not a pass).
+  if (isI18n) {
+    for (const entry of findLexEntries(text)) {
+      const parts = splitTopLevelCommas(entry.inner);
+      const zh = parts[1] ? stripQuotes(parts[1]) : "";
+      const entryLines = Array.from(
+        { length: entry.endLine - entry.startLine + 1 },
+        (_, k) => entry.startLine + k
+      );
+      const entryAdded = entryLines.some((ln) => added.has(ln));
+      // A new LEX entry IS added user-visible copy — count it so the
+      // zh_translation null (main(), "no new user-visible strings added")
+      // is never printed for a file whose added lines ARE new English
+      // strings routed through LEX (the AST visible-span check does not
+      // classify a bare array-literal string as a visible position, which
+      // produced exactly that false null).
+      if (entryAdded) visibleAddedCount += 1;
+      if (parts.length < 2 || zh === "") {
+        const waiverReason2 = parseWaiver(lines[entry.startLine - 1] ?? "");
+        findings.push(mkFinding(relPath, entry.startLine, "missing_zh", "LEX",
+          "LEX entry has arity < 2 or an empty zh translation",
+          "add a non-empty zh translation as the tuple's second element",
+          entryAdded, waiverReason2));
+      }
+    }
+  }
+
   return { findings, visibleAddedCount };
+}
+
+// Split a LEX tuple's inner text (e.g. `"Hello, world", "..."`) on commas
+// that are NOT inside a quoted string. A naive `str.split(",")` misreads a
+// comma inside the English/zh string content itself as a tuple-element
+// boundary.
+function splitTopLevelCommas(str) {
+  const parts = [];
+  let cur = "";
+  let quote = null;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (quote) {
+      cur += ch;
+      if (ch === "\\") { i += 1; cur += str[i] ?? ""; continue; }
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+    } else if (ch === ",") {
+      parts.push(cur.trim());
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim().length > 0) parts.push(cur.trim());
+  return parts;
+}
+
+function stripQuotes(s) {
+  return s.replace(/^["']|["']$/g, "");
+}
+
+// Find every `KEY: [ ... ]` LEX entry in i18n.tsx, wherever it starts and
+// however many lines its array spans — quote-aware bracket matching so a
+// `]`/`,` inside a string literal never truncates or splits the entry.
+function findLexEntries(text) {
+  const entries = [];
+  const startRe = /^[ \t]*[A-Za-z0-9_]+\s*:\s*\[/gm;
+  let m;
+  while ((m = startRe.exec(text))) {
+    const bracketIdx = m.index + m[0].length - 1; // index of the '['
+    let depth = 1;
+    let i = bracketIdx + 1;
+    let quote = null;
+    while (i < text.length && depth > 0) {
+      const ch = text[i];
+      if (quote) {
+        if (ch === "\\") { i += 2; continue; }
+        if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === "[") {
+        depth += 1;
+      } else if (ch === "]") {
+        depth -= 1;
+      }
+      i += 1;
+    }
+    const inner = text.slice(bracketIdx + 1, i - 1);
+    const startLine = text.slice(0, m.index).split("\n").length;
+    const endLine = startLine + inner.split("\n").length - 1;
+    entries.push({ startLine, endLine, inner });
+  }
+  return entries;
 }
 
 function scanFile(root, absPath, addedLines, overlayTerms) {

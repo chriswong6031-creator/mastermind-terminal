@@ -199,3 +199,66 @@ regex, so it can only pass by the rule actually firing.
   `--since` path starts working with no code change; if it stays shallow,
   the disclosed fail-open is the correct, non-silent outcome — never a false
   green on a real violation.
+
+## 9. Review fixes (round 2, PR #530)
+
+The following blockers/majors from the review of head `6aaeb6f3` were fixed
+in a follow-up commit and are each locked in by a regression test in
+`plainLanguageGuard.test.ts`:
+
+- **BLOCKER — overlay bare label KEYS were substring-matched.**
+  `hasPlainHelperOnLine` matched every helper ending in `(` or `[` by whole
+  name (`\bNAME\(`), but a bare identifier harvested from the `#519` overlay
+  (e.g. a `TRUST_TIER_LABEL` key like `pro`) still fell through to
+  `line.includes(h)` — an unbounded substring match. MEASURED: with the
+  overlay present, `<div className="profile-card">{row.regime}</div>`
+  stopped being flagged as `raw_slug_interpolation`, purely because `"pro"`
+  is a substring of `"profile"`. Fixed: every bare (non-call, non-`LEX[`)
+  overlay term is now matched with `\bTERM\b`. Test 13.
+- **MAJOR — `R2 internal_study_slug` was a bare substring match.**
+  `line.includes(slug)` fired on any English word containing a slug as a
+  substring, e.g. `"lobe"` inside `"Globe"`. Fixed: `R2` now matches
+  `\bslug\b`. Test 14.
+- **BLOCKER — the i18n.tsx `LEX` arity check was comma-naive and
+  single-line-only.** The old per-line regex captured everything between
+  `[` and the first `]` and split it on every comma, so
+  `commaEn: ["Hello, world"]` misread the comma inside the English string as
+  a tuple-element boundary (miscounting arity), and required the whole
+  `key: [...]` on one physical line, so a LEX entry whose array spans
+  multiple lines was never matched at all — a silent miss, not a pass. Fixed
+  with `findLexEntries()` (a quote-aware bracket-matching scan of the whole
+  file, so a comma/`]` inside a string literal never splits or truncates an
+  entry) and `splitTopLevelCommas()` (splits only on commas outside quotes).
+  A newly-added multi-line or comma-containing LEX entry with a missing zh
+  translation is now also counted toward `visibleAddedCount`, so the
+  `zh_translation` null is never printed for a file whose added lines ARE
+  new English LEX strings. Test 15.
+- **MAJOR — the receipt printer replayed raw `::error`/`::warning` lines
+  into a passing test's stdout**, which GitHub parses as run-level
+  annotations regardless of the step's own exit code (this repo's own
+  convention: "GitHub annotations must START the line"). Fixed:
+  `plainLanguageGuard.test.ts` now indents each such line
+  (`redactAnnotations()`) before printing the receipt in test 8, so the
+  characters stay legible in the log without minting a phantom annotation.
+- **MAJOR — `isUserVisiblePosition` false-positive class
+  (`MAX_RETRY_COUNT`-in-a-comparison) was already fixed by the AST rewrite
+  in §3a** (this doc, unchanged) at the time of this review pass — verified
+  by direct reproduction against `6aaeb6f3`: a line with no JSX/string
+  literal produces no visible span, so `R1` cannot fire on it. No further
+  code change was needed for this item; it is recorded here because the
+  review flagged it against the same head.
+- **Not fixed in this pass (out of the owned paths for this packet):** the
+  required check `Terminal typecheck + tests` was independently red on
+  `terminal/e2e/marker-tooltip.spec.ts` (an unrelated, un-owned file) at
+  head `6aaeb6f3`. Re-establishing a fresh, non-inherited CI proof for this
+  PR's own head requires either a fix to that e2e spec (out of this
+  packet's owned paths) or a fresh CI run demonstrating the red is
+  base-inherited; neither can be completed by editing
+  `check_plain_language.mjs` / `plainLanguageGuard.test.ts` / this doc alone.
+  See the PR's "Review fixes" section for the current status of that item.
+- **Not a code change:** the "single declared source" vs "#519 reuse"
+  framing in §3 is unchanged by this pass — `PLAIN_VOCABULARY` remains the
+  base declared source, with the `#519` overlay merged in additively once
+  present, exactly as documented above (and now correctly enforced with
+  whole-word matching per the first bullet). Re-litigating that design
+  choice is out of scope for a review-fix pass.
