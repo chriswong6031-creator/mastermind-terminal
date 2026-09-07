@@ -101,15 +101,15 @@
       "packet": "F11-1",
       "pr": 502,
       "pr_state": "merged",
-      "note": "present on master; open PR #520 (B-F11-2) edits the same path -- an edit, not a second 0012 file"
+      "note": "present on master via PR #502; open PR #520 (B-F11-2) does not touch supabase/migrations at all (verified against #520's file list) -- no collision, and the earlier claim that #520 edits this path was stale and is corrected here"
     },
     "0013": {
       "state": "taken",
       "file": "0013_alert_runs_outbox.sql",
       "packet": "B-F08-2",
       "pr": 513,
-      "pr_state": "open",
-      "note": "file lives in an unmerged PR; absent from this checkout by design"
+      "pr_state": "merged",
+      "note": "present on master via PR #513 (merged 2026-09-06); the reservation premise that this file was absent from the checkout is stale and is corrected here -- present-file and absent-file are now both provable on the real tree (0013 present, 0014 still absent)"
     },
     "0014": {
       "state": "taken",
