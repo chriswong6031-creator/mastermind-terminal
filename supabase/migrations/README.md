@@ -48,7 +48,8 @@ and have been.** Application status, re-censused 2026-08-21:
 | `0009_watchlist_symbol_unique.sql` | `wls_watchlist_symbol` | **yes** — applied 2026-08-19 |
 | `0010_search_event_stats.sql` | `search_event_stats()` + `search_events_created_at` | **yes** — applied 2026-08-21 |
 | `0012_thesis_objects.sql` | `theses`, `thesis_versions` + `apply_thesis_version_v1()`/`read_current_thesis_versions_v1()` | no — not yet applied |
-| `0013_alert_runs_outbox.sql` | `alert_runs`, `alert_outbox` tables + RLS (Market Ontology F08 packet B-F08-2) | reserved -> merged; **not applied — awaiting readback receipt** |
+| `0013_alert_runs_outbox.sql` | `alert_runs`, `alert_outbox` tables + RLS (Market Ontology F08 packet B-F08-2) | **yes** — applied 2026-09-07 via README raw fallback; readback receipt on PR #513 (Meta-CEO B comment 5563321750) |
+| `0014_tenancy_foundation.sql` | `teams`, `team_members`, `team_invites`, 2 definer helpers, `on_team_created` trigger, RLS | **no** — reserved 2026-09-06 (packet B-F12-1), not applied |
 
 `0009` was applied two days before `0008`. The numbering records *when the DDL entered the repo*,
 not when an operator ran it — so **never infer application status from file order.** Ask the
@@ -85,3 +86,5 @@ to apply **everything** from `0001`. That is survivable only because every file 
 
 **Keep it that way.** A migration that is not safe to re-run is a migration that cannot be applied
 in this estate, because nothing here records that it already was.
+
+`0011`–`0013` were reserved/contested by pull requests that had not merged when `0014` was reserved, so this packet took `0014` rather than a contested prefix. By the time this packet rebased onto `master`, one of those contenders (#502) had actually merged as `0012_thesis_objects.sql` (see the table above) — not `0011` as first assumed — so the number that ultimately landed from that set was `0012`. `tests/test_migration_ledger.py` is the only enforcement of prefix uniqueness (§ Version prefixes must be unique).
