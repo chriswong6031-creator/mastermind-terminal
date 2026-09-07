@@ -48,6 +48,7 @@ and have been.** Application status, re-censused 2026-08-21:
 | `0009_watchlist_symbol_unique.sql` | `wls_watchlist_symbol` | **yes** — applied 2026-08-19 |
 | `0010_search_event_stats.sql` | `search_event_stats()` + `search_events_created_at` | **yes** — applied 2026-08-21 |
 | `0012_thesis_objects.sql` | `theses`, `thesis_versions` + `apply_thesis_version_v1()`/`read_current_thesis_versions_v1()` | no — not yet applied |
+| `0013_alert_runs_outbox.sql` | `alert_runs`, `alert_outbox` tables + RLS (Market Ontology F08 packet B-F08-2) | **yes** — applied 2026-09-07 via README raw fallback; readback receipt on PR #513 (Meta-CEO B comment 5563321750) |
 | `0014_tenancy_foundation.sql` | `teams`, `team_members`, `team_invites`, 2 definer helpers, `on_team_created` trigger, RLS | **no** — reserved 2026-09-06 (packet B-F12-1), not applied |
 
 `0009` was applied two days before `0008`. The numbering records *when the DDL entered the repo*,
