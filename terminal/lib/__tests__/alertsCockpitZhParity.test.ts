@@ -117,6 +117,23 @@ const SENT_OUTBOX = [{
     evidence_url: "https://example.com/evidence/f1", fired_at: "2026-09-05T09:41:00Z",
   },
 }];
+// Round-9 review of f352b961 (major): a non-price condition kind whose stamped `triggered.value`
+// must NEVER be rendered as if it were a price ("触发时价格 72" for an RSI reading is a
+// fabricated data claim). condition_plain is deliberately EN-only prose the ZH branch never
+// uses, matching FIRED_ALERT above.
+const FIRED_RSI_ALERT = {
+  id: "a2", symbol: "NVDA", active: false, created_at: "2026-08-01T00:00:00Z",
+  condition: { type: "rsi", value: 30, triggered: { at: "2026-09-05T09:41:00Z", value: 72, note: "rsi crossed" } },
+};
+const SENT_RSI_OUTBOX = [{
+  alert_id: "a2", fire_event_id: "f2", status: "sent", attempts: 1, last_error: null,
+  deliver_after: null, delivered_at: "2026-09-05T09:41:00Z", created_at: "2026-08-01T00:00:00Z",
+  payload: {
+    subject: "NVDA RSI crossed", summary_plain: "NVDA RSI crossed.",
+    ticker: "NVDA", condition_plain: "RSI crossed 30",
+    evidence_url: "https://example.com/evidence/f2", fired_at: "2026-09-05T09:41:00Z",
+  },
+}];
 const WATCHING_ALERT = {
   id: "a0", symbol: "NVDA", active: true, created_at: "2026-08-01T00:00:00Z",
   condition: { type: "price", op: "above", value: 200 },
@@ -218,6 +235,31 @@ describe("AlertsCockpit — full composed ZH page never leaks English and never 
     // the dialog, so both duplicate-fact sites are exercised at once.
     assertNoLeakedEnglish(container, "fired + drillback (full composed page)");
     assertNoDuplicatedConditionTitleAndNote(container, "fired + drillback (full composed page)");
+  });
+
+  it("RED-first: a non-price fired alert (RSI) must never render \"价格\" (price) for its stamped value, on either the row note or the drillback dialog (round-9 review of f352b961, major)", async () => {
+    mockFetch([FIRED_RSI_ALERT], {
+      run: FRESH_RUN, runs_state: "READ_OK", last_success_at: FRESH_RUN.concluded_at,
+      last_success_state: "READ_OK", outbox: SENT_RSI_OUTBOX, outbox_state: "READ_OK",
+    });
+    await mount();
+
+    const note = container.querySelector(".arow-note");
+    expect(note, "expected the existing-alerts list's fired-note span (.arow-note) to render for the FIRED_RSI_ALERT fixture").not.toBeNull();
+    expect(note!.textContent ?? "").not.toContain("价格"); // an RSI reading is never a price
+    expect(note!.textContent ?? "").toContain("触发时数值 72"); // unit-neutral "value" sentence
+
+    const deliveryRow = container.querySelector('[data-delivery="sent"]') as HTMLElement | null;
+    expect(deliveryRow).not.toBeNull();
+    await act(async () => { deliveryRow!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+
+    const dialog = container.querySelector('[data-cockpit-state="drillback"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog!.textContent ?? "").not.toContain("价格");
+    expect(dialog!.textContent ?? "").toContain("触发时数值 72");
+
+    assertNoLeakedEnglish(container, "non-price fired alert (full composed page)");
+    assertNoDuplicatedConditionTitleAndNote(container, "non-price fired alert (full composed page)");
   });
 
   it("watching-only fixture (no fired rows): the full composed page is English-free", async () => {

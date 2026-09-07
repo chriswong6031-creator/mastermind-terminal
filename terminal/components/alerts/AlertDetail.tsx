@@ -15,6 +15,11 @@ export interface AlertDetailData {
   // conditionText above). `null` when the alert has since been re-armed and lost its stamp, or
   // never carried a numeric value to begin with (an honest unknown, never a fabricated one).
   triggeredValue: number | null;
+  // Major (round-9 review of f352b961): which condition kind fired — the ONLY thing that makes
+  // a stamped value a "price" rather than an RSI reading, a gamma-flip level, etc. `null` when
+  // the alert's own condition object is unavailable; firedEventTextZh treats that the same as
+  // "not a price condition" (unit-neutral sentence), never assuming price by default.
+  conditionType: string | null;
   firedAt: string | null;
   armedAt: string;
   evidenceUrl: string | null;
@@ -68,8 +73,13 @@ export default function AlertDetail({ data, lang, onClose }: { data: AlertDetail
           ("触发时价格 100"), never the condition/threshold already shown in the "条件" field
           above — falling back to an honest "fired, no value recorded" disclosure when no
           crossing value survived (e.g. re-armed since). Never the identical string to the
-          "条件" field either way, never fabricated. */}
-      <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "发生了什么" : "What changed"}</span><span>{lang === "zh" ? firedEventTextZh(data.triggeredValue) : (data.summaryPlain || data.conditionPlain || copy("null.notRecorded", lang))}</span></div>
+          "条件" field either way, never fabricated.
+          Major (round-9 review of f352b961): the round-8 sentence said "价格" (price) for
+          EVERY condition kind, so a non-price alert's stamped value ("72" for an RSI condition,
+          say) rendered as if it were a price. `data.conditionType` is passed through so
+          firedEventTextZh only claims "price" for an actual `type === "price"` condition, and
+          says "数值" (value) — unit-neutral — for every other kind. */}
+      <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "发生了什么" : "What changed"}</span><span>{lang === "zh" ? firedEventTextZh(data.triggeredValue, data.conditionType) : (data.summaryPlain || data.conditionPlain || copy("null.notRecorded", lang))}</span></div>
       <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "时间线" : "Timeframe"}</span><span>{data.firedAt ? (lang === "zh" ? `触发于 ${fmt(data.firedAt)}` : `Fired ${fmt(data.firedAt)}`) : copy("null.notRecorded", lang)}{lang === "zh" ? `，建立于 ${fmt(data.armedAt)}` : `, armed ${fmt(data.armedAt)}`}</span></div>
       <div className={s.detailFact}>
         <span className={s.detailLabel}>{lang === "zh" ? "证据" : "Evidence"}</span>

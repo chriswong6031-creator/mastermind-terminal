@@ -400,19 +400,19 @@ describe("firedEventTextZh — the ZH event sentence never restates the conditio
     const conditionTextZh = conditionText(priceCondition, "NVDA", "zh");
     const oldBuggyExpression = `${conditionTextZh} · 100`;
     expect(oldBuggyExpression).toContain(conditionTextZh); // confirms: the old field repeated the condition
-    expect(firedEventTextZh(100)).not.toContain(conditionTextZh);
+    expect(firedEventTextZh(100, "price")).not.toContain(conditionTextZh);
   });
 
   it("renders the real crossing value when one exists, and never the condition's threshold", () => {
-    const result = firedEventTextZh(100);
+    const result = firedEventTextZh(100, "price");
     expect(result).toBe("触发时价格 100");
     expect(result).not.toContain("150"); // the condition's threshold, never repeated here
     expect(result).not.toContain(conditionText(priceCondition, "NVDA", "zh"));
   });
 
   it("falls back to an honest disclosure — never a fabricated value — when no crossing value survived", () => {
-    expect(firedEventTextZh(null)).toBe("已触发，未记录触发价");
-    expect(firedEventTextZh(undefined)).toBe("已触发，未记录触发价");
+    expect(firedEventTextZh(null, "price")).toBe("已触发，未记录触发价");
+    expect(firedEventTextZh(undefined, "price")).toBe("已触发，未记录触发价");
   });
 
   it("gates on the triggered VALUE existing, never on any EN note string (minor-2, r7 review)", () => {
@@ -420,6 +420,39 @@ describe("firedEventTextZh — the ZH event sentence never restates the conditio
     // sentence, not the generic fallback (a `value != null` check alone would still pass this,
     // but a truthiness check on the value, or a gate keyed off some separate EN "note" string,
     // would not).
-    expect(firedEventTextZh(0)).toBe("触发时价格 0");
+    expect(firedEventTextZh(0, "price")).toBe("触发时价格 0");
+  });
+
+  // Major (round-9 review of f352b961): the round-8 fix hardcoded "价格" (price) for EVERY
+  // condition kind — the one clause of ruling item (1) not executed ("with the value's unit as
+  // the condition implies") — converting a duplicate-fact defect into a wrong-fact defect: an
+  // RSI/gamma-flip/premium-burst alert with a stamped value rendered "触发时价格 72", asserting
+  // a non-price number IS a price.
+  it("RED-first: a non-price condition must NEVER be told its value is a price", () => {
+    const nonPriceTypes = ["rsi", "signal", "regime", "opt_gamma_flip", "opt_wall_touch", "opt_premium_burst", "opt_0dte_spike", "suite_event", "suite_sequence"];
+    for (const t of nonPriceTypes) {
+      const result = firedEventTextZh(72, t);
+      expect(result, `condition.${t}`).not.toContain("价格"); // never claims a non-price number is a price
+      expect(result, `condition.${t}`).toBe("触发时数值 72"); // unit-neutral "value", not "price"
+    }
+  });
+
+  it("still says price ONLY for an actual price condition", () => {
+    expect(firedEventTextZh(72, "price")).toBe("触发时价格 72");
+  });
+
+  it("an unknown/missing condition type is treated as non-price (never defaults to claiming a price)", () => {
+    expect(firedEventTextZh(72, undefined)).toBe("触发时数值 72");
+    expect(firedEventTextZh(72, null)).toBe("触发时数值 72");
+    expect(firedEventTextZh(72, "some_future_condition_kind")).toBe("触发时数值 72");
+  });
+
+  // Minor-1 (round-9 review): the engine's own stamp type is untrusted here on purpose — a
+  // numeric STRING must normalize the same as a number, never fall through to the honest-
+  // sounding but FALSE "no value recorded" disclosure.
+  it("normalizes a numeric-string stamp the same as a number (minor-1, r9 review)", () => {
+    expect(firedEventTextZh("72", "price")).toBe("触发时价格 72");
+    expect(firedEventTextZh("not-a-number", "price")).toBe("已触发，未记录触发价");
+    expect(firedEventTextZh("", "price")).toBe("已触发，未记录触发价");
   });
 });

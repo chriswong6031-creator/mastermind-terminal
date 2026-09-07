@@ -699,11 +699,17 @@ export default function AlertsView({ email, panelOnly, listOnly }: { email: stri
                     was empty. ZH is now gated on `trig` alone; firedEventTextZh itself decides
                     what to say from the triggered VALUE, with an honest fallback sentence when
                     none survived. Making the engine emit a translated note is a separate
-                    contract change. */}
+                    contract change.
+                    Major (round-9 review of f352b961): firedEventTextZh used to hardcode "价格"
+                    (price) for every condition kind, so a non-price alert (RSI, gamma-flip,
+                    premium-burst, ...) that fires with a stamped value rendered "触发时价格 72"
+                    — a false claim that a non-price number is a price. `a.condition?.type` is
+                    now passed through so the function can pick the price sentence only for an
+                    actual price condition, and a unit-neutral one otherwise. */}
                 {lang === "zh"
                   ? trig && (
                       <span className="arow-note" lang="zh">
-                        {firedEventTextZh(tval)}
+                        {firedEventTextZh(tval, a.condition?.type)}
                       </span>
                     )
                   : trig && note && (

@@ -107,6 +107,10 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
     // Absent (re-armed since, or the stamp never carried one) is an honest null, never a guess.
     const triggered = alert.condition?.triggered;
     const triggeredValue = typeof triggered === "object" && triggered !== null && typeof triggered.value === "number" ? triggered.value : null;
+    // Major (round-9 review of f352b961): the only thing that makes `triggeredValue` a PRICE
+    // rather than an RSI reading, a gamma-flip level, etc. — passed through so the ZH "发生了
+    // 什么" sentence (firedEventTextZh) never claims "价格" (price) for a non-price condition.
+    const conditionType = typeof alert.condition?.type === "string" ? alert.condition.type : null;
     return {
       // Minor 4 (round-6 review): same lang-aware gate as the timeline verdict above — the
       // EN-only fired-event payload never renders straight into the ZH drillback dialog.
@@ -118,6 +122,7 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
       summaryPlain: row.outboxRow?.payload?.summary_plain ?? null,
       conditionPlain: row.outboxRow?.payload?.condition_plain ?? null,
       triggeredValue,
+      conditionType,
       firedAt: row.outboxRow?.payload?.fired_at ?? null,
       armedAt: alert.created_at,
       evidenceUrl: row.outboxRow?.payload?.evidence_url ?? null,

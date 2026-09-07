@@ -314,6 +314,12 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
   // the condition's threshold. EN is unaffected by this key (EN keeps the engine's own note /
   // fired-event payload sentence unchanged); the EN column exists only so `copy()` has a pair.
   "alertFired.withValue": ["Fired at {value}.", "触发时价格 {value}"],
+  // Major (round-9 review of round-8 fix, f352b961): the round-8 sentence hardcoded "价格"
+  // (price) for EVERY condition kind, so a non-price alert (RSI, gamma-flip, premium-burst, ...)
+  // that fires with a stamped numeric value rendered "触发时价格 72" — asserting a non-price
+  // number IS a price. Used whenever the condition is not `type === "price"`: a unit-neutral
+  // "触发时数值 {value}" — a value, not a claimed price.
+  "alertFired.withValueGeneric": ["Fired at {value}.", "触发时数值 {value}"],
   "alertFired.noValue": ["Fired; no value recorded.", "已触发，未记录触发价"],
 };
 
@@ -384,8 +390,24 @@ export function verdictText(
  * stamped independently by the engine, so gating the ZH sentence on the EN note's presence can
  * silently drop a real value that IS on the record.
  */
-export function firedEventTextZh(triggeredValue: number | null | undefined): string {
-  return typeof triggeredValue === "number"
-    ? copy("alertFired.withValue", "zh", { value: String(triggeredValue) })
-    : copy("alertFired.noValue", "zh");
+// Round-9 review (of round-8's f352b961): normalizes a numeric-string stamp too (minor-1,
+// r8 review) — the caller's own type narrowing is untrusted here on purpose, this function is
+// the single point every caller routes through. Never treats `null`/`undefined`/a non-numeric
+// string as a value.
+function normalizeTriggeredValue(v: number | string | null | undefined): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
+  return null;
+}
+
+export function firedEventTextZh(
+  triggeredValue: number | string | null | undefined,
+  conditionType?: string | null,
+): string {
+  const value = normalizeTriggeredValue(triggeredValue);
+  if (value === null) return copy("alertFired.noValue", "zh");
+  // Major (round-9 review): only a `price` condition's value is a price — every other
+  // condition kind (rsi, opt_gamma_flip, suite_event, ...) gets the unit-neutral sentence.
+  const key = conditionType === "price" ? "alertFired.withValue" : "alertFired.withValueGeneric";
+  return copy(key, "zh", { value: String(value) });
 }
