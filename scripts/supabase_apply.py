@@ -291,167 +291,87 @@ def extract_block(text: str, anchor: str) -> Optional[str]:
     return "\n".join(captured)
 
 
-_STATEMENT_KEYWORD_RE = re.compile(
-    r"(?i)^[ \t]*("
-    r"select|with|explain|insert|update|delete|drop|alter|create|revoke|"
-    r"grant|begin|commit|rollback|do|refresh|truncate|vacuum|analyze|set|"
-    r"show|copy|call|values|table|comment|merge|execute|prepare|reset|lock"
-    r")\b"
-)
-
-# Postgres' DROP grammar always requires an object-type keyword directly
-# after DROP (DROP FUNCTION ..., DROP TABLE ..., DROP POLICY ... ON ...) --
-# `DROP <qualified.name>` with no object type is not valid SQL at all. That
-# makes the following token after DROP a free, syntax-grounded check for
-# whether a DROP-leading line is really SQL or an English sentence that
-# happens to start with the word "Drop" (round-3 review MAJOR-1).
-_DROP_OBJECT_KEYWORDS = frozenset({
-    "function", "table", "index", "policy", "trigger", "view", "materialized",
-    "type", "schema", "sequence", "extension", "role", "database", "owned",
-    "aggregate", "cast", "collation", "conversion", "domain", "language",
-    "operator", "publication", "rule", "statistics", "subscription",
-    "tablespace", "user", "group", "foreign", "text", "event",
+# Meta-CEO B ruling r4 (2026-09-07, review-#516 round-2-on-r3: 2 majors --
+# the r3 keyword-list classifier both under- and over-matched prose: rule
+# (c) accepted a down-block sentence that only happened to open with a SQL
+# word, and separately (round-6/round-7) a widened keyword list let a
+# colon-terminated heading glue onto the statement below it). Keyword-list
+# classification of prose is abandoned entirely -- see `_block_statements`
+# for the structural replacement. The ONLY keyword use left anywhere in
+# this module is the SAFETY VETO below: once a run of lines has already
+# been recognized as a terminated statement (it ends with ';'), its first
+# token must be a real PostgreSQL command verb, or the parser refuses to
+# guess and raises instead of silently keeping or dropping it. This is the
+# documented list of SQL command first words (ruling r4, verbatim).
+_SQL_COMMAND_VERBS = frozenset({
+    "select", "with", "insert", "update", "delete", "drop", "create", "alter",
+    "grant", "revoke", "comment", "do", "explain", "show", "set", "reset",
+    "analyze", "vacuum", "truncate", "refresh", "call", "begin", "commit",
+    "rollback", "lock", "notify", "listen", "table", "values",
 })
 
 
-def _is_sql_statement_start(line: str) -> bool:
-    """True when `line` plausibly opens a real SQL statement, not English
-    prose whose first word happens to match the keyword list.
-
-    Meta-CEO B ruling r3 round-2 review MAJOR-1 (this round): rule (c) as
-    first implemented matched ANY line whose first token was a SQL
-    keyword, including "Drop these by hand, there is no automated undo."
-    and this repo's own 0012_thesis_objects.sql down-block prose ("drop
-    public.apply_thesis_version_v1(...) and ... Run manually") -- neither
-    is valid SQL, because Postgres requires the object-type keyword
-    (FUNCTION/TABLE/POLICY/INDEX/...) right after DROP, which English
-    narration of a drop does not supply. Every real DROP statement in this
-    repo's migrations (0001, 0002, 0006, 0012, 0013) carries that
-    object-type keyword, so requiring it here closes the false-green
-    without touching any keyword other than DROP -- the one this round's
-    review measured as broken. Every other keyword keeps its prior
-    bare-first-word behavior (that remains a known residual gap for
-    keywords like COPY/SET that can also open an English sentence --
-    round-3 review MINOR-2, not required by this ruling).
-    """
-    m = _STATEMENT_KEYWORD_RE.match(line)
-    if not m:
-        return False
-    if m.group(1).lower() != "drop":
-        return True
-    rest = line[m.end():].lstrip()
-    next_token = re.match(r"[A-Za-z]+", rest)
-    return bool(next_token) and next_token.group(0).lower() in _DROP_OBJECT_KEYWORDS
-
-
-def _process_paragraph(para: str) -> tuple[Optional[str], list[str]]:
-    """Decide whether one blank-line-delimited paragraph of a `-- readback:`/
-    `-- down:` block is SQL, prose, or a mix of both -- and if it is a mix,
-    return only the SQL part, plus the raw heading lines rule (b) dropped
-    along the way (round-3 review MINOR-1: the excluded header text from a
-    mixed paragraph must be recoverable so it can land in the receipt's
-    `readback_excluded`, not vanish silently).
-
-    Meta-CEO B ruling r3 (review-#516 round-2 BLOCKER + MAJOR): prose vs SQL
-    is NOT decided by a paragraph's first word alone. Rules, in order,
-    applied line-by-line to a paragraph (already stripped of its enclosing
-    `-- ` comment marker by extract_block()):
-
-      (a) a line that still begins with '--' is a (nested) comment: drop it
-          and keep scanning the same paragraph.
-      (b) a line whose last non-space character is ':' is a prose HEADING
-          (e.g. "Set of checks to run after apply:", or "Post-apply
-          verification (...):"): drop it, and drop every following line of
-          THIS paragraph until the first line whose first token is a SQL
-          keyword -- a header sharing its paragraph with a real statement
-          (no blank line between them) must not take that statement down
-          with it. This is the BLOCKER fix: the previous ';'-first,
-          whole-chunk-or-nothing gate deleted a readback query that shared
-          its ';'-delimited chunk with the header above it (the 19:2xZ
-          production incident: `syntax error at or near "Post"` on the very
-          first --apply of 0012).
-      (c) the paragraph's first REMAINING line (after (a)/(b) drops) must
-          begin with a keyword from the FULL SQL keyword list -- checking
-          only the bare first word let ordinary English headers that happen
-          to start with a SQL keyword ("Set of checks to run after apply:")
-          match and get glued onto the statement below them (the MAJOR: the
-          widened keyword list re-opened this). A heading is caught by (b)
-          before this check ever runs, so (c) only fires on genuine
-          non-heading prose (e.g. "Manual cleanup required, no automated
-          undo.") -- that disqualifies the WHOLE paragraph, which is then
-          prose and is dropped entirely, never sent to the endpoint.
-
-    (d) -- splitting the survivors on ';' into individual statements --
-    happens in the caller, `_block_statements`, only AFTER this function has
-    run on every paragraph; never before. Splitting on ';' first (the
-    pre-r3 order) is what let a header and a real statement end up sharing
-    ONE all-or-nothing chunk in the first place.
-
-    Returns ``(sql_text, excluded_headings)``: ``sql_text`` is the
-    paragraph's SQL text (verbatim, ';' still unsplit), or ``None`` when the
-    whole paragraph is prose; ``excluded_headings`` is the raw heading
-    line(s) rule (b) dropped from an otherwise-kept paragraph (empty when
-    ``sql_text`` is ``None`` -- the caller records the whole raw paragraph
-    in that case, so a separate heading list would only duplicate it).
-    """
-    lines = para.split("\n")
-    i = 0
-    n = len(lines)
-    excluded: list[str] = []
-    while i < n:
-        line = lines[i]
-        stripped = line.strip()
-        if stripped.startswith("--"):
-            i += 1
-            continue
-        if stripped.endswith(":"):
-            excluded.append(line.strip())
-            i += 1
-            while i < n and not _is_sql_statement_start(lines[i]):
-                excluded.append(lines[i].strip())
-                i += 1
-            continue
-        if _is_sql_statement_start(line):
-            return "\n".join(lines[i:]), excluded
-        return None, []
-    return None, []
-
-
 def _block_statements(block: str) -> tuple[list[str], list[str]]:
-    """Split a `-- readback:`/`-- down:` block into statements.
+    """Split a `-- readback:`/`-- down:` block into statements, structurally.
 
-    Paragraphs (blank-line-delimited chunks of the RAW block) are resolved
-    into SQL-or-prose one at a time by `_process_paragraph` (rules (a)-(c))
-    BEFORE any ';' split -- rule (d) says the ';' split (via
-    `split_statements`) happens only after, on the combined survivors, so a
-    statement's OWN internal ';' terminators are unaffected by paragraph
-    boundaries and a header sharing a paragraph with a statement no longer
-    drags that statement down with it (Meta-CEO B ruling r3).
+    Meta-CEO B ruling r4: prose vs SQL is no longer decided by scanning for
+    a recognized first word at all (that classifier both under- and
+    over-matched -- review-#516's round-2-on-r3 majors). A STATEMENT is a
+    run of lines inside the block, joined, that terminates with ';' --
+    lines accumulate until one ends with ';' (comments are already stripped
+    of their leading '-- ' marker by extract_block() before this function
+    ever sees the block, so "a line ends with ';'" here always means the
+    SQL text itself ends there, not a comment marker). A run that instead
+    reaches a blank line, or the end of the block, without ever
+    terminating is PROSE and is dropped whole -- e.g. "Drop table by hand
+    before re-running." and "Set of checks to run after apply:" are prose
+    because they end in '.' / ':', never ';'. A multi-line statement like
+    `drop\n  function public.foo();` is one run: the ';' check only fires
+    on the LAST line of the run, so an earlier line with no ';' just keeps
+    the run open.
 
-    Returns (kept, dropped): `kept` is every parsed statement; `dropped` is
-    the raw (pre-strip) text of every paragraph that was ALL prose (round-2
-    review MINOR 1), PLUS the raw heading line(s) excluded from an
-    otherwise-kept mixed paragraph (round-3 review MINOR-1: a header
-    sharing its paragraph with a real statement must still be recorded as
-    excluded, not just silently removed from the SQL side) -- so callers
-    can report everything that was excluded instead of silently reducing
-    the statement count.
+    The only remaining keyword use is a SAFETY VETO, applied only to a run
+    that DID terminate with ';': its first token must be a recognized
+    PostgreSQL command verb (`_SQL_COMMAND_VERBS`). A terminated run whose
+    first token is not one of these is neither silently kept nor silently
+    dropped -- it raises `MigrationError` naming the line, because a
+    ';'-terminated chunk that does not open with a real SQL verb is not a
+    case this parser is willing to guess about. This is the accepted edge:
+    an ordinary English sentence that happens to end in ';' hits this veto
+    and is a hard error, not silently swallowed as either SQL or prose.
+
+    Returns (kept, dropped): `kept` is every parsed statement (its own
+    terminating ';' trimmed off); `dropped` is the raw text of every run
+    that was prose.
     """
-    paragraphs = re.split(r"\n[ \t]*\n", block)
-    kept_texts: list[str] = []
+    lines = block.split("\n")
+    kept: list[str] = []
     dropped: list[str] = []
-    for para in paragraphs:
-        if not para.strip():
+    run: list[str] = []
+
+    def _flush_prose() -> None:
+        if run:
+            dropped.append("\n".join(run).strip())
+            run.clear()
+
+    for line in lines:
+        if line.strip() == "":
+            _flush_prose()
             continue
-        cleaned, excluded = _process_paragraph(para)
-        if cleaned is None:
-            dropped.append(para.strip())
-        else:
-            kept_texts.append(cleaned)
-            if excluded:
-                dropped.append("\n".join(excluded))
-    combined = "\n\n".join(kept_texts).strip()
-    kept = split_statements(strip_sql_comments(combined)) if combined else []
+        run.append(line)
+        if line.rstrip().endswith(";"):
+            stmt = "\n".join(run).strip()
+            run.clear()
+            first_token_m = re.match(r"[A-Za-z]+", stmt)
+            first_token = first_token_m.group(0).lower() if first_token_m else ""
+            if first_token not in _SQL_COMMAND_VERBS:
+                first_line = stmt.splitlines()[0].strip()
+                raise MigrationError(
+                    "-- readback:/-- down: block line terminates with ';' "
+                    f"but does not open a recognized SQL statement: {first_line!r}"
+                )
+            kept.append(stmt[:-1].strip())
+    _flush_prose()
     return kept, dropped
 
 
@@ -594,16 +514,20 @@ def idempotency_findings(text: str, statements: list[str]) -> list[str]:
         findings.append("no -- down: block -- the file does not say how to undo itself")
     else:
         # Ruling item (1) named both the readback AND the down block for
-        # leading-prose parsing (round-2 review MINOR 2) -- the down block
-        # has no separate statement-splitting call site today (it is only
-        # presence-checked), so apply the same paragraph-anchored drop here
-        # and flag a down block that reads as prose only, not an undo query.
-        down_kept, _down_dropped = _block_statements(down_block)
-        if not down_kept:
-            findings.append(
-                "-- down: block has no statement that starts with a "
-                "recognized SQL keyword -- it reads as prose, not an undo query"
-            )
+        # structural statement-vs-prose parsing -- the down block has no
+        # separate statement-splitting call site today (it is only
+        # presence-checked), so apply the same `_block_statements` here and
+        # flag a down block that reads as prose only, not an undo query.
+        try:
+            down_kept, _down_dropped = _block_statements(down_block)
+        except MigrationError as exc:
+            findings.append(f"-- down: {exc}")
+        else:
+            if not down_kept:
+                findings.append(
+                    "-- down: block has no line that terminates with ';' -- "
+                    "it reads as prose, not an undo query"
+                )
     try:
         readback_statements(text)
     except MigrationError as exc:
@@ -881,10 +805,24 @@ def run_dry(path: Path, *, allow_legacy: bool = False, project_ref: Optional[str
             print(f"  [{i:02d}] {rb_shown}{rb_marker}", file=out)
         # Ruling item (3): the dry-run listing must let an operator see that
         # prose was excluded, not just a statement count that is smaller
-        # than they might expect (round-2 review MINOR 1).
+        # than they might expect (round-2 review MINOR 1). The note's own
+        # wording (ruling r4 minor-1) must describe the ACTUAL reason a run
+        # is excluded under the structural parser -- it never terminated
+        # with ';' before a blank line / the end of the block -- not the
+        # abandoned keyword classifier's language. It also needs its own
+        # truncation marker (ruling r4 minor-3): a multi-line excluded run
+        # collapsed to one line and cut at 100 chars with no indicator left
+        # an operator unable to tell a short excluded line from a long one
+        # silently cut off.
         for s in rb_dropped:
             note_one_line = " ".join(strip_sql_comments(s).split())
-            print(f"  note: excluded (no SQL keyword found): {note_one_line[:100]}", file=out)
+            note_shown = note_one_line[:100]
+            note_marker = " …[truncated]" if len(note_one_line) > 100 else ""
+            print(
+                f"  note: excluded (no terminating ';' -- reads as prose): "
+                f"{note_shown}{note_marker}",
+                file=out,
+            )
 
     objs = expected_objects(statements)
     if objs:
