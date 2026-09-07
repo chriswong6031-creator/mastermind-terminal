@@ -104,7 +104,7 @@
 .lensHead { display: grid; gap: 4px; padding: 12px 2px 0; border-top: 1px solid var(--line-2); }
 .lensHead h2 { margin: 0; font-size: 13px; letter-spacing: .04em; }
 .lensWhat { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.subjectChip { justify-self: start; margin-top: 2px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-2); border-radius: 999px; padding: 3px 10px; color: var(--text-2); background: color-mix(in srgb, var(--brand-2) 10%, transparent); font: 700 11px/1.3 var(--font-ui); cursor: pointer; transition: background var(--t-fast) var(--ease); }
+.subjectChip { justify-self: start; margin-top: 2px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-2); border-radius: var(--r-pill); padding: 3px 10px; color: var(--text-2); background: color-mix(in srgb, var(--brand-2) 10%, transparent); font: 700 11px/1.3 var(--font-ui); cursor: pointer; transition: background var(--t-fast) var(--ease); }
 .subjectChip:hover { background: color-mix(in srgb, var(--brand-2) 18%, transparent); }
 .scopeNote { margin: 0; color: var(--text-dim); font-size: 11px; line-height: 1.5; }
 .lensPanel { display: grid; gap: 7px; margin-top: 12px; }
@@ -154,7 +154,7 @@
 .rowReason { font-style: normal; color: var(--muted); font-size: 11px; }
 .emptyLens { margin-top: 4px; padding: 14px; border: 1px dashed var(--line); border-radius: 10px; }
 .emptyLens p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.showMore { min-height: 34px; margin-top: 4px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; color: inherit; background: var(--panel-2); font: 700 11px/1.2 var(--font-ui); cursor: pointer; }
+.showMore { min-height: 34px; margin-top: 4px; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 6px 10px; color: inherit; background: var(--panel-2); font: 700 11px/1.2 var(--font-ui); cursor: pointer; }
 .conditionLine { margin: -8px 0 16px; padding-left: 10px; border-left: 2px solid var(--line-3); color: var(--muted); font-size: 12px; line-height: 1.5; }
 .conditionLine[data-state="window_closed"] { border-left-color: var(--warn); color: var(--text-2); }
 @media (prefers-reduced-motion: reduce) { .lens { transition: none; } }

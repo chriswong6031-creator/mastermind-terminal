@@ -264,28 +264,22 @@ describe("condition read seam (B5)", () => {
 });
 
 describe("no new schema", () => {
-  it("migrations directory is unchanged (frozen list)", () => {
+  it("carries no thesis migration of its own — 0012 is present (owned by terminal#502, already merged), and no thesis-scoped file was added or renamed by this packet", () => {
+    // Round-2 review BLOCKER: a hardcoded whole-directory equality list is base-fragile
+    // by construction — any *unrelated* migration landing on master (e.g. 0013, a
+    // different lane's packet) breaks this test on merge, even though this packet never
+    // touches the migrations directory at all. The invariant this guard actually owns is
+    // narrower and base-stable: 0012_thesis_objects.sql exists (this packet's filter
+    // layer depends on it) and no thesis-scoped schema file was added/renamed by *this*
+    // PR (a `thesis_saved_views` table, a renamed/duplicated 0012, etc). Sibling packets
+    // landing their own numbered migrations on master must never fail this test.
     const dir = path.resolve(__dirname, "../../../supabase/migrations");
-    const entries = fs.readdirSync(dir).sort();
-    const expected = [
-      "0001_init.sql",
-      "0002_drawings.sql",
-      "0003_search_events.sql",
-      "0004_analytics.sql",
-      "0005_brain_threads.sql",
-      "0006_lock_is_pro.sql",
-      "0007_portfolio_positions.sql",
-      "0008_chart_layouts_unique_name.sql",
-      "0009_watchlist_symbol_unique.sql",
-      "0010_search_event_stats.sql",
-      "0011_analytics_eid.sql",
-      "0012_thesis_objects.sql",
-      "README.md",
-    ].sort();
-    // Hard assertion: this packet is a filter layer over 0012, not a schema change.
-    // A new migration file (a 0013_*.sql, a renamed 0012, an added thesis_saved_views
-    // table) fails this test outright instead of silently passing.
-    expect(entries).toEqual(expected);
+    const entries = fs.readdirSync(dir);
+    expect(entries).toContain("0012_thesis_objects.sql");
+    const thesisScoped = entries.filter(
+      (name) => /thesis/i.test(name) && name !== "0012_thesis_objects.sql",
+    );
+    expect(thesisScoped).toEqual([]);
   });
 
   it("route.ts and the thesis store module (theses.ts) contain no DDL or unexpected table access", () => {

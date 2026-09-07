@@ -628,6 +628,14 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   const rms = RMS_COPY[lang];
   const activeViewDef: RmsViewDef = RMS_VIEWS.find((v) => v.id === view) ?? RMS_VIEWS[0];
   const detailListRows = useMemo(() => Array.from(hydratedDetails.values()), [hydratedDetails]);
+  // minor 2 (round-2 review) — considered, not changed: `missingIds` are ids the batch
+  // API reported `not_found` for a thesis this workspace's own list just returned, i.e.
+  // confirmed gone (deleted between list and hydrate), never a transient fault (a fault
+  // is a 503 for the whole batch, handled separately by `hydrationUnavailable`). Content
+  // lenses (catalystRows/riskRows/noteRows) read only from `hydratedDetails`, so a
+  // missing id contributes zero rows either way — counting it toward `scope.complete`
+  // reaches an honest 100% instead of one that can never complete for a thesis that no
+  // longer exists, and reports no rows as loaded that were actually dropped.
   const scope = useMemo(() => hydrationScope(activeTheses, new Set([...hydratedDetails.keys(), ...missingIds])), [activeTheses, hydratedDetails, missingIds]);
   const conditions = useMemo(() => readConditionStates(theses.map((t) => t.id)), [theses]);
   const coverageViewRows = useMemo(() => coverageRows(theses), [theses]);
