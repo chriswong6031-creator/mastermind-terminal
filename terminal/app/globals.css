@@ -2404,7 +2404,7 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
  * selector never contains the string. */
 .analysis-route .mobilebar{z-index:95}
 /* Raising `.mobilebar` above `.fin-pane` (the rule right above) stops the bar from being
- * covered, but introduced the opposite collision — at <=860px `.fin-pane--workspace` still
+ * covered, but introduced the opposite stacking conflict — at <=860px `.fin-pane--workspace` still
  * falls back to `.fin-pane`'s base `inset:0` (app/fin.css:1160-1174), so the now-higher
  * `.mobilebar` paints directly OVER the pane's OWN header (`.fin-head`, including the "Back to
  * chart" exit affordance — components/fin/MegaPane.tsx) instead of being covered by it. Fix:

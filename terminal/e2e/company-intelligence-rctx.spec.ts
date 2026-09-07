@@ -270,7 +270,14 @@ test("the real Analysis shell hosts one-turn exact source sends in the existing 
   await expect(page.locator(`script[src="${BRAIN_SCRIPT_SRC}"]`)).toHaveCount(1);
 });
 
-test("Analysis adopts an existing document Brain host without racing a second widget script", async ({ page }) => {
+// Product rule (Meta-CEO B ruling r5, 2026-09-07): the shell's ACTIVE symbol always wins. When
+// /analysis adopts an existing document Brain host, the host's stale MM_BRAIN_CFG.symbol is
+// overwritten by the route's own symbol — a user who navigates to /analysis?symbol=NVDA must get
+// a Brain about NVDA, never whatever the adopted host happened to be preseeded with. Same law as
+// #508 ("carry the active company across workspaces"). This is the same mechanism the unit test
+// lib/__tests__/brainWidgetColdSymbol.test.ts already pins at the component level; that test is
+// unchanged by this ruling.
+test("Analysis adopts an existing document Brain host, overwriting its stale symbol with the route's active symbol, without racing a second widget script", async ({ page }) => {
   await page.addInitScript(() => {
     const host = window as Window & {
       MMBrain?: { open: () => void };
@@ -286,10 +293,14 @@ test("Analysis adopts an existing document Brain host without racing a second wi
 
   await page.goto("/analysis?symbol=NVDA&page=intelligence");
 
-  expect(await page.evaluate(() => {
-    const host = window as Window & { MM_BRAIN_CFG?: { symbol?: () => string } };
-    return host.MM_BRAIN_CFG?.symbol?.();
-  })).toBe("stale-preseed");
+  // The route's own active symbol (NVDA) wins over the adopted host's stale preseed — see the
+  // product rule above.
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const host = window as Window & { MM_BRAIN_CFG?: { symbol?: () => string } };
+      return host.MM_BRAIN_CFG?.symbol?.();
+    })
+  ).toBe("NVDA");
   await expect(page.locator(`script[src="${BRAIN_SCRIPT_SRC}"]`)).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.dataset.unexpectedSecondBrain)).toBeUndefined();
 });
