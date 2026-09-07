@@ -11,6 +11,7 @@ import warnings
 from pathlib import Path
 
 from scripts.check_supabase_migration_namespace import (
+    EXPECTED_HEADER_REQUIRED_FROM,
     HEADER_SCAN_LINES,
     MIGRATIONS_DIR,
     RESERVATIONS_PATH,
@@ -338,3 +339,113 @@ def test_report_prints_nulls_in_plain_words_and_is_not_vacuous():
     empty_dir = MIGRATIONS_DIR.parent / "__does_not_exist__"
     findings, _ = collect(migrations_dir=empty_dir, reservations=RESERVATIONS_PATH)
     assert any(f.code == "MIGRATIONS_DIR_EMPTY" for f in findings)
+
+
+# --- 14 (MAJOR 1 fix: drive a finding through check_all/collect, the path CI runs) ---
+
+
+def test_check_all_wires_every_sub_check():
+    """Directly exercises check_all() (not the individual helpers) with one
+    violation from each finding category live at once. Deleting any single
+    `findings.extend(...)` wiring line in check_all would drop exactly one of
+    these codes from the result and fail this test -- unlike calling the
+    helpers directly, this cannot go green while the wiring is broken.
+    """
+    filenames = ["0099_a.sql", "0099_b.sql", "0098_x.sql", "0100_y.sql"]
+    texts = {"0100_y.sql": "create table foo();\n"}
+    doc = reservations_doc(
+        prefixes={
+            "0100": {
+                "state": "taken",
+                "file": "0100_y.sql",
+                "packet": "TEST",
+                "pr": 1,
+                "pr_state": "open",
+                "note": "fixture",
+            },
+        }
+    )
+    findings = check_all(filenames, texts, doc)
+    codes = {f.code for f in findings}
+    assert "DUPLICATE_PREFIX" in codes  # 0099_a.sql / 0099_b.sql
+    assert "UNRESERVED_PREFIX" in codes  # 0098_x.sql has no ledger entry
+    assert "MISSING_LEDGER_ROW_HEADER" in codes  # 0100_y.sql >= floor, no header
+    assert "MISSING_ROLLBACK_HEADER" in codes
+
+
+def test_collect_end_to_end_over_a_synthetic_tree(tmp_path):
+    """Drives collect() -- the exact function main()/CI calls -- over a
+    from-scratch on-disk migrations dir + RESERVATIONS.json, proving the
+    full read-files-then-check_all wiring, not just an in-memory helper call.
+    Uses the previously-dead write_tree fixture.
+    """
+    clean_root = tmp_path / "clean"
+    clean_root.mkdir()
+    dup_root = tmp_path / "dup"
+    dup_root.mkdir()
+
+    doc = reservations_doc(
+        prefixes={
+            "0099": {
+                "state": "taken",
+                "file": "0099_a.sql",
+                "packet": "TEST",
+                "pr": 1,
+                "pr_state": "open",
+                "note": "fixture",
+            },
+        }
+    )
+
+    clean_text = "-- Ledger row: NONE: fixture\n-- Rollback: NONE: fixture\ncreate table t();\n"
+    migrations_dir, reservations_path = write_tree(clean_root, {"0099_a.sql": clean_text}, doc)
+    findings, _notes = collect(migrations_dir=migrations_dir, reservations=reservations_path)
+    assert findings == []
+
+    dup_migrations_dir, dup_reservations_path = write_tree(
+        dup_root,
+        {"0099_a.sql": clean_text, "0099_b.sql": clean_text},
+        doc,
+    )
+    dup_findings, _ = collect(migrations_dir=dup_migrations_dir, reservations=dup_reservations_path)
+    assert any(f.code == "DUPLICATE_PREFIX" for f in dup_findings)
+
+
+# --- 15 (MAJOR 2 fix: header_required_from is validated and pinned) ---------
+
+
+def test_missing_header_floor_is_detected():
+    doc = reservations_doc(header_required_from=None)
+    findings = validate_reservations(doc)
+    assert any(f.code == "MISSING_HEADER_FLOOR" for f in findings)
+
+
+def test_malformed_header_floor_is_detected():
+    doc = reservations_doc(header_required_from="abcd")
+    findings = validate_reservations(doc)
+    assert any(f.code == "MISSING_HEADER_FLOOR" for f in findings)
+
+
+def test_header_floor_is_pinned_to_the_expected_value():
+    doc = reservations_doc(header_required_from="0020")
+    findings = validate_reservations(doc)
+    assert any(f.code == "HEADER_FLOOR_UNEXPECTED" for f in findings)
+    assert EXPECTED_HEADER_REQUIRED_FROM == "0015"
+
+
+def test_missing_header_floor_note_is_detected():
+    doc = reservations_doc(header_required_note="")
+    findings = validate_reservations(doc)
+    assert any(f.code == "MISSING_HEADER_FLOOR_NOTE" for f in findings)
+
+
+def test_disclosure_survives_a_missing_header_floor():
+    """The disclosure used to vanish in the same instant header_required_from
+    was removed (scripts:294-302's `if isinstance(floor, str)` guard). It now
+    keys off header_required_note instead, so the nulls-printed gap note
+    survives even while validate_reservations is separately failing the
+    missing floor.
+    """
+    doc = reservations_doc(header_required_from=None)
+    notes = disclosures([], doc)
+    assert any("header rule starts at 0015" in n.text for n in notes)

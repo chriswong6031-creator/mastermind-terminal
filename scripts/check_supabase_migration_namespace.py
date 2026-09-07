@@ -40,6 +40,13 @@ HEADER_SCAN_LINES = 40  # header lines only; a buried '-- Rollback:' mid-file do
 
 REQUIRED_KEYS = {"state", "file", "packet", "pr", "pr_state", "note"}
 
+# Pinned expected value (MAJOR 2 fix): header_required_from used to be read
+# unvalidated -- removing or mangling the key silently switched the header-law
+# enforcement AND its nulls-printed disclosure off at the same instant. Both are
+# now validated top-level keys (see validate_reservations) so a missing or
+# unexpected floor is a loud Finding rather than a silent no-op.
+EXPECTED_HEADER_REQUIRED_FROM = "0015"
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -74,6 +81,37 @@ def validate_reservations(doc: dict) -> list[Finding]:
 
     if not isinstance(doc, dict):
         return [Finding("RESERVATION_SCHEMA", None, "RESERVATIONS.json top level must be an object")]
+
+    floor = doc.get("header_required_from")
+    if not isinstance(floor, str) or not re.fullmatch(r"\d{4}", floor):
+        findings.append(
+            Finding(
+                "MISSING_HEADER_FLOOR",
+                None,
+                "top-level 'header_required_from' must be a 4-digit string pinning where the "
+                "header-law floor starts -- a missing or malformed value used to silently turn "
+                "the header rule (and its disclosure) off",
+            )
+        )
+    elif floor != EXPECTED_HEADER_REQUIRED_FROM:
+        findings.append(
+            Finding(
+                "HEADER_FLOOR_UNEXPECTED",
+                None,
+                f"top-level 'header_required_from' is {floor!r}, expected "
+                f"{EXPECTED_HEADER_REQUIRED_FROM!r}",
+            )
+        )
+
+    if not _non_empty_str(doc.get("header_required_note")):
+        findings.append(
+            Finding(
+                "MISSING_HEADER_FLOOR_NOTE",
+                None,
+                "top-level 'header_required_note' must be a non-empty string disclosing the "
+                "pre-floor gap",
+            )
+        )
 
     prefixes = doc.get("prefixes")
     if not isinstance(prefixes, dict):
@@ -291,8 +329,8 @@ def disclosures(filenames: Sequence[str], doc: dict) -> list[Disclosure]:
             text += " (absent from this checkout by design.)"
         notes.append(Disclosure(prefix=prefix, state=state or "unknown", text=text))
 
-    floor = doc.get("header_required_from") if isinstance(doc, dict) else None
-    if isinstance(floor, str):
+    header_note = doc.get("header_required_note") if isinstance(doc, dict) else None
+    if _non_empty_str(header_note):
         notes.append(
             Disclosure(
                 prefix="*",
