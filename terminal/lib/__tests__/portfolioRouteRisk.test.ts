@@ -22,11 +22,13 @@ vi.mock("next/headers", () => ({
   cookies: vi.fn(),
 }));
 
-function mockCookies(key: string) {
-  const jar = new Map<string, { value: string }>();
-  jar.set(FIXTURE_STORE_COOKIE, { value: key });
+function mockCookies(key: string, extra: Record<string, string> = {}) {
+  const jar = new Map<string, { name: string; value: string }>();
+  jar.set(FIXTURE_STORE_COOKIE, { name: FIXTURE_STORE_COOKIE, value: key });
+  for (const [name, value] of Object.entries(extra)) jar.set(name, { name, value });
   return {
     get: (name: string) => jar.get(name),
+    getAll: () => Array.from(jar.values()),
   };
 }
 
@@ -125,22 +127,65 @@ describe("GET /api/portfolio — risk field (additive)", () => {
     expect(gap.reason).toBe("page_locked");
   });
 
-  it("8: artifact request carries no Cookie/Authorization/user id", async () => {
+  // Meta-CEO B ruling (2026-09-06, BLOCKER-1 DECIDED) reverses the anonymous-fan-out design
+  // the previous "8" pinned: macro's regwall 401s every anonymous artifact read in production
+  // (app/regwall.py), so the route now forwards the CALLER's own Supabase session cookie —
+  // the one credential macro's gate accepts (it has no Authorization-bearer path at all) and
+  // the one Terminal already holds, since Terminal and macro share one Supabase project and
+  // one `.mastermind-x.com`-scoped session cookie.
+  it("8: forwards the caller's Supabase session cookie to the artifact fetch, and a recorded 200 fixture reads through it", async () => {
+    const authCookieName = "sb-testref-auth-token";
+    const authCookieValue = "base64-eyJhY2Nlc3NfdG9rZW4iOiJmYWtlIn0";
+    const { cookies } = await import("next/headers");
+    (cookies as any).mockResolvedValue(mockCookies(key, { [authCookieName]: authCookieValue }));
+
+    const calls: any[] = [];
+    global.fetch = vi.fn(async (url: string, init?: any) => {
+      calls.push([url, init]);
+      const cookieHeader = init?.headers?.Cookie ?? "";
+      // Recorded 200 fixture: the artifact shape macro serves once a valid session clears the
+      // regwall (never curl-provable from a build pass — see the PR body's live-verification
+      // gap). Without the forwarded cookie this fixture answers the real observed 401 lock.
+      if (cookieHeader.includes(authCookieName)) {
+        return new Response(
+          JSON.stringify({ sector: "Technology", personality: { market_cap: 3e12 } }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({ locked: true, reason: "authentication_required" }),
+        { status: 401, headers: { "x-regwall": "deny" } },
+      );
+    }) as any;
+
+    const res = await GET();
+    const body = await res.json();
+    // Proves the forwarded cookie was honored end-to-end: AAPL reads Technology/3e12, not a
+    // page_locked gap, because the fixture only answers 200 when it sees the cookie.
+    expect(body.risk.sectors.some((s: any) => s.key === "Technology")).toBe(true);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const [, init] of calls) {
+      const headerNames = Object.keys(init?.headers ?? {}).map((h) => h.toLowerCase());
+      expect(headerNames).toContain("cookie");
+      // macro's gate has no Authorization-bearer path (app/regwall.py `_mm_supabase_access_token`
+      // reads only `request.cookies`) — a bearer header would do nothing, so none is sent.
+      expect(headerNames).not.toContain("authorization");
+      expect(init.headers.Cookie).toBe(`${authCookieName}=${authCookieValue}`);
+      // Only the auth cookie travels — never the unrelated fixture-store cookie from the jar.
+      expect(init.headers.Cookie).not.toContain(FIXTURE_STORE_COOKIE);
+    }
+  });
+
+  it("9: with no session cookie present, the artifact fetch carries no Cookie header (an anonymous caller stays anonymous)", async () => {
     const calls: any[] = [];
     global.fetch = vi.fn(async (url: string, init?: any) => {
       calls.push([url, init]);
       return new Response(JSON.stringify({ sector: "Energy" }), { status: 200 });
     }) as any;
-    await GET();
-    for (const [url, init] of calls) {
-      expect(String(url)).not.toMatch(/cookie|authorization|user/i);
-      // The route passes NO headers object at all on the artifact fan-out (verified against
-      // route.ts's fetch call) — assert that directly so this fails the day a header is added,
-      // rather than only re-checking an object that is vacuously empty either way.
-      expect(init?.headers).toBeUndefined();
-      const headers = init?.headers || {};
-      expect(Object.keys(headers).map((h) => h.toLowerCase())).not.toContain("cookie");
-      expect(Object.keys(headers).map((h) => h.toLowerCase())).not.toContain("authorization");
+    await GET(); // beforeEach's mockCookies(key) carries no sb-*-auth-token cookie
+    expect(calls.length).toBeGreaterThan(0);
+    for (const [, init] of calls) {
+      expect(init?.headers?.Cookie).toBeUndefined();
     }
   });
 });

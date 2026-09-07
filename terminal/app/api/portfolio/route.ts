@@ -61,21 +61,63 @@ const fail = (error: string, status: number) => NextResponse.json({ error }, { s
  */
 // ── Artifact fan-out (W B-F08-4) — additive `risk` field on GET only ──
 //
-// Anonymous by construction: no cookie, no Authorization, no user id, no ticker list in a query
-// string. A `{locked:true}` envelope is therefore an EXPECTED state (the artifact endpoint is
-// auth-gated), never an error — and a total outage here must never degrade the `positions`
-// response, which is why every failure is caught locally rather than allowed to reject GET.
+// Forwards the CALLER's own credential (Meta-CEO B ruling, 2026-09-06 — BLOCKER-1 DECIDED).
+// macro's regwall (macro-main app/regwall.py `_deny` / app/main.py `_mm_supabase_access_token`)
+// answers an anonymous fan-out with a real 401 `{locked:true,reason:"authentication_required"}`
+// for EVERY ticker in production — an anonymous read can never satisfy the sector/liquidity
+// acceptance clause. Two facts make forwarding possible without new plumbing: (1) macro's gate
+// reads ONLY a Supabase session cookie (`sb-<project-ref>-auth-token`, chunked `.0`/`.1`/… —
+// there is no Authorization-bearer path in app/regwall.py at all), and (2) Terminal and macro
+// point at the SAME Supabase project and share that exact cookie, scoped `Domain=.mastermind-x.com`
+// (research/MASTERMIND_WATCHLIST_PORTFOLIO_W0_COMMISSIONING_PACKET_2026-08-12.md §"same Supabase
+// project… same GoTrue issuer… shared .mastermind-x.com SSO cookie"; terminal/lib/supabase/
+// cookies.ts AUTH_COOKIE_DOMAIN=".mastermind-x.com"). So a signed-in Terminal request already
+// carries the one credential macro's gate accepts — `callerAuthCookieHeader()` below reads it
+// off the incoming request and forwards ONLY that cookie (never the whole jar, never a bearer
+// header macro would ignore anyway) to each artifact fetch. A `{locked:true}` envelope stays a
+// possible, handled state (a signed-out caller, a stale/expired token, or a real macro-side
+// outage all still degrade to it) — never an error — and a total outage here must never
+// degrade the `positions` response, which is why every failure is caught locally rather than
+// allowed to reject GET. Whether this actually clears the wall in production cannot be proven
+// from a build pass (a live curl with a real session is not an available proof method here);
+// see the PR body for the unit + e2e fixture proof and the live-verification gap.
 const STOCKDATA_BASE = process.env.STOCKDATA_BASE || "https://www.mastermind-x.com";
 const ARTIFACT_FANOUT_CAP = 60;
 const ARTIFACT_CONCURRENCY = 8;
 const ARTIFACT_TIMEOUT_MS = 2500;
 
-async function fetchArtifact(ticker: string): Promise<ArtifactState> {
+// Same predicate as lib/supabase/middleware.ts's hasAuthCookie: Supabase writes its session as
+// `sb-<project-ref>-auth-token`, chunked into `.0`/`.1`/… suffixes when large. Matching by name
+// (rather than deriving the exact project ref) keeps this route working across environments
+// without a second copy of macro's ref-derivation logic.
+function isSupabaseAuthCookie(name: string): boolean {
+  return name.startsWith("sb-") && name.includes("-auth-token");
+}
+
+/** The caller's Supabase session cookie(s), reassembled as one `Cookie` header value — or
+ *  `null` when no such cookie is present (signed-out caller, or a transport that never raises
+ *  is required to answer without one). Never forwards any other cookie in the jar. */
+async function callerAuthCookieHeader(): Promise<string | null> {
+  try {
+    const jar = await cookies();
+    const getAll = (jar as { getAll?: () => { name: string; value: string }[] }).getAll;
+    const all = typeof getAll === "function" ? getAll.call(jar) : [];
+    const pairs = all
+      .filter((c) => isSupabaseAuthCookie(c.name))
+      .map((c) => `${c.name}=${c.value}`);
+    return pairs.length ? pairs.join("; ") : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchArtifact(ticker: string, cookieHeader: string | null): Promise<ArtifactState> {
   try {
     const url = `${STOCKDATA_BASE}/stockdata/${encodeURIComponent(ticker.toUpperCase())}.json`;
     const res = await fetch(url, {
       signal: AbortSignal.timeout(ARTIFACT_TIMEOUT_MS),
       next: { revalidate: 900 },
+      ...(cookieHeader ? { headers: { Cookie: cookieHeader } } : {}),
     } as RequestInit);
     if (res.status === 404) return { kind: "missing" };
     // The regwall answers an anonymous fan-out with a REAL HTTP 401 (measured live,
@@ -108,7 +150,10 @@ async function fetchArtifact(ticker: string): Promise<ArtifactState> {
   }
 }
 
-async function fetchArtifactsFor(tickers: readonly string[]): Promise<Record<string, ArtifactState>> {
+async function fetchArtifactsFor(
+  tickers: readonly string[],
+  cookieHeader: string | null,
+): Promise<Record<string, ArtifactState>> {
   const unique = [...new Set(tickers)];
   const attempted = unique.slice(0, ARTIFACT_FANOUT_CAP);
   const overflow = unique.slice(ARTIFACT_FANOUT_CAP);
@@ -120,19 +165,19 @@ async function fetchArtifactsFor(tickers: readonly string[]): Promise<Record<str
     while (i < attempted.length) {
       const idx = i++;
       const ticker = attempted[idx];
-      out[ticker] = await fetchArtifact(ticker);
+      out[ticker] = await fetchArtifact(ticker, cookieHeader);
     }
   }
   await Promise.all(Array.from({ length: Math.min(ARTIFACT_CONCURRENCY, attempted.length || 1) }, worker));
   return out;
 }
 
-async function buildRisk(positions: readonly Position[]): Promise<PortfolioRisk> {
+async function buildRisk(positions: readonly Position[], cookieHeader: string | null): Promise<PortfolioRisk> {
   const open = positions.filter((p) => p.status === "open");
   const tickers = open.map((p) => p.ticker);
   let artifacts: Record<string, ArtifactState> = {};
   try {
-    artifacts = await fetchArtifactsFor(tickers);
+    artifacts = await fetchArtifactsFor(tickers, cookieHeader);
   } catch {
     artifacts = {};
   }
@@ -151,10 +196,13 @@ async function buildRisk(positions: readonly Position[]): Promise<PortfolioRisk>
 // than ever blocking — or endangering — the `positions` response.
 const RISK_BUDGET_MS = 4000;
 
-async function buildRiskBounded(positions: readonly Position[]): Promise<PortfolioRisk | null> {
+async function buildRiskBounded(
+  positions: readonly Position[],
+  cookieHeader: string | null,
+): Promise<PortfolioRisk | null> {
   try {
     return await Promise.race([
-      buildRisk(positions),
+      buildRisk(positions, cookieHeader),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), RISK_BUDGET_MS)),
     ]);
   } catch {
@@ -170,7 +218,8 @@ export async function GET() {
     console.error("portfolio GET failed:", read.error);
     return fail("portfolio unavailable", 503);
   }
-  const risk = await buildRiskBounded(read.positions);
+  const cookieHeader = await callerAuthCookieHeader();
+  const risk = await buildRiskBounded(read.positions, cookieHeader);
   return NextResponse.json({ positions: read.positions, risk });
 }
 
