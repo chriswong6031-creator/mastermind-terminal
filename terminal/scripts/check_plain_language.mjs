@@ -133,12 +133,45 @@ function walk(dir, out) {
   return out;
 }
 
+// The ruling's copy-dictionary category is scoped by path as `lib/**/*copy*.ts`
+// (note: `.ts`, not `.tsx` — the SCAN_GLOBS walk() above only ever pushes
+// `.tsx` files, so a plain `.ts` copy-dict file under `terminal/lib/` was
+// never opened at all: `isCopyDictFile`'s own path regex could never match
+// a scanned file (PR #530 review BLOCKER 2, measured: a `terminal/lib/
+// marketCopy.ts` fixture produced zero findings). This walks `terminal/lib`
+// recursively (both `.ts` and `.tsx`) and keeps only files whose basename
+// contains "copy" — the same walk-then-filter shape as SCAN_GLOBS, scoped
+// to the one path pattern the ruling names.
+function walkAnyTs(dir, out) {
+  if (!existsSync(dir)) return out;
+  for (const entry of readdirSync(dir)) {
+    const p = join(dir, entry);
+    const st = statSync(p);
+    if (st.isDirectory()) {
+      if (entry === "node_modules" || entry === ".next") continue;
+      walkAnyTs(p, out);
+    } else if (/\.tsx?$/.test(entry)) {
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+function listLibCopyFiles(root) {
+  const all = [];
+  walkAnyTs(join(root, "terminal/lib"), all);
+  return all.filter((p) => /copy/i.test(relative(root, p).split(/[\\/]/).pop()));
+}
+
 function listScanFiles(root) {
   const files = [];
   for (const g of SCAN_GLOBS) walk(join(root, g), files);
   for (const f of EXTRA_FILES) {
     const p = join(root, f);
     if (existsSync(p)) files.push(p);
+  }
+  for (const p of listLibCopyFiles(root)) {
+    if (!files.includes(p)) files.push(p);
   }
   return files.filter((f) => !EXCLUDE_RE.test(f.replace(/\\/g, "/")));
 }
@@ -176,23 +209,27 @@ function parseAddedLineNumbers(diffText) {
   return addedLines;
 }
 
-// A file counts as a "bilingual copy dictionary" (whose string literal
-// VALUES are all treated as user-visible, per the ruling) when either its
-// path matches lib/**/*copy*.ts(x) or it has a top-level exported
-// declaration whose name ends in `_COPY`.
-function isCopyDictFile(relPath, sourceFile) {
+// Finds the "bilingual copy dictionary" regions of a file, per the ruling:
+// a file counts when either its path matches lib/**/*copy*.ts(x) (in which
+// case the WHOLE file is one region) or it has a top-level exported
+// declaration whose name ends in `_COPY` (in which case only THAT
+// declaration's initializer is a region — not the rest of the file).
+// Scoping to the declaration's own initializer (rather than a file-wide
+// boolean) is what stops an unrelated string elsewhere in the same file
+// (an import specifier, an unrelated helper's argument) from being swept
+// in just because the file also happens to export a `*_COPY` const
+// (PR #530 review BLOCKER 1).
+function findCopyRegions(relPath, sourceFile) {
   const norm = relPath.replace(/\\/g, "/");
-  if (/(^|\/)lib\/.*copy.*\.tsx?$/i.test(norm)) return true;
-  let found = false;
+  const wholeFile = /(^|\/)lib\/.*copy.*\.tsx?$/i.test(norm);
+  const ranges = [];
   const visit = (node) => {
-    if (found) return;
     if (ts.isVariableStatement(node)) {
       const isExported = (node.modifiers || []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
       if (isExported) {
         for (const decl of node.declarationList.declarations) {
-          if (ts.isIdentifier(decl.name) && /_COPY$/.test(decl.name.text)) {
-            found = true;
-            return;
+          if (ts.isIdentifier(decl.name) && /_COPY$/.test(decl.name.text) && decl.initializer) {
+            ranges.push({ start: decl.initializer.getStart(sourceFile), end: decl.initializer.getEnd() });
           }
         }
       }
@@ -200,7 +237,36 @@ function isCopyDictFile(relPath, sourceFile) {
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  return found;
+  return { wholeFile, ranges };
+}
+
+// A string-literal node counts as a copy-dict VALUE (never a KEY, an import/
+// export module specifier, or anything else) when it falls inside a
+// qualifying region (see findCopyRegions) — the ruling's own wording is
+// "string values", which is not "every string literal in the file"
+// (PR #530 review BLOCKER 1, measured: a quoted object-literal KEY like
+// `"BOTTOM_WATCH": "..."` and an unrelated import specifier were both being
+// treated as visible before this fix).
+function isCopyDictValueNode(node, copyInfo, sourceFile) {
+  const parent = node.parent;
+  if (
+    parent &&
+    (ts.isPropertyAssignment(parent) || ts.isShorthandPropertyAssignment(parent)) &&
+    parent.name === node
+  ) {
+    return false; // this string literal IS the property key, not its value
+  }
+  if (
+    parent &&
+    (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) &&
+    parent.moduleSpecifier === node
+  ) {
+    return false; // module specifier string ("./foo"), not display copy
+  }
+  if (copyInfo.wholeFile) return true;
+  const start = node.getStart(sourceFile);
+  const end = node.getEnd();
+  return copyInfo.ranges.some((r) => start >= r.start && end <= r.end);
 }
 
 // isUserVisiblePosition (AST-based): the set of AST node kinds treated as a
@@ -211,8 +277,9 @@ function isCopyDictFile(relPath, sourceFile) {
 //   - string literals that are `{...}` expression VALUES of a
 //     title/aria-label/placeholder/alt JSX attribute (or the bare string
 //     literal form, `alt="..."`)
-//   - string literal values inside a bilingual copy dictionary file
-//     (isCopyDictFile above)
+//   - string literal VALUES inside a bilingual copy dictionary file/region
+//     (findCopyRegions/isCopyDictValueNode above — never a property KEY,
+//     never an import/export module specifier)
 // Everything else — a bare identifier used as a style/prop value
 // (`style={LEGEND_ITEM}`), a string literal passed as an i18n KEY
 // (`t("marketCalm")` — "marketCalm" is a lookup key, not display text), a
@@ -223,7 +290,7 @@ function isCopyDictFile(relPath, sourceFile) {
 // with real JSX markup.
 function computeVisibleSpans(sourceFile, relPath) {
   const spans = [];
-  const copyDict = isCopyDictFile(relPath, sourceFile);
+  const copyInfo = findCopyRegions(relPath, sourceFile);
   const isStringy = (node) => ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
   const addSpan = (node) => spans.push({ start: node.getStart(sourceFile), end: node.getEnd() });
 
@@ -243,8 +310,8 @@ function computeVisibleSpans(sourceFile, relPath) {
       } else if (parent && ts.isJsxAttribute(parent)) {
         const attrName = parent.name.getText(sourceFile).toLowerCase();
         if (VISIBLE_ATTR_NAMES.has(attrName)) addSpan(node); // `attr="..."`
-      } else if (copyDict) {
-        addSpan(node); // any string literal value inside a *_COPY dictionary file
+      } else if (isCopyDictValueNode(node, copyInfo, sourceFile)) {
+        addSpan(node); // a genuine copy-dict VALUE — never a key or import specifier
       }
     }
     ts.forEachChild(node, visit);
@@ -568,7 +635,12 @@ function resolveDiff({ diffFile, since, root }) {
   try {
     const text = execFileSync(
       "git",
-      ["diff", "--unified=0", `${since}...HEAD`, "--", "terminal/app", "terminal/components", "terminal/lib/i18n.tsx"],
+      // "terminal/lib" (not the narrower "terminal/lib/i18n.tsx") so an
+      // added/changed lib/**/*copy*.ts(x) file's own lines are captured in
+      // addedLines too — otherwise a real violation added inside a new copy
+      // dictionary would only ever surface as `legacy`, never `blocking`
+      // (PR #530 review BLOCKER 2).
+      ["diff", "--unified=0", `${since}...HEAD`, "--", "terminal/app", "terminal/components", "terminal/lib"],
       { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
     );
     return { text, baseResolved: true };

@@ -69,9 +69,13 @@ and walking the AST. A position counts as visible **only** when it is one of:
 - a string literal that is the value of a `title` / `aria-label` /
   `placeholder` / `alt` JSX attribute, in either form (`alt="..."` or
   `alt={"..."}`);
-- any string literal value inside a bilingual copy-dictionary file — a path
-  matching `lib/**/*copy*.ts(x)`, or a file exporting a top-level
-  declaration whose name ends in `_COPY`.
+- any string literal **value** (never a property key, never an import/
+  export module specifier) inside a bilingual copy dictionary — either a
+  path matching `lib/**/*copy*.ts(x)` (the whole file is the region) or a
+  top-level exported declaration whose name ends in `_COPY` (only that
+  declaration's own initializer is the region, not the rest of the file);
+  see §9 round 3 for the fix that scoped this from "every string literal in
+  the file" down to this.
 
 Everything else the AST walk touches — a bare identifier used as a
 style/prop value (`style={{ color: LEGEND_ITEM }}`), an arrow function or a
@@ -262,3 +266,78 @@ in a follow-up commit and are each locked in by a regression test in
   present, exactly as documented above (and now correctly enforced with
   whole-word matching per the first bullet). Re-litigating that design
   choice is out of scope for a review-fix pass.
+
+## 10. Review fixes (round 3, PR #530) — META-CEO B ruling 2026-09-07 00:20Z
+
+The ruling text for this round: *"isUserVisiblePosition must use the
+TypeScript compiler API ... and treat as user-visible ONLY: JsxText nodes,
+string literals that are direct JSX children or inside JsxExpression
+children, string literals in title/aria-label/placeholder/alt attributes,
+and string values inside the bilingual copy dictionaries (files matching
+lib/\*\*/\*copy\*.ts or exporting \*\_COPY)."*
+
+- **BLOCKER 1 fixed — copy-dict spans covered every string literal in the
+  file, not "string values".** `isCopyDictFile` was a file-level boolean;
+  once true, `computeVisibleSpans`'s `else if (copyDict) addSpan(node)`
+  branch added a span for **any** string literal anywhere in the file —
+  object-literal KEYS, import/export module specifiers, anything. MEASURED
+  (reviewer's exact probe, `MARKET_COPY = { "BOTTOM_WATCH": "Watching for a
+  bottom", "chart_url": "https://cdn.example.com/ASSET_MAP/v1.png" }`): the
+  key `"BOTTOM_WATCH"` fired `raw_state_enum` — the guard blocking its own
+  prescribed remediation, since the key is the raw enum being mapped
+  *from*, never display text. Fixed: `isCopyDictFile` is replaced by
+  `findCopyRegions`, which returns either `wholeFile: true` (a path matching
+  `lib/**/*copy*.ts(x)`) or a list of the exact source ranges of each
+  top-level exported `*_COPY` declaration's own initializer — no longer the
+  whole file for that case. `isCopyDictValueNode` then excludes a string
+  literal that is a property-assignment KEY or an import/export module
+  specifier, and only counts a node as a visible copy VALUE when it falls
+  inside a qualifying region. Test 16 locks in the exact probe: the key
+  `"BOTTOM_WATCH"` produces zero findings and the import specifier's own
+  line produces zero findings. **Ruling-authorized remainder, not a defect:**
+  the reviewer's second probe value — `"chart_url":
+  "https://cdn.example.com/ASSET_MAP/v1.png"` — still fires `raw_state_enum`
+  on `ASSET_MAP` after this fix, because it genuinely IS a copy-dict VALUE
+  (not a key, not an import specifier) and the ruling's own text scopes
+  visibility to "string values inside the bilingual copy dictionaries"
+  without a further carve-out for non-prose values (URLs, paths). R1 firing
+  on any UPPER_SNAKE token inside a qualifying visible position, with no
+  content-shape exception, is exactly what the ruling specifies ("R1 ...
+  fires only on UPPER_SNAKE tokens inside those positions"). Narrowing this
+  further (e.g. by property-key naming heuristics such as `*_url`/`*_href`)
+  is not authorized by the ruling's text and was not invented here.
+- **BLOCKER 2 fixed — `lib/**/*copy*.ts` was unreachable dead code.**
+  `SCAN_GLOBS`'s `walk()` only ever pushed `.tsx` files (line filter
+  `/\.tsx$/`), and `EXTRA_FILES` named only `terminal/lib/i18n.tsx` — so no
+  `.ts` file anywhere, and no `terminal/lib/**` file other than `i18n.tsx`,
+  was ever opened. `isCopyDictFile`'s own path-match branch
+  (`/(^|\/)lib\/.*copy.*\.tsx?$/i`) could therefore never match a scanned
+  file. MEASURED (reviewer's exact fixture, `terminal/lib/marketCopy.ts`
+  exporting `MARKET_COPY = { a: "BOTTOM_WATCH" }`): `scannedFiles` never
+  included it, 0 findings. Fixed: `listLibCopyFiles()` walks
+  `terminal/lib/` recursively (both `.ts` and `.tsx`) and keeps files whose
+  basename contains "copy"; `listScanFiles()` now includes these. The git
+  diff pathspec used to compute `addedLines` (`resolveDiff`) was widened
+  from `terminal/lib/i18n.tsx` to `terminal/lib` so an added violation
+  inside a new lib copy file is captured as `blocking`, not only ever
+  `legacy`. Test 17 locks in the exact probe: the file is now scanned and
+  its `BOTTOM_WATCH` value fires as a blocking `raw_state_enum` finding.
+  The one file this newly reaches on the real tree today,
+  `terminal/lib/__tests__/markerTooltipCopy.test.ts`, is still excluded by
+  `EXCLUDE_RE` (`__tests__`/`.test.`) — `scannedFiles` is unchanged at 231.
+- **Real-tree measurement** (`node terminal/scripts/check_plain_language.mjs
+  --root . --diff-file empty.patch --json`, same invocation shape as prior
+  rounds): `scannedFiles: 231`, `raw_state_enum` survivors: **0** (ruling's
+  gate: "total findings must be <= 5" read as R1-scoped, since R1 is the
+  rule the ruling's BLOCKER-1 text is about). Full disclosure of every rule
+  (not just R1), since the round-2 review's MINOR flagged non-disclosure of
+  the total: `byRule {"missing_zh": 27, "raw_slug_interpolation": 32,
+  "untranslated_stat_token": 8}` — 67 total findings, all `legacy` (0
+  `blocking`), all pre-existing and un-added by this PR. `R2
+  internal_study_slug` now measures 0 on the real tree (was 1,
+  `ChartPanel.tsx`'s `GOLDEN ORACLE` JsxText — case-sensitive whole-word
+  match: `\boracle\b` does not match uppercase `ORACLE`; not a fix made in
+  this round, an incidental consequence of round-2's whole-word change,
+  observed while re-measuring).
+- Full suite: 18/18 passing (`npx vitest run
+  lib/__tests__/plainLanguageGuard.test.ts`); `npx tsc --noEmit` clean.

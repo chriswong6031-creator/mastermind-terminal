@@ -461,4 +461,58 @@ describe("check_plain_language.mjs", () => {
     expect(parsed.nulls.find((n: any) => n.path === relPath)).toBeUndefined();
     rmSync(root, { recursive: true, force: true });
   });
+
+  it("16. copy-dict spans cover VALUES, never object KEYS or import specifiers (PR #530 round-2 review BLOCKER 1)", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/components/__p2/Dict.tsx";
+    mkdirSync(join(root, "terminal/components/__p2"), { recursive: true });
+    // Exact reviewer-constructed probe: a *_COPY object whose KEY is a raw
+    // state enum (the enum being mapped FROM, never display text) and whose
+    // VALUE is a URL containing an unrelated UPPER_SNAKE path segment.
+    const content = [
+      'import { helper } from "./ASSET_MAP_helper";',
+      "export const MARKET_COPY = {",
+      '  "BOTTOM_WATCH": "Watching for a bottom",',
+      '  "chart_url": "https://cdn.example.com/ASSET_MAP/v1.png",',
+      "};",
+      "void helper;",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [1, 2, 3, 4, 5, 6]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    // The KEY "BOTTOM_WATCH" must never be flagged — it is the object's KEY
+    // (the raw enum being translated FROM), not a copy-dict VALUE. Before
+    // this fix every string literal in a *_COPY file was swept in,
+    // including quoted keys.
+    expect(parsed.findings.some((f: any) => f.token === "BOTTOM_WATCH")).toBe(false);
+    // The import module specifier must never be scanned as copy either,
+    // even though it textually contains "ASSET_MAP_helper".
+    expect(parsed.findings.some((f: any) => f.path === relPath && f.line === 1)).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("17. a .ts (not .tsx) file under terminal/lib/ matching *copy* is actually scanned (PR #530 round-2 review BLOCKER 2)", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/lib/marketCopy.ts";
+    const content = ['export const MARKET_COPY = { a: "BOTTOM_WATCH" };', ""].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [1]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    expect(res.status).toBe(1);
+    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    // Before this fix, listScanFiles() never opened a plain .ts file at
+    // all (walk() only pushes .tsx), so this file's raw enum VALUE was
+    // silently invisible to the guard — scannedFiles never included it.
+    const hit = parsed.findings.find(
+      (f: any) => f.path === relPath && f.rule === "raw_state_enum" && f.token === "BOTTOM_WATCH" && f.blocking
+    );
+    expect(hit).toBeTruthy();
+    rmSync(root, { recursive: true, force: true });
+  });
 });
