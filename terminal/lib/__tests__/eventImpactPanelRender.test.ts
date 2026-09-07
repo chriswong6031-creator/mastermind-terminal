@@ -112,7 +112,14 @@ describe("EventImpactPanel render (acceptance 2)", () => {
 
   it("renders a plain typed sentence, not a blank panel, when the calendar is unreadable", async () => {
     await renderWith({ state: "calendar_unreadable", detail: "bad schema" });
-    expect(container.querySelector('[data-testid="event-impact-calendar-unreadable"]')).toBeTruthy();
+    const node = container.querySelector('[data-testid="event-impact-calendar-unreadable"]');
+    expect(node).toBeTruthy();
+    // RULING r3, item 1: this must be the CALENDAR sentence ("the event list is the part
+    // that's missing"), never the upstream-locked sentence ("your positions are unaffected") —
+    // the route bug this test guards against (see eventImpactRoute.test.ts case 16) confused
+    // the two by letting an HTTP-fallback 401 relabel a disk-side parse failure.
+    expect(node?.textContent).toContain("the event list is the part that's missing");
+    expect(node?.textContent).not.toContain("Your positions are unaffected");
   });
 
   it("renders a stale disclosure when the route served a cached-past-outage copy", async () => {

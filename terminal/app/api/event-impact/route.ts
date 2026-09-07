@@ -33,14 +33,16 @@ const MAX_STALE_MS = 6 * 60 * 60_000; // 6h — well past one failed nightly bak
 
 // The live artifact is registration-walled at the edge (app/regwall.py in the macro repo): every
 // `/data/*` path 401s an unauthenticated server-to-server fetch with `x-regwall: deny` (verified
-// live probe, B-F08-5 review r2 BLOCKER 1) — there is no cookie or bearer token this route could
-// present that would pass a Supabase-session-cookie wall. Both products are deployed on the SAME
+// live probe, B-F08-5 review r2 BLOCKER 1). Both products share one Supabase project, so a
+// same-domain `sb-` session cookie does exist on the caller's side — but this packet did not
+// measure whether forwarding it through the fetch would pass the wall, so that is left unstated
+// rather than claimed either way (review r3, minor). Both products are deployed on the SAME
 // VPS (macro at REPO=/opt/macro, this app at /opt/terminal), and macro's own
 // `/api/portfolio/brief` handler reads this exact artifact off local disk
 // (`REPO / "site/data/portfolio_ctx.json"`, app/main.py:1752/1875/1955 in the macro repo) rather
 // than fetching itself over HTTP. This route does the same: a same-box file read is the PRIMARY
-// path, the regwalled HTTP fetch is kept only as a FALLBACK for boxes where the file is not
-// mounted (local dev, CI, a future split deploy). Documented in ops/README.md.
+// path (RULING B1(b)), the regwalled HTTP fetch is kept only as a FALLBACK for boxes where the
+// file is not mounted (local dev, CI, a future split deploy). Documented in ops/README.md.
 const MACRO_DATA_DIR = process.env.MACRO_DATA_DIR || "/opt/macro/site/data";
 const CTX_FILE = path.join(MACRO_DATA_DIR, "portfolio_ctx.json");
 
@@ -124,6 +126,16 @@ async function fetchCtx(): Promise<CtxResult> {
 async function readCtx(): Promise<CtxResult> {
   const fromDisk = await readCtxFromDisk();
   if (fromDisk.data !== null) return fromDisk;
+  if (fromDisk.error) {
+    // The on-disk artifact EXISTS but failed to parse — a disk-side defect, not an access
+    // problem. Never let the HTTP fallback's own outcome (even a genuine regwall 401/403)
+    // relabel this as `upstream_locked`: the caller must see `calendar_unreadable` with the
+    // disk's own detail (RULING r3, item 1). The fallthrough tie-break below only distinguishes
+    // "disk had nothing to say" from "disk had something to say" and cannot itself tell a
+    // corrupt local file apart from a routine "not on this box" miss — this early return is
+    // what makes that distinction, before the HTTP outcome ever gets a vote.
+    return fromDisk;
+  }
   const fromHttp = await fetchCtx();
   if (fromHttp.data !== null) return fromHttp;
   // Prefer whichever attempt actually has something to say; the disk miss's `error` is empty in

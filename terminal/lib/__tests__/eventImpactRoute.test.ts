@@ -240,6 +240,37 @@ describe("event-impact route", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  // RULING r3, item 1 (was review r2 BLOCKER-adjacent): a disk file that EXISTS but fails to
+  // parse must surface as `calendar_unreadable` — the source is broken, not access-denied — even
+  // when the HTTP fallback that runs next happens to 401. RED before the fix: `readCtx()` let
+  // whichever attempt had a non-empty `.error` win the tie, so the HTTP 401's `locked: true`
+  // silently overwrote the disk's own "unparseable" outcome and the route answered
+  // `upstream_locked` instead — the wrong typed state, carrying the wrong user sentence
+  // (`eiUpstreamLocked`'s "your positions are unaffected" instead of `eiCalendarUnreadable`'s
+  // "the event list is the part that's missing").
+  it("16. a corrupt on-disk artifact stays calendar_unreadable even when the HTTP fallback 401s", async () => {
+    const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "mo-event-impact-corrupt-"));
+    const file = path.join(dir, "portfolio_ctx.json");
+    await fsPromises.writeFile(file, "{ this is not valid json", "utf8");
+    process.env.MACRO_DATA_DIR = dir;
+    fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
+    try {
+      const { GET } = await import("@/app/api/event-impact/route");
+      const res = await GET(new Request("http://x/api/event-impact"));
+      expect(res.status).toBe(503);
+      const body = await res.json();
+      // Must be the disk-side "broken calendar" state, never the access-side "locked out" state
+      // the HTTP 401 would otherwise have produced — those two states render different user
+      // sentences (eiCalendarUnreadable vs eiUpstreamLocked) and must not be confused.
+      expect(body.state).toBe("calendar_unreadable");
+      expect(body.state).not.toBe("upstream_locked");
+      // The HTTP fallback's own detail must never leak in and relabel a disk-side parse failure.
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // m3: `stale` must never be spread onto a shape the EventImpactRead union does not declare it
   // on. A holdings-read failure racing a stale-cache window must surface as a clean
   // `holdings_unreadable`, with no dangling `stale` field the panel never reads.

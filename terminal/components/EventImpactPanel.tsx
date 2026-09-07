@@ -57,7 +57,7 @@ const COPY: Record<string, [string, string]> = {
   // positions" (which `upstream_locked` must never render as).
   eiUpstreamLocked: [
     "We could not read the event calendar right now. Your positions are unaffected.",
-    "目前无法读取事件日历，您的持仓不受影响。",
+    "目前无法读取事件日历，你的持仓不受影响。",
   ],
   eiChecking: [
     "Checking your positions…",

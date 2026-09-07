@@ -278,4 +278,22 @@ describe("eventImpact join", () => {
     });
     expect(lockedWithBook.state).toBe("upstream_locked");
   });
+
+  it("14. ZH register: no panel copy string addresses the user as 您 (RULING r3, item 2)", () => {
+    // eiUpstreamLocked's ZH half used the formal/distancing 您 while every other ZH string in
+    // the panel uses the plain 你 — a register mismatch a user would notice line to line. RED
+    // before the fix: this failed on "目前无法读取事件日历，您的持仓不受影响。".
+    const file = fs.readFileSync(
+      path.join(process.cwd(), "components", "EventImpactPanel.tsx"),
+      "utf8"
+    );
+    const copyMatch = file.match(/const COPY: Record<string, \[string, string\]> = \{([\s\S]*?)\n\};/);
+    expect(copyMatch).not.toBeNull();
+    const body = copyMatch![1];
+    const entries = [...body.matchAll(/\[\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\]/g)];
+    expect(entries.length).toBeGreaterThan(0);
+    for (const [, , zh] of entries) {
+      expect(zh.includes("您")).toBe(false);
+    }
+  });
 });
