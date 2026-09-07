@@ -8,7 +8,7 @@ import CouldNotWatch from "./CouldNotWatch";
 import AlertDetail, { type AlertDetailData } from "./AlertDetail";
 import { NewAlertPanel } from "@/components/AlertsView";
 import {
-  buildAlertsView, conditionText, conditionsWord, copy, ALERTS_CHANGED_EVENT,
+  buildAlertsView, conditionText, conditionsWord, copy, verdictText, ALERTS_CHANGED_EVENT,
   type Alert, type ReadState, type RunReceipt, type OutboxRow,
 } from "@/lib/alertsView";
 import { useLang } from "@/lib/i18n";
@@ -86,10 +86,12 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
     return {
       id: r.alertId, time: t,
       subject: r.outboxRow?.payload?.ticker || alert?.symbol || "—",
-      // Minor: a fired-event payload's own plain-language description wins when present; the
-      // fallback must describe the actual condition (conditionText), never the content-free
-      // literal "Condition"/"条件" this used to render for every row lacking a payload.
-      verdict: r.outboxRow?.payload?.condition_plain || conditionText(alert?.condition, alert?.symbol, L),
+      // Minor: a fired-event payload's own plain-language description wins when present (EN
+      // only, see verdictText); the fallback must describe the actual condition (conditionText),
+      // never the content-free literal "Condition"/"条件" this used to render for every row
+      // lacking a payload. Minor 4 (round-6 review): the EN-only payload must never leak
+      // straight into a ZH page — verdictText gates it on `L`.
+      verdict: verdictText(r.outboxRow?.payload?.condition_plain, alert?.condition, alert?.symbol, L),
       delivery: r.delivery, foldedRows: r.foldedRows,
     };
   });
@@ -100,7 +102,9 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
     const alert = alerts?.find((a) => a.id === openId);
     if (!row || !alert) return null;
     return {
-      conditionText: row.outboxRow?.payload?.condition_plain || conditionText(alert.condition, alert.symbol, L),
+      // Minor 4 (round-6 review): same lang-aware gate as the timeline verdict above — the
+      // EN-only fired-event payload never renders straight into the ZH drillback dialog.
+      conditionText: verdictText(row.outboxRow?.payload?.condition_plain, alert.condition, alert.symbol, L),
       // Holding resolution is by ticker only — there is no portfolio/position join yet (F08 V2
       // owns true holding-coverage mapping). `null` means the ticker itself could not be
       // established, in which case the honest answer is "not covered", never a guess.
@@ -247,6 +251,16 @@ export default function AlertsCockpit({ email, children }: { email: string; chil
           alongside CouldNotWatch below. */}
       {dataState === "no-coverage" && timelineRows.length === 0 && (
         <div className={s.module} data-alerts-module="recent-activity">
+          {/* Minor 3 (round-6 review): this module went straight to two same-weight calmBody
+              paragraphs with no head — the headline fact ("Nothing has fired yet.") and the
+              last-successful-check timestamp read as equally important, with nothing marking
+              which one is the module's own title. Give it the identical `s.moduleHead` label
+              treatment AlertTimeline (the sibling this module stands in for at zero rows) and
+              WatchingList/CouldNotWatch already use, so the two body lines stay subordinate to
+              one real heading, matching every other module on this page. */}
+          <div className={s.moduleHead}>
+            <span>{L === "zh" ? "近期活动" : "Recent activity"}</span>
+          </div>
           <p className={s.calmBody}>{copy("activity.empty", L)}</p>
           <p className={s.calmBody}>{copy("activity.lastSuccess", L, { t: fmtLastSuccess() })}</p>
         </div>

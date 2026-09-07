@@ -333,3 +333,23 @@ export function conditionText(
   const key = `condition.${condition.type}`;
   return ALERTS_COPY[key] ? copy(key, lang) : copy("condition.unknown", lang);
 }
+
+/**
+ * Lang-aware verdict text for a fired alert row (round-6 review, Minor 4). The evaluator's own
+ * fired-event payload (`condition_plain`, `OutboxRow.payload.condition_plain`) is EN-only —
+ * ingest/alerts_engine.py stamps it in English regardless of the viewer's language, so using it
+ * unconditionally rendered raw English condition text ("Crossed your price line") straight into
+ * a ZH page. EN keeps the payload's own richer, real production sentence when present; ZH NEVER
+ * uses it — it always renders the house per-condition-kind template via `conditionText`, which
+ * carries a Chinese line for every condition kind this cockpit can display (never a raw EN
+ * fallback, and never the generic "条件" unless the condition type itself is truly unrecognized).
+ */
+export function verdictText(
+  conditionPlain: string | null | undefined,
+  condition: { type?: string; op?: string; value?: number } | null | undefined,
+  symbol: string | undefined,
+  lang: "en" | "zh",
+): string {
+  if (lang === "zh") return conditionText(condition, symbol, lang);
+  return conditionPlain || conditionText(condition, symbol, lang);
+}

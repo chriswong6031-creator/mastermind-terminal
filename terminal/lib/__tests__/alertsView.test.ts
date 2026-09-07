@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import path from "path";
 import {
-  buildAlertsView, monitorFor, foldOutbox, deliveryFor, ALERTS_COPY, copy, conditionText, conditionsWord,
+  buildAlertsView, monitorFor, foldOutbox, deliveryFor, ALERTS_COPY, copy, conditionText, conditionsWord, verdictText,
   type RunReceipt, type OutboxRow, type Alert,
 } from "../alertsView";
 
@@ -345,5 +345,46 @@ describe("copy table", () => {
   it("copy() substitutes variables", () => {
     expect(copy("degraded.body", "en", { t: "09:41" })).toContain("09:41");
     expect(copy("noCoverage.body", "zh", { n: 2 })).toContain("2");
+  });
+});
+
+describe("verdictText — lang-aware condition_plain gate (minor 4, round-6 review)", () => {
+  const priceCondition = { type: "price", op: "below" as const, value: 150 };
+
+  it("RED-first: reproduces the exact pre-fix expression (AlertsCockpit.tsx used the same `||` for both languages) to confirm the bug was real", () => {
+    const payload = "Crossed your price line";
+    // The pre-fix line, verbatim: `r.outboxRow?.payload?.condition_plain || conditionText(...)`,
+    // used identically for EN and ZH — no lang gate at all.
+    const oldBuggyExpression = payload || conditionText(priceCondition, "NVDA", "zh");
+    expect(oldBuggyExpression).toBe("Crossed your price line"); // confirms: a ZH render got raw EN
+    expect(verdictText(payload, priceCondition, "NVDA", "zh")).not.toBe(oldBuggyExpression);
+  });
+
+  it("ZH NEVER uses the EN-only fired-event payload, even when present", () => {
+    // Prior to this fix, AlertsCockpit.tsx rendered `condition_plain || conditionText(...)` for
+    // BOTH languages, so a ZH page showed the evaluator's raw English sentence
+    // ("Crossed your price line") whenever the fired-event payload carried one. verdictText must
+    // ignore conditionPlain entirely on zh and always render the house ZH template.
+    const result = verdictText("Crossed your price line", priceCondition, "NVDA", "zh");
+    expect(result).not.toContain("Crossed");
+    expect(result).toBe(conditionText(priceCondition, "NVDA", "zh"));
+    expect(result).toBe("NVDA 价格低于 150");
+  });
+
+  it("EN keeps the payload's own richer sentence when present", () => {
+    expect(verdictText("Crossed your price line", priceCondition, "NVDA", "en")).toBe("Crossed your price line");
+  });
+
+  it("EN falls back to conditionText when the payload has no condition_plain", () => {
+    expect(verdictText(null, priceCondition, "NVDA", "en")).toBe(conditionText(priceCondition, "NVDA", "en"));
+    expect(verdictText(undefined, priceCondition, "NVDA", "en")).toBe("NVDA price below 150");
+  });
+
+  it("ZH renders the house template for every condition kind the cockpit can display, never a raw EN fallback", () => {
+    const engineTypes = ["signal", "regime", "price", "rsi", "opt_gamma_flip", "opt_wall_touch", "opt_premium_burst", "opt_0dte_spike", "opt_surface_pocket", "opt_wall_migration", "opt_sign_fragile", "opt_opex_concentration"];
+    for (const t of engineTypes) {
+      const zh = verdictText("some english fired-event sentence", { type: t }, "NVDA", "zh");
+      expect(zh, `condition.${t}`).not.toMatch(/[A-Za-z]{3,}/);
+    }
   });
 });

@@ -50,7 +50,12 @@ export default function AlertDetail({ data, lang, onClose }: { data: AlertDetail
             asserts ownership the account has not established. */}
         <span>{data.holdingSymbol ? <a href="/portfolio">{data.holdingSymbol}</a> : copy("null.notCovered", lang)}</span>
       </div>
-      <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "发生了什么" : "What changed"}</span><span>{data.summaryPlain || data.conditionPlain || copy("null.notRecorded", lang)}</span></div>
+      {/* Minor 4 (round-6 review): summaryPlain/conditionPlain are the fired-event payload's own
+          EN-only sentences (same source as the timeline verdict's condition_plain) — rendering
+          them unconditionally put raw English into the ZH drillback dialog. ZH instead reuses
+          `data.conditionText`, already lang-gated via verdictText (lib/alertsView.ts) to the
+          house ZH template for this condition kind. */}
+      <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "发生了什么" : "What changed"}</span><span>{lang === "zh" ? data.conditionText : (data.summaryPlain || data.conditionPlain || copy("null.notRecorded", lang))}</span></div>
       <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "时间线" : "Timeframe"}</span><span>{data.firedAt ? (lang === "zh" ? `触发于 ${fmt(data.firedAt)}` : `Fired ${fmt(data.firedAt)}`) : copy("null.notRecorded", lang)}{lang === "zh" ? `，建立于 ${fmt(data.armedAt)}` : `, armed ${fmt(data.armedAt)}`}</span></div>
       <div className={s.detailFact}>
         <span className={s.detailLabel}>{lang === "zh" ? "证据" : "Evidence"}</span>
