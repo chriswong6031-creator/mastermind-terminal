@@ -31,6 +31,10 @@ describe("0015 migration contract", () => {
     expect(flat).toContain("encode(sha256(convert_to(p_token");
   });
 
+  it("refuses to mint an owner via acceptance, regardless of what role the invite row carries (round-2 review MAJOR-3)", () => {
+    expect(flat).toMatch(/if v_inv\.role = 'owner' then\s*return jsonb_build_object\('ok', false, 'reason', 'invalid_role'\)/);
+  });
+
   it("never forwards a caller-supplied identity or uses dynamic SQL / service_role / a second owner path", () => {
     expect(flat).not.toContain("p_user_id");
     expect(flat).not.toContain("execute format");

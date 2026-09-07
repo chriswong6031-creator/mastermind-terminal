@@ -48,6 +48,13 @@ begin
   if v_email <> lower(btrim(v_inv.email)) then
     return jsonb_build_object('ok', false, 'reason', 'email_mismatch');
   end if;
+  -- Belt-and-braces: ownership is never transferable through an invitation, regardless of what
+  -- role a team_invites row carries. The app layer already refuses to CREATE an owner-role
+  -- invite (lib/teams.ts createInvite), but this function is reachable by any row that exists in
+  -- team_invites (round-2 review, MAJOR-3) -- so the acceptance path refuses to mint one too.
+  if v_inv.role = 'owner' then
+    return jsonb_build_object('ok', false, 'reason', 'invalid_role');
+  end if;
   insert into public.team_members (team_id, user_id, role, invited_by)
     values (v_inv.team_id, v_uid, v_inv.role, v_inv.invited_by)
     on conflict (team_id, user_id) do nothing;

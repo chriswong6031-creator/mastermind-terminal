@@ -533,14 +533,18 @@ export async function readSettings(
   db: TenancyDb,
   userId: string,
   args: { scope: "user" | "workspace"; teamId?: string | null },
-): Promise<{ ok: true; settings: Setting[] } | { ok: false; reason: "unavailable" | "failed" | "forbidden"; error: string }> {
-  if (args.scope === "workspace" && args.teamId) {
+): Promise<{ ok: true; settings: Setting[] } | { ok: false; reason: "unavailable" | "failed" | "forbidden" | "invalid"; error: string }> {
+  if (args.scope === "workspace") {
+    // A workspace read with no teamId must never reach getCallerRole (nothing to check
+    // membership against) or the query builder (an empty string against a uuid column raises
+    // 22P02, surfacing as an unclassified 500 instead of a validated 400 -- round-2 review).
+    if (!args.teamId) return { ok: false, reason: "invalid", error: "teamId required for workspace scope" };
     const roleResult = await getCallerRole(db, userId, args.teamId);
     if (!roleResult.ok) return { ok: false, reason: roleResult.reason, error: roleResult.error };
     if (!roleResult.role) return { ok: false, reason: "forbidden", error: "not a member" };
   }
   let query = db.from(WORKSPACE_SETTINGS_TABLE).select("scope,team_id,key,value,updated_at").eq("scope", args.scope);
-  query = args.scope === "workspace" ? query.eq("team_id", args.teamId ?? "") : query.eq("user_id", userId);
+  query = args.scope === "workspace" ? query.eq("team_id", args.teamId as string) : query.eq("user_id", userId);
   const result = await query;
   const fail = classifyReadError(result);
   if (fail) return fail;
@@ -549,15 +553,24 @@ export async function readSettings(
   return { ok: true, settings };
 }
 
+// A settings-only code union, kept separate from the invite-shaped `InvalidCode` (which a
+// pre-existing route already exhaustively maps and must not be widened by this packet). Both
+// invalid branches below now set `code` explicitly and symmetrically so a future settings route
+// can map result.code -> SETTING_MESSAGES (round-2 review MINOR-4: an explicit `code: undefined`
+// on one branch and an omitted `code` on the sibling read the same at runtime, but neither ever
+// carried a code a caller could switch on).
+export type WriteSettingCode = "invalid_key" | "invalid_value";
+export type WriteSettingResult = WriteResult<Setting> | { ok: false; reason: "invalid"; error: string; code: WriteSettingCode; status: number };
+
 export async function writeSetting(
   db: TenancyDb,
   userId: string,
   args: { scope: "user" | "workspace"; teamId?: string | null; key: string; value: unknown },
-): Promise<WriteResult<Setting>> {
+): Promise<WriteSettingResult> {
   const key = normalizeSettingKey(args.key);
-  if (!key) return { ok: false, reason: "invalid", error: "invalid key", code: undefined, status: 400 };
+  if (!key) return { ok: false, reason: "invalid", error: "invalid key", code: "invalid_key", status: 400 };
   const normalized = normalizeSettingValue(args.value);
-  if (!normalized.ok) return { ok: false, reason: "invalid", error: "invalid value", status: 400 };
+  if (!normalized.ok) return { ok: false, reason: "invalid", error: "invalid value", code: "invalid_value", status: 400 };
   const teamId = args.scope === "workspace" ? args.teamId ?? null : null;
   if (args.scope === "workspace" && !teamId) return { ok: false, reason: "invalid", error: "teamId required for workspace scope", status: 400 };
   // owner_id (generated column: coalesce(team_id, user_id)) makes this one target work for both

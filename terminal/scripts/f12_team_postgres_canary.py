@@ -190,10 +190,35 @@ def main() -> int:
         result2 = cur.fetchone()[0]
     proof.check("rpc:accept_twice_is_already_used", isinstance(result2, dict) and result2.get("reason") == "already_used", str(result2))
 
+    # rpc:accept_cannot_mint_owner (round-2 review MAJOR-3): the prior version of this check only
+    # re-counted owners after a MEMBER-role invite was accepted, so it could never fail -- no path
+    # in that scenario could have minted an owner in the first place. This exercises the real
+    # property: insert an OWNER-role invite directly (bypassing the app layer's createInvite
+    # guard, exactly as a buggy/compromised writer would) and prove the RPC itself refuses it.
+    f_user = str(uuid.uuid4())
+    with admin.cursor() as cur:
+        cur.execute("insert into auth.users (id, email) values (%s, 'f@a.example')", (f_user,))
+        owner_token = "canaryownertoken" + uuid.uuid4().hex
+        owner_token_hash = hashlib.sha256(owner_token.encode("utf8")).hexdigest()
+        cur.execute(
+            "insert into public.team_invites (team_id, email, role, token_hash, invited_by, expires_at) values (%s,'f@a.example','owner',%s,%s, now() + interval '14 days')",
+            (team_a, owner_token_hash, a_owner),
+        )
+
+    f_conn = actor_connection(dsn, f_user)
+    with f_conn.cursor() as cur:
+        cur.execute("select public.accept_team_invite(%s)", (owner_token,))
+        owner_result = cur.fetchone()[0]
+    proof.check(
+        "rpc:accept_cannot_mint_owner",
+        isinstance(owner_result, dict) and owner_result.get("reason") == "invalid_role",
+        str(owner_result),
+    )
+
     with admin.cursor() as cur:
         cur.execute("select count(*) from public.team_members where team_id=%s and role='owner'", (team_a,))
         owner_count = cur.fetchone()[0]
-    proof.check("rpc:accept_cannot_mint_owner", owner_count == 1, f"owner_count={owner_count}")
+    proof.check("rpc:accept_owner_invite_creates_no_membership", owner_count == 1, f"owner_count={owner_count}")
 
     # workspace_settings cross-tenant isolation (acceptance #3)
     d_owner = str(uuid.uuid4())

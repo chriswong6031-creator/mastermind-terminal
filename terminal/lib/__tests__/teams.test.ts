@@ -430,6 +430,42 @@ describe("normalizeSettingKey / normalizeSettingValue", () => {
   });
 });
 
+describe("writeSetting invalid branches carry a matching, non-undefined code (round-2 review MINOR-4)", () => {
+  it("invalid key -> code invalid_key", async () => {
+    const db = fakeWithCallerRole("owner");
+    const r = await writeSetting(db, "u1", { scope: "user", key: "Not Valid", value: 1 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("invalid");
+      expect(r.code).toBe("invalid_key");
+    }
+  });
+  it("invalid value -> code invalid_value, symmetric with invalid key (previously omitted entirely)", async () => {
+    const db = fakeWithCallerRole("owner");
+    const r = await writeSetting(db, "u1", { scope: "user", key: "chart.density", value: "x".repeat(5000) });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("invalid");
+      expect(r.code).toBe("invalid_value");
+    }
+  });
+});
+
+describe("readSettings workspace scope requires teamId before any role check or query (round-2 review MINOR-3)", () => {
+  it("workspace scope with no teamId -> invalid, never reaches getCallerRole or the DB", async () => {
+    let calledFrom = false;
+    const db: TenancyDb = {
+      from: (_table: string) => {
+        calledFrom = true;
+        throw new Error("readSettings must not query the DB when teamId is missing for workspace scope");
+      },
+    } as unknown as TenancyDb;
+    const r = await readSettings(db, "u1", { scope: "workspace" });
+    expect(r).toEqual({ ok: false, reason: "invalid", error: expect.any(String) });
+    expect(calledFrom).toBe(false);
+  });
+});
+
 describe("INVITE_MESSAGES plain-word completeness (acceptance #6)", () => {
   const allCodes: InviteCode[] = [
     "not_signed_in", "invalid_token", "already_used", "expired", "email_unknown", "email_mismatch",
