@@ -10,7 +10,8 @@ import MegaPane, { FIN_PAGES as FIN_PAGE_LIST, type FinPage } from "@/components
 import { getFund, getBars, type Fund, type Bar } from "@/lib/fund";
 import { getJSON } from "@/lib/dataCache";
 import { useLang } from "@/lib/i18n";
-import { normalizeAnalysisSymbol } from "@/lib/analysisSymbol";
+import { ANALYSIS_DEFAULT_SYMBOL, normalizeAnalysisSymbol } from "@/lib/analysisSymbol";
+import { announceShellBrainSymbol } from "@/lib/shellBrainSymbol";
 
 /**
  * Analysis workspace composer (Wave-2 IA) — the `/analysis` body.
@@ -42,7 +43,10 @@ import { normalizeAnalysisSymbol } from "@/lib/analysisSymbol";
  */
 
 const FIN_PAGES = new Set<FinPage>(FIN_PAGE_LIST);
-const DEFAULT_SYMBOL = "NVDA";
+// Sourced from lib/analysisSymbol.ts (not redeclared here) so lib/shellBrainSymbol.ts's
+// shell-side fallback (SHELL_DEFAULT_BRAIN_SYMBOL) can share the exact same constant instead
+// of duplicating the literal in a second file, where it could silently drift out of sync.
+const DEFAULT_SYMBOL = ANALYSIS_DEFAULT_SYMBOL;
 const DEFAULT_PAGE: FinPage = "overview";
 /**
  * A symbol is an identifier, never a path fragment.  Keep this distinct from
@@ -93,10 +97,15 @@ export default function AnalysisWorkspace({ initialSymbol, initialPage }: Analys
     window.history.replaceState(null, "", u.toString());
   }, []);
 
-  // ── symbol change → rewrite ?symbol= shallowly ──
+  // ── symbol change → rewrite ?symbol= shallowly, and tell AppShell's Brain host ──
+  // `writeParam` uses `history.replaceState`, which fires no Next.js navigation and no
+  // native DOM event, so AppShell's shell-level resolver would otherwise never learn the
+  // user switched company on the same /analysis visit.
+  // `announceShellBrainSymbol` is the one channel that reaches it — see lib/shellBrainSymbol.ts.
   useEffect(() => {
     if (invalidSymbol) return;
     writeParam("symbol", sym);
+    announceShellBrainSymbol(sym);
   }, [invalidSymbol, sym, writeParam]);
 
   // ── sub-page change (MegaPane onPage) → state + ?page= shallowly ──
