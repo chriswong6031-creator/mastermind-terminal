@@ -1,7 +1,7 @@
 "use client";
 import { useEffect } from "react";
 import s from "./alerts.module.css";
-import { copy, type DeliveryState, type ReadState, type ResolutionState } from "@/lib/alertsView";
+import { copy, firedEventTextZh, type DeliveryState, type ReadState, type ResolutionState } from "@/lib/alertsView";
 
 export interface AlertDetailData {
   conditionText: string;
@@ -58,15 +58,18 @@ export default function AlertDetail({ data, lang, onClose }: { data: AlertDetail
       {/* Minor 4 (round-6 review): summaryPlain/conditionPlain are the fired-event payload's own
           EN-only sentences (same source as the timeline verdict's condition_plain) — rendering
           them unconditionally put raw English into the ZH drillback dialog.
-          Major 4 (round-6 review, follow-up): the first fix reused `data.conditionText`
-          verbatim for ZH — byte-identical to the "Condition" field right above it, so a ZH
-          viewer saw one fact printed twice under two different labels while EN keeps two
-          distinct facts. ZH now adds the alert's own real crossing value (never the condition's
-          threshold, already shown above) when the fired stamp still carries one, so the field
-          describes an EVENT ("NVDA 价格低于 150 · 100") rather than repeating the definition;
-          when no crossing value survived (e.g. re-armed since), it falls back to an honest
-          generic "this fired" notice — still never the identical string, never fabricated. */}
-      <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "发生了什么" : "What changed"}</span><span>{lang === "zh" ? (data.triggeredValue != null ? `${data.conditionText} · ${data.triggeredValue}` : copy("condition.firedGeneric", lang)) : (data.summaryPlain || data.conditionPlain || copy("null.notRecorded", lang))}</span></div>
+          Major 4 (round-6 review, follow-up) then META-CEO B ruling r8 (r7 review of fa003118:
+          "ZH duplicate-fact row"): the round-6 fix reused `data.conditionText` verbatim for ZH
+          — byte-identical to the "Condition" field right above it — and the follow-up fix
+          (`${data.conditionText} · ${data.triggeredValue}`) still PREPENDED the same
+          conditionText, so the field still repeated the threshold definition instead of
+          describing the EVENT. ZH now renders the shared event-only sentence
+          (firedEventTextZh, lib/alertsView.ts) — the alert's own real crossing value alone
+          ("触发时价格 100"), never the condition/threshold already shown in the "条件" field
+          above — falling back to an honest "fired, no value recorded" disclosure when no
+          crossing value survived (e.g. re-armed since). Never the identical string to the
+          "条件" field either way, never fabricated. */}
+      <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "发生了什么" : "What changed"}</span><span>{lang === "zh" ? firedEventTextZh(data.triggeredValue) : (data.summaryPlain || data.conditionPlain || copy("null.notRecorded", lang))}</span></div>
       <div className={s.detailFact}><span className={s.detailLabel}>{lang === "zh" ? "时间线" : "Timeframe"}</span><span>{data.firedAt ? (lang === "zh" ? `触发于 ${fmt(data.firedAt)}` : `Fired ${fmt(data.firedAt)}`) : copy("null.notRecorded", lang)}{lang === "zh" ? `，建立于 ${fmt(data.armedAt)}` : `, armed ${fmt(data.armedAt)}`}</span></div>
       <div className={s.detailFact}>
         <span className={s.detailLabel}>{lang === "zh" ? "证据" : "Evidence"}</span>

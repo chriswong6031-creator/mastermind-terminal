@@ -304,6 +304,17 @@ export const ALERTS_COPY: Record<string, [string, string]> = {
   // the two fields concretely differ (see AlertDetail.tsx) — an honest, generic "this fired"
   // notice, never a fabricated specific.
   "condition.firedGeneric": ["Your condition was met.", "你设置的条件已被触发。"],
+  // META-CEO B ruling r8 (r7 review of fa003118 — ZH duplicate-fact row): the ZH "row note"
+  // (AlertsView.tsx's `.arow-note`) and AlertDetail's "发生了什么" field must describe the
+  // EVENT (what fired), never the condition/threshold restated — that restatement is exactly
+  // what the "条件"/`.cond` fact right next to it already shows, so repeating it there is a
+  // duplicate-fact row. These two keys are the shared ZH event sentence: the alert's own real
+  // crossing value when the fired stamp still carries one, or an honest disclosure that no
+  // value survived (e.g. the alert was re-armed since) — never a fabricated number, and never
+  // the condition's threshold. EN is unaffected by this key (EN keeps the engine's own note /
+  // fired-event payload sentence unchanged); the EN column exists only so `copy()` has a pair.
+  "alertFired.withValue": ["Fired at {value}.", "触发时价格 {value}"],
+  "alertFired.noValue": ["Fired; no value recorded.", "已触发，未记录触发价"],
 };
 
 export function copy(key: string, lang: "en" | "zh", vars?: Record<string, string | number>): string {
@@ -360,4 +371,21 @@ export function verdictText(
 ): string {
   if (lang === "zh") return conditionText(condition, symbol, lang);
   return conditionPlain || conditionText(condition, symbol, lang);
+}
+
+/**
+ * ZH-only "what actually happened" event sentence — shared by AlertsView.tsx's `.arow-note`
+ * row span and AlertDetail's "发生了什么" field (META-CEO B ruling r8, response to the r7
+ * review of fa003118: "ZH duplicate-fact row"). Never the condition/threshold restated — that
+ * fact already lives in the adjacent `.cond` span / "条件" field — this is the EVENT alone: the
+ * real crossing value from the alert's own fired stamp, or an honest "fired, no value recorded"
+ * disclosure when none survived (e.g. re-armed since). Gated on the triggered VALUE existing,
+ * never on the EN engine note string (minor-2, r7 review) — a note and a numeric value are
+ * stamped independently by the engine, so gating the ZH sentence on the EN note's presence can
+ * silently drop a real value that IS on the record.
+ */
+export function firedEventTextZh(triggeredValue: number | null | undefined): string {
+  return typeof triggeredValue === "number"
+    ? copy("alertFired.withValue", "zh", { value: String(triggeredValue) })
+    : copy("alertFired.noValue", "zh");
 }

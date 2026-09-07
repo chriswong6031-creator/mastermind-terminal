@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import path from "path";
 import {
   buildAlertsView, monitorFor, foldOutbox, deliveryFor, ALERTS_COPY, copy, conditionText, conditionsWord, verdictText,
+  firedEventTextZh,
   type RunReceipt, type OutboxRow, type Alert,
 } from "../alertsView";
 
@@ -386,5 +387,39 @@ describe("verdictText — lang-aware condition_plain gate (minor 4, round-6 revi
       const zh = verdictText("some english fired-event sentence", { type: t }, "NVDA", "zh");
       expect(zh, `condition.${t}`).not.toMatch(/[A-Za-z]{3,}/);
     }
+  });
+});
+
+describe("firedEventTextZh — the ZH event sentence never restates the condition (META-CEO B ruling r8, r7 review of fa003118: ZH duplicate-fact row)", () => {
+  const priceCondition = { type: "price", op: "below" as const, value: 150 };
+
+  it("RED-first: reproduces the exact pre-fix expression (AlertDetail.tsx's `发生了什么` field prepended `conditionText`) to confirm the duplicate-fact bug was real", () => {
+    // The pre-fix line, verbatim: `${data.conditionText} · ${data.triggeredValue}` — this
+    // STILL contains the full condition/threshold sentence, byte-for-byte identical to the
+    // "条件" field a few lines above it in the DOM.
+    const conditionTextZh = conditionText(priceCondition, "NVDA", "zh");
+    const oldBuggyExpression = `${conditionTextZh} · 100`;
+    expect(oldBuggyExpression).toContain(conditionTextZh); // confirms: the old field repeated the condition
+    expect(firedEventTextZh(100)).not.toContain(conditionTextZh);
+  });
+
+  it("renders the real crossing value when one exists, and never the condition's threshold", () => {
+    const result = firedEventTextZh(100);
+    expect(result).toBe("触发时价格 100");
+    expect(result).not.toContain("150"); // the condition's threshold, never repeated here
+    expect(result).not.toContain(conditionText(priceCondition, "NVDA", "zh"));
+  });
+
+  it("falls back to an honest disclosure — never a fabricated value — when no crossing value survived", () => {
+    expect(firedEventTextZh(null)).toBe("已触发，未记录触发价");
+    expect(firedEventTextZh(undefined)).toBe("已触发，未记录触发价");
+  });
+
+  it("gates on the triggered VALUE existing, never on any EN note string (minor-2, r7 review)", () => {
+    // A value of 0 is a real, falsy-but-present number — must still render the specific
+    // sentence, not the generic fallback (a `value != null` check alone would still pass this,
+    // but a truthiness check on the value, or a gate keyed off some separate EN "note" string,
+    // would not).
+    expect(firedEventTextZh(0)).toBe("触发时价格 0");
   });
 });

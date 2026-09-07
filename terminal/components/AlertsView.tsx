@@ -22,7 +22,7 @@ import {
 import { SUITE_DEFS } from "@/lib/suites/registry";
 import { useGateEntitlement } from "@/lib/entitlementStore";
 import { useShellIdentity } from "@/components/chrome/AppShell";
-import { ALERTS_CHANGED_EVENT, conditionText } from "@/lib/alertsView";
+import { ALERTS_CHANGED_EVENT, firedEventTextZh } from "@/lib/alertsView";
 
 type Alert = { id: string; symbol: string; condition: any; active: boolean; created_at: string };
 
@@ -686,18 +686,32 @@ export default function AlertsView({ email, panelOnly, listOnly }: { email: stri
                     English string, so it does NOT follow the UI language (major, round-6
                     review: this span was rendering raw English — "crossed · 100" — on
                     the ZH page). EN keeps the engine's own note (tagged lang="en" for
-                    assistive tech); ZH never renders it — it renders the house
-                    per-condition-kind ZH template (conditionText, lib/alertsView.ts,
-                    the same one every other ZH module on this page already uses) instead,
-                    still followed by the real crossing value when the fired stamp
-                    carries one. Making the engine emit a translated note is a separate
+                    assistive tech), gated on the note existing, unchanged.
+                    ZH never renders the engine note — it renders the shared EVENT sentence
+                    (firedEventTextZh, lib/alertsView.ts; META-CEO B ruling r8) instead. Two
+                    r7-review defects fixed here: (a) that ZH sentence used to be
+                    `conditionText` — the condition/threshold restated, duplicating the `.cond`
+                    span a few pixels to the left (ZH duplicate-fact row) — firedEventTextZh
+                    states the EVENT (the crossing value) instead, never the threshold; (b) the
+                    ZH branch used to be gated on the EN `note` string being non-empty
+                    (minor-2) — a note and a numeric value are stamped independently by the
+                    engine, so that silently hid a real value on the record whenever the note
+                    was empty. ZH is now gated on `trig` alone; firedEventTextZh itself decides
+                    what to say from the triggered VALUE, with an honest fallback sentence when
+                    none survived. Making the engine emit a translated note is a separate
                     contract change. */}
-                {trig && note && (
-                  <span className="arow-note" lang={lang === "zh" ? "zh" : "en"}>
-                    {lang === "zh" ? conditionText(a.condition, a.symbol, "zh") : note}
-                    {tval != null ? ` · ${tval}` : ""}
-                  </span>
-                )}
+                {lang === "zh"
+                  ? trig && (
+                      <span className="arow-note" lang="zh">
+                        {firedEventTextZh(tval)}
+                      </span>
+                    )
+                  : trig && note && (
+                      <span className="arow-note" lang="en">
+                        {note}
+                        {tval != null ? ` · ${tval}` : ""}
+                      </span>
+                    )}
                 {confirmDel === a.id && (
                   <span className="arow-confirm" role="group" aria-label={t("deleteAlertQ")}>
                     <span className="arow-confirm-q">{t("deleteAlertQ")}</span>
