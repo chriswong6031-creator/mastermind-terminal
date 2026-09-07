@@ -72,7 +72,11 @@ create table if not exists public.workspace_settings (
   id         uuid primary key default gen_random_uuid(),
   scope      text not null check (scope in ('user','workspace')),
   team_id    uuid references public.teams(id) on delete cascade,
-  user_id    uuid not null references auth.users(id) on delete cascade,
+  -- user_id is nullable and ON DELETE SET NULL, not ON DELETE CASCADE: it records the last
+  -- WRITER for attribution only. Ownership is owner_id (below), which for a workspace-scope row
+  -- is team_id, never the writer -- a workspace's settings must not be deleted just because the
+  -- account that last wrote them is later deleted (round-2 review MAJOR-2, ruling 2026-09-07).
+  user_id    uuid references auth.users(id) on delete set null,
   -- owner_id collapses the two scopes into one conflict target: for scope='user' it is the
   -- user, for scope='workspace' it is the team. PostgREST's upsert ON CONFLICT(columns) cannot
   -- infer a *partial* unique index (SQLSTATE 42P10) -- a non-partial index on
@@ -102,7 +106,10 @@ create policy ws_update on public.workspace_settings for update to authenticated
   or (scope = 'workspace' and public.team_role(team_id) in ('owner','admin')))
   with check (
   (scope = 'user' and user_id = auth.uid() and team_id is null)
-  or (scope = 'workspace' and public.team_role(team_id) in ('owner','admin')));
+  -- WITH CHECK also pins user_id = auth.uid() on the workspace branch (round-2 review MAJOR-2):
+  -- USING alone let any owner/admin UPDATE re-attribute a row to an arbitrary user_id, minting a
+  -- false attribution for someone who never wrote it. The writer can only ever be themselves.
+  or (scope = 'workspace' and user_id = auth.uid() and public.team_role(team_id) in ('owner','admin')));
 drop policy if exists ws_delete on public.workspace_settings;
 create policy ws_delete on public.workspace_settings for delete to authenticated using (
   (scope = 'user' and user_id = auth.uid())

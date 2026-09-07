@@ -3,6 +3,10 @@ name: f12-team-postgres-canary
 on:
   pull_request:
     paths:
+      # 0015's accept_team_invite/workspace_settings build on 0014's teams/team_members/
+      # team_invites, and the canary applies 0001..0015 in order against a real Postgres --
+      # 0014 is included so a change there also re-runs this canary (round-3 review minor).
+      - "supabase/migrations/0014_tenancy_foundation.sql"
       - "supabase/migrations/0015_team_roles_invitations.sql"
       - "terminal/scripts/f12_team_postgres_canary.py"
       - ".github/workflows/f12-team-postgres-canary.yml"

@@ -89,4 +89,26 @@ describe("0015 migration contract", () => {
       expect(flat).not.toContain(forbidden);
     }
   });
+
+  it("user_id is a nullable last-writer attribution column, never a cascading owner (round-2 review MAJOR-2)", () => {
+    // Ownership of a workspace-scope row is owner_id/team_id, never the writer -- a workspace's
+    // settings must survive the deletion of whichever account last wrote them. That requires
+    // user_id to be (a) nullable and (b) ON DELETE SET NULL, never NOT NULL / ON DELETE CASCADE.
+    expect(flat).toMatch(/user_id\s+uuid references auth\.users\(id\) on delete set null/);
+    expect(flat).not.toMatch(/user_id\s+uuid not null/);
+    expect(flat).not.toContain("references auth.users(id) on delete cascade");
+  });
+
+  it("ws_update's WITH CHECK pins user_id = auth.uid() on the workspace branch, not just the user branch (round-2 review MAJOR-2)", () => {
+    // Without this pin, USING alone let any owner/admin UPDATE a workspace_settings row and
+    // re-attribute it to an arbitrary user_id -- minting a false attribution for a write that
+    // user never made. Pull just the ws_update policy body so a pin on ws_insert cannot satisfy
+    // this test by coincidence.
+    const wsUpdateMatch = flat.match(/create policy ws_update on public\.workspace_settings[\s\S]*?;/);
+    expect(wsUpdateMatch).not.toBeNull();
+    const wsUpdate = wsUpdateMatch ? wsUpdateMatch[0] : "";
+    expect(wsUpdate).toMatch(/with check\s*\(/);
+    const withCheck = wsUpdate.slice(wsUpdate.indexOf("with check"));
+    expect(withCheck).toMatch(/scope = 'workspace' and user_id = auth\.uid\(\) and public\.team_role\(team_id\) in \('owner','admin'\)/);
+  });
 });

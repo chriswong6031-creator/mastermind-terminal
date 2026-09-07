@@ -166,6 +166,7 @@ def main() -> int:
             (team_a, token_hash, a_owner),
         )
 
+    a_conn = actor_connection(dsn, a_owner)
     b_conn = actor_connection(dsn, b_user)
 
     def b_insert_member():
@@ -265,6 +266,46 @@ def main() -> int:
         cur.execute("select * from public.workspace_settings where team_id=%s", (team_b,))
         rows_b = cur.fetchall()
     proof.check("rls:cross_tenant_settings", len(rows_b) == 0, f"A member saw {len(rows_b)} of B's rows")
+
+    # rls:admin_cannot_attribute_setting_to_another_user (round-2 review MAJOR-2): USING alone let
+    # any owner/admin UPDATE a workspace_settings row and re-attribute it to an arbitrary user_id --
+    # minting a false attribution for a write that user never made. a_owner is owner of team_a
+    # (allowed to write team_a's settings) but must not be able to set user_id to b_user's id on
+    # team_a's own existing row (inserted above as ('workspace', team_a, a_owner, 'view_density', ...)).
+    def owner_attributes_write_to_another_user():
+        with a_conn.cursor() as cur:
+            cur.execute(
+                "update public.workspace_settings set user_id=%s where scope='workspace' and team_id=%s and key='view_density'",
+                (b_user, team_a),
+            )
+
+    proof.check(
+        "rls:admin_cannot_attribute_setting_to_another_user",
+        expect_database_error(owner_attributes_write_to_another_user, "42501"),
+        "an owner/admin UPDATE must not be able to attribute a workspace setting to a different user_id",
+    )
+
+    # ddl:writer_deletion_preserves_workspace_setting (round-2 review MAJOR-2): deleting the
+    # account that last wrote a workspace setting must not delete the setting itself -- ownership
+    # is team_id/owner_id, never the writer. Fresh actors/team so this does not disturb team_a's
+    # state used by the checks above.
+    e_owner = str(uuid.uuid4())
+    with admin.cursor() as cur:
+        cur.execute("insert into auth.users (id, email) values (%s, 'owner@e.example')", (e_owner,))
+        cur.execute("insert into public.teams (id, name, created_by) values (gen_random_uuid(),'Team E', %s) returning id", (e_owner,))
+        team_e = cur.fetchone()[0]
+        cur.execute(
+            "insert into public.workspace_settings (scope, team_id, user_id, key, value) values ('workspace', %s, %s, 'k', '\"ve\"'::jsonb)",
+            (team_e, e_owner),
+        )
+        cur.execute("delete from auth.users where id=%s", (e_owner,))
+        cur.execute("select user_id, value from public.workspace_settings where team_id=%s and key='k'", (team_e,))
+        row = cur.fetchone()
+    proof.check(
+        "ddl:writer_deletion_preserves_workspace_setting",
+        bool(row) and row[0] is None and row[1] == "ve",
+        f"row={row!r} (expected user_id=NULL, value preserved, after deleting the writer's auth.users row)",
+    )
 
     Path(args.receipt).write_text(json.dumps(_receipt(proof.failed), indent=2))
     print(f"::notice title=f12-team-canary::receipt written to {args.receipt}", flush=True)
