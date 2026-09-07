@@ -44,8 +44,7 @@ Because application is manual and per-file, **the files here can be applied out 
 and have been.** Application status (baseline census 2026-08-21; the `0011`, `0012`, and `0013`
 rows were updated 2026-09-06, each recording its own date — `0011`'s DDL was applied 2026-09-05
 (readback receipt posted 2026-09-06); `0012`'s DDL was applied 2026-09-06; `0013` merged to
-`master` as `be898be5` on 2026-09-06 via PR #513 — see the Reservations table below for its DDL
-application date):
+`master` as `be898be5` on 2026-09-06 via PR #513):
 
 | file | object it creates | in production? |
 |---|---|---|
@@ -55,7 +54,7 @@ application date):
 | `0010_search_event_stats.sql` | `search_event_stats()` + `search_events_created_at` | **yes** — applied 2026-08-21 |
 | `0011_analytics_eid.sql` | `analytics_events.eid` (nullable unique UUID column) + `analytics_events_eid_uniq` unique index | yes — DDL applied 2026-09-05; readback receipt posted 2026-09-06 (PR #507 comment `5557754941`) |
 | `0012_thesis_objects.sql` | `theses`, `thesis_versions` | yes — applied 2026-09-06 (Meta-CEO B; project fsldfzlxyavsuwqbceod; post-apply readback: both tables relrowsecurity=true, policies theses_select_own + thesis_versions_select_own, SELECT-only grant to authenticated, functions apply_thesis_version_v1 (security definer) + read_current_thesis_versions_v1 (security invoker), indexes theses_owner_updated_idx/theses_owner_subject_idx/thesis_versions_owner_thesis_idx) |
-| `0013_alert_runs_outbox.sql` | `alert_runs`, `alert_outbox` tables + RLS (Market Ontology F08 packet B-F08-2) | merged to `master` as `be898be5` (2026-09-06) — **not applied**, awaiting readback receipt |
+| `0013_alert_runs_outbox.sql` | `alert_runs`, `alert_outbox` tables + RLS (Market Ontology F08 packet B-F08-2) | yes — applied 2026-09-07 via a direct Management API query (curl method above); readback receipt on PR #513 comment `5563321750` |
 
 `0009` was applied two days before `0008`. The numbering records *when the DDL entered the repo*,
 not when an operator ran it — so **never infer application status from file order.** Ask the
@@ -182,16 +181,9 @@ DDL applied out of band on 2026-09-07 via a direct Management API query (the met
 above in "How DDL actually lands"), used instead of the apply script `scripts/supabase_apply.py`
 (PR #516) because of a readback-parser bug in that script (readback receipt posted on PR #513,
 comment `5563321750`) — merged = yes, applied = yes. `0014` (PR #514) remains an open pull
-request (merged = no, applied = no). The "in production?" table above still reads `0013` as
-merged-but-not-applied as of its own last edit (2026-09-06, before the 2026-09-07 out-of-band
-apply recorded above) and has not yet been re-synced to this fact; the Reservations table here
-is the current truth for `0013`. This split (Reservations table updated, Application-status
-table's `0013` cell held at master's wording) is the round-11 Meta-CEO B ruling's own item (1)
-"keeping master's rows" / item (2) "the Reservations status cell" scoping, not an oversight —
-but it leaves rule (d) above (readback posted -> application table updated) unsatisfied for that
-one cell. Reconciling the Application-status table's own `0013` cell needs a further Meta-CEO B
-ruling naming that exact cell; it is not a change a builder should make unprompted, since the
-round-11 ruling scoped the applied-status edit to the Reservations table alone.
+request (merged = no, applied = no). The "in production?" table above now agrees with the
+Reservations table below on `0013`: both read applied 2026-09-07 (round-13 Meta-CEO B ruling,
+resolving the round-11/round-12 wording split between the two tables).
 
 This table is re-verified at merge time, not just at the moment this pull request opened. A later
 reader should re-run the same open-pull-request query rather than trust these owner cells past
