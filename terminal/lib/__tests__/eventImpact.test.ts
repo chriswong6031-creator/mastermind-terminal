@@ -290,8 +290,15 @@ describe("eventImpact join", () => {
     const copyMatch = file.match(/const COPY: Record<string, \[string, string\]> = \{([\s\S]*?)\n\};/);
     expect(copyMatch).not.toBeNull();
     const body = copyMatch![1];
-    const entries = [...body.matchAll(/\[\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\]/g)];
-    expect(entries.length).toBeGreaterThan(0);
+    // Entries wrap two ways — single-line (`key: ["a", "b"],`) and multi-line
+    // (`key: [\n  "a",\n  "b",\n],`, with a trailing comma before the closing
+    // bracket). An earlier version of this regex required `\s*\]` right after
+    // the ZH string with no comma allowed, so it silently matched only the
+    // single-line entries (6 of 18) and never inspected eiUpstreamLocked —
+    // the exact multi-line entry the RULING named. The trailing `,?` here is
+    // load-bearing: removing it reproduces that silent gap.
+    const entries = [...body.matchAll(/\[\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,?\s*\]/g)];
+    expect(entries.length).toBe(18);
     for (const [, , zh] of entries) {
       expect(zh.includes("您")).toBe(false);
     }
