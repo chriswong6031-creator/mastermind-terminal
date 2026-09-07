@@ -101,6 +101,10 @@
 .lens:focus-visible { outline: 2px solid color-mix(in srgb, var(--brand) 55%, transparent); outline-offset: -2px; }
 .lensCount { color: var(--text-dim); font: 700 11px/1 var(--font-num); font-variant-numeric: tabular-nums; }
 .lens[data-selected] .lensCount { color: var(--text-2); }
+/* Round-2 review r3 minor 7: the Theses lens badge shows the FILTERED count while a
+   Coverage subject filter is active — this marks it so it never reads as the total. */
+.lensCount[data-filtered]::after { content: "•"; margin-left: 4px; color: var(--brand); }
+.srOnly { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .lensHead { display: grid; gap: 4px; padding: 12px 2px 0; border-top: 1px solid var(--line-2); }
 .lensHead h2 { margin: 0; font-size: 13px; letter-spacing: .04em; }
 .lensWhat { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
@@ -149,7 +153,12 @@
 .lineText { margin: 0; color: var(--text); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
 .lineOwner { display: flex; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: var(--muted); font: 11px/1.2 var(--font-ui); text-align: left; cursor: pointer; }
 .lineOwner b { flex: 0 0 auto; color: var(--brand-2); font: 700 11px/1 var(--font-num); }
-.lineOwner span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lineOwner span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Round-2 review r3 minor 3: without an explicit flex-basis, the date shrank along
+   with the title at 1440 and its digits wrapped onto a second line — the title (which
+   already truncates with an ellipsis) is the one that should give up space, never the
+   date. */
+.lineOwner time { flex: 0 0 auto; white-space: nowrap; }
 .lineOwner:hover { color: var(--text-2); }
 .rowReason { font-style: normal; color: var(--muted); font-size: 11px; }
 .emptyLens { margin-top: 4px; padding: 14px; border: 1px dashed var(--line); border-radius: 10px; }

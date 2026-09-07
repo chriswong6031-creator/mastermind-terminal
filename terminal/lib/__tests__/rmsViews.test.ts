@@ -7,6 +7,7 @@ import {
   catalystRows,
   coverageRows,
   conditionLine,
+  formatScopeSentence,
   hydrationScope,
   ideaRows,
   noteRows,
@@ -198,6 +199,33 @@ describe("rmsViews copy", () => {
     expect(conditionLine({ source: "monitor", state: "window_closed", at: "x" }, "zh")).toBe(
       "你关注的观察窗口已结束",
     );
+  });
+
+  it("scope sentence names the actual counted subset ('active theses'), never a bare, unqualified count (round-2 review r3 MAJOR-2)", () => {
+    // Every EN template that quotes a live count carries "active" — the content
+    // lenses only ever hydrate the active subset (m5), so an unqualified "theses"
+    // reads as "all your theses" when it is really a filtered one.
+    expect(RMS_COPY.en.scope).toMatch(/active/);
+    expect(RMS_COPY.en.scopeComplete).toMatch(/active/);
+    expect(RMS_COPY.en.scopeSingular).toMatch(/active/);
+    expect(RMS_COPY.en.scopeCompleteSingular).toMatch(/active/);
+    expect(RMS_COPY.zh.scope).toMatch(/活跃/);
+    expect(RMS_COPY.zh.scopeComplete).toMatch(/活跃/);
+    // The partial-count template names the subset it counts out of — reviewer check
+    // per the ruling: grep copy for "of your".
+    expect(RMS_COPY.en.scope).toMatch(/of your/);
+    expect(RMS_COPY.en.scopeSingular).toMatch(/of your/);
+  });
+
+  it("formatScopeSentence: plural/singular x partial/complete (round-2 review r3 minor 4)", () => {
+    expect(formatScopeSentence(10, 12, false, RMS_COPY.en)).toBe("Showing lines from 10 of your 12 active theses.");
+    expect(formatScopeSentence(12, 12, true, RMS_COPY.en)).toBe("Showing lines from all 12 active theses.");
+    // Singular: never "1 active theses" — the count must not lie about plurality.
+    expect(formatScopeSentence(0, 1, false, RMS_COPY.en)).toBe("Showing lines from 0 of your 1 active thesis.");
+    expect(formatScopeSentence(1, 1, false, RMS_COPY.en)).toBe("Showing lines from 1 of your 1 active thesis.");
+    expect(formatScopeSentence(1, 1, true, RMS_COPY.en)).toBe("Showing lines from all 1 active thesis.");
+    expect(formatScopeSentence(1, 1, false, RMS_COPY.en)).not.toMatch(/1 active theses/);
+    expect(formatScopeSentence(1, 1, true, RMS_COPY.en)).not.toMatch(/1 active theses/);
   });
 
   it("typed not-connected condition (honest, not a transient error), and readConditionStates returns it for every id today", () => {

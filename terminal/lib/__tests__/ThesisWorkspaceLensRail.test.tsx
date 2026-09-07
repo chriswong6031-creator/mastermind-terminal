@@ -338,7 +338,8 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     // Every id in the first automatic batch is one of the 12 ACTIVE theses — none of
     // the 3 newer non-active ones — and the scope denominator is 12, not 15.
     expect(idsCalls[0].every((id) => active.some((s) => s.id === id))).toBe(true);
-    expect(el.querySelector('[data-testid="rms-scope"]')?.textContent).toBe("Showing lines from 10 of your 12 theses.");
+    // Round-2 review r3 MAJOR-2: names the actual counted subset ("active theses").
+    expect(el.querySelector('[data-testid="rms-scope"]')?.textContent).toBe("Showing lines from 10 of your 12 active theses.");
     expect(catalystsTab.querySelector("[class*='lensCount']")?.textContent).toBe("—");
 
     // Switching lenses away and back must NOT re-trigger an automatic batch (M4: one
@@ -365,7 +366,7 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     const allRequested = new Set([...idsCalls[0], ...idsCalls[1]]);
     expect(allRequested.size).toBe(12);
     expect([...allRequested].every((id) => active.some((s) => s.id === id))).toBe(true);
-    expect(el.querySelector('[data-testid="rms-scope"]')?.textContent).toBe("Showing lines from all 12 of your theses.");
+    expect(el.querySelector('[data-testid="rms-scope"]')?.textContent).toBe("Showing lines from all 12 active theses.");
     expect(Array.from(el.querySelectorAll("button")).some((b) => b.textContent === "Show 10 more")).toBe(false);
     // m1: scope is now complete, so the catalysts count is exactly knowable (one
     // catalyst per active thesis, none from the 3 non-active ones).
@@ -454,6 +455,77 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     expect(el.querySelector('[data-testid="rms-hydration-unavailable"]')).toBeNull();
     expect(batchCalls).toBe(2);
     expect(Array.from(el.querySelectorAll('[data-testid="rms-line-row"]')).length).toBe(3);
+  });
+
+  it("a fault on a LATER batch never unmounts rows already hydrated (round-2 review r3 MAJOR-1)", async () => {
+    const active = Array.from({ length: 13 }, (_, i) =>
+      ({
+        id: `f${i}`,
+        currentVersion: 1,
+        lifecycleState: "active" as const,
+        subject: subject("AAA", "Alpha Co"),
+        title: `Thesis ${i}`,
+        updatedAt: new Date(2026, 0, i + 1).toISOString(),
+      }) satisfies ThesisSummary,
+    );
+    const details = new Map(active.map((s) => [s.id, detailFor(s, { catalysts: [`cat-${s.id}`] })]));
+    let batchCalls = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(raw, "https://x.test");
+      if (url.pathname !== "/api/theses") return jsonResponse({ error: "not_found" }, 404);
+      const ids = url.searchParams.getAll("ids");
+      if (ids.length > 0) {
+        batchCalls += 1;
+        // Batch 1 (the automatic 10) succeeds; batch 2 (the explicit "Show 10 more"
+        // for the remaining 3) faults — the exact RED-first sequence from the ruling.
+        if (batchCalls === 2) return jsonResponse({ error: "thesis_store_unavailable" }, 503);
+        const batch = ids.map((id) => details.get(id)).filter((d): d is ThesisDetail => !!d);
+        return jsonResponse({ batch, missing: [] });
+      }
+      return jsonResponse({ theses: active, truncated: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const el = await mount({ ownerKey: "owner-hydration-later-fault" });
+
+    await act(async () => {
+      tabs(el).find((b) => b.dataset.view === "catalysts")!.click();
+    });
+    await flush();
+    expect(Array.from(el.querySelectorAll('[data-testid="rms-line-row"]')).length).toBe(10);
+
+    const showMore = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "Show 10 more") as HTMLButtonElement;
+    expect(showMore).toBeTruthy();
+    await act(async () => {
+      showMore.click();
+    });
+    await flush();
+
+    // The first 10 rows are still in the DOM — a fault on this later batch must never
+    // unmount them, and the terminal "nothing to show" panel must NOT render (rows
+    // exist). The fault is the smaller inline notice, distinct from that panel.
+    expect(Array.from(el.querySelectorAll('[data-testid="rms-line-row"]')).length).toBe(10);
+    expect(el.querySelector('[data-testid="rms-hydration-unavailable"]')).toBeNull();
+    const faultNotice = el.querySelector('[data-testid="rms-hydration-fault"]');
+    expect(faultNotice, "expected the inline row-level fault notice").not.toBeNull();
+    expect(faultNotice!.textContent).toContain("The next 10 could not be loaded. Try again.");
+    // "Show 10 more" hides while the fault notice is up — the notice's own retry
+    // button is the one explicit-action way to try the pending increment again.
+    expect(Array.from(el.querySelectorAll("button")).some((b) => b.textContent === "Show 10 more")).toBe(false);
+
+    const retryButton = Array.from(faultNotice!.querySelectorAll("button")).find(
+      (b) => b.textContent === "Try again",
+    ) as HTMLButtonElement;
+    expect(retryButton, "expected a retry action inside the inline fault notice").toBeTruthy();
+
+    await act(async () => {
+      retryButton.click();
+    });
+    await flush();
+
+    expect(el.querySelector('[data-testid="rms-hydration-fault"]')).toBeNull();
+    expect(batchCalls).toBe(3);
+    expect(Array.from(el.querySelectorAll('[data-testid="rms-line-row"]')).length).toBe(13);
   });
 
   it("Coverage subject filter names the subject and offers a labeled way back even after the filtered subject's last thesis leaves a later list refresh (round-2 review MAJOR)", async () => {
@@ -562,6 +634,9 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     try {
       const el = await mount({ ownerKey: "owner-narrow-nav" });
       const list = el.querySelector('[role="tablist"]')!;
+      // Round-2 review r3 minor 1/2: aria-orientation follows the same 600px
+      // breakpoint the CSS switches the rail to a horizontal scroller at.
+      expect(list.getAttribute("aria-orientation")).toBe("horizontal");
       await act(async () => {
         list.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
       });
@@ -581,5 +656,41 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     const newThesisButton = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "New thesis") as HTMLButtonElement;
     await act(async () => newThesisButton.click());
     expect(el.querySelector('[data-testid="thesis-condition"]')).toBeNull();
+  });
+
+  it("tablist ARIA: vertical by default (desktop), and every tab's <li> wrapper is role=presentation (round-2 review r3 minor 1/2)", async () => {
+    const t1: ThesisSummary = { id: "t1", currentVersion: 1, lifecycleState: "active", subject: subject("AAA", "Alpha Co"), title: "Alpha", updatedAt: "2026-09-01T00:00:00.000Z" };
+    installFetch([t1], new Map());
+    const el = await mount({ ownerKey: "owner-aria-default" });
+    const list = el.querySelector('[data-testid="thesis-lens-rail"] [role="tablist"]')!;
+    expect(list.getAttribute("aria-orientation")).toBe("vertical");
+    const items = Array.from(list.querySelectorAll(":scope > li"));
+    expect(items.length).toBe(7);
+    expect(items.every((li) => li.getAttribute("role") === "presentation")).toBe(true);
+  });
+
+  it("Theses lens rail badge marks a FILTERED count distinctly from the total (round-2 review r3 minor 7)", async () => {
+    const alpha: ThesisSummary = { id: "a1", currentVersion: 1, lifecycleState: "active", subject: subject("AAA", "Alpha Co"), title: "Alpha thesis", updatedAt: "2026-09-02T00:00:00.000Z" };
+    const beta: ThesisSummary = { id: "b1", currentVersion: 1, lifecycleState: "active", subject: subject("BBB", "Beta Co"), title: "Beta thesis", updatedAt: "2026-08-30T00:00:00.000Z" };
+    installFetch([alpha, beta], new Map());
+    const el = await mount({ ownerKey: "owner-filtered-badge" });
+
+    const thesesTab = tabs(el).find((b) => b.dataset.view === "theses")!;
+    const badge = () => thesesTab.querySelector("[class*='lensCount']") as HTMLElement;
+    // Unfiltered: the badge counts both theses, and carries no filtered marker.
+    expect(badge().textContent).toContain("2");
+    expect(badge().hasAttribute("data-filtered")).toBe(false);
+
+    const coverageTab = tabs(el).find((b) => b.dataset.view === "coverage")!;
+    await act(async () => coverageTab.click());
+    const alphaRow = Array.from(el.querySelectorAll('[data-testid="thesis-list-pane"] button')).find((b) =>
+      b.textContent?.includes("Alpha Co"),
+    ) as HTMLButtonElement;
+    await act(async () => alphaRow.click());
+
+    // Filtered to Alpha: the badge shows the FILTERED count (1, not 2) and now carries
+    // a marker so it never reads as the total.
+    expect(badge().textContent).toContain("1");
+    expect(badge().hasAttribute("data-filtered")).toBe(true);
   });
 });

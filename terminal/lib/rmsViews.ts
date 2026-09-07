@@ -232,6 +232,25 @@ export function hydrationScope(
   return { loaded, total, complete: total === 0 ? true : loaded >= total };
 }
 
+/** Round-2 review r3 MAJOR-2: the scope sentence must name the actual counted subset
+ *  ("active theses" — the content lenses only ever hydrate the `active` subset, m5) and
+ *  must not lie with a plural when there is exactly one (minor 4). */
+export function formatScopeSentence(
+  loaded: number,
+  total: number,
+  complete: boolean,
+  copy: RmsCopy,
+): string {
+  if (complete) {
+    return total === 1
+      ? copy.scopeCompleteSingular
+      : copy.scopeComplete.replace("{total}", String(total));
+  }
+  return total === 1
+    ? copy.scopeSingular.replace("{loaded}", String(loaded))
+    : copy.scope.replace("{loaded}", String(loaded)).replace("{total}", String(total));
+}
+
 export function conditionLine(state: ConditionState, lang: "en" | "zh"): string {
   const copy = RMS_COPY[lang];
   if (state.source === "unavailable") return copy["condition.unavailable"];
@@ -244,10 +263,25 @@ export type RmsCopy = {
   what: Record<RmsViewId, string>;
   empty: Record<RmsViewId, string>;
   reason: Record<ReviewReason, string>;
+  /** {loaded}/{total} placeholders; total > 1. Names the actual counted subset — the
+   *  content lenses only ever hydrate `active` theses (m5), so the sentence must say
+   *  "active theses", never bare "theses" (round-2 review r3 MAJOR-2: an unqualified
+   *  count reads as "all your theses" when it is really a filtered subset). */
   scope: string;
+  /** {loaded} placeholder only; total === 1 (round-2 review r3 MAJOR-2 minor 4). */
+  scopeSingular: string;
+  /** {total} placeholder; total > 1. */
   scopeComplete: string;
+  /** total === 1. */
+  scopeCompleteSingular: string;
   showMore: string;
   unavailableLens: string;
+  /** A fault on a batch AFTER the first must never read as the terminal
+   *  `unavailableLens` state while earlier rows are still mounted (round-2 review r3
+   *  MAJOR-1) — this is the inline, row-level notice shown under the still-visible
+   *  list, distinct from `unavailableLens` (which may render only when zero rows are
+   *  hydrated). */
+  hydrationFault: string;
   "condition.window_closed": string;
   "condition.open": string;
   "condition.unavailable": string;
@@ -261,6 +295,10 @@ export type RmsCopy = {
    *  filter is active and resolves to zero rows; never claims "No theses yet." while
    *  the workspace actually holds theses (round-2 review MAJOR). */
   filteredEmpty: string;
+  /** Screen-reader-only word appended to the Theses lens rail badge when a subject
+   *  filter is active — the badge already shows the filtered count (round-2 review r3
+   *  minor 7: the filtered count needs a marker so it does not read as the total). */
+  filteredMarker: string;
 };
 
 export const RMS_COPY: { en: RmsCopy; zh: RmsCopy } = {
@@ -299,13 +337,16 @@ export const RMS_COPY: { en: RmsCopy; zh: RmsCopy } = {
       stale: "No changes in 90 days",
       window_closed: "The window you were watching has closed",
     },
-    scope: "Showing lines from {loaded} of your {total} theses.",
-    scopeComplete: "Showing lines from all {total} of your theses.",
+    scope: "Showing lines from {loaded} of your {total} active theses.",
+    scopeSingular: "Showing lines from {loaded} of your 1 active thesis.",
+    scopeComplete: "Showing lines from all {total} active theses.",
+    scopeCompleteSingular: "Showing lines from all 1 active thesis.",
     showMore: "Show 10 more",
     // Not "Your thesis store did not answer..." — the strong heading right above this
     // paragraph already says exactly that; repeating it read as a stutter (sibling
     // repair on this branch).
     unavailableLens: "This view has nothing to show right now. Nothing has been changed.",
+    hydrationFault: "The next 10 could not be loaded. Try again.",
     "condition.window_closed": "The window you were watching has closed",
     "condition.open": "The window you were watching is still open.",
     "condition.unavailable": "Condition checks are not connected yet.",
@@ -314,6 +355,7 @@ export const RMS_COPY: { en: RmsCopy; zh: RmsCopy } = {
     filteredBySubject: "Only what you have written about {subject}.",
     clearFilter: "Show everything",
     filteredEmpty: "Nothing written about {subject} right now. Clear the filter to see every thesis.",
+    filteredMarker: "filtered",
   },
   zh: {
     lensRailLabel: "研究视角",
@@ -350,10 +392,13 @@ export const RMS_COPY: { en: RmsCopy; zh: RmsCopy } = {
       stale: "90 天没有改动",
       window_closed: "你关注的观察窗口已结束",
     },
-    scope: "正在显示 {total} 条论点中 {loaded} 条的内容。",
-    scopeComplete: "正在显示全部 {total} 条论点的内容。",
+    scope: "正在显示 {total} 条活跃论点中 {loaded} 条的内容。",
+    scopeSingular: "正在显示 1 条活跃论点中 {loaded} 条的内容。",
+    scopeComplete: "正在显示全部 {total} 条活跃论点的内容。",
+    scopeCompleteSingular: "正在显示这 1 条活跃论点的全部内容。",
     showMore: "再载入 10 条",
     unavailableLens: "此视角暂时没有内容可显示。没有任何内容被更改。",
+    hydrationFault: "接下来的 10 条未能载入。请重试。",
     "condition.window_closed": "你关注的观察窗口已结束",
     "condition.open": "你关注的观察窗口仍然开着。",
     "condition.unavailable": "条件检查尚未接入",
@@ -362,5 +407,6 @@ export const RMS_COPY: { en: RmsCopy; zh: RmsCopy } = {
     filteredBySubject: "仅显示关于 {subject} 的内容。",
     clearFilter: "显示全部",
     filteredEmpty: "目前没有关于 {subject} 的论点。清除筛选可查看全部论点。",
+    filteredMarker: "已筛选",
   },
 };

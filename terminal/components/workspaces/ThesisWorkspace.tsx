@@ -28,6 +28,7 @@ import {
   noteRows,
   selectHydrationIds,
   hydrationScope,
+  formatScopeSentence,
   conditionLine,
   readConditionStates,
 } from "@/lib/rmsViews";
@@ -440,7 +441,41 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   const autoHydrationAttempted = useRef(false);
   useEffect(() => {
     autoHydrationAttempted.current = false;
+    // Round-2 review r3 minor 5: a prior owner's stale fault must not survive into a
+    // new owner's hydration — otherwise switching `ownerKey` within one mount could
+    // render the fault notice before that owner's own first batch has even run.
+    setHydrationUnavailable(false);
   }, [ownerKey]);
+  // Round-2 review r3 minor 1/2: the rail's ARIA orientation must track the same
+  // 600px breakpoint the CSS switches the tablist to a horizontal scroller at — read
+  // via `matchMedia` state, not recomputed ad hoc only inside the keydown handler.
+  const [narrowRail, setNarrowRail] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(max-width: 600px)");
+    const update = () => setNarrowRail(mq.matches);
+    update();
+    if (mq.addEventListener) mq.addEventListener("change", update);
+    else mq.addListener(update);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener("change", update);
+      else mq.removeListener(update);
+    };
+  }, []);
+  // Round-2 review r3 minor 6: `reviewRows` reads a 90-day staleness window off `now`
+  // — frozen at the last time `theses`/`conditions` changed, a thesis crossed into
+  // "stale" only when something ELSE happened to reload the list, sometimes days
+  // late. Recompute on a slow interval and whenever the tab regains focus.
+  const [reviewNow, setReviewNow] = useState(() => new Date());
+  useEffect(() => {
+    const tick = () => setReviewNow(new Date());
+    const id = window.setInterval(tick, 5 * 60 * 1000);
+    window.addEventListener("focus", tick);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", tick);
+    };
+  }, []);
   const pending = pendingQueue[0] ?? null;
   // Computed early (round-2 review minor) so the lens rail's keyboard handler below can
   // read it: a locked carrier already disables every tab button, but the keydown
@@ -524,6 +559,9 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
     setView(id);
     setSubjectFilterKey(null);
     setSubjectFilterLabel(null);
+    // Round-2 review r3 minor 5: a fault on the PREVIOUS lens must not bleed into the
+    // next one — the new lens gets its own fresh read of the hydration state.
+    setHydrationUnavailable(false);
     try {
       window.localStorage.setItem(`mm.thesis.lens.v1:${ownerKey}`, id);
     } catch {
@@ -551,10 +589,9 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
     if (carrierLocked) return;
     const idx = RMS_VIEWS.findIndex((v) => v.id === view);
     if (idx < 0) return;
-    const isNarrow = typeof window !== "undefined" && window.matchMedia("(max-width: 600px)").matches;
     let nextIdx = idx;
-    if (event.key === "ArrowDown" || (isNarrow && event.key === "ArrowRight")) nextIdx = (idx + 1) % RMS_VIEWS.length;
-    else if (event.key === "ArrowUp" || (isNarrow && event.key === "ArrowLeft")) nextIdx = (idx - 1 + RMS_VIEWS.length) % RMS_VIEWS.length;
+    if (event.key === "ArrowDown" || (narrowRail && event.key === "ArrowRight")) nextIdx = (idx + 1) % RMS_VIEWS.length;
+    else if (event.key === "ArrowUp" || (narrowRail && event.key === "ArrowLeft")) nextIdx = (idx - 1 + RMS_VIEWS.length) % RMS_VIEWS.length;
     else if (event.key === "Home") nextIdx = 0;
     else if (event.key === "End") nextIdx = RMS_VIEWS.length - 1;
     else return;
@@ -562,7 +599,7 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
     const nextId = RMS_VIEWS[nextIdx].id;
     selectView(nextId);
     requestAnimationFrame(() => lensRefs.current[nextId]?.focus());
-  }, [carrierLocked, selectView, view]);
+  }, [carrierLocked, narrowRail, selectView, view]);
 
   const hydrateBatch = useCallback(async (ids: string[]) => {
     if (ids.length === 0) return;
@@ -658,7 +695,7 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
     setSubjectFilterKey(null);
     setSubjectFilterLabel(null);
   }, []);
-  const reviewViewRows = useMemo(() => reviewRows(theses, new Date(), conditions), [theses, conditions]);
+  const reviewViewRows = useMemo(() => reviewRows(theses, reviewNow, conditions), [theses, conditions, reviewNow]);
   const catalystViewRows = useMemo(() => catalystRows(detailListRows), [detailListRows]);
   const riskViewRows = useMemo(() => riskRows(detailListRows), [detailListRows]);
   const noteViewRows = useMemo(() => noteRows(detailListRows), [detailListRows]);
@@ -682,9 +719,7 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
       default: return 0;
     }
   }, [rms.countUnknown, coverageViewRows, ideaViewRows, thesesViewRows, reviewViewRows, scope.complete, catalystViewRows, riskViewRows, noteViewRows]);
-  const scopeSentence = scope.complete
-    ? rms.scopeComplete.replace("{total}", String(scope.total))
-    : rms.scope.replace("{loaded}", String(scope.loaded)).replace("{total}", String(scope.total));
+  const scopeSentence = formatScopeSentence(scope.loaded, scope.total, scope.complete, rms);
   // Round-2 review minor: memoized (was recomputed on every render via an inline call),
   // and `null` rather than a fabricated `{source:"unavailable"}` when there is no
   // `detail` yet — an unsaved NEW thesis is not an object whose condition can be
@@ -1108,6 +1143,10 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
     setMessage(copy.copied);
   }, [copy.copied]);
 
+  // Round-2 review r3 MAJOR-1: rows already hydrated must stay on screen through a
+  // LATER batch's fault — computed once so both the "already have rows" branch and
+  // the inline fault notice below read the exact same list.
+  const contentRows = view === "catalysts" ? catalystViewRows : view === "risks" ? riskViewRows : noteViewRows;
   const lifecycle = detail?.lifecycleState ?? "active";
   const editable = !detail || lifecycle === "active";
   const ambiguous = pendingQueue.length > 0 && !saving;
@@ -1144,20 +1183,29 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
         <div className={styles.workspaceGrid}>
           <aside className={styles.rail} aria-label={copy.list} data-testid="thesis-list-pane">
             <nav className={styles.lensRail} aria-label={rms.lensRailLabel} data-testid="thesis-lens-rail">
-              <ul role="tablist" aria-orientation="vertical" onKeyDown={onLensKeyDown}>
-                {RMS_VIEWS.map((v) => (
-                  <li key={v.id}>
-                    <button type="button" role="tab" id={`rms-lens-${v.id}`} aria-controls="rms-lens-panel"
-                      aria-selected={view === v.id} tabIndex={view === v.id ? 0 : -1}
-                      ref={(el) => { lensRefs.current[v.id] = el; }}
-                      className={styles.lens} data-selected={view === v.id || undefined}
-                      data-grain={v.grain} data-view={v.id} disabled={carrierLocked}
-                      onClick={() => selectView(v.id)}>
-                      <span>{rms.name[v.id]}</span>
-                      <span className={styles.lensCount}>{lensCount(v)}</span>
-                    </button>
-                  </li>
-                ))}
+              <ul role="tablist" aria-orientation={narrowRail ? "horizontal" : "vertical"} onKeyDown={onLensKeyDown}>
+                {RMS_VIEWS.map((v) => {
+                  // Round-2 review r3 minor 7: the Theses lens badge already shows the
+                  // FILTERED count (thesesViewRows is pre-filtered) — it needs a marker
+                  // so it never reads as the total while a subject filter is active.
+                  const filteredBadge = v.id === "theses" && !!subjectFilterKey;
+                  return (
+                    <li key={v.id} role="presentation">
+                      <button type="button" role="tab" id={`rms-lens-${v.id}`} aria-controls="rms-lens-panel"
+                        aria-selected={view === v.id} tabIndex={view === v.id ? 0 : -1}
+                        ref={(el) => { lensRefs.current[v.id] = el; }}
+                        className={styles.lens} data-selected={view === v.id || undefined}
+                        data-grain={v.grain} data-view={v.id} disabled={carrierLocked}
+                        onClick={() => selectView(v.id)}>
+                        <span>{rms.name[v.id]}</span>
+                        <span className={styles.lensCount} data-filtered={filteredBadge || undefined}>
+                          {lensCount(v)}
+                          {filteredBadge && <span className={styles.srOnly}> ({rms.filteredMarker})</span>}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             </nav>
 
@@ -1190,7 +1238,12 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
                   <button onClick={() => { setListState("loading"); void loadList(); }}>{copy.retry}</button>
                 </div>
               )}
-              {listState === "ready" && activeViewDef.requiresContent && hydrationUnavailable && (
+              {/* Round-2 review r3 MAJOR-1: a fault gates only the PENDING increment.
+                  This terminal "nothing to show" panel may render only when there is
+                  truly nothing hydrated yet — the moment any row exists it stays
+                  mounted below instead, and the fault becomes the smaller inline
+                  notice under the list (further down). */}
+              {listState === "ready" && activeViewDef.requiresContent && hydrationUnavailable && contentRows.length === 0 && (
                 <div className={styles.railState} role="status" data-testid="rms-hydration-unavailable">
                   <strong>{copy.unavailable}</strong><p>{rms.unavailableLens}</p>
                   {/* Round-2 review MAJOR: a faulted or malformed hydration batch used to
@@ -1239,12 +1292,19 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
                     ))}
                   </div>
               )}
-              {listState === "ready" && !hydrationUnavailable && (view === "catalysts" || view === "risks" || view === "notes") && (
-                (view === "catalysts" ? catalystViewRows : view === "risks" ? riskViewRows : noteViewRows).length === 0
-                  ? (hydrating && detailListRows.length === 0
-                    ? <p className={styles.muted} role="status">{copy.loading}</p>
-                    : <div className={styles.emptyLens} data-testid="rms-empty"><p>{rms.empty[view]}</p></div>)
-                  : (view === "catalysts" ? catalystViewRows : view === "risks" ? riskViewRows : noteViewRows).map((row) => (
+              {/* Round-2 review r3 MAJOR-1: rows already hydrated stay mounted through a
+                  LATER batch's fault — this branch no longer gates on `!hydrationUnavailable`
+                  (a fault when `contentRows` is empty still falls through to the
+                  `rms-hydration-unavailable` panel above, which is the ONLY place that
+                  panel may render, per the guard on it). */}
+              {listState === "ready" && (view === "catalysts" || view === "risks" || view === "notes") && (
+                contentRows.length === 0
+                  ? (hydrationUnavailable
+                    ? null
+                    : (hydrating && detailListRows.length === 0
+                      ? <p className={styles.muted} role="status">{copy.loading}</p>
+                      : <div className={styles.emptyLens} data-testid="rms-empty"><p>{rms.empty[view]}</p></div>))
+                  : contentRows.map((row) => (
                     <article key={`${row.thesisId}-${row.index}`} className={styles.lineRow} data-testid="rms-line-row">
                       <p className={styles.lineText}>{row.text}</p>
                       <button type="button" className={styles.lineOwner} disabled={carrierLocked} onClick={() => beginDetailLoad(row.thesisId)}>
@@ -1252,6 +1312,15 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
                       </button>
                     </article>
                   ))
+              )}
+              {/* Round-2 review r3 MAJOR-1: the inline, row-level fault notice — shown
+                  UNDER the still-visible list, never replacing it. Only reachable when
+                  `contentRows.length > 0`; the zero-rows case is the panel above. */}
+              {listState === "ready" && activeViewDef.requiresContent && hydrationUnavailable && contentRows.length > 0 && (
+                <div className={styles.railState} role="status" data-testid="rms-hydration-fault">
+                  <p>{rms.hydrationFault}</p>
+                  <button type="button" onClick={hydrateMore} disabled={hydrating}>{copy.retry}</button>
+                </div>
               )}
               {activeViewDef.requiresContent && !scope.complete && !hydrationUnavailable && (
                 <button type="button" className={styles.showMore} onClick={hydrateMore} disabled={hydrating}>{rms.showMore}</button>
