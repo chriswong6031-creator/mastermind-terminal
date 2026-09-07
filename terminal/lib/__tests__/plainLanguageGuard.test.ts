@@ -290,6 +290,64 @@ describe("check_plain_language.mjs", () => {
     rmSync(root2, { recursive: true, force: true });
   });
 
+  it("11. AST visibility: `=>`, `<=`, and an enum comparison in code never fire raw_state_enum", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/components/CodeOnly.tsx";
+    // Every line below was constructed to defeat the OLD `>[^<>]*<` substring
+    // heuristic (an arrow function and a `<=` comparison, each sharing a
+    // line with real angle-bracket JSX) and the old line-level `visible`
+    // gate (an UPPER_SNAKE token used as a style/prop value and as a bare
+    // string comparison, neither of which is a JsxText/string-JSX-child/
+    // title-aria-placeholder-alt attribute value). None of these are a
+    // genuine user-visible position, so R1 must never fire on any of them.
+    const content = [
+      "export function CodeOnly({ rows, row }: any) {",
+      "  const filtered = rows.filter((r: any) => r.value <= THRESHOLD_MAX);",
+      "  if (row.status === \"BOTTOM_WATCH\") { /* internal branch, not rendered */ }",
+      "  return <div style={{ color: LEGEND_ITEM }}>{filtered.length}</div>;",
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [2, 3, 4]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const enumFindings = parsed.findings.filter((f: any) => f.rule === "raw_state_enum");
+    expect(enumFindings).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("12. AST visibility: a true positive in JsxText still blocks raw_state_enum", () => {
+    const root = makeFixtureRoot();
+    const relPath = "terminal/components/TruePositive.tsx";
+    const content = [
+      "export function TruePositive() {",
+      "  return (",
+      "    <div>",
+      "      <span>BOTTOM_WATCH</span>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(root, relPath), content);
+    const diff = unifiedDiffFor(relPath, content, [4]);
+    const diffFile = join(root, "diff.patch");
+    writeFileSync(diffFile, diff);
+
+    const res = run(["--mode", "enforce-added", "--root", root, "--diff-file", diffFile, "--json"]);
+    expect(res.status).toBe(1);
+    const parsed = JSON.parse(res.stdout.trim().split("\n").pop()!);
+    const hit = parsed.findings.find(
+      (f: any) => f.rule === "raw_state_enum" && f.token === "BOTTOM_WATCH" && f.blocking
+    );
+    expect(hit).toBeTruthy();
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("9. --json contract shape is stable", () => {
     const root = makeFixtureRoot();
     const relPath = "terminal/components/Good.tsx";

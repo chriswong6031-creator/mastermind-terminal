@@ -54,6 +54,54 @@ Note also that `hasPlainHelperOnLine` matches whole call names
 `"t("` would also match `.sort(`, `.at(`, `useEffect(`, `format(`, defeating
 the "already routed" check on any line that happens to contain one of those.
 
+### 3a. `isUserVisiblePosition` is AST-based, not a substring heuristic
+
+Per the binding review ruling on this PR's round 1, "user-visible position"
+is decided by parsing every scanned `.tsx` file with the repo's existing
+`typescript` devDependency (`ts.createSourceFile`, zero new npm dependency)
+and walking the AST. A position counts as visible **only** when it is one of:
+
+- a `JsxText` node (non-whitespace) — plain text between JSX tags;
+- a string literal that is a direct JSX child via `{"..."}` (its parent is a
+  `JsxExpression` whose own parent is a `JsxElement`/`JsxFragment` — never an
+  argument buried inside a call, so `t("marketCalm")`'s `"marketCalm"` key is
+  correctly excluded: it is a lookup key, not the rendered text);
+- a string literal that is the value of a `title` / `aria-label` /
+  `placeholder` / `alt` JSX attribute, in either form (`alt="..."` or
+  `alt={"..."}`);
+- any string literal value inside a bilingual copy-dictionary file — a path
+  matching `lib/**/*copy*.ts(x)`, or a file exporting a top-level
+  declaration whose name ends in `_COPY`.
+
+Everything else the AST walk touches — a bare identifier used as a
+style/prop value (`style={{ color: LEGEND_ITEM }}`), an arrow function or a
+`<=`/`>=` comparison in ordinary code, a string literal passed as a
+translation *key* rather than rendered as text — produces no span and can
+never be treated as visible. **R1 (`raw_state_enum`) is token-precise**: it
+scans only the text *inside* these AST-derived spans, never a whole raw
+line, so an UPPER_SNAKE identifier used as code on the same physical line as
+real JSX text can no longer be mistaken for the visible text itself. This
+replaced the prior `>[^<>]*<` substring check, which matched `=>`/`<=`
+operators and any bare identifier sharing a line with markup — measured on
+the real terminal tree (`node terminal/scripts/check_plain_language.mjs
+--root . --diff-file empty.patch --json`, repo root as `--root`): the prior
+heuristic produced 435 `raw_state_enum` findings tree-wide, almost all of
+them style/prop identifiers (`LEGEND_ITEM`, `TH_STYLE`, `PAD_L`, `CALL_COLOR`,
+…), never a declared state enum in a genuinely visible position; the
+AST-based rewrite produces **0** `raw_state_enum` findings on the same tree
+(no genuine visible-position state-enum usage exists there today — see
+`terminal/lib/__tests__/plainLanguageGuard.test.ts` tests 11/12 for the
+regression fixtures: false positives on `=>`/`<=`/an enum comparison in
+code no longer fire, and a true JsxText positive still does).
+
+R2 (`internal_study_slug`), R4 (`untranslated_stat_token`), and R5b
+(`missing_zh` on a bare English literal) still reason at line granularity —
+a line "is visible" iff at least one AST-derived span overlaps it
+(`lineIsVisible`) — but that gate itself is now AST-driven rather than
+regex-driven, so those rules also no longer flip "visible" on for a line
+just because it contains an unrelated `=>`/`<=`. R3
+(`raw_slug_interpolation`) never used the visibility gate and is unchanged.
+
 ## 4. CLI, exit codes, JSON contract
 
 ```
@@ -102,9 +150,18 @@ regex, so it can only pass by the rule actually firing.
 
 ## 8. Known gaps (printed, not hidden)
 
-- **Regex detection, not AST.** Multi-line JSX text and line-spanning template
-  literals are false negatives. An AST pass would need a TS parser dependency
-  this packet may not add (`terminal/package.json` is out of scope).
+- **Visibility detection is AST-based (§3a); the token/slug matching layered
+  on top of it is still regex.** `isUserVisiblePosition` — and R1's
+  token-precise span scan — use the real TS AST (`ts.createSourceFile`), so
+  the `=>`/`<=`/bare-identifier false-positive class measured in review
+  round 1 is fixed. What is still regex: R2/R4/R5b's own token/slug matching
+  runs `RegExp.test` over the raw line text once that line is judged
+  visible, and a multi-line `JsxText` node or a line-spanning template
+  literal is a false negative for the line-based rules (R1 itself, being
+  span-based rather than line-based, does not share this specific gap for
+  its own rule, but a JsxText span that happens to straddle multiple lines
+  is still walked as one node whose interior offsets are correctly mapped
+  back to the right line via `sourceFile.getLineAndCharacterOfPosition`).
 - **False positives on ordinary code remain possible.** `slugFields` includes
   generic names (`type`, `status`, `code`, `kind`) that also occur as
   legitimate non-slug fields (e.g. React's `.type`, an instrument's quote

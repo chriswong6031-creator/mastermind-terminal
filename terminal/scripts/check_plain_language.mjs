@@ -11,7 +11,9 @@
 // /Users/chriswong/Documents/Cluade/macro-main/scripts/check_design_system.py.
 // Packet B-PL-5 (lane marketontology-b4-plain-language-guard).
 //
-// Node 20 ESM, zero npm dependencies.
+// Node 20 ESM. Uses the repo's existing `typescript` devDependency
+// (terminal/package.json) for AST-based user-visible-position detection —
+// see isUserVisiblePosition below; no other npm dependency is added.
 //
 // Scanning model (full census, forward-only blocking — same shape as the
 // macro precedent): every file under SCAN_GLOBS/EXTRA_FILES is scanned on
@@ -25,6 +27,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ANNOTATION_CAP = 10;
@@ -66,6 +69,16 @@ export const PLAIN_VOCABULARY = {
 const SCAN_GLOBS = ["terminal/app", "terminal/components"];
 const EXTRA_FILES = ["terminal/lib/i18n.tsx"];
 const EXCLUDE_RE = /(__tests__|\.test\.|\/e2e\/|\.d\.ts$|terminal\/scripts\/)/;
+
+// Attribute names whose string-literal value is a genuine user-visible
+// position (title text / accessible name / placeholder copy / alt text).
+// Deliberately NOT the old regex's broader list (label/sublabel/caption/
+// heading/tooltip/emptyText/children/`>...<`) — the ruling scopes this to
+// exactly these four attributes plus JsxText/JSX-child string literals plus
+// bilingual copy dictionaries; a bare style/data attribute holding an
+// UPPER_SNAKE identifier (e.g. `style={LEGEND_ITEM}`) is source code, not
+// visible text, and must never count.
+const VISIBLE_ATTR_NAMES = new Set(["title", "aria-label", "placeholder", "alt"]);
 
 function findRepoRoot() {
   // repo root resolved from import.meta.url: terminal/scripts/<this file> -> repo root is two up.
@@ -163,11 +176,96 @@ function parseAddedLineNumbers(diffText) {
   return addedLines;
 }
 
-function isUserVisiblePosition(line) {
-  if (/>[^<>]*<\/?[a-zA-Z]/.test(line) || />[^<>]+</.test(line)) return true;
-  if (/\b(label|title|sublabel|placeholder|aria-label|caption|heading|tooltip|emptyText|alt|children)\s*[:=]/.test(line)) return true;
-  if (/\bLEX\s*[.\[]/.test(line)) return true;
-  return false;
+// A file counts as a "bilingual copy dictionary" (whose string literal
+// VALUES are all treated as user-visible, per the ruling) when either its
+// path matches lib/**/*copy*.ts(x) or it has a top-level exported
+// declaration whose name ends in `_COPY`.
+function isCopyDictFile(relPath, sourceFile) {
+  const norm = relPath.replace(/\\/g, "/");
+  if (/(^|\/)lib\/.*copy.*\.tsx?$/i.test(norm)) return true;
+  let found = false;
+  const visit = (node) => {
+    if (found) return;
+    if (ts.isVariableStatement(node)) {
+      const isExported = (node.modifiers || []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+      if (isExported) {
+        for (const decl of node.declarationList.declarations) {
+          if (ts.isIdentifier(decl.name) && /_COPY$/.test(decl.name.text)) {
+            found = true;
+            return;
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
+}
+
+// isUserVisiblePosition (AST-based): the set of AST node kinds treated as a
+// genuine user-visible position, per the binding ruling on Terminal #530 —
+//   - JsxText nodes (non-whitespace)
+//   - string literals that are direct JSX children (`{"..."}` as a child of
+//     a JsxElement/JsxFragment, not as an argument to a call inside one)
+//   - string literals that are `{...}` expression VALUES of a
+//     title/aria-label/placeholder/alt JSX attribute (or the bare string
+//     literal form, `alt="..."`)
+//   - string literal values inside a bilingual copy dictionary file
+//     (isCopyDictFile above)
+// Everything else — a bare identifier used as a style/prop value
+// (`style={LEGEND_ITEM}`), a string literal passed as an i18n KEY
+// (`t("marketCalm")` — "marketCalm" is a lookup key, not display text), a
+// comparison or arrow function in ordinary code (`=>`, `<=`) — is walked by
+// the AST but never produces a span, so it can never be mistaken for a
+// visible position. This replaces the old `>[^<>]*<` substring heuristic,
+// which matched `=>`/`<=` operators and any bare identifier sharing a line
+// with real JSX markup.
+function computeVisibleSpans(sourceFile, relPath) {
+  const spans = [];
+  const copyDict = isCopyDictFile(relPath, sourceFile);
+  const isStringy = (node) => ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
+  const addSpan = (node) => spans.push({ start: node.getStart(sourceFile), end: node.getEnd() });
+
+  const visit = (node) => {
+    if (ts.isJsxText(node)) {
+      if (node.text.trim().length > 0) addSpan(node);
+    } else if (isStringy(node)) {
+      const parent = node.parent;
+      if (parent && ts.isJsxExpression(parent)) {
+        const grandparent = parent.parent;
+        if (grandparent && (ts.isJsxElement(grandparent) || ts.isJsxFragment(grandparent))) {
+          addSpan(node); // `{"..."}` as a direct JSX child
+        } else if (grandparent && ts.isJsxAttribute(grandparent)) {
+          const attrName = grandparent.name.getText(sourceFile).toLowerCase();
+          if (VISIBLE_ATTR_NAMES.has(attrName)) addSpan(node); // `attr={"..."}`
+        }
+      } else if (parent && ts.isJsxAttribute(parent)) {
+        const attrName = parent.name.getText(sourceFile).toLowerCase();
+        if (VISIBLE_ATTR_NAMES.has(attrName)) addSpan(node); // `attr="..."`
+      } else if (copyDict) {
+        addSpan(node); // any string literal value inside a *_COPY dictionary file
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return spans;
+}
+
+// Line-level visibility check for the rules that still reason per raw line
+// (R2/R4/R5b): a line "is visible" iff at least one AST-derived visible span
+// overlaps its character range. Coarser than R1's token-precise span check
+// (see scanLines below) but still strictly AST-driven — no more `>...<`
+// substring matching, so `=>`/`<=` and bare identifiers on an otherwise-JSX
+// line no longer flip this true on their own.
+function lineIsVisible(spans, sourceFile, lineNo) {
+  const lineStarts = sourceFile.getLineStarts();
+  const idx = lineNo - 1;
+  if (idx < 0 || idx >= lineStarts.length) return false;
+  const start = lineStarts[idx];
+  const end = idx + 1 < lineStarts.length ? lineStarts[idx + 1] : sourceFile.end;
+  return spans.some((s) => s.start < end && s.end > start);
 }
 
 function escapeRegExp(s) {
@@ -213,26 +311,48 @@ function scanLines(relPath, text, addedLines, overlayTerms) {
   const added = addedLines.get(relPath) || new Set();
   const findings = [];
   const isI18n = relPath.endsWith("terminal/lib/i18n.tsx");
+
+  // ts.createSourceFile is lenient (produces error nodes rather than
+  // throwing) on malformed input, so a scanned .tsx file always yields a
+  // sourceFile; spans is simply empty if nothing qualifies as visible.
+  const sourceFile = ts.createSourceFile(relPath, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const spans = computeVisibleSpans(sourceFile, relPath);
+
   let visibleAddedCount = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const lineNo = i + 1;
+    if (added.has(lineNo) && lineIsVisible(spans, sourceFile, lineNo)) visibleAddedCount += 1;
+  }
 
-  lines.forEach((rawLine, idx) => {
-    const lineNo = idx + 1;
-    const line = rawLine;
-    const visible = isUserVisiblePosition(line);
-    const waiverReason = parseWaiver(line);
-    if (visible && added.has(lineNo)) visibleAddedCount += 1;
-
-    // R1: raw_state_enum
-    const enumRe = /\b([A-Z][A-Z0-9]+(?:_[A-Z0-9]+)+)\b/g;
+  // R1: raw_state_enum — token-precise. Scans ONLY the text inside genuinely
+  // visible AST spans (never a whole line), so an UPPER_SNAKE identifier
+  // used as a style/prop value or inside a comparison/arrow expression on
+  // the same line as real JSX text can never be mistaken for the visible
+  // text itself (the exact false-positive class the review measured on
+  // VolSkewPanel.tsx / HeatmapTable.tsx / OptionsHubView.tsx).
+  const enumRe = /\b([A-Z][A-Z0-9]+(?:_[A-Z0-9]+)+)\b/g;
+  for (const span of spans) {
+    const spanText = text.slice(span.start, span.end);
+    enumRe.lastIndex = 0;
     let m;
-    while ((m = enumRe.exec(line))) {
+    while ((m = enumRe.exec(spanText))) {
       const token = m[1];
       if (PLAIN_VOCABULARY.allowTokens.includes(token)) continue;
-      if (!visible) continue;
+      const absOffset = span.start + m.index;
+      const lineNo = sourceFile.getLineAndCharacterOfPosition(absOffset).line + 1;
+      const rawLine = lines[lineNo - 1] ?? "";
+      const waiverReason = parseWaiver(rawLine);
       findings.push(mkFinding(relPath, lineNo, "raw_state_enum", token,
         "raw state enum in a user-visible position", suggestionForEnum(token),
         added.has(lineNo), waiverReason));
     }
+  }
+
+  lines.forEach((rawLine, idx) => {
+    const lineNo = idx + 1;
+    const line = rawLine;
+    const visible = lineIsVisible(spans, sourceFile, lineNo);
+    const waiverReason = parseWaiver(line);
 
     // R2: internal_study_slug
     for (const slug of PLAIN_VOCABULARY.studySlugs) {
@@ -368,7 +488,7 @@ function selfCheckFixtures() {
 // production scan uses (not a re-typed regex proxy), with that one line
 // marked as added — so a rule only reports "detected" if the guard's actual
 // rule logic, on its actual code path, flags the fixture as blocking.
-function runSelfCheck(root) {
+function runSelfCheck() {
   const fixtures = selfCheckFixtures();
   const results = {};
   for (const [rule, fx] of Object.entries(fixtures)) {
@@ -399,7 +519,7 @@ function main() {
   }
 
   if (opts.selfCheck) {
-    const results = runSelfCheck(root);
+    const results = runSelfCheck();
     for (const [rule, ok] of Object.entries(results)) {
       process.stdout.write(`${rule} ${ok ? "detected" : "NOT detected"}\n`);
     }
