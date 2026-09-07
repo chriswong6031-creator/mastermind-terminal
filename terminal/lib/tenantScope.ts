@@ -100,6 +100,16 @@ function isNonEmptyTrimmedString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+// A revocation timestamp is meaningful only as a genuine, non-empty
+// string. `null`/`undefined` mean "never revoked" (active). Any other
+// present value — including the empty/whitespace string a malformed or
+// truncated write can leave behind — is treated as REVOKED, never as
+// active: this module fails closed, so an ambiguous revocation marker
+// denies rather than silently granting access. See doc §3 ruling 6.
+function isRevoked(value: unknown): boolean {
+  return value !== null && value !== undefined;
+}
+
 function isAbsentVisibility(value: unknown): boolean {
   return value === null || value === undefined || (typeof value === "string" && value.trim().length === 0);
 }
@@ -148,7 +158,7 @@ export function decideTenantScope(
 
   // Row 6
   const activeGrant = safeGrants.find(
-    (g) => g.resourceId === resource.id && g.granteeUserId === userId && !g.revokedAt,
+    (g) => g.resourceId === resource.id && g.granteeUserId === userId && !isRevoked(g.revokedAt),
   );
   if (activeGrant) {
     return { allow: true, reason: "explicit_grant", via: "grant" };
@@ -161,7 +171,7 @@ export function decideTenantScope(
   // §3 ruling 4.
   if (resource.visibility === "team" && isNonEmptyTrimmedString(resource.teamId)) {
     const activeMembership = ownMemberships.find(
-      (m) => m.teamId === resource.teamId && !m.revokedAt,
+      (m) => m.teamId === resource.teamId && !isRevoked(m.revokedAt),
     );
     if (activeMembership) {
       return { allow: true, reason: "team_member_visible", via: "membership" };
@@ -170,7 +180,7 @@ export function decideTenantScope(
 
   // Row 8
   const revokedGrant = safeGrants.find(
-    (g) => g.resourceId === resource.id && g.granteeUserId === userId && !!g.revokedAt,
+    (g) => g.resourceId === resource.id && g.granteeUserId === userId && isRevoked(g.revokedAt),
   );
   if (revokedGrant) {
     return { allow: false, reason: "grant_revoked" };
@@ -188,7 +198,7 @@ export function decideTenantScope(
 
   // Row 11
   const revokedMembership = ownMemberships.find(
-    (m) => m.teamId === resource.teamId && !!m.revokedAt,
+    (m) => m.teamId === resource.teamId && isRevoked(m.revokedAt),
   );
   if (revokedMembership) {
     return { allow: false, reason: "membership_revoked" };
@@ -298,6 +308,15 @@ export const TENANT_SCOPE_CONFORMANCE: readonly ConformanceCase[] = [
     expect: { allow: false, reason: "grant_revoked" },
   },
   {
+    id: "empty-string-revoked-grant-denied",
+    scenario: "A share whose revocation timestamp was left as an empty string is treated as revoked, not active",
+    identity: { userId: "u1" },
+    memberships: [],
+    resource: { id: "r7b", ownerId: "u2", teamId: null, visibility: "private" },
+    grants: [{ resourceId: "r7b", granteeUserId: "u1", revokedAt: "" }],
+    expect: { allow: false, reason: "grant_revoked" },
+  },
+  {
     id: "private-row-stranger-denied",
     scenario: "A signed-in stranger asks for someone else's private row",
     identity: { userId: "u1" },
@@ -321,6 +340,15 @@ export const TENANT_SCOPE_CONFORMANCE: readonly ConformanceCase[] = [
     identity: { userId: "u1" },
     memberships: [{ userId: "u1", teamId: "team-a", role: "member", revokedAt: "2026-01-01T00:00:00Z" }],
     resource: { id: "r11", ownerId: "u2", teamId: "team-a", visibility: "team" },
+    grants: [],
+    expect: { allow: false, reason: "membership_revoked" },
+  },
+  {
+    id: "empty-string-revoked-membership-denied",
+    scenario: "A membership whose revocation timestamp was left as an empty string is treated as revoked, not active",
+    identity: { userId: "u1" },
+    memberships: [{ userId: "u1", teamId: "team-a", role: "member", revokedAt: "" }],
+    resource: { id: "r11b", ownerId: "u2", teamId: "team-a", visibility: "team" },
     grants: [],
     expect: { allow: false, reason: "membership_revoked" },
   },

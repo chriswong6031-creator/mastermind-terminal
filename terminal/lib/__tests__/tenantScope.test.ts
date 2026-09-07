@@ -111,6 +111,23 @@ describe("tenantScope decision function", () => {
     expect(decision).toEqual({ allow: true, reason: "team_member_visible", via: "membership" });
   });
 
+  it("BLOCKER: an empty-string revokedAt on a grant is treated as revoked, not active", () => {
+    // Bare truthiness (`!g.revokedAt`) reads "" as falsy, i.e. NOT revoked —
+    // fail-OPEN on a malformed/truncated write. This module fails closed:
+    // any present revokedAt value, empty string included, denies.
+    const resource: ScopedResource = { id: "res-7", ownerId: "u2", teamId: null, visibility: "private" };
+    const grants: Grant[] = [{ resourceId: "res-7", granteeUserId: "u1", revokedAt: "" }];
+    const decision = decideTenantScope(identity, [], resource, grants);
+    expect(decision).toEqual({ allow: false, reason: "grant_revoked" });
+  });
+
+  it("BLOCKER: an empty-string revokedAt on a membership is treated as revoked, not active", () => {
+    const resource: ScopedResource = { id: "res-8", ownerId: "u2", teamId: "team-a", visibility: "team" };
+    const memberships: Membership[] = [{ userId: "u1", teamId: "team-a", role: "member", revokedAt: "" }];
+    const decision = decideTenantScope(identity, memberships, resource, []);
+    expect(decision).toEqual({ allow: false, reason: "membership_revoked" });
+  });
+
   it("carries `via` on every allow and omits it on every deny", () => {
     const allow = decideTenantScope(identity, [], owned, []);
     expect("via" in allow).toBe(allow.allow);

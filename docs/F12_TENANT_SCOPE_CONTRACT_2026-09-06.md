@@ -78,12 +78,12 @@ result.
 | 3 | `resource.visibility` is null/undefined/empty-after-trim | DENY | `visibility_absent` |
 | 4 | `resource.visibility` is not in `TENANT_SCOPE_VISIBILITIES` | DENY | `visibility_unrecognized` |
 | 5 | `resource.ownerId === identity.userId` | ALLOW (`via: "owner"`) | `owner_match` |
-| 6 | a grant exists with `resourceId === resource.id && granteeUserId === identity.userId && !revokedAt` | ALLOW (`via: "grant"`) | `explicit_grant` |
-| 7 | `resource.visibility === "team"` and an OWN membership (`userId === identity.userId`) exists with `teamId === resource.teamId && !revokedAt` | ALLOW (`via: "membership"`) | `team_member_visible` |
-| 8 | a grant exists for the same pair **with** a non-null `revokedAt` | DENY | `grant_revoked` |
+| 6 | a grant exists with `resourceId === resource.id && granteeUserId === identity.userId` and `revokedAt` is null/undefined (not revoked) | ALLOW (`via: "grant"`) | `explicit_grant` |
+| 7 | `resource.visibility === "team"` and an OWN membership (`userId === identity.userId`) exists with `teamId === resource.teamId` and `revokedAt` null/undefined (not revoked) | ALLOW (`via: "membership"`) | `team_member_visible` |
+| 8 | a grant exists for the same pair **with** `revokedAt` present — any value other than null/undefined, an empty string included | DENY | `grant_revoked` |
 | 9 | `resource.visibility === "private"` | DENY | `private_not_owner` |
 | 10 | `resource.teamId` is not a non-empty trimmed string | DENY | `resource_has_no_team` |
-| 11 | an OWN membership exists for that `teamId` **with** a non-null `revokedAt` | DENY | `membership_revoked` |
+| 11 | an OWN membership exists for that `teamId` **with** `revokedAt` present — any value other than null/undefined, an empty string included | DENY | `membership_revoked` |
 | 12 | any OWN membership exists (but none match this team) | DENY | `wrong_team` |
 | 13 | otherwise | DENY | `no_membership` |
 
@@ -126,6 +126,18 @@ ruling 4).
    any more — pinned by `tenantScope.test.ts`'s "a membership row belonging to
    a different user never grants access".
 
+6. **A revocation marker is "present" the moment it is not null/undefined —
+   an empty string counts.** `isRevoked()` treats any value other than
+   `null`/`undefined` as revoked, so a malformed or truncated write that
+   leaves `revokedAt: ""` denies (rows 8, 11) rather than being read as an
+   active grant/membership. *Rejected alternative:* bare truthiness
+   (`!revokedAt`) — it reads `""` as falsy, i.e. NOT revoked, which is a
+   fail-OPEN reading of an ambiguous value in a module whose whole contract
+   is fail-closed; pinned by `tenantScope.test.ts`'s two "an empty-string
+   revokedAt ... is treated as revoked, not active" cases and by the
+   `empty-string-revoked-grant-denied` / `empty-string-revoked-membership-denied`
+   conformance rows.
+
 ## 4. Conformance table
 
 <!-- BEGIN:tenant-scope-conformance (generated from terminal/lib/tenantScope.ts TENANT_SCOPE_CONFORMANCE — do not hand-edit; tenantScopeConformance.test.ts asserts byte identity) -->
@@ -140,12 +152,14 @@ ruling 4).
 | 7 | A team member reads their team's row | `team` | ALLOW | `team_member_visible` |
 | 8 | A member reads the team row after an unrelated one-off grant to it was withdrawn | `team` | ALLOW | `team_member_visible` |
 | 9 | That same person reads it after the share was withdrawn | `private` | DENY | `grant_revoked` |
-| 10 | A signed-in stranger asks for someone else's private row | `private` | DENY | `private_not_owner` |
-| 11 | A row marked team-visible carries no team | `team` | DENY | `resource_has_no_team` |
-| 12 | That member reads it after being removed from the team | `team` | DENY | `membership_revoked` |
-| 13 | A member of another team asks for this team's row | `team` | DENY | `wrong_team` |
-| 14 | A signed-in person who belongs to no team asks for a team row | `team` | DENY | `no_membership` |
-| 15 | A membership row belonging to someone else is mixed into the caller's own list | `team` | DENY | `no_membership` |
+| 10 | A share whose revocation timestamp was left as an empty string is treated as revoked, not active | `private` | DENY | `grant_revoked` |
+| 11 | A signed-in stranger asks for someone else's private row | `private` | DENY | `private_not_owner` |
+| 12 | A row marked team-visible carries no team | `team` | DENY | `resource_has_no_team` |
+| 13 | That member reads it after being removed from the team | `team` | DENY | `membership_revoked` |
+| 14 | A membership whose revocation timestamp was left as an empty string is treated as revoked, not active | `team` | DENY | `membership_revoked` |
+| 15 | A member of another team asks for this team's row | `team` | DENY | `wrong_team` |
+| 16 | A signed-in person who belongs to no team asks for a team row | `team` | DENY | `no_membership` |
+| 17 | A membership row belonging to someone else is mixed into the caller's own list | `team` | DENY | `no_membership` |
 <!-- END:tenant-scope-conformance -->
 
 ## 5. Reason strings are internal — the caller owes plain words
