@@ -114,9 +114,16 @@ async function callerAuthCookieHeader(): Promise<string | null> {
 async function fetchArtifact(ticker: string, cookieHeader: string | null): Promise<ArtifactState> {
   try {
     const url = `${STOCKDATA_BASE}/stockdata/${encodeURIComponent(ticker.toUpperCase())}.json`;
+    // MINOR (review repair): this fetch now carries a per-caller `Cookie` when one exists — the
+    // response is no longer the same value for every caller of the same URL. `next.revalidate`
+    // priced that assumption (a 15-minute Data Cache entry keyed only by request identity);
+    // whether the pinned Next version folds request headers into that key is unverified either
+    // way, and a wrong guess either mints one cache entry per session token (unbounded growth,
+    // near-zero hit rate) or serves one caller's locked/unlocked result to a different caller for
+    // up to 15 minutes. `no-store` removes the ambiguity outright rather than betting on it.
     const res = await fetch(url, {
       signal: AbortSignal.timeout(ARTIFACT_TIMEOUT_MS),
-      next: { revalidate: 900 },
+      cache: "no-store",
       ...(cookieHeader ? { headers: { Cookie: cookieHeader } } : {}),
     } as RequestInit);
     if (res.status === 404) return { kind: "missing" };
@@ -200,13 +207,19 @@ async function buildRiskBounded(
   positions: readonly Position[],
   cookieHeader: string | null,
 ): Promise<PortfolioRisk | null> {
+  // MINOR (review repair): a bare `setTimeout` inside `Promise.race` is never cleared on the
+  // fast path — every GET used to leave a live 4s timer handle behind even when `buildRisk`
+  // resolved in milliseconds. `clearTimeout` in `finally` releases it on every exit.
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       buildRisk(positions, cookieHeader),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), RISK_BUDGET_MS)),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), RISK_BUDGET_MS); }),
     ]);
   } catch {
     return null;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 

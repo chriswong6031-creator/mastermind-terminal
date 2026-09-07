@@ -26,8 +26,26 @@ const QUOTES = { quotes: {
 const shot = (page: Page, name: string, testInfo: TestInfo, lang = "en") =>
   page.screenshot({ path: join(OUT, `${name}-${lang}-${testInfo.project.name}-${MODE}.png`), fullPage: false });
 
-async function prepare(page: Page, testInfo: TestInfo, baseURL: string | undefined, zh = false) {
+// Meta-CEO B ruling (BLOCKER-1) + review MAJOR 3: `route.ts` now forwards the CALLER's own
+// Supabase session cookie to every artifact fetch — an anonymous fan-out 401s in production, so
+// evidence captured without this cookie exercises a path a signed-in user never takes. Same
+// cookie SHAPE the unit test's fixture (`portfolioRouteRisk.test.ts` test 8) and macro's real
+// gate (`sb-<project-ref>-auth-token`) use; `isSignedIn` gates whether a spec's crops are meant
+// to show the covered (signed-in) or locked (signed-out) state.
+const SESSION_COOKIE_NAME = "sb-testref-auth-token";
+const SESSION_COOKIE_VALUE = "base64-eyJhY2Nlc3NfdG9rZW4iOiJmYWtlIn0";
+
+async function setSessionCookie(page: Page, baseURL: string | undefined) {
+  await page.context().addCookies([{
+    name: SESSION_COOKIE_NAME,
+    value: SESSION_COOKIE_VALUE,
+    url: baseURL ?? "http://127.0.0.1:3108",
+  }]);
+}
+
+async function prepare(page: Page, testInfo: TestInfo, baseURL: string | undefined, zh = false, isSignedIn = true) {
   await isolateWatchlistStore(page, testInfo, baseURL);
+  if (isSignedIn) await setSessionCookie(page, baseURL);
   await page.addInitScript((useZh) => {
     localStorage.setItem("mm.lang", useZh ? "zh" : "en");
     document.documentElement.setAttribute("data-lang", useZh ? "zh" : "en");

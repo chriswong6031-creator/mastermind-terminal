@@ -34,7 +34,7 @@ import {
   sinceEntryValue,
   type Position,
 } from "@/lib/portfolio";
-import { riskCopy, type PortfolioRisk, type Lang } from "@/lib/portfolioRisk";
+import { riskCopy, riskAvailability, T_RISK_UNAVAILABLE, type PortfolioRisk, type Lang } from "@/lib/portfolioRisk";
 import s from "@/components/PortfolioRisk.module.css";
 
 type Quote = { last?: number; chg?: number } | null | undefined;
@@ -91,6 +91,12 @@ export default function PortfolioView(
   const { lang } = useLang();
   const [positions, setPositions] = useState<Position[]>(seed);
   const [risk, setRisk] = useState<PortfolioRisk | null>(null);
+  // MAJOR 2 (review repair): distinguishes "the risk GET hasn't resolved yet" (render nothing)
+  // from "it resolved and came back degraded" (render the plain-word notice) — see
+  // `riskAvailability` in lib/portfolioRisk.ts. Set true once, in `reload()`, regardless of
+  // whether that read succeeded or failed; never reset, since a later successful reload simply
+  // replaces `risk` with a real value and `riskAvailability` reads that first.
+  const [riskAttempted, setRiskAttempted] = useState(false);
   // The server could not read the book. `positions` is [] here because there is nothing to show
   // — NOT because the user holds nothing. Everything that would assert a count or a total is
   // suppressed while this is true, and it clears the moment a read lands.
@@ -125,6 +131,10 @@ export default function PortfolioView(
   // answer) leaves `positions` untouched and raises the unreadable flag: it must never overwrite
   // a book the user can see, and it must never be reported as a successful empty read.
   const reload = useCallback(async (): Promise<Position[] | null> => {
+    // finally, not one setter per branch: MAJOR 2 needs `riskAttempted` set on EVERY exit path
+    // (ok, non-ok, malformed payload, thrown) so a degrade (`risk: null` in an otherwise-ok
+    // response) and an outright failed read both let `riskAvailability` render its notice
+    // instead of silently staying "hidden" forever.
     try {
       const response = await fetch("/api/portfolio", { headers: { Accept: "application/json" } });
       if (!response.ok) { setUnread(true); return null; }
@@ -136,6 +146,7 @@ export default function PortfolioView(
       setUnread(false);
       return authoritative;
     } catch { setUnread(true); return null; }
+    finally { setRiskAttempted(true); }
   }, []);
 
   const retryRead = useCallback(async () => {
@@ -385,7 +396,13 @@ export default function PortfolioView(
           </div>
         )}
 
-        {!!open.length && risk && <PortfolioRiskReadout risk={risk} lang={lang as Lang} />}
+        {(() => {
+          switch (riskAvailability(!!open.length, risk, riskAttempted)) {
+            case "ready": return <PortfolioRiskReadout risk={risk!} lang={lang as Lang} />;
+            case "unavailable": return <RiskUnavailableNotice lang={lang as Lang} />;
+            default: return null;
+          }
+        })()}
 
         <div className="panel" data-testid="portfolio-open">
           <div className="ph">
@@ -492,6 +509,17 @@ function Legend({ rows, lang }: { rows: LegendRow[]; lang: Lang }) {
         </div>
       ))}
     </div>
+  );
+}
+
+/** MAJOR 2 (review repair): the plain-word state for a degraded `risk: null` — never a silent
+ *  disappearance of the whole readout. Reuses the readout's own section/notice styling rather
+ *  than a new CSS block for a one-line message. */
+function RiskUnavailableNotice({ lang }: { lang: Lang }) {
+  return (
+    <section className={s.shape} data-testid="portfolio-shape-unavailable">
+      <p className={s.unread}>{lang === "zh" ? T_RISK_UNAVAILABLE.zh : T_RISK_UNAVAILABLE.en}</p>
+    </section>
   );
 }
 

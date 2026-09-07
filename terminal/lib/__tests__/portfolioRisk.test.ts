@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   computePortfolioRisk,
   riskCopy,
+  riskAvailability,
   type ArtifactState,
+  type PortfolioRisk,
   type RiskInputPosition,
 } from "@/lib/portfolioRisk";
 
@@ -167,5 +169,69 @@ describe("computePortfolioRisk", () => {
   it("computable with zero artifacts read (artifact-independence of concentration)", () => {
     const risk = computePortfolioRisk(FIXTURE, {});
     expect(risk.concentration).not.toBeNull();
+  });
+
+  // MAJOR 4 (review repair, EN/ZH parity): a sector arriving under an SPDR-style alias (e.g.
+  // "Technology" instead of the canonical GICS "Information Technology") must still translate
+  // in the ZH card — the exact defect the reviewer found in the committed ZH crops, where the
+  // Industries card rendered the raw EN sector name while the sibling Company-size card (a fixed
+  // enum) was fully translated. RED before the alias bridge: GICS_ZH has no "Technology" key, so
+  // `sectorLabel` fell back to `{ en: sector, zh: sector }` — an untranslated EN leak into zh.
+  it("12: aliased sector ('Technology') still translates in the zh legend, using the same bridge macro-main applies", () => {
+    const aliased: RiskInputPosition[] = [pos("NVDA", 1, 1000)];
+    const risk = computePortfolioRisk(aliased, {
+      NVDA: read({ sector: "Technology", marketCap: 2e12 }, "NVDA"),
+    });
+    const copy = riskCopy(risk);
+    const industries = copy.legend[1];
+    expect(industries.length).toBe(1);
+    expect(industries[0].label.zh).toBe("信息技术");
+    // No raw-English leak into the zh legend row.
+    const cjk = /[一-鿿]/;
+    expect(cjk.test(industries[0].label.zh)).toBe(true);
+  });
+
+  it("13: the OTHER macro-bridged alias ('Communications') also translates", () => {
+    const aliased: RiskInputPosition[] = [pos("T", 1, 1000)];
+    const risk = computePortfolioRisk(aliased, {
+      T: read({ sector: "Communications", marketCap: 1e11 }, "T"),
+    });
+    const copy = riskCopy(risk);
+    expect(copy.legend[1][0].label.zh).toBe("通信服务");
+  });
+
+  it("14: a genuinely unrecognized sector string still falls back to EN in both languages (no blocked render)", () => {
+    const unknown: RiskInputPosition[] = [pos("ZZZ", 1, 1000)];
+    const risk = computePortfolioRisk(unknown, {
+      ZZZ: read({ sector: "Some Made-Up Sector" }, "ZZZ"),
+    });
+    const copy = riskCopy(risk);
+    expect(copy.legend[1][0].label).toEqual({ en: "Some Made-Up Sector", zh: "Some Made-Up Sector" });
+  });
+});
+
+// MAJOR 2 (review repair): `risk: null` must never simply delete the readout. This is the pure
+// decision table `PortfolioView.tsx` renders from — RED before the fix, since the component had
+// no concept of "attempted" at all and rendered nothing whenever `risk` was falsy, regardless of
+// why.
+describe("riskAvailability", () => {
+  const stub = {} as PortfolioRisk;
+
+  it("no open positions -> always hidden, even if risk or attempted say otherwise", () => {
+    expect(riskAvailability(false, stub, true)).toBe("hidden");
+    expect(riskAvailability(false, null, true)).toBe("hidden");
+  });
+
+  it("open positions + a real risk object -> ready, regardless of attempted", () => {
+    expect(riskAvailability(true, stub, false)).toBe("ready");
+    expect(riskAvailability(true, stub, true)).toBe("ready");
+  });
+
+  it("open positions + null risk + not yet attempted -> hidden (first paint, GET still in flight)", () => {
+    expect(riskAvailability(true, null, false)).toBe("hidden");
+  });
+
+  it("open positions + null risk + attempted -> unavailable (the degrade/timeout path)", () => {
+    expect(riskAvailability(true, null, true)).toBe("unavailable");
   });
 });

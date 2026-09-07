@@ -75,8 +75,26 @@ const GICS_ZH: Record<string, string> = {
   "Materials": "材料",
 };
 
+// Same SPDR->GICS bridge macro-main/scripts/build_stock_library.py already applies to
+// basket-derived rows (its `_SPDR_TO_GICS`): a sector string can arrive under a display-name
+// alias rather than one of the 11 canonical GICS names this map translates. Review finding
+// (MAJOR 4, EN/ZH parity): without this, an aliased sector rendered its EN string untranslated
+// in the ZH card even though the size-bucket card next to it was fully translated — the same raw
+// English leak the house plain-word law forbids. Normalizing here, with the SAME two pairs macro
+// itself bridges, means an alias is grouped and labelled exactly as its canonical GICS name would
+// be, in both languages; a truly unrecognized string (neither a GICS name nor a known alias)
+// still falls back to the same EN string in both languages rather than a blocked render.
+const SECTOR_ALIAS_TO_GICS: Record<string, string> = {
+  "Technology": "Information Technology",
+  "Communications": "Communication Services",
+};
+
 function sectorLabel(sector: string): Bilingual {
-  const zh = GICS_ZH[sector];
+  // Grouping identity (the `key` callers use to bucket cost by sector) stays the artifact's own
+  // raw string — only the ZH translation lookup normalizes through the alias bridge, so an
+  // alias and its canonical spelling still translate to the same Chinese label without changing
+  // which raw strings group together or what the EN card has always shown.
+  const zh = GICS_ZH[sector] ?? GICS_ZH[SECTOR_ALIAS_TO_GICS[sector] ?? sector];
   // Unmapped value: fall back to the artifact's own EN string in BOTH languages — never a raw
   // slug, and never a blocked render.
   return zh ? { en: sector, zh } : { en: sector, zh: sector };
@@ -267,6 +285,32 @@ const T_TITLE: Bilingual = { en: "What your holdings look like", zh: "你的持�
 const T_STANDING: Bilingual = { en: "Research view of your holdings, not advice.", zh: "这是对你持仓的研究性说明，不是投资建议。" };
 const T_BASIS: Bilingual = { en: "Weighed by what you paid.", zh: "按你的买入成本加权。" };
 const T_COVERAGE: Bilingual = { en: "Read {read} of {total} holdings.", zh: "{total} 个持仓中读到 {read} 个。" };
+
+// MAJOR 2 (review repair): `risk` degrades to `null` on a real, honest path (route.ts's
+// RISK_BUDGET_MS timeout, or buildRiskBounded's catch) — a signed-in user with open positions
+// must never see this readout simply vanish, which is indistinguishable from "this feature does
+// not exist" and contradicts the route's own docstring promise that a degrade renders as the
+// normal per-card "not covered yet" states. This is the plain-word notice for that path — shown
+// only once a read was actually attempted and came back empty, never during the ordinary first
+// paint before the client GET has resolved (see `riskAvailability` below).
+export const T_RISK_UNAVAILABLE: Bilingual = {
+  en: "We could not read your holdings shape in time. It will try again next time you reload.",
+  zh: "暂时未能及时读取你的持仓构成，下次刷新会重新尝试。",
+};
+
+/** Whether the shape readout should render as ready, as a plain-word "try again" notice, or not
+ *  at all — pure decision logic so MAJOR 2's fix is unit-testable without a DOM. `attempted` is
+ *  true once a GET has actually resolved (success or failure); before that, `risk === null` only
+ *  means "hasn't loaded yet" and must render nothing, not a false "unavailable" flash. */
+export function riskAvailability(
+  hasOpenPositions: boolean,
+  risk: PortfolioRisk | null,
+  attempted: boolean,
+): "hidden" | "ready" | "unavailable" {
+  if (!hasOpenPositions) return "hidden";
+  if (risk) return "ready";
+  return attempted ? "unavailable" : "hidden";
+}
 
 const T_C1_LABEL: Bilingual = { en: "Biggest holding", zh: "最大的一笔持仓" };
 const T_C1_Q: Bilingual = { en: "How much of your money sits in one name", zh: "有多少钱押在同一只股票上" };
