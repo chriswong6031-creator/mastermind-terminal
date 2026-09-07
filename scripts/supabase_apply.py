@@ -259,15 +259,35 @@ def split_statements(sql: str) -> list[str]:
 
 def extract_block(text: str, anchor: str) -> Optional[str]:
     lines = text.splitlines()
-    anchor_re = re.compile(rf"^\s*--\s*{re.escape(anchor)}\s*:", re.IGNORECASE)
+    # Capture group 1 so a real migration's own convention of putting the
+    # anchor and its content on ONE line (e.g. "-- down: drop index if
+    # exists public.foo;", supabase/migrations/0011_analytics_eid.sql) is
+    # not silently discarded -- capture used to start at `start + 1`,
+    # dropping the anchor line's own trailing text outright (review-#516
+    # latest round MINOR 1, measured against 0011's real down block: the
+    # `drop index ...` statement never reached `_block_statements` at all).
+    anchor_re = re.compile(rf"^\s*--\s*{re.escape(anchor)}\s*:(.*)$", re.IGNORECASE)
     start = None
+    anchor_suffix = ""
     for idx, line in enumerate(lines):
-        if anchor_re.match(line):
+        m = anchor_re.match(line)
+        if m:
             start = idx
+            anchor_suffix = m.group(1)
             break
     if start is None:
         return None
     captured = []
+    if anchor_suffix.strip():
+        captured.append(anchor_suffix.strip())
+    # The anchor line is always its own boundary -- it never glues onto the
+    # first captured line below it, the same way a blank line separates any
+    # other two runs. Without this, an anchor-line annotation with no
+    # terminating ';' of its own (e.g. 0013_alert_runs_outbox.sql's
+    # "-- down: (manual, out-of-band ...)") would join the FIRST real
+    # statement line below it into one corrupt run, because nothing else in
+    # this file separates them.
+    captured.append("")
     for line in lines[start + 1:]:
         stripped = line.strip()
         if stripped == "":
@@ -321,14 +341,24 @@ def _block_statements(block: str) -> tuple[list[str], list[str]]:
     lines accumulate until one ends with ';' (comments are already stripped
     of their leading '-- ' marker by extract_block() before this function
     ever sees the block, so "a line ends with ';'" here always means the
-    SQL text itself ends there, not a comment marker). A run that instead
-    reaches a blank line, or the end of the block, without ever
-    terminating is PROSE and is dropped whole -- e.g. "Drop table by hand
-    before re-running." and "Set of checks to run after apply:" are prose
-    because they end in '.' / ':', never ';'. A multi-line statement like
+    SQL text itself ends there, not a comment marker; a trailing INLINE
+    comment on the same line, e.g. "select 1; -- expect one row", is
+    stripped before this check so it cannot hide a real terminator). A run
+    that instead reaches a blank line, or the end of the block, without
+    ever terminating is PROSE and is dropped whole. A line that ends in
+    '.' or ':' -- a declarative sentence, or a heading introducing what
+    follows -- can never be how a SQL statement legitimately terminates,
+    so it ALSO flushes the run as prose immediately, the same as a blank
+    line, instead of waiting for one: "Drop table by hand before
+    re-running." and "Set of checks to run after apply:" are prose
+    because they end in '.' / ':', and this now holds even with no blank
+    line before the real statement that follows (review-#516 latest round
+    MAJOR 2 -- the prior version only excluded these via the blank-line
+    rule, so a colon-terminated heading with no blank line beneath it
+    glued onto the statement below it). A multi-line statement like
     `drop\n  function public.foo();` is one run: the ';' check only fires
-    on the LAST line of the run, so an earlier line with no ';' just keeps
-    the run open.
+    on the LAST line of the run, so an earlier line with no ';' (and not
+    ending in '.'/':' either) just keeps the run open.
 
     The only remaining keyword use is a SAFETY VETO, applied only to a run
     that DID terminate with ';': its first token must be a recognized
@@ -336,9 +366,21 @@ def _block_statements(block: str) -> tuple[list[str], list[str]]:
     first token is not one of these is neither silently kept nor silently
     dropped -- it raises `MigrationError` naming the line, because a
     ';'-terminated chunk that does not open with a real SQL verb is not a
-    case this parser is willing to guess about. This is the accepted edge:
-    an ordinary English sentence that happens to end in ';' hits this veto
-    and is a hard error, not silently swallowed as either SQL or prose.
+    case this parser is willing to guess about ("Note: apply order matters
+    here;" is this accepted edge -- "note" is not a command verb).
+
+    KNOWN RESIDUAL GAP (review-#516 latest round MAJOR 1, not closed by
+    this function): a prose sentence that (a) opens with a word that is
+    ALSO a recognized SQL command verb -- e.g. "Drop the table by hand;",
+    "Set the migration aside;" -- AND (b) terminates the line with ';'
+    instead of '.' or ':' has no structural signal left to distinguish it
+    from real SQL, so the safety veto passes it and it is silently KEPT
+    and would be sent to the database by --apply. Closing this without a
+    second keyword table (e.g. a verb-to-expected-object-noun map) would
+    reintroduce exactly the kind of keyword set ruling r4 named and
+    ordered deleted ("Delete _DROP_OBJECT_KEYWORDS and every keyword
+    set"); it is left open pending a further ruling rather than silently
+    re-adding one here.
 
     Returns (kept, dropped): `kept` is every parsed statement (its own
     terminating ';' trimmed off); `dropped` is the raw text of every run
@@ -359,7 +401,24 @@ def _block_statements(block: str) -> tuple[list[str], list[str]]:
             _flush_prose()
             continue
         run.append(line)
-        if line.rstrip().endswith(";"):
+        line_sql = strip_sql_comments(line).rstrip()
+        if not line_sql.endswith(";") and (line_sql.endswith(".") or line_sql.endswith(":")):
+            _flush_prose()
+            continue
+        if line_sql.endswith(";"):
+            # Trim the run's LAST line at the terminating ';' using its
+            # position in the comment-stripped text, not the raw line's own
+            # last character -- a trailing inline comment after the ';'
+            # (e.g. "select 1; -- expect one row") used to defeat a plain
+            # `stmt[:-1]` trim (it chopped the comment's last character
+            # instead of the ';'), which is moot only because the line
+            # failed the OLD `endswith(';')` check entirely and was
+            # excluded as prose (review-#516 latest round MINOR 2).
+            # strip_sql_comments() is length- and position-preserving (it
+            # replaces comment characters with spaces, never removes any),
+            # so the ';' sits at the same index in the raw line too.
+            term_idx = len(line_sql) - 1
+            run[-1] = line[:term_idx]
             stmt = "\n".join(run).strip()
             run.clear()
             first_token_m = re.match(r"[A-Za-z]+", stmt)
@@ -370,7 +429,7 @@ def _block_statements(block: str) -> tuple[list[str], list[str]]:
                     "-- readback:/-- down: block line terminates with ';' "
                     f"but does not open a recognized SQL statement: {first_line!r}"
                 )
-            kept.append(stmt[:-1].strip())
+            kept.append(stmt)
     _flush_prose()
     return kept, dropped
 

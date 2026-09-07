@@ -49,6 +49,7 @@ and have been.** Application status, re-censused 2026-08-21:
 | `0008_chart_layouts_unique_name.sql` | `chart_layouts_user_name` | **yes** — applied 2026-08-21 |
 | `0009_watchlist_symbol_unique.sql` | `wls_watchlist_symbol` | **yes** — applied 2026-08-19 |
 | `0010_search_event_stats.sql` | `search_event_stats()` + `search_events_created_at` | **yes** — applied 2026-08-21 |
+| `0011_analytics_eid.sql` | `analytics_events.eid` + `analytics_events_eid_uniq` (WS:COMMERCIAL-ACTIVATION CA1A) | **yes** — applied 2026-09-05 UTC via the Management API (see the file's own header) |
 | `0012_thesis_objects.sql` | `theses`, `thesis_versions` + `apply_thesis_version_v1()`/`read_current_thesis_versions_v1()` | **yes** — applied 2026-09-06 (raw fallback, see note below) |
 | `0013_alert_runs_outbox.sql` | `alert_runs`, `alert_outbox` tables + RLS (Market Ontology F08 packet B-F08-2) | reserved -> merged; **not applied — awaiting readback receipt** |
 

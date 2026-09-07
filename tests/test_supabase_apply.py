@@ -1017,25 +1017,61 @@ create table if not exists public.t (id bigint generated always as identity prim
 """
 
 
-def test_readback_header_adjacent_to_a_statement_is_the_accepted_hard_error_edge():
-    # Meta-CEO B ruling r4 supersedes r3's paragraph/keyword-heading
-    # mechanism entirely (that classifier both under- and over-matched --
-    # review-#516 round-2-on-r3's 2 majors). Under the new structural
-    # parser, a prose header with NO blank line before the real statement
-    # is not specially detected and stripped any more -- it joins the SAME
-    # run as the statement below it (no blank line ever separates them),
-    # and that combined run DOES terminate with ';' (the statement's own
-    # terminator). Ruling r4 names this exact shape as the ACCEPTED EDGE:
-    # a prose sentence that ends up ';'-terminated is neither silently kept
-    # nor silently dropped -- the safety veto fires because the combined
-    # text's first token ("Post") is not a recognized SQL command verb, and
-    # readback_statements() raises MigrationError naming the line instead
-    # of guessing. (Every real migration on disk -- 0011/0012/0013 --
-    # always separates a prose header from its statements with a blank
-    # line, so this shape never actually occurs in this repo's own files;
-    # it is a synthetic adversarial case only.)
-    with pytest.raises(MigrationError, match="Post-apply verification"):
-        readback_statements(FIXTURE_PROSE_HEADER_ADJACENT_TO_STATEMENT)
+def test_readback_header_adjacent_to_a_statement_is_excluded_not_glued():
+    # Review-#516 latest round MAJOR 2, RED-FIRST against the pre-fix
+    # parser at 6977fa56: a prose header with NO blank line before the real
+    # statement joined the SAME run as the statement below it (no blank
+    # line ever separated them), and the combined run happened to raise
+    # MigrationError only because this fixture's header ("Post-apply
+    # verification...") does not open with a recognized SQL verb -- a
+    # verb-initial header (see
+    # test_readback_verb_initial_header_adjacent_to_a_statement_is_excluded_not_glued
+    # below) glued and was SILENTLY KEPT instead, which is the actual
+    # over-match major. `_block_statements` now flushes a run the instant
+    # a line ends in '.' or ':' (Meta-CEO B ruling r4's own explanatory
+    # text: these punctuation marks are never how a SQL statement
+    # legitimately terminates), so the colon-terminated header is excluded
+    # as its own prose chunk immediately -- no blank line required -- and
+    # the real statement below it is parsed cleanly, whatever word the
+    # header happens to open with. (Every real migration on disk --
+    # 0011/0012/0013 -- always separates a prose header from its
+    # statements with a blank line anyway, so this shape never actually
+    # occurs in this repo's own files; it is a synthetic adversarial case
+    # that the fix now handles regardless.)
+    stmts, dropped = readback_statements_detailed(FIXTURE_PROSE_HEADER_ADJACENT_TO_STATEMENT)
+    assert stmts == ["select 1 from pg_class where relname = 't'"]
+    assert dropped == ["Post-apply verification, run these manually against the target DB:"]
+
+
+FIXTURE_VERB_INITIAL_HEADER_ADJACENT_TO_STATEMENT = """
+create table if not exists public.t (id bigint generated always as identity primary key);
+
+-- down:
+-- drop table if exists public.t;
+
+-- readback:
+-- Set of checks to run after apply:
+-- select 1 from pg_class where relname = 't';
+"""
+
+
+def test_readback_verb_initial_header_adjacent_to_a_statement_is_excluded_not_glued():
+    # Review-#516 latest round MAJOR 2, exact reproduction: a heading that
+    # OPENS with a recognized SQL command verb ("Set") used to defeat the
+    # safety veto entirely once glued (no blank line) to the real statement
+    # below it -- `_block_statements("Set of checks to run after apply:\\n"
+    # "select 1;")` returned the whole two-line run as ONE silently-KEPT
+    # statement, because "set" passed the veto's first-token check. That
+    # corrupt statement would have been POSTed to the database by --apply.
+    # The '.'/':' flush (see the companion test above) closes this: the
+    # heading is excluded the instant its own line ends in ':', regardless
+    # of which word it opens with, so the veto's word-choice never matters
+    # for this shape.
+    stmts, dropped = readback_statements_detailed(
+        FIXTURE_VERB_INITIAL_HEADER_ADJACENT_TO_STATEMENT
+    )
+    assert stmts == ["select 1 from pg_class where relname = 't'"]
+    assert dropped == ["Set of checks to run after apply:"]
 
 
 FIXTURE_MULTILINE_STATEMENT_WITH_UNLISTED_LEADING_KEYWORD = """
@@ -1587,3 +1623,99 @@ def test_readback_verb_list_matches_ruling_r4_exactly():
         "begin", "commit", "rollback", "lock", "notify", "listen", "table",
         "values",
     })
+
+
+# --- Regression tests: review-#516 latest round (this round) --------------
+#
+# On top of ruling r4. MAJORS 1 and 2 covered above
+# (test_readback_verb_initial_header_adjacent_to_a_statement_is_excluded_not_glued
+# closes MAJOR 2; MAJOR 1 -- a verb-initial, ';'-terminated prose sentence
+# with no other punctuation cue -- is NOT closed, see the KNOWN RESIDUAL GAP
+# note on _block_statements' own docstring and the worker's DEVIATIONS
+# report; it is not pinned by a test here because it is not fixed, and a
+# test asserting the unsafe behavior as "expected" would misrepresent an
+# open gap as accepted design).
+
+def test_readback_down_block_anchor_line_content_is_not_discarded():
+    # MINOR 1, RED-FIRST against the pre-fix parser at 6977fa56: extract_block()
+    # started capture at `start + 1`, silently discarding whatever followed
+    # the anchor's own colon on the SAME line. Measured against the real,
+    # on-disk supabase/migrations/0011_analytics_eid.sql, whose down block is
+    # written entirely on the anchor line and the line after it:
+    #   -- down: drop index if exists public.analytics_events_eid_uniq;
+    #   --       alter table public.analytics_events drop column if exists eid;
+    # the pre-fix parser returned only the `alter table ...` statement --
+    # the `drop index ...` rollback statement never reached
+    # `_block_statements` at all and was invisible everywhere (dry-run,
+    # apply's receipt, and idempotency_findings' "down block OK" guard all
+    # silently proceeded as if the file's down block only undid half of
+    # what 0011 actually created).
+    text = Path("supabase/migrations/0011_analytics_eid.sql").read_text()
+    down_block = extract_block(text, "down")
+    kept, dropped = supabase_apply_module._block_statements(down_block)
+    assert kept == [
+        "drop index if exists public.analytics_events_eid_uniq",
+        "alter table public.analytics_events drop column if exists eid",
+    ]
+    assert dropped == []
+
+
+def test_readback_anchor_line_annotation_does_not_glue_to_the_statement_below():
+    # Companion coverage for the anchor-line fix above: an anchor line whose
+    # own suffix is a PROSE annotation (no terminating ';' of its own), not a
+    # real statement -- the real, on-disk
+    # supabase/migrations/0013_alert_runs_outbox.sql shape:
+    #   -- down: (manual, out-of-band -- for completeness / recovery only, never auto-run)
+    #   -- ---------------------------------------------------------------
+    #   -- drop table if exists public.alert_outbox;
+    #   -- drop table if exists public.alert_runs;
+    # must not glue the annotation into the first real drop statement (which
+    # would corrupt it and fail the safety veto, since the annotation opens
+    # with "(", not a SQL verb) -- the anchor line is always its own
+    # boundary, exactly like a blank line.
+    text = Path("supabase/migrations/0013_alert_runs_outbox.sql").read_text()
+    down_block = extract_block(text, "down")
+    kept, dropped = supabase_apply_module._block_statements(down_block)
+    assert kept == [
+        "drop table if exists public.alert_outbox",
+        "drop table if exists public.alert_runs",
+    ]
+    assert len(dropped) == 1
+    assert "manual, out-of-band" in dropped[0]
+
+
+def test_readback_statement_with_trailing_inline_comment_is_kept_not_dropped():
+    # MINOR 2, RED-FIRST against the pre-fix parser at 6977fa56:
+    # `_block_statements("select count(*) from t; -- expect 1\\n\\nselect 2;")`
+    # returned dropped=['select count(*) from t; -- expect 1'],
+    # kept=['select 2'] -- the trailing inline comment defeated the plain
+    # `line.rstrip().endswith(';')` check (the line's own last character was
+    # "1", not ';'), so a readback statement with an inline annotation on
+    # its own line was silently excluded as prose instead of kept and sent.
+    kept, dropped = supabase_apply_module._block_statements(
+        "select count(*) from t; -- expect 1\n\nselect 2;"
+    )
+    assert kept == ["select count(*) from t", "select 2"]
+    assert dropped == []
+
+
+def test_dry_run_excluded_note_wording_is_exactly_the_ruling_r4_text(tmp_path, capsys):
+    # Review MINOR 3: the prior version of this test only checked the
+    # substring "note: excluded", which the abandoned pre-ruling-r4 wording
+    # ("no SQL keyword found") would ALSO have satisfied were it hiding
+    # behind a differently-worded prefix -- it was not RED-first against the
+    # actual old wording. Pin the exact, full note text ruling r4 mandates
+    # (minor-1: the note must describe the REAL reason under the structural
+    # parser -- no terminating ';' before a blank line / end of block --
+    # never the abandoned keyword-classifier's language), so any wording
+    # regression, old or new, fails this test by name.
+    f = tmp_path / "0099_prose_only_header.sql"
+    f.write_text(FIXTURE_PROSE_ONLY_READBACK_HEADER)
+    rc = run_dry(f)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert (
+        "note: excluded (no terminating ';' -- reads as prose): "
+        "Post-apply verification; run these manually against the target DB:"
+    ) in out
+    assert "no sql keyword found" not in out.lower()
