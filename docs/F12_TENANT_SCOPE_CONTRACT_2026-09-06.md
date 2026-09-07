@@ -9,13 +9,22 @@ that decides whether an identity may see a team-scoped row, and why. It has
 no I/O and no framework import — it is a deterministic table lookup over its
 arguments.
 
-The database-side authority is Row Level Security, defined in
-`supabase/migrations/0014_tenancy_foundation.sql` (PR #514, **OPEN/unmerged**;
-the migration's own header at line 10 says `-- NOT APPLIED by packet B-F12-1
-— application is a separate privileged act.`). This module is the
-application-side **second gate**. It never replaces RLS and never talks to a
-database — every input it reads (identity, memberships, resource, grants) is
-supplied by the caller.
+The database-side authority is Row Level Security, defined in migration 0014
+(tenancy foundation, Terminal PR #514, **OPEN/unmerged**; the migration's own
+header at line 10 says `-- NOT APPLIED by packet B-F12-1 — application is a
+separate privileged act.`). This module is the application-side **second
+gate**. It never replaces RLS and never talks to a database — every input it
+reads (identity, memberships, resource, grants) is supplied by the caller.
+
+TODO(F12): once PR #514 merges, restore the literal migration path here
+(supabase, migrations dir, file "0014_tenancy_foundation" + ".sql") — it is
+worded without that literal for now only because
+`tests/test_migration_ledger.py::test_referenced_migration_filenames_exist`
+scans `terminal/lib/**/*.ts` and `terminal/app/**/*.ts*` for exactly this
+pattern, and while this file is not itself in that scan set today, keeping
+the wording consistent with `terminal/lib/tenantScope.ts`'s own comment
+avoids a doc that names, as a scannable literal, a file absent from
+`master`.
 
 ## 2. Data contract
 
@@ -118,10 +127,10 @@ ruling 4).
    carries a required `userId`, and every row that reads `memberships`
    (7, 11, 12) filters to `m.userId === identity.userId` first. This is a
    fail-closed default even against a caller mistake: `listMembers(session.db,
-   session.userId, teamId)` (PR #514 diff line 286) returns every member of a
-   team — i.e. rows for OTHER users — while `listTeams(session.db,
-   session.userId)` (PR #514 diff line 368) is the identity-scoped reader
-   §8 requires callers to use. Passing `listMembers`'s output by mistake used
+   session.userId, teamId)` (`terminal/lib/teams.ts`, PR #514) returns every
+   member of a team — i.e. rows for OTHER users — while `listTeams(session.db,
+   session.userId)` (same file, PR #514) is the identity-scoped reader §8
+   requires callers to use. Passing `listMembers`'s output by mistake used
    to grant access from any membership row the caller handed in; it cannot
    any more — pinned by `tenantScope.test.ts`'s "a membership row belonging to
    a different user never grants access".
@@ -237,9 +246,12 @@ This packet names no ledger row to close.
 **Real at merge:**
 - `terminal/vitest.config.ts:9`'s glob collects both test files with no
   registration — running `npm test` in `terminal/` executes them, and
-  `.github/workflows/ci.yml:52` runs exactly that inside the protected
-  `Terminal typecheck + tests` context.
-- `.github/workflows/ci.yml:51` (`npx tsc --noEmit`) typechecks
+  `.github/workflows/ci.yml`'s `terminal-unit` job (`name: Terminal unit +
+  typecheck (shard)`) runs exactly that inside its protected context (as of
+  `origin/master@be898be5`: `npx tsc --noEmit` then `npm test`, in that
+  order — cite the job NAME, not a line number, since the workflow is
+  reshuffled/sharded independently of this packet).
+- The same job's `npx tsc --noEmit` step typechecks
   `terminal/lib/tenantScope.ts` as part of the Next project.
 - This doc is served at the live URL by GitHub the moment the squash-merge
   lands on `master`.

@@ -33,11 +33,12 @@ export type Identity = { userId: string | null };
 
 /** `userId` is REQUIRED and is the row's owner: the decision function only ever
  *  honours a membership whose `userId` matches the calling `identity.userId`. This
- *  is load-bearing — `listMembers(session.db, session.userId, teamId)` (PR #514
- *  diff line 286) returns every member of a team, i.e. OTHER users' rows too. A
- *  caller must build `memberships` from `listTeams(session.db, session.userId)`
- *  (PR #514 diff line 368), which is identity-scoped; but even if a caller passes
- *  the wrong (team-wide) source by mistake, this module still only honours rows
+ *  is load-bearing — `listMembers(session.db, session.userId, teamId)` in
+ *  `terminal/lib/teams.ts` (PR #514) returns every member of a team, i.e. OTHER
+ *  users' rows too. A caller must build `memberships` from
+ *  `listTeams(session.db, session.userId)` (same file, PR #514), which is
+ *  identity-scoped; but even if a caller passes the wrong (team-wide) source by
+ *  mistake, this module still only honours rows
  *  that carry the caller's own `userId` — a foreign membership row can never grant
  *  access. A revoked membership is carried as a FACT on the input, never read from
  *  a clock — that is what keeps "revoked membership denies immediately" testable
