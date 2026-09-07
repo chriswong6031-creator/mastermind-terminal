@@ -17,6 +17,7 @@ import {
   fixtureUserId,
   FIXTURE_STORE_COOKIE,
 } from "@/lib/watchlistsFixtureDb";
+import { resetArtifactCache } from "@/lib/artifactCache";
 
 vi.mock("next/headers", () => ({
   cookies: vi.fn(),
@@ -44,6 +45,11 @@ describe("GET /api/portfolio — risk field (additive)", () => {
   const key = `risk-route-${Math.random().toString(36).slice(2)}`;
 
   beforeEach(async () => {
+    // MAJOR 3 (round-2 review): the route now caches artifact reads per (ticker, cookie). Every
+    // `it` block below reuses the SAME ticker ("AAPL") with a DIFFERENT `global.fetch` mock, so
+    // without this reset, a later test would silently read back an earlier test's cached result
+    // instead of exercising its own mock.
+    resetArtifactCache();
     const { cookies } = await import("next/headers");
     (cookies as any).mockResolvedValue(mockCookies(key));
     global.fetch = vi.fn(async (url: string) => {
@@ -161,8 +167,11 @@ describe("GET /api/portfolio — risk field (additive)", () => {
     const res = await GET();
     const body = await res.json();
     // Proves the forwarded cookie was honored end-to-end: AAPL reads Technology/3e12, not a
-    // page_locked gap, because the fixture only answers 200 when it sees the cookie.
-    expect(body.risk.sectors.some((s: any) => s.key === "Technology")).toBe(true);
+    // page_locked gap, because the fixture only answers 200 when it sees the cookie. The grouping
+    // KEY is now the canonical GICS name ("Information Technology"), not the raw alias the
+    // artifact returned — round-2 review MINOR: normalise the grouping key so an alias and its
+    // canonical spelling merge into one legend row instead of two.
+    expect(body.risk.sectors.some((s: any) => s.key === "Information Technology")).toBe(true);
     expect(calls.length).toBeGreaterThan(0);
     for (const [, init] of calls) {
       const headerNames = Object.keys(init?.headers ?? {}).map((h) => h.toLowerCase());
@@ -187,5 +196,66 @@ describe("GET /api/portfolio — risk field (additive)", () => {
     for (const [, init] of calls) {
       expect(init?.headers?.Cookie).toBeUndefined();
     }
+  });
+
+  it("9b: an anonymous GET reports coverageSource 'anonymous'; a signed-in GET reports 'credentialed' (MAJOR 2)", async () => {
+    global.fetch = vi.fn(async () => new Response(JSON.stringify({ sector: "Energy" }), { status: 200 })) as any;
+    const anon = await (await GET()).json();
+    expect(anon.risk.coverageSource).toBe("anonymous");
+
+    const authCookieName = "sb-testref-auth-token";
+    const authCookieValue = "base64-eyJhY2Nlc3NfdG9rZW4iOiJmYWtlIn0";
+    const { cookies } = await import("next/headers");
+    (cookies as any).mockResolvedValue(mockCookies(key, { [authCookieName]: authCookieValue }));
+    const signedIn = await (await GET()).json();
+    expect(signedIn.risk.coverageSource).toBe("credentialed");
+  });
+
+  it("10: N reloads within the 15-minute window produce ONE upstream fetch per ticker (MAJOR 3)", async () => {
+    // A dedicated, never-reused ticker: the fixture DB accumulates every `it` block's positions
+    // under the SAME `key` (by design — the isolation invariant these tests exist to prove is
+    // per-USER, not per-test), so filtering the spy's calls by THIS ticker is what makes the
+    // assertion robust to however many other tickers earlier tests in this file left open.
+    await seedOpenPosition(key, "CACHETEST10", 5, 20);
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ sector: "Energy", personality: { market_cap: 5e9 } }), { status: 200 }));
+    global.fetch = fetchMock as any;
+    for (let i = 0; i < 4; i++) {
+      const res = await GET();
+      const body = await res.json();
+      expect(body.risk.sectors.some((s: any) => s.key === "Energy")).toBe(true);
+    }
+    const cacheTestCalls = fetchMock.mock.calls.filter(([url]: any[]) => String(url).includes("CACHETEST10"));
+    // 4 reloads, ONE upstream fetch for this ticker — the rest were served from the memo.
+    expect(cacheTestCalls.length).toBe(1);
+  });
+
+  it("11: a redirect response from the artifact host is never followed, and the cookie never leaves it (MINOR: allow-list forward origin)", async () => {
+    await seedOpenPosition(key, "REDIRECTTEST11", 3, 40);
+    const authCookieName = "sb-testref-auth-token";
+    const authCookieValue = "base64-eyJhY2Nlc3NfdG9rZW4iOiJmYWtlIn0";
+    const { cookies } = await import("next/headers");
+    (cookies as any).mockResolvedValue(mockCookies(key, { [authCookieName]: authCookieValue }));
+
+    const calls: any[] = [];
+    global.fetch = vi.fn(async (url: string, init?: any) => {
+      calls.push([url, init]);
+      if (String(url).includes("REDIRECTTEST11")) {
+        // A same-host artifact response that tries to redirect the caller elsewhere.
+        return new Response(null, { status: 302, headers: { location: "https://not-mastermind-x.example.com/steal" } });
+      }
+      return new Response(JSON.stringify({ sector: "Energy", personality: { market_cap: 5e9 } }), { status: 200 });
+    }) as any;
+
+    const res = await GET();
+    const body = await res.json();
+    const gap = body.risk.gaps.find((g: any) => g.ticker === "REDIRECTTEST11");
+    expect(gap).toBeTruthy();
+    expect(gap.reason).toBe("page_unreadable");
+    const redirectCalls = calls.filter(([url]) => String(url).includes("REDIRECTTEST11"));
+    // Exactly ONE fetch for this ticker — the redirect was never auto-followed with the cookie
+    // re-attached to wherever `Location` pointed.
+    expect(redirectCalls.length).toBe(1);
+    expect(redirectCalls[0][1]?.redirect).toBe("manual");
   });
 });

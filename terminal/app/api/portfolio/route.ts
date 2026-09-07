@@ -11,6 +11,7 @@ import {
   type Position,
 } from "@/lib/portfolio";
 import { computePortfolioRisk, type ArtifactState, type PortfolioRisk } from "@/lib/portfolioRisk";
+import { getCachedArtifact } from "@/lib/artifactCache";
 
 // Owner-scoped portfolio-position API (W5).
 //
@@ -82,6 +83,21 @@ const fail = (error: string, status: number) => NextResponse.json({ error }, { s
 // from a build pass (a live curl with a real session is not an available proof method here);
 // see the PR body for the unit + e2e fixture proof and the live-verification gap.
 const STOCKDATA_BASE = process.env.STOCKDATA_BASE || "https://www.mastermind-x.com";
+// MINOR (round-2 review): allow-list the credential forward origin to the configured
+// STOCKDATA_BASE host ONLY. The URL every artifact fetch hits is always built from this same
+// constant, so a same-origin request is already structural — but a plain `fetch()` with the
+// default `redirect: "follow"` would re-attach the SAME `Cookie` header to wherever a 3xx
+// response's `Location` points, including a host neither this route nor its operator chose.
+// `fetchArtifactUncached` below sets `redirect: "manual"` and treats any redirect as
+// `unreadable` rather than following it, so the caller's session cookie can never leave this
+// one configured host no matter what an artifact response claims.
+const STOCKDATA_HOST = (() => {
+  try {
+    return new URL(STOCKDATA_BASE).host;
+  } catch {
+    return null;
+  }
+})();
 const ARTIFACT_FANOUT_CAP = 60;
 const ARTIFACT_CONCURRENCY = 8;
 const ARTIFACT_TIMEOUT_MS = 2500;
@@ -111,22 +127,28 @@ async function callerAuthCookieHeader(): Promise<string | null> {
   }
 }
 
-async function fetchArtifact(ticker: string, cookieHeader: string | null): Promise<ArtifactState> {
+async function fetchArtifactUncached(ticker: string, cookieHeader: string | null): Promise<ArtifactState> {
   try {
     const url = `${STOCKDATA_BASE}/stockdata/${encodeURIComponent(ticker.toUpperCase())}.json`;
-    // MINOR (review repair): this fetch now carries a per-caller `Cookie` when one exists — the
-    // response is no longer the same value for every caller of the same URL. `next.revalidate`
-    // priced that assumption (a 15-minute Data Cache entry keyed only by request identity);
-    // whether the pinned Next version folds request headers into that key is unverified either
-    // way, and a wrong guess either mints one cache entry per session token (unbounded growth,
-    // near-zero hit rate) or serves one caller's locked/unlocked result to a different caller for
-    // up to 15 minutes. `no-store` removes the ambiguity outright rather than betting on it.
+    // MINOR (round-2 review): never forward the caller's session cookie anywhere but the
+    // configured STOCKDATA_HOST. Two layers, since either one alone is not quite enough: the
+    // explicit host comparison catches a malformed/misconfigured STOCKDATA_BASE at the source,
+    // and `redirect: "manual"` (never auto-following, so the default `redirect: "follow"` can
+    // never re-send this same Cookie header to whatever host a 3xx `Location` names) catches a
+    // same-host artifact response that tries to redirect elsewhere after the fact.
+    const forwardCookie = cookieHeader && STOCKDATA_HOST && new URL(url).host === STOCKDATA_HOST
+      ? cookieHeader
+      : null;
     const res = await fetch(url, {
       signal: AbortSignal.timeout(ARTIFACT_TIMEOUT_MS),
       cache: "no-store",
-      ...(cookieHeader ? { headers: { Cookie: cookieHeader } } : {}),
+      redirect: "manual",
+      ...(forwardCookie ? { headers: { Cookie: forwardCookie } } : {}),
     } as RequestInit);
     if (res.status === 404) return { kind: "missing" };
+    if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
+      return { kind: "unreadable" };
+    }
     // The regwall answers an anonymous fan-out with a REAL HTTP 401 (measured live,
     // 2026-09-06: `x-regwall: deny` + a `{"locked":true,...}` body) — never a 200. `res.ok`
     // is therefore false for the locked case, so the locked check must run BEFORE the
@@ -155,6 +177,15 @@ async function fetchArtifact(ticker: string, cookieHeader: string | null): Promi
   } catch {
     return { kind: "unreadable" };
   }
+}
+
+// MAJOR 3 (round-2 review): restores a per-(ticker, caller-cookie) cache in front of the real
+// fetch — see lib/artifactCache.ts for why it is keyed the way it is and why it replaces the
+// `next: { revalidate }` this route used before the per-caller cookie made that ambiguous. The
+// mount-time GET stays (still the only thing that populates `risk`); it now simply hits this
+// memo instead of always paying a fresh upstream fetch.
+async function fetchArtifact(ticker: string, cookieHeader: string | null): Promise<ArtifactState> {
+  return getCachedArtifact(ticker, cookieHeader, () => fetchArtifactUncached(ticker, cookieHeader));
 }
 
 async function fetchArtifactsFor(
@@ -191,6 +222,11 @@ async function buildRisk(positions: readonly Position[], cookieHeader: string | 
   return computePortfolioRisk(
     positions.map((p) => ({ ticker: p.ticker, shares: p.shares, entryPrice: p.entryPrice, status: p.status })),
     artifacts,
+    // MAJOR 2: `coverageSource` reports whether the caller's OWN session cookie was present for
+    // this fan-out, never whether any individual read happened to succeed — an anonymous caller
+    // stays "anonymous" even if every ticker is (implausibly) readable, and a signed-in caller
+    // stays "credentialed" even when every artifact locks or times out.
+    !!cookieHeader,
   );
 }
 

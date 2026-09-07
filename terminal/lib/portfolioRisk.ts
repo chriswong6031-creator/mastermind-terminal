@@ -44,6 +44,14 @@ export interface RiskInputPosition {
 export interface PortfolioRisk {
   schema: "portfolio_risk.v1";
   weightBasis: "cost";
+  // MAJOR 2 (round-2 review): the ONLY way an e2e proof can tell "this reflects the caller's own
+  // credentialed artifact reads" apart from "this reflects only the artifact-independent
+  // concentration card, because every read was anonymous/locked" — a signed-in caller with no
+  // forwarded cookie and a signed-out caller both render `concentration`, so that card alone
+  // proves nothing about which path ran. Set once in `computePortfolioRisk` from whether the
+  // caller's own session cookie was present when the artifact fan-out ran (never from whether any
+  // individual read happened to succeed), so it is available even when every ticker is `locked`.
+  coverageSource: "credentialed" | "anonymous";
   counts: { total: number; sized: number; read: number };
   totalCost: number | null;
   concentration: {
@@ -150,6 +158,9 @@ function isFiniteNum(n: unknown): n is number {
 export function computePortfolioRisk(
   positions: readonly RiskInputPosition[],
   artifacts: Readonly<Record<string, ArtifactState>>,
+  // Optional so every pre-existing call site (this module's own test file included) keeps
+  // compiling unchanged; the route is the one real caller that has an actual cookie to report.
+  credentialed = false,
 ): PortfolioRisk {
   const open = positions.filter((p) => p.status === "open");
   const gaps: { ticker: string; reason: GapReason }[] = [];
@@ -211,7 +222,14 @@ export function computePortfolioRisk(
       gaps.push({ ticker: s.ticker, reason: "no_industry" });
       sectorUncoveredCost += s.cost;
     } else {
-      const key = facts.sector;
+      // MINOR (round-2 review): grouping used to key on the artifact's raw sector string, so an
+      // alias ("Technology") and its canonical GICS spelling ("Information Technology") landed in
+      // TWO separate legend rows for what is the same industry — under-informing concentration
+      // even after MAJOR 4 fixed the ZH translation of the alias row itself. Normalize the
+      // GROUPING key through the same bridge so an alias and its canonical name merge into one
+      // row, with the canonical bilingual label; a truly unrecognized string still groups (and
+      // renders) under its own raw value exactly as before.
+      const key = SECTOR_ALIAS_TO_GICS[facts.sector] ?? facts.sector;
       sectorCostByKey.set(key, (sectorCostByKey.get(key) ?? 0) + s.cost);
       if (!sectorLabelByKey.has(key)) sectorLabelByKey.set(key, sectorLabel(key));
     }
@@ -267,6 +285,7 @@ export function computePortfolioRisk(
   return {
     schema: "portfolio_risk.v1",
     weightBasis: "cost",
+    coverageSource: credentialed ? "credentialed" : "anonymous",
     counts: { total: open.length, sized: sized.length, read: readCount },
     totalCost,
     concentration,
@@ -391,10 +410,14 @@ export function riskCopy(risk: PortfolioRisk): {
     : { key: "thickness" as const, label: T_C4_LABEL, question: T_C4_Q, value: null, sub: null, unread: T_C4_UNREAD };
 
   const T_REST: Bilingual = { en: "Rest of your book", zh: "其余持仓" };
+  // MINOR (round-2 review): a single-holding book has top1 at 100%, so the remainder is exactly
+  // 0% — an always-empty "Rest of your book" legend row that told the reader nothing and read as
+  // a rendering glitch. Suppress it whenever there is nothing left to show.
+  const restPct = c ? Math.round((100 - c.top1!.weightPct) * 10) / 10 : 0;
   const legend0 = c
     ? [
       { key: c.top1!.ticker, label: { en: c.top1!.ticker, zh: c.top1!.ticker }, weightPct: c.top1!.weightPct, covered: true },
-      { key: "rest", label: T_REST, weightPct: Math.round((100 - c.top1!.weightPct) * 10) / 10, covered: true, muted: true },
+      ...(restPct > 0 ? [{ key: "rest", label: T_REST, weightPct: restPct, covered: true, muted: true }] : []),
     ]
     : [];
   const legend1 = [

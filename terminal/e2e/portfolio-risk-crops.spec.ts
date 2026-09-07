@@ -6,6 +6,15 @@ import { isolateWatchlistStore } from "./watchlistStore";
 // OPT-IN via TERMINAL_CROPS=1. Positions come from real POSTs through /api/portfolio; the
 // per-ticker artifact reads go through STOCKDATA_BASE (set by the invoking shell) so the
 // gap states (missing/locked) are real transport outcomes, not mocked JSON.
+//
+// Round-2 review MAJOR 2 + MAJOR 4: point STOCKDATA_BASE at the COMMITTED fixture server
+// (`e2e/fixtureStockdataServer.mjs`) before starting the e2e webServer — it is the only
+// stockdata fixture in this repo that actually enforces the cookie gate (401 without the
+// session cookie the spec sets below, 200 with it), and its fixture book spans >= 3 sectors
+// and >= 3 company-size buckets for exactly the four tickers `seedBook()` opens positions in.
+// The old, uncommitted fixture server this comment used to describe answered 200
+// unconditionally, so the crops it produced never actually exercised the credentialed path —
+// see the PR body's "State at head" section for how that was found and fixed.
 test.skip(!process.env.TERMINAL_CROPS, "Crop generator — set TERMINAL_CROPS=1 to write PR artifacts.");
 test.setTimeout(120_000);
 
@@ -25,6 +34,21 @@ const QUOTES = { quotes: {
 
 const shot = (page: Page, name: string, testInfo: TestInfo, lang = "en") =>
   page.screenshot({ path: join(OUT, `${name}-${lang}-${testInfo.project.name}-${MODE}.png`), fullPage: false });
+
+// MAJOR 1 (round-2 review): at the 390 breakpoint the shell's own floating assistant launcher
+// (a fixed-position element, pinned to the bottom of the viewport — a SHELL defect tracked
+// separately as B-PLAT-7, never a defect in this component) can sit directly over the legend
+// row of the last visible card. A fixed element cannot be scrolled out of the way itself, but
+// scrolling the PAGE so the legend row sits higher in the viewport — clear of the region the
+// bubble occupies — gives an honest, unobstructed crop of what this component actually renders.
+async function scrollLegendClear(page: Page) {
+  const legend = page.locator('[data-testid="portfolio-shape"] ul').first();
+  if (!(await legend.count())) return;
+  await legend.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  // A little extra headroom past "centered" so the row clears the bubble's fixed footprint
+  // even on the shortest (390x844) viewport.
+  await page.mouse.wheel(0, 160);
+}
 
 // Meta-CEO B ruling (BLOCKER-1) + review MAJOR 3: `route.ts` now forwards the CALLER's own
 // Supabase session cookie to every artifact fetch — an anonymous fan-out 401s in production, so
@@ -73,7 +97,13 @@ test("risk readout — mixed/outage book, EN", async ({ page, baseURL }, testInf
   await prepare(page, testInfo, baseURL, false);
   await seedBook(page);
   await page.goto("/portfolio");
-  await expect(page.getByTestId("portfolio-shape")).toBeVisible({ timeout: 20_000 });
+  const shape = page.getByTestId("portfolio-shape");
+  await expect(shape).toBeVisible({ timeout: 20_000 });
+  // MAJOR 2 (round-2 review): the ONLY DOM proof this crop actually exercised the credentialed
+  // fan-out path (this spec sets the session cookie above via `prepare(..., isSignedIn)`) rather
+  // than the anonymous one, which an unauthenticated caller can equally reach.
+  await expect(shape).toHaveAttribute("data-coverage-source", "credentialed");
+  if (testInfo.project.name === "mobile") await scrollLegendClear(page);
   await shot(page, "risk-book", testInfo, "en");
   if (MODE === "mixed") {
     const gaps = page.getByTestId("shape-gaps");
@@ -88,8 +118,25 @@ test("risk readout — mixed/outage book, ZH", async ({ page, baseURL }, testInf
   await prepare(page, testInfo, baseURL, true);
   await seedBook(page);
   await page.goto("/portfolio");
-  await expect(page.getByTestId("portfolio-shape")).toBeVisible({ timeout: 20_000 });
+  const shape = page.getByTestId("portfolio-shape");
+  await expect(shape).toBeVisible({ timeout: 20_000 });
+  await expect(shape).toHaveAttribute("data-coverage-source", "credentialed");
+  if (testInfo.project.name === "mobile") await scrollLegendClear(page);
   await shot(page, "risk-book", testInfo, "zh");
+});
+
+// MAJOR 2 (round-2 review): the anonymous path must NEVER render the same attribute value a
+// credentialed caller gets — this is the assertion the reviewer asked for, that the fixture
+// stockdata server's cookie gate (e2e/fixtureStockdataServer.mjs) makes possible to prove.
+test("risk readout — signed-out caller never renders data-coverage-source=credentialed", async ({ page, baseURL }, testInfo) => {
+  test.skip(MODE !== "mixed", "Anonymous-path proof only needed once.");
+  await prepare(page, testInfo, baseURL, false, /* isSignedIn */ false);
+  await seedBook(page);
+  await page.goto("/portfolio");
+  const shape = page.getByTestId("portfolio-shape");
+  await expect(shape).toBeVisible({ timeout: 20_000 });
+  await expect(shape).not.toHaveAttribute("data-coverage-source", "credentialed");
+  await expect(shape).toHaveAttribute("data-coverage-source", "anonymous");
 });
 
 test("risk readout — empty book renders nothing", async ({ page, baseURL }, testInfo) => {

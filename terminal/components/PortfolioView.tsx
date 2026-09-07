@@ -532,6 +532,10 @@ function PortfolioRiskReadout({ risk, lang }: { risk: PortfolioRisk; lang: Lang 
       data-testid="portfolio-shape"
       data-shape-read={risk.counts.read}
       data-shape-total={risk.counts.total}
+      // MAJOR 2 (round-2 review): the only DOM signal that proves the credentialed fan-out
+      // path actually ran, rather than the anonymous one — never rendered as "credentialed"
+      // unless the caller's own session cookie was present for this GET.
+      data-coverage-source={risk.coverageSource}
       aria-labelledby="pf-shape-h"
     >
       <header className={s.head}>
