@@ -299,7 +299,7 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     void row;
   });
 
-  it("bounded hydration: active-only budget (m5), one automatic batch of 10, a second only on 'Show 10 more', and knowable counts once complete (m1)", async () => {
+  it("bounded hydration: active-only budget (m5), one automatic batch of 10, a second only on 'Show N more', and knowable counts once complete (m1)", async () => {
     const active = Array.from({ length: 12 }, (_, i) =>
       ({
         id: `h${i}`,
@@ -354,7 +354,9 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     await flush();
     expect(idsCalls.length).toBe(1);
 
-    const showMore = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "Show 10 more") as HTMLButtonElement;
+    // Meta-CEO B ruling r4 minor 2: 2 theses remain (12 - 10), so the count-aware copy
+    // reads "Show 2 more" — never the withdrawn hardcoded "Show 10 more".
+    const showMore = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "Show 2 more") as HTMLButtonElement;
     expect(showMore).toBeTruthy();
     await act(async () => {
       showMore.click();
@@ -367,7 +369,7 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     expect(allRequested.size).toBe(12);
     expect([...allRequested].every((id) => active.some((s) => s.id === id))).toBe(true);
     expect(el.querySelector('[data-testid="rms-scope"]')?.textContent).toBe("Showing lines from all 12 active theses.");
-    expect(Array.from(el.querySelectorAll("button")).some((b) => b.textContent === "Show 10 more")).toBe(false);
+    expect(Array.from(el.querySelectorAll("button")).some((b) => /^Show \d+ more$/.test(b.textContent ?? ""))).toBe(false);
     // m1: scope is now complete, so the catalysts count is exactly knowable (one
     // catalyst per active thesis, none from the 3 non-active ones).
     expect(tabs(el).find((b) => b.dataset.view === "catalysts")!.querySelector("[class*='lensCount']")?.textContent).toBe("12");
@@ -422,7 +424,7 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
       if (ids.length > 0) {
         batchCalls += 1;
         // First batch faults (e.g. the route's own 503 fault path); the retry must
-        // use the SAME explicit-user-action mechanism as "Show 10 more" and succeed.
+        // use the SAME explicit-user-action mechanism as "Show N more" and succeed.
         if (batchCalls === 1) return jsonResponse({ error: "thesis_store_unavailable" }, 503);
         const batch = ids.map((id) => details.get(id)).filter((d): d is ThesisDetail => !!d);
         return jsonResponse({ batch, missing: [] });
@@ -439,9 +441,9 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
 
     const unavailablePanel = el.querySelector('[data-testid="rms-hydration-unavailable"]');
     expect(unavailablePanel, "expected the hydration-unavailable panel after a faulted batch").not.toBeNull();
-    // "Show 10 more" is deliberately hidden while this panel shows — it must not be
+    // "Show N more" is deliberately hidden while this panel shows — it must not be
     // the ONLY way out, or a faulted batch is a permanent dead end.
-    expect(Array.from(el.querySelectorAll("button")).some((b) => b.textContent === "Show 10 more")).toBe(false);
+    expect(Array.from(el.querySelectorAll("button")).some((b) => /^Show \d+ more$/.test(b.textContent ?? ""))).toBe(false);
     const retryButton = Array.from(unavailablePanel!.querySelectorAll("button")).find(
       (b) => b.textContent === "Try again",
     ) as HTMLButtonElement;
@@ -477,7 +479,7 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
       const ids = url.searchParams.getAll("ids");
       if (ids.length > 0) {
         batchCalls += 1;
-        // Batch 1 (the automatic 10) succeeds; batch 2 (the explicit "Show 10 more"
+        // Batch 1 (the automatic 10) succeeds; batch 2 (the explicit "Show N more"
         // for the remaining 3) faults — the exact RED-first sequence from the ruling.
         if (batchCalls === 2) return jsonResponse({ error: "thesis_store_unavailable" }, 503);
         const batch = ids.map((id) => details.get(id)).filter((d): d is ThesisDetail => !!d);
@@ -494,7 +496,9 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     await flush();
     expect(Array.from(el.querySelectorAll('[data-testid="rms-line-row"]')).length).toBe(10);
 
-    const showMore = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "Show 10 more") as HTMLButtonElement;
+    // Meta-CEO B ruling r4 minor 2: 3 theses remain (13 - 10) — "Show 3 more", never
+    // the withdrawn hardcoded "Show 10 more".
+    const showMore = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "Show 3 more") as HTMLButtonElement;
     expect(showMore).toBeTruthy();
     await act(async () => {
       showMore.click();
@@ -508,10 +512,12 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     expect(el.querySelector('[data-testid="rms-hydration-unavailable"]')).toBeNull();
     const faultNotice = el.querySelector('[data-testid="rms-hydration-fault"]');
     expect(faultNotice, "expected the inline row-level fault notice").not.toBeNull();
-    expect(faultNotice!.textContent).toContain("The next 10 could not be loaded. Try again.");
-    // "Show 10 more" hides while the fault notice is up — the notice's own retry
+    // Meta-CEO B ruling r4 minor 2: count-aware, never the withdrawn "The next 10
+    // could not be loaded.".
+    expect(faultNotice!.textContent).toContain("3 more could not be loaded. Try again.");
+    // "Show N more" hides while the fault notice is up — the notice's own retry
     // button is the one explicit-action way to try the pending increment again.
-    expect(Array.from(el.querySelectorAll("button")).some((b) => b.textContent === "Show 10 more")).toBe(false);
+    expect(Array.from(el.querySelectorAll("button")).some((b) => /^Show \d+ more$/.test(b.textContent ?? ""))).toBe(false);
 
     const retryButton = Array.from(faultNotice!.querySelectorAll("button")).find(
       (b) => b.textContent === "Try again",
@@ -734,24 +740,37 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     expect(el.querySelector('[data-testid="rms-hydration-unavailable"]'), "the previous lens's fault must not bleed into this one").toBeNull();
   });
 
-  it("changing ownerKey clears a stale hydration fault left by the previous owner (round-2 review r3 minor 5)", async () => {
-    const active = Array.from({ length: 3 }, (_, i) =>
-      ({
-        id: `o${i}`,
-        currentVersion: 1,
-        lifecycleState: "active" as const,
-        subject: subject("AAA", "Alpha Co"),
-        title: `Thesis ${i}`,
-        updatedAt: new Date(2026, 0, i + 1).toISOString(),
-      }) satisfies ThesisSummary,
-    );
+  it("changing ownerKey clears a stale hydration fault left by the previous owner, and the new owner's OWN hydration genuinely succeeds (Meta-CEO B ruling r4 minor 5: non-vacuous)", async () => {
+    // Ruling r4 minor 5: the prior version of this test asserted only that the fault
+    // panel was absent after the swap — but the panel gates on `view` being a content
+    // lens too, and the ownerKey-change effect resets `view` back to the default
+    // "theses" lens, so the panel was ALWAYS going to be absent regardless of whether
+    // the fault flag itself was actually cleared. This version explicitly returns to a
+    // content lens for owner B and asserts real hydrated CONTENT renders, not just the
+    // panel's absence — the fault flag must be genuinely false, not merely masked.
+    const ownerAThesis: ThesisSummary = {
+      id: "reset-a1", currentVersion: 1, lifecycleState: "active",
+      subject: subject("AAA", "Alpha Co"), title: "Alpha thesis", updatedAt: "2026-09-01T00:00:00.000Z",
+    };
+    const ownerBThesis: ThesisSummary = {
+      id: "reset-b1", currentVersion: 1, lifecycleState: "active",
+      subject: subject("BBB", "Beta Co"), title: "Beta thesis", updatedAt: "2026-09-01T00:00:00.000Z",
+    };
+    const detailB = detailFor(ownerBThesis, { catalysts: ["catalyst-RESET-B"] });
+    let currentTheses: ThesisSummary[] = [ownerAThesis];
+    let currentlyOwnerB = false;
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       const url = new URL(raw, "https://x.test");
       if (url.pathname !== "/api/theses") return jsonResponse({ error: "not_found" }, 404);
       const ids = url.searchParams.getAll("ids");
-      if (ids.length > 0) return jsonResponse({ error: "thesis_store_unavailable" }, 503);
-      return jsonResponse({ theses: active, truncated: false });
+      if (ids.length > 0) {
+        // Owner A's batch always faults; Owner B's own batch genuinely succeeds.
+        if (!currentlyOwnerB) return jsonResponse({ error: "thesis_store_unavailable" }, 503);
+        const batch = ids.map((id) => (id === ownerBThesis.id ? detailB : undefined)).filter((d): d is ThesisDetail => !!d);
+        return jsonResponse({ batch, missing: [] });
+      }
+      return jsonResponse({ theses: currentTheses, truncated: false });
     });
     vi.stubGlobal("fetch", fetchMock);
     const el = await mount({ ownerKey: "owner-reset-a" });
@@ -765,11 +784,26 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     // Re-render the SAME root with a different ownerKey (no unmount) — this is the
     // exact prop-change React commits, not a fresh mount, so the ownerKey-keyed
     // effect (not a mount-time initializer) is what must fire.
+    currentlyOwnerB = true;
+    currentTheses = [ownerBThesis];
     await act(async () => {
       root!.render(<ThesisWorkspace ownerKey="owner-reset-b" />);
     });
     await flush();
+    // Explicitly return to the Catalysts lens for owner B — the view itself was reset
+    // to "theses" by the owner swap, so this is required to exercise the fault flag,
+    // not merely observe that the panel's OTHER gating condition (a content lens)
+    // happens to be false.
+    await act(async () => {
+      tabs(el).find((b) => b.dataset.view === "catalysts")!.click();
+    });
+    await flush();
+
     expect(el.querySelector('[data-testid="rms-hydration-unavailable"]'), "owner A's fault must not survive into owner B").toBeNull();
+    expect(
+      Array.from(el.querySelectorAll('[data-testid="rms-line-row"]')).some((row) => row.textContent?.includes("catalyst-RESET-B")),
+      "expected owner B's own real hydrated content, not just an absent fault panel",
+    ).toBe(true);
   });
 
   it("the rail's aria-orientation stays live across a breakpoint change, not just the initial matchMedia read (round-2 review r3 minor 2)", async () => {
@@ -865,5 +899,206 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("an ownerKey change resets every per-owner state so no owner-A data survives into owner B (Meta-CEO B ruling r4 MAJOR)", async () => {
+    const ownerAThesis: ThesisSummary = {
+      id: "iso-a1", currentVersion: 1, lifecycleState: "active",
+      subject: subject("AAA", "Alpha Co"), title: "Alpha thesis", updatedAt: "2026-09-01T00:00:00.000Z",
+    };
+    const ownerBThesis: ThesisSummary = {
+      id: "iso-b1", currentVersion: 1, lifecycleState: "active",
+      subject: subject("BBB", "Beta Co"), title: "Beta thesis", updatedAt: "2026-09-01T00:00:00.000Z",
+    };
+    const detailA = detailFor(ownerAThesis, { catalysts: ["catalyst-A"], risks: ["risk-A"], revisionNote: "note-A" });
+    const detailB = detailFor(ownerBThesis, { catalysts: ["catalyst-B"], risks: ["risk-B"], revisionNote: "note-B" });
+    let currentTheses: ThesisSummary[] = [ownerAThesis];
+    const details = new Map([[ownerAThesis.id, detailA], [ownerBThesis.id, detailB]]);
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(raw, "https://x.test");
+      if (url.pathname !== "/api/theses") return jsonResponse({ error: "not_found" }, 404);
+      const ids = url.searchParams.getAll("ids");
+      if (ids.length > 0) {
+        const batch = ids.map((id) => details.get(id)).filter((d): d is ThesisDetail => !!d);
+        const missing = ids.filter((id) => !details.has(id));
+        return jsonResponse({ batch, missing });
+      }
+      return jsonResponse({ theses: currentTheses, truncated: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const el = await mount({ ownerKey: "owner-isolation-a" });
+
+    // Owner A: apply a Coverage subject filter AND fully hydrate every content lens.
+    await act(async () => { tabs(el).find((b) => b.dataset.view === "coverage")!.click(); });
+    const alphaRow = Array.from(el.querySelectorAll('[data-testid="thesis-list-pane"] button')).find((b) =>
+      b.textContent?.includes("Alpha Co"),
+    ) as HTMLButtonElement;
+    await act(async () => alphaRow.click());
+    expect(el.querySelector('[data-testid="rms-subject-chip"]')?.textContent).toBe("Alpha Co · Show everything");
+
+    await act(async () => { tabs(el).find((b) => b.dataset.view === "catalysts")!.click(); });
+    await flush();
+    expect(el.textContent).toContain("catalyst-A");
+
+    await act(async () => { tabs(el).find((b) => b.dataset.view === "risks")!.click(); });
+    await flush();
+    expect(el.textContent).toContain("risk-A");
+
+    await act(async () => { tabs(el).find((b) => b.dataset.view === "notes")!.click(); });
+    await flush();
+    expect(el.textContent).toContain("note-A");
+
+    // Swap owner WITHOUT remounting — same React root, new ownerKey prop — and switch
+    // the fixture's own list to Owner B's thesis, exactly as a real account switch
+    // would look from this component's point of view.
+    currentTheses = [ownerBThesis];
+    await act(async () => { root!.render(<ThesisWorkspace ownerKey="owner-isolation-b" />); });
+    await flush();
+
+    // The subject filter must not survive — no chip, no stale "Alpha Co" label, and no
+    // filtered-empty state resolved against Owner A's stale subject key.
+    expect(el.querySelector('[data-testid="rms-subject-chip"]')).toBeNull();
+    expect(el.textContent).not.toContain("Alpha Co");
+    expect(el.querySelector('[data-testid="rms-filtered-empty"]')).toBeNull();
+
+    // Owner B's own content, hydrated fresh — never Owner A's stale lines — in every
+    // content lens the ruling names.
+    await act(async () => { tabs(el).find((b) => b.dataset.view === "catalysts")!.click(); });
+    await flush();
+    expect(el.textContent).toContain("catalyst-B");
+    expect(el.textContent).not.toContain("catalyst-A");
+
+    await act(async () => { tabs(el).find((b) => b.dataset.view === "risks")!.click(); });
+    await flush();
+    expect(el.textContent).toContain("risk-B");
+    expect(el.textContent).not.toContain("risk-A");
+
+    await act(async () => { tabs(el).find((b) => b.dataset.view === "notes")!.click(); });
+    await flush();
+    expect(el.textContent).toContain("note-B");
+    expect(el.textContent).not.toContain("note-A");
+
+    // The scope sentence names only Owner B's own single active thesis — never a
+    // stale/combined count carried over from Owner A.
+    expect(el.querySelector('[data-testid="rms-scope"]')?.textContent).toBe("Showing lines from all 1 active thesis.");
+    expect(el.textContent).not.toContain("AAA");
+  });
+
+  it("a stale in-flight batch from the PREVIOUS owner can never render after an ownerKey swap, even if it resolves late (Meta-CEO B ruling r4 MAJOR, defensive membership filter)", async () => {
+    const ownerAThesis: ThesisSummary = {
+      id: "race-a1", currentVersion: 1, lifecycleState: "active",
+      subject: subject("AAA", "Alpha Co"), title: "Alpha thesis", updatedAt: "2026-09-01T00:00:00.000Z",
+    };
+    const ownerBThesis: ThesisSummary = {
+      id: "race-b1", currentVersion: 1, lifecycleState: "active",
+      subject: subject("BBB", "Beta Co"), title: "Beta thesis", updatedAt: "2026-09-01T00:00:00.000Z",
+    };
+    const detailA = detailFor(ownerAThesis, { catalysts: ["catalyst-RACE-A"] });
+    const detailB = detailFor(ownerBThesis, { catalysts: ["catalyst-RACE-B"] });
+    let currentTheses: ThesisSummary[] = [ownerAThesis];
+    let resolveAResponse: ((value: Response) => void) | null = null;
+    let idsCallCount = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(raw, "https://x.test");
+      if (url.pathname !== "/api/theses") return jsonResponse({ error: "not_found" }, 404);
+      const ids = url.searchParams.getAll("ids");
+      if (ids.length > 0) {
+        idsCallCount += 1;
+        if (idsCallCount === 1) {
+          // Owner A's automatic batch: deliberately held open so it resolves AFTER the
+          // ownerKey swap below — the exact stale-async-response race the ruling's
+          // "defensively" clause exists for.
+          return new Promise<Response>((resolve) => { resolveAResponse = resolve; });
+        }
+        const batch = ids.map((id) => (id === ownerBThesis.id ? detailB : undefined)).filter((d): d is ThesisDetail => !!d);
+        return jsonResponse({ batch, missing: [] });
+      }
+      return jsonResponse({ theses: currentTheses, truncated: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const el = await mount({ ownerKey: "owner-race-a" });
+
+    await act(async () => { tabs(el).find((b) => b.dataset.view === "catalysts")!.click(); });
+    await flush();
+    expect(idsCallCount).toBe(1);
+
+    // Swap owner WITHOUT remounting, and WITHOUT ever resolving Owner A's request.
+    currentTheses = [ownerBThesis];
+    await act(async () => { root!.render(<ThesisWorkspace ownerKey="owner-race-b" />); });
+    await flush();
+    await act(async () => { tabs(el).find((b) => b.dataset.view === "catalysts")!.click(); });
+    await flush();
+    expect(el.textContent).toContain("catalyst-RACE-B");
+
+    // NOW the stale Owner-A response lands — after the swap, and after Owner B's own
+    // hydration already succeeded.
+    expect(resolveAResponse).not.toBeNull();
+    await act(async () => {
+      resolveAResponse!(jsonResponse({ batch: [detailA], missing: [] }));
+    });
+    await flush();
+
+    expect(el.textContent).not.toContain("catalyst-RACE-A");
+    expect(
+      Array.from(el.querySelectorAll('[data-testid="rms-line-row"]')).every((row) => !row.textContent?.includes("Alpha")),
+    ).toBe(true);
+    expect(el.querySelector('[data-testid="rms-scope"]')?.textContent).toBe("Showing lines from all 1 active thesis.");
+  });
+
+  it("a fault while THIS lens has zero of its OWN rows still shows the lens's own empty state, not the terminal panel, when other theses are already hydrated (Meta-CEO B ruling r4 minor 1)", async () => {
+    const active = Array.from({ length: 11 }, (_, i) =>
+      ({
+        id: `mn1-${i}`,
+        currentVersion: 1,
+        lifecycleState: "active" as const,
+        subject: subject("AAA", "Alpha Co"),
+        title: `Thesis ${i}`,
+        updatedAt: new Date(2026, 0, i + 1).toISOString(),
+      }) satisfies ThesisSummary,
+    );
+    // None of these theses carry any risk lines — only catalysts — so the Risks lens
+    // is legitimately empty for the 10 theses that DO hydrate, even though the
+    // workspace as a whole has real hydrated content.
+    const details = new Map(active.map((s) => [s.id, detailFor(s, { catalysts: [`cat-${s.id}`] })]));
+    let batchCalls = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(raw, "https://x.test");
+      if (url.pathname !== "/api/theses") return jsonResponse({ error: "not_found" }, 404);
+      const ids = url.searchParams.getAll("ids");
+      if (ids.length > 0) {
+        batchCalls += 1;
+        if (batchCalls === 2) return jsonResponse({ error: "thesis_store_unavailable" }, 503);
+        const batch = ids.map((id) => details.get(id)).filter((d): d is ThesisDetail => !!d);
+        return jsonResponse({ batch, missing: [] });
+      }
+      return jsonResponse({ theses: active, truncated: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const el = await mount({ ownerKey: "owner-minor1" });
+
+    await act(async () => { tabs(el).find((b) => b.dataset.view === "risks")!.click(); });
+    await flush();
+    // First automatic batch succeeds (10 theses hydrated, none with a risk line) — a
+    // legitimate empty state for THIS lens, never the terminal "nothing to show" panel.
+    expect(el.querySelector('[data-testid="rms-hydration-unavailable"]')).toBeNull();
+    expect(el.querySelector('[data-testid="rms-empty"]')?.textContent).toBe("No risks written down in the theses loaded here.");
+
+    const showMore = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "Show 1 more") as HTMLButtonElement;
+    expect(showMore).toBeTruthy();
+    await act(async () => { showMore.click(); });
+    await flush();
+
+    // The second batch (the last thesis) faults. Ten theses' worth of content is still
+    // hydrated workspace-wide — the terminal "nothing to show" panel must NOT
+    // reappear; the lens's own empty copy stays, and the smaller inline fault notice
+    // appears alongside it (never `null`).
+    expect(el.querySelector('[data-testid="rms-hydration-unavailable"]')).toBeNull();
+    expect(el.querySelector('[data-testid="rms-empty"]')?.textContent).toBe("No risks written down in the theses loaded here.");
+    const faultNotice = el.querySelector('[data-testid="rms-hydration-fault"]');
+    expect(faultNotice, "expected the inline fault notice alongside the lens's own empty state").not.toBeNull();
+    expect(faultNotice!.textContent).toContain("1 more could not be loaded. Try again.");
   });
 });

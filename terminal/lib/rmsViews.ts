@@ -274,13 +274,17 @@ export type RmsCopy = {
   scopeComplete: string;
   /** total === 1. */
   scopeCompleteSingular: string;
+  /** {n} placeholder — the actual pending increment (`min(RMS_HYDRATION_BATCH,
+   *  remaining)`), never a hardcoded "10" (Meta-CEO B ruling r4 minor 2: a fixed "10"
+   *  read false whenever fewer than 10 theses remained). */
   showMore: string;
   unavailableLens: string;
   /** A fault on a batch AFTER the first must never read as the terminal
    *  `unavailableLens` state while earlier rows are still mounted (round-2 review r3
    *  MAJOR-1) — this is the inline, row-level notice shown under the still-visible
    *  list, distinct from `unavailableLens` (which may render only when zero rows are
-   *  hydrated). */
+   *  hydrated). {n} placeholder — same pending-increment count as `showMore` (ruling
+   *  r4 minor 2). */
   hydrationFault: string;
   "condition.window_closed": string;
   "condition.open": string;
@@ -341,12 +345,12 @@ export const RMS_COPY: { en: RmsCopy; zh: RmsCopy } = {
     scopeSingular: "Showing lines from {loaded} of your 1 active thesis.",
     scopeComplete: "Showing lines from all {total} active theses.",
     scopeCompleteSingular: "Showing lines from all 1 active thesis.",
-    showMore: "Show 10 more",
+    showMore: "Show {n} more",
     // Not "Your thesis store did not answer..." — the strong heading right above this
     // paragraph already says exactly that; repeating it read as a stutter (sibling
     // repair on this branch).
     unavailableLens: "This view has nothing to show right now. Nothing has been changed.",
-    hydrationFault: "The next 10 could not be loaded. Try again.",
+    hydrationFault: "{n} more could not be loaded. Try again.",
     "condition.window_closed": "The window you were watching has closed",
     "condition.open": "The window you were watching is still open.",
     "condition.unavailable": "Condition checks are not connected yet.",
@@ -396,9 +400,9 @@ export const RMS_COPY: { en: RmsCopy; zh: RmsCopy } = {
     scopeSingular: "正在显示 1 条活跃论点中 {loaded} 条的内容。",
     scopeComplete: "正在显示全部 {total} 条活跃论点的内容。",
     scopeCompleteSingular: "正在显示这 1 条活跃论点的全部内容。",
-    showMore: "再载入 10 条",
+    showMore: "再载入 {n} 条",
     unavailableLens: "此视角暂时没有内容可显示。没有任何内容被更改。",
-    hydrationFault: "接下来的 10 条未能载入。请重试。",
+    hydrationFault: "接下来的 {n} 条未能载入。请重试。",
     "condition.window_closed": "你关注的观察窗口已结束",
     "condition.open": "你关注的观察窗口仍然开着。",
     "condition.unavailable": "条件检查尚未接入",

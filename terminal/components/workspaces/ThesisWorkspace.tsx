@@ -18,6 +18,7 @@ import type {
 import {
   RMS_VIEWS,
   RMS_DEFAULT_VIEW,
+  RMS_HYDRATION_BATCH,
   RMS_COPY,
   coverageRows,
   ideaRows,
@@ -445,6 +446,16 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
     // new owner's hydration — otherwise switching `ownerKey` within one mount could
     // render the fault notice before that owner's own first batch has even run.
     setHydrationUnavailable(false);
+    // Meta-CEO B ruling r4 MAJOR: an `ownerKey` change with no remount must reset
+    // EVERY per-owner piece of state, not only the fault flag above — otherwise a
+    // previous owner's hydrated thesis details, missing-id set, or an active subject
+    // filter survive into the new owner's workspace (a stale subject filter label in
+    // particular used to keep naming the PREVIOUS owner's subject while resolving
+    // against the new owner's rows).
+    setHydratedDetails(new Map());
+    setMissingIds(new Set());
+    setSubjectFilterKey(null);
+    setSubjectFilterLabel(null);
   }, [ownerKey]);
   // Round-2 review r3 minor 1/2: the rail's ARIA orientation must track the same
   // 600px breakpoint the CSS switches the tablist to a horizontal scroller at — read
@@ -462,6 +473,32 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
       else mq.removeListener(update);
     };
   }, []);
+  // Meta-CEO B ruling r4 minor 6: at the narrow (<=600px) breakpoint the tablist
+  // becomes a horizontal scroller (CSS above) — it must always START at scroll
+  // position 0 (never wherever a browser's own scroll-into-view for a focused/clicked
+  // tab happened to leave it), and it must carry a visible edge-fade affordance
+  // whenever its content actually overflows the visible width, so a user knows there
+  // is more to scroll to. `narrowRail` flipping true is the one signal that the rail
+  // just became (or already is) the horizontal layout, so re-check and reset then.
+  const lensListRef = useRef<HTMLUListElement | null>(null);
+  const [railOverflowing, setRailOverflowing] = useState(false);
+  useEffect(() => {
+    const el = lensListRef.current;
+    if (!narrowRail || !el) {
+      setRailOverflowing(false);
+      return;
+    }
+    el.scrollLeft = 0;
+    const check = () => setRailOverflowing(el.scrollWidth > el.clientWidth + 1);
+    check();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", check);
+      return () => window.removeEventListener("resize", check);
+    }
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [narrowRail]);
   // Round-2 review r3 minor 6: `reviewRows` reads a 90-day staleness window off `now`
   // — frozen at the last time `theses`/`conditions` changed, a thesis crossed into
   // "stale" only when something ELSE happened to reload the list, sometimes days
@@ -664,7 +701,18 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
 
   const rms = RMS_COPY[lang];
   const activeViewDef: RmsViewDef = RMS_VIEWS.find((v) => v.id === view) ?? RMS_VIEWS[0];
-  const detailListRows = useMemo(() => Array.from(hydratedDetails.values()), [hydratedDetails]);
+  // Meta-CEO B ruling r4 MAJOR (defensive half): the reset above closes the ordinary
+  // path, but a hydration request already in flight when `ownerKey` swaps can still
+  // resolve AFTER the reset and merge the PREVIOUS owner's thesis details back in via
+  // `hydrateBatch`'s functional `setHydratedDetails` update. Every content lens reads
+  // through `detailListRows`, so gating it on membership in the CURRENT owner's own
+  // `theses` list is the one choke point that keeps a foreign thesis's lines from ever
+  // rendering, regardless of which stale async response lands when.
+  const thesesIdSet = useMemo(() => new Set(theses.map((t) => t.id)), [theses]);
+  const detailListRows = useMemo(
+    () => Array.from(hydratedDetails.values()).filter((d) => thesesIdSet.has(d.id)),
+    [hydratedDetails, thesesIdSet],
+  );
   // minor 2 (round-2 review) — considered, not changed: `missingIds` are ids the batch
   // API reported `not_found` for a thesis this workspace's own list just returned, i.e.
   // confirmed gone (deleted between list and hydrate), never a transient fault (a fault
@@ -720,6 +768,10 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
     }
   }, [rms.countUnknown, coverageViewRows, ideaViewRows, thesesViewRows, reviewViewRows, scope.complete, catalystViewRows, riskViewRows, noteViewRows]);
   const scopeSentence = formatScopeSentence(scope.loaded, scope.total, scope.complete, rms);
+  // Meta-CEO B ruling r4 minor 2 (the frozen "10" strings are withdrawn): the pending
+  // increment is never larger than the actual remaining count, so "Show 10 more"/"The
+  // next 10 could not be loaded" read false the moment fewer than 10 theses are left.
+  const pendingCount = Math.max(0, Math.min(RMS_HYDRATION_BATCH, scope.total - scope.loaded));
   // Round-2 review minor: memoized (was recomputed on every render via an inline call),
   // and `null` rather than a fabricated `{source:"unavailable"}` when there is no
   // `detail` yet — an unsaved NEW thesis is not an object whose condition can be
@@ -1182,8 +1234,8 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
       ) : (
         <div className={styles.workspaceGrid}>
           <aside className={styles.rail} aria-label={copy.list} data-testid="thesis-list-pane">
-            <nav className={styles.lensRail} aria-label={rms.lensRailLabel} data-testid="thesis-lens-rail">
-              <ul role="tablist" aria-orientation={narrowRail ? "horizontal" : "vertical"} onKeyDown={onLensKeyDown}>
+            <nav className={styles.lensRail} aria-label={rms.lensRailLabel} data-testid="thesis-lens-rail" data-overflow={railOverflowing || undefined}>
+              <ul ref={lensListRef} role="tablist" aria-orientation={narrowRail ? "horizontal" : "vertical"} onKeyDown={onLensKeyDown}>
                 {RMS_VIEWS.map((v) => {
                   // Round-2 review r3 minor 7: the Theses lens badge already shows the
                   // FILTERED count (thesesViewRows is pre-filtered) — it needs a marker
@@ -1242,15 +1294,20 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
                   This terminal "nothing to show" panel may render only when there is
                   truly nothing hydrated yet — the moment any row exists it stays
                   mounted below instead, and the fault becomes the smaller inline
-                  notice under the list (further down). */}
-              {listState === "ready" && activeViewDef.requiresContent && hydrationUnavailable && contentRows.length === 0 && (
+                  notice under the list (further down). Meta-CEO B ruling r4 minor 1:
+                  "nothing hydrated" means ZERO theses hydrated for the WHOLE
+                  workspace (`detailListRows`), never merely zero rows in the CURRENT
+                  lens — a lens can legitimately have no lines of its own even while
+                  other theses are hydrated; that case is the lens's own empty state
+                  plus the inline fault notice below, not this panel. */}
+              {listState === "ready" && activeViewDef.requiresContent && hydrationUnavailable && detailListRows.length === 0 && (
                 <div className={styles.railState} role="status" data-testid="rms-hydration-unavailable">
                   <strong>{copy.unavailable}</strong><p>{rms.unavailableLens}</p>
                   {/* Round-2 review MAJOR: a faulted or malformed hydration batch used to
                       leave this the terminal state — the automatic effect only ever fires
-                      once per mount (M4) and "Show 10 more" below is deliberately hidden
+                      once per mount (M4) and "Show N more" below is deliberately hidden
                       while this panel is showing, so there was no way back in. Retrying
-                      is the same explicit user action as "Show 10 more" (ruling item 6:
+                      is the same explicit user action as "Show N more" (ruling item 6:
                       further batches only ever via an explicit action, never automatic). */}
                   <button type="button" onClick={hydrateMore} disabled={hydrating}>{copy.retry}</button>
                 </div>
@@ -1296,10 +1353,15 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
                   LATER batch's fault — this branch no longer gates on `!hydrationUnavailable`
                   (a fault when `contentRows` is empty still falls through to the
                   `rms-hydration-unavailable` panel above, which is the ONLY place that
-                  panel may render, per the guard on it). */}
+                  panel may render, per the guard on it). Meta-CEO B ruling r4 minor 1:
+                  that panel now gates on `detailListRows` (workspace-wide), not
+                  `contentRows` (this lens only) — so when OTHER theses are already
+                  hydrated but this lens has none of its own, render this lens's own
+                  empty copy here (never `null`); the inline fault notice below still
+                  renders alongside it. */}
               {listState === "ready" && (view === "catalysts" || view === "risks" || view === "notes") && (
                 contentRows.length === 0
-                  ? (hydrationUnavailable
+                  ? (hydrationUnavailable && detailListRows.length === 0
                     ? null
                     : (hydrating && detailListRows.length === 0
                       ? <p className={styles.muted} role="status">{copy.loading}</p>
@@ -1314,16 +1376,19 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
                   ))
               )}
               {/* Round-2 review r3 MAJOR-1: the inline, row-level fault notice — shown
-                  UNDER the still-visible list, never replacing it. Only reachable when
-                  `contentRows.length > 0`; the zero-rows case is the panel above. */}
-              {listState === "ready" && activeViewDef.requiresContent && hydrationUnavailable && contentRows.length > 0 && (
+                  UNDER the still-visible list, never replacing it. Meta-CEO B ruling r4
+                  minor 1: reachable whenever ANY thesis is already hydrated workspace-
+                  wide (`detailListRows.length > 0`), not only when THIS lens has rows —
+                  a lens with its own legitimate empty state still needs to show that a
+                  later batch faulted. The terminal panel above is the only other case. */}
+              {listState === "ready" && activeViewDef.requiresContent && hydrationUnavailable && detailListRows.length > 0 && (
                 <div className={styles.railState} role="status" data-testid="rms-hydration-fault">
-                  <p>{rms.hydrationFault}</p>
+                  <p>{rms.hydrationFault.replace("{n}", String(pendingCount))}</p>
                   <button type="button" onClick={hydrateMore} disabled={hydrating}>{copy.retry}</button>
                 </div>
               )}
               {activeViewDef.requiresContent && !scope.complete && !hydrationUnavailable && (
-                <button type="button" className={styles.showMore} onClick={hydrateMore} disabled={hydrating}>{rms.showMore}</button>
+                <button type="button" className={styles.showMore} onClick={hydrateMore} disabled={hydrating}>{rms.showMore.replace("{n}", String(pendingCount))}</button>
               )}
             </div>
             {truncated && <p className={styles.muted}>{copy.moreTheses}</p>}

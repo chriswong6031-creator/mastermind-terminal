@@ -133,11 +133,27 @@
   .historySummary > button { grid-column: 2; grid-row: 1 / span 4; align-self: stretch; }
   .versionMeta, .snapshotGrid { grid-template-columns: 1fr; }
   .snapshotFull { grid-column: auto; }
-  .lensRail { margin: 0 -10px 12px; padding: 0 10px; }
+  .lensRail { position: relative; margin: 0 -10px 12px; padding: 0 10px; }
   .lensRail ul { grid-auto-flow: column; grid-auto-columns: max-content; overflow-x: auto; gap: 6px; padding-bottom: 4px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
   .lens { min-height: 38px; border-left: 0; border-bottom: 2px solid transparent; border-radius: var(--r-md); padding: 8px 12px; scroll-snap-align: start; }
   .lens[data-selected] { border-bottom-color: var(--brand); }
   .lensPanel { gap: 8px; }
+  /* Meta-CEO B ruling r4 minor 6: a visible affordance that the horizontally scrolling
+     lens rail holds more tabs than fit — shown only while `railOverflowing` is
+     actually true (JS-measured scrollWidth > clientWidth), never as a permanent
+     decoration. A right-edge fade into the panel background, not a hard cutoff. */
+  .lensRail[data-overflow]::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 10px;
+    bottom: 4px;
+    width: 28px;
+    /* Matches `.rail`'s own background (color-mix(in srgb, var(--panel) 86%,
+       transparent)) so the fade reads as an edge of the panel, not a mismatched tint. */
+    background: linear-gradient(to right, transparent, color-mix(in srgb, var(--panel) 86%, transparent) 75%);
+    pointer-events: none;
+  }
 }
 .subjectRow { width: 100%; display: grid; gap: 6px; padding: 11px; text-align: left; color: inherit; border: 1px solid transparent; border-radius: 9px; background: transparent; cursor: pointer; }
 .subjectRow:hover { border-color: var(--line); background: var(--panel-2); }
