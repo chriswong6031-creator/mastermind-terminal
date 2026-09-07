@@ -229,7 +229,14 @@ const WATCHING_ALERT = {
 const FIRED_ALERT = {
   id: "a1", symbol: "NVDA", active: false, created_at: "2026-08-01T00:00:00Z",
   // Production shape (see the "fired alert" test above) — never the bare-boolean shape alone.
-  condition: { type: "price", triggered: { at: "2026-09-05T09:41:00Z", value: 100, note: "crossed" } },
+  // Round-5 review deviation, fixed here rather than deferred: this condition carried no
+  // op/value (only `triggered`), the exact same missing-field shape round-4's Major 1 fixed
+  // for WATCHING_ALERT — AlertsView.tsx's legacy row label (`condText`) reads `c.op`/`c.value`
+  // regardless of `triggered`, so every crop built on this fixture (fired-delivery, drillback,
+  // zh-calm) still printed "NVDA · Price crosses below undefined" in the existing-alerts panel
+  // even after round-4/5's other fixes. op:"below"/value:150 is consistent with the fired
+  // evaluation (triggered.value:100 is below 150).
+  condition: { type: "price", op: "below", value: 150, triggered: { at: "2026-09-05T09:41:00Z", value: 100, note: "crossed" } },
 };
 const SENT_OUTBOX = [{
   alert_id: "a1", fire_event_id: "f1", status: "sent", attempts: 1, last_error: null,
