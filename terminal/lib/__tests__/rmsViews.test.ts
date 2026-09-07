@@ -228,6 +228,16 @@ describe("rmsViews copy", () => {
     expect(formatScopeSentence(1, 1, true, RMS_COPY.en)).not.toMatch(/1 active theses/);
   });
 
+  it("formatScopeSentence: ZH plural/singular x partial/complete (round-2 review r3 minor 4 — ZH was asserted only via /活跃/ on the raw templates, never through a rendered sentence)", () => {
+    expect(formatScopeSentence(10, 12, false, RMS_COPY.zh)).toBe("正在显示 12 条活跃论点中 10 条的内容。");
+    expect(formatScopeSentence(12, 12, true, RMS_COPY.zh)).toBe("正在显示全部 12 条活跃论点的内容。");
+    expect(formatScopeSentence(0, 1, false, RMS_COPY.zh)).toBe("正在显示 1 条活跃论点中 0 条的内容。");
+    expect(formatScopeSentence(1, 1, false, RMS_COPY.zh)).toBe("正在显示 1 条活跃论点中 1 条的内容。");
+    expect(formatScopeSentence(1, 1, true, RMS_COPY.zh)).toBe("正在显示这 1 条活跃论点的全部内容。");
+    expect(RMS_COPY.zh.scopeSingular).toMatch(/活跃/);
+    expect(RMS_COPY.zh.scopeCompleteSingular).toMatch(/活跃/);
+  });
+
   it("typed not-connected condition (honest, not a transient error), and readConditionStates returns it for every id today", () => {
     expect(conditionLine({ source: "unavailable" }, "en")).toBe("Condition checks are not connected yet.");
     expect(conditionLine({ source: "unavailable" }, "zh")).toBe("条件检查尚未接入");

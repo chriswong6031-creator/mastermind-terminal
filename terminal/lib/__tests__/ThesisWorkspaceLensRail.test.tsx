@@ -693,4 +693,177 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
     expect(badge().textContent).toContain("1");
     expect(badge().hasAttribute("data-filtered")).toBe(true);
   });
+
+  it("switching lenses clears a stale hydration fault immediately, before the new lens's own read (round-2 review r3 minor 5)", async () => {
+    const active = Array.from({ length: 3 }, (_, i) =>
+      ({
+        id: `s${i}`,
+        currentVersion: 1,
+        lifecycleState: "active" as const,
+        subject: subject("AAA", "Alpha Co"),
+        title: `Thesis ${i}`,
+        updatedAt: new Date(2026, 0, i + 1).toISOString(),
+      }) satisfies ThesisSummary,
+    );
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(raw, "https://x.test");
+      if (url.pathname !== "/api/theses") return jsonResponse({ error: "not_found" }, 404);
+      const ids = url.searchParams.getAll("ids");
+      // Every batch read faults — this test only needs the fault flag to be raised
+      // once, on the first (default-view) lens.
+      if (ids.length > 0) return jsonResponse({ error: "thesis_store_unavailable" }, 503);
+      return jsonResponse({ theses: active, truncated: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const el = await mount({ ownerKey: "owner-lens-reset" });
+
+    await act(async () => {
+      tabs(el).find((b) => b.dataset.view === "catalysts")!.click();
+    });
+    await flush();
+    expect(el.querySelector('[data-testid="rms-hydration-unavailable"]'), "expected the fault panel on catalysts").not.toBeNull();
+
+    // Switch to a different content lens. Its own automatic-batch effect is a no-op
+    // (M4: one automatic batch, ever, per mount — already consumed by catalysts), so
+    // if the fault flag were not reset on lens change, this lens would show the exact
+    // same stale fault panel despite never having made a request of its own.
+    await act(async () => {
+      tabs(el).find((b) => b.dataset.view === "risks")!.click();
+    });
+    expect(el.querySelector('[data-testid="rms-hydration-unavailable"]'), "the previous lens's fault must not bleed into this one").toBeNull();
+  });
+
+  it("changing ownerKey clears a stale hydration fault left by the previous owner (round-2 review r3 minor 5)", async () => {
+    const active = Array.from({ length: 3 }, (_, i) =>
+      ({
+        id: `o${i}`,
+        currentVersion: 1,
+        lifecycleState: "active" as const,
+        subject: subject("AAA", "Alpha Co"),
+        title: `Thesis ${i}`,
+        updatedAt: new Date(2026, 0, i + 1).toISOString(),
+      }) satisfies ThesisSummary,
+    );
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(raw, "https://x.test");
+      if (url.pathname !== "/api/theses") return jsonResponse({ error: "not_found" }, 404);
+      const ids = url.searchParams.getAll("ids");
+      if (ids.length > 0) return jsonResponse({ error: "thesis_store_unavailable" }, 503);
+      return jsonResponse({ theses: active, truncated: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const el = await mount({ ownerKey: "owner-reset-a" });
+
+    await act(async () => {
+      tabs(el).find((b) => b.dataset.view === "catalysts")!.click();
+    });
+    await flush();
+    expect(el.querySelector('[data-testid="rms-hydration-unavailable"]'), "expected the fault panel for owner A").not.toBeNull();
+
+    // Re-render the SAME root with a different ownerKey (no unmount) — this is the
+    // exact prop-change React commits, not a fresh mount, so the ownerKey-keyed
+    // effect (not a mount-time initializer) is what must fire.
+    await act(async () => {
+      root!.render(<ThesisWorkspace ownerKey="owner-reset-b" />);
+    });
+    await flush();
+    expect(el.querySelector('[data-testid="rms-hydration-unavailable"]'), "owner A's fault must not survive into owner B").toBeNull();
+  });
+
+  it("the rail's aria-orientation stays live across a breakpoint change, not just the initial matchMedia read (round-2 review r3 minor 2)", async () => {
+    const t1: ThesisSummary = { id: "t1", currentVersion: 1, lifecycleState: "active", subject: subject("AAA", "Alpha Co"), title: "Alpha", updatedAt: "2026-09-01T00:00:00.000Z" };
+    installFetch([t1], new Map());
+    let changeListener: (() => void) | null = null;
+    // A real MediaQueryList mutates its own `.matches` before dispatching "change" —
+    // the component reads `mq.matches` inside the listener, not an event argument, so
+    // the stub must mirror that: one shared, mutable object, not a fresh literal per
+    // `matchMedia()` call.
+    const mq = {
+      matches: false,
+      media: "(max-width: 600px)",
+      addListener() {},
+      removeListener() {},
+      addEventListener(_type: string, listener: () => void) {
+        changeListener = listener;
+      },
+      removeEventListener() {},
+      dispatchEvent() {
+        return false;
+      },
+    };
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => {
+      mq.media = query;
+      return mq as unknown as MediaQueryList;
+    }) as typeof window.matchMedia;
+    try {
+      const el = await mount({ ownerKey: "owner-live-breakpoint" });
+      const list = el.querySelector('[data-testid="thesis-lens-rail"] [role="tablist"]')!;
+      expect(list.getAttribute("aria-orientation")).toBe("vertical");
+      expect(changeListener, "expected the component to register a matchMedia change listener").not.toBeNull();
+
+      // Simulate the viewport crossing the 600px breakpoint after mount — the live
+      // resize case minor 2 requires, distinct from the two static-breakpoint states
+      // the other tests cover.
+      mq.matches = true;
+      await act(async () => {
+        changeListener!();
+      });
+      expect(list.getAttribute("aria-orientation")).toBe("horizontal");
+
+      mq.matches = false;
+      await act(async () => {
+        changeListener!();
+      });
+      expect(list.getAttribute("aria-orientation")).toBe("vertical");
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
+  it("the Worth-a-look (reviews) lens re-evaluates 90-day staleness on focus, not only when the list itself changes (round-2 review r3 minor 6)", async () => {
+    const start = new Date("2026-01-10T00:00:00.000Z");
+    // Updated 89 days before `start` — active, and not yet stale.
+    const borderline: ThesisSummary = {
+      id: "stale1",
+      currentVersion: 1,
+      lifecycleState: "active",
+      subject: subject("AAA", "Alpha Co"),
+      title: "Borderline thesis",
+      updatedAt: new Date(start.getTime() - 89 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+    installFetch([borderline], new Map());
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(start);
+      const el = await mount({ ownerKey: "owner-review-clock" });
+
+      await act(async () => {
+        tabs(el).find((b) => b.dataset.view === "reviews")!.click();
+      });
+      await flush();
+      // Not yet stale: the reviews lens is empty and the badge count is 0.
+      expect(el.querySelector('[data-testid="rms-empty"]')).not.toBeNull();
+      const reviewsTab = tabs(el).find((b) => b.dataset.view === "reviews")!;
+      expect(reviewsTab.querySelector("[class*='lensCount']")?.textContent).toBe("0");
+
+      // Two days later the same thesis has crossed the 90-day threshold — nothing about
+      // `theses` itself changed, only the clock. A tab regaining focus is the second
+      // (non-timer) trigger the ruling names.
+      vi.setSystemTime(new Date(start.getTime() + 2 * 24 * 60 * 60 * 1000));
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await flush();
+
+      expect(el.querySelector('[data-testid="rms-empty"]')).toBeNull();
+      expect(reviewsTab.querySelector("[class*='lensCount']")?.textContent).toBe("1");
+      const rows = Array.from(el.querySelectorAll('[data-testid="thesis-list-pane"] .thesisList button, [data-testid="rms-lens-panel"] button'));
+      expect(rows.some((b) => b.textContent?.includes("Borderline thesis"))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
