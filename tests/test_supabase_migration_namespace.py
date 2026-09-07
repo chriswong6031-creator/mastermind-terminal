@@ -170,37 +170,37 @@ def test_header_rule_does_not_retro_fail_pre_floor_files():
 
 # --- 10 (acceptance 4) ---------------------------------------------------------
 
-def test_taken_prefix_with_absent_file_is_not_an_error():
-    doc = reservations_doc(
-        prefixes={
-            "0013": {
-                "state": "taken",
-                "file": "0013_alert_runs_outbox.sql",
-                "packet": "B-F08-2",
-                "pr": 513,
-                "pr_state": "open",
-                "note": "fixture",
-            },
-            "0014": {
-                "state": "taken",
-                "file": "0014_tenancy_foundation.sql",
-                "packet": "B-F12-1",
-                "pr": 514,
-                "pr_state": "open",
-                "note": "fixture",
-            },
-        }
-    )
-    on_disk: list[str] = []  # neither file present -- both PRs are unmerged
+def test_taken_prefix_present_and_absent_is_not_an_error_on_the_real_tree():
+    """Acceptance 4, proved against the REAL checkout, not a synthetic fixture.
+
+    The commission premise ("green on a checkout missing 0013/0014") went stale
+    the moment PR #513 merged 0013_alert_runs_outbox.sql to master -- 0012 and
+    0013 are both `taken` with their files present on disk; 0014 (PR #514,
+    still open) is `taken` with its file still absent. This test proves BOTH
+    shapes -- file present, file absent -- against the actual RESERVATIONS.json
+    and the actual supabase/migrations/ directory, so it cannot go stale silently
+    the way the old synthetic-fixture version did.
+    """
+    doc = load_reservations(RESERVATIONS_PATH)
+    on_disk = sorted(p.name for p in MIGRATIONS_DIR.glob("*.sql"))
+
+    assert "0012_thesis_objects.sql" in on_disk, "0012 (PR #502, merged) should be present"
+    assert "0013_alert_runs_outbox.sql" in on_disk, "0013 (PR #513, merged) should be present"
+    assert "0014_tenancy_foundation.sql" not in on_disk, "0014 (PR #514, still open) should be absent"
 
     findings = check_files_are_reserved(on_disk, doc)
     assert findings == []
 
     notes = disclosures(on_disk, doc)
-    text_513 = next(n.text for n in notes if n.prefix == "0013")
-    text_514 = next(n.text for n in notes if n.prefix == "0014")
-    assert "#513" in text_513 and "absent from this checkout by design" in text_513
-    assert "#514" in text_514 and "absent from this checkout by design" in text_514
+    text_012 = next(n.text for n in notes if n.prefix == "0012")
+    text_013 = next(n.text for n in notes if n.prefix == "0013")
+    text_014 = next(n.text for n in notes if n.prefix == "0014")
+
+    # file-present case: no "absent from this checkout" tag
+    assert "absent from this checkout by design" not in text_012
+    assert "absent from this checkout by design" not in text_013
+    # file-absent case: the tag is present, naming the open PR
+    assert "#514" in text_014 and "absent from this checkout by design" in text_014
 
 
 # --- 11 -----------------------------------------------------------------------
@@ -285,7 +285,7 @@ def test_reservations_records_the_known_collision_surface():
     assert prefixes["0013"]["state"] == "taken"
     assert prefixes["0013"]["packet"] == "B-F08-2"
     assert prefixes["0013"]["pr"] == 513
-    assert prefixes["0013"]["pr_state"] == "open"
+    assert prefixes["0013"]["pr_state"] == "merged"
 
     assert prefixes["0014"]["state"] == "taken"
     assert prefixes["0014"]["packet"] == "B-F12-1"
