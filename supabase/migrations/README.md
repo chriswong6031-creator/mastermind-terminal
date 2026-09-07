@@ -160,7 +160,7 @@ amendment, only a README edit.
 |---|---|---|---|
 | `0011` | `analytics_eid` | PR #507 (DDL applied 2026-09-05; readback receipt posted 2026-09-06: https://github.com/mastermindx-market-intelligence/mastermind-terminal/pull/507#issuecomment-5557754941) | applied |
 | `0012` | `thesis_objects` | PR #502 (merged as `d4556962`; DDL applied 2026-09-06, readback receipt) | merged + applied 2026-09-06 |
-| `0013` | `alert_runs_outbox` | PR #513 (merged as `be898be5` on 2026-09-06, packet B-F08-2) | applied 2026-09-07 via the README raw Management-API fallback; readback receipt posted on PR #513 (Meta-CEO B comment https://github.com/mastermindx-market-intelligence/mastermind-terminal/pull/513#issuecomment-5563321750) |
+| `0013` | `alert_runs_outbox` | PR #513 (merged as `be898be5` on 2026-09-06, packet B-F08-2) | applied 2026-09-07 via a direct Management API query (the curl method described above in "How DDL actually lands"), used instead of the apply script `scripts/supabase_apply.py` (PR #516) because of a readback-parser bug in that script; readback receipt posted on PR #513 (Meta-CEO B comment https://github.com/mastermindx-market-intelligence/mastermind-terminal/pull/513#issuecomment-5563321750) |
 | `0014` | `tenancy_foundation` | PR #514 (open PR, packet B-F12-1) | open PR |
 
 What the statuses mean: **reserved** — the number is claimed (for example, by a Meta-CEO B
@@ -178,12 +178,20 @@ table above, `0011` via its corrective DDL applied live on 2026-09-05 via the ma
 (readback receipt posted 2026-09-06, recorded on PR #507, ahead of `0011`'s own file landing on
 `master`), `0012` merged to `master` as `d4556962` with its DDL applied 2026-09-06 (Meta-CEO B,
 readback receipt), and `0013` (PR #513) merged to `master` as `be898be5` on 2026-09-06 with its
-DDL applied out of band on 2026-09-07 via the README raw Management-API fallback (readback
-receipt posted on PR #513, comment `5563321750`) — merged = yes, applied = yes. `0014` (PR #514)
-remains an open pull request (merged = no, applied = no). The "in production?" table above still
-reads `0013` as merged-but-not-applied as of its own last edit (2026-09-06, before the
-2026-09-07 out-of-band apply below) and has not yet been re-synced to this fact; the
-Reservations table here is the current truth for `0013`.
+DDL applied out of band on 2026-09-07 via a direct Management API query (the method described
+above in "How DDL actually lands"), used instead of the apply script `scripts/supabase_apply.py`
+(PR #516) because of a readback-parser bug in that script (readback receipt posted on PR #513,
+comment `5563321750`) — merged = yes, applied = yes. `0014` (PR #514) remains an open pull
+request (merged = no, applied = no). The "in production?" table above still reads `0013` as
+merged-but-not-applied as of its own last edit (2026-09-06, before the 2026-09-07 out-of-band
+apply recorded above) and has not yet been re-synced to this fact; the Reservations table here
+is the current truth for `0013`. This split (Reservations table updated, Application-status
+table's `0013` cell held at master's wording) is the round-11 Meta-CEO B ruling's own item (1)
+"keeping master's rows" / item (2) "the Reservations status cell" scoping, not an oversight —
+but it leaves rule (d) above (readback posted -> application table updated) unsatisfied for that
+one cell. Reconciling the Application-status table's own `0013` cell needs a further Meta-CEO B
+ruling naming that exact cell; it is not a change a builder should make unprompted, since the
+round-11 ruling scoped the applied-status edit to the Reservations table alone.
 
 This table is re-verified at merge time, not just at the moment this pull request opened. A later
 reader should re-run the same open-pull-request query rather than trust these owner cells past
