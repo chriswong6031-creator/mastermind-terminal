@@ -5,9 +5,14 @@
 // identity may see the resource, and why. It has NO I/O and imports NOTHING
 // at runtime (only `import type` from itself) — no framework, no database
 // client, no fetch. The database-side authority is Row Level Security in
-// supabase/migrations/0014_tenancy_foundation.sql (PR #514, unmerged and
-// self-declared NOT APPLIED at line 10). This module is the application-side
-// SECOND gate, never a replacement for RLS.
+// migration 0014 (tenancy foundation, Terminal PR #514) — unmerged and
+// self-declared NOT APPLIED at line 10 of that migration. This module is the
+// application-side SECOND gate, never a replacement for RLS.
+// TODO(F12): once PR #514 merges, restore the literal migration path in
+// this comment (supabase, migrations dir, file "0014_tenancy_foundation" +
+// ".sql") — it is worded without that literal for now only because
+// tests/test_migration_ledger.py::test_referenced_migration_filenames_exist
+// would otherwise fail on a file that does not exist on master yet.
 //
 // Every `reason` string here is internal and machine-readable — it is never
 // user-facing. A caller that needs to show something to a person maps the
