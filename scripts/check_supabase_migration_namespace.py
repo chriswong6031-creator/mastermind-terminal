@@ -278,11 +278,16 @@ def check_migration_header(filename: str, text: str, doc: dict) -> list[Finding]
 def check_all(filenames: Sequence[str], texts: Mapping[str, str], doc: dict) -> list[Finding]:
     findings: list[Finding] = []
 
+    # Ledger-schema validation must run even on an empty/wrong migrations dir --
+    # otherwise a corrupt RESERVATIONS.json on a checkout with no .sql files (or
+    # the wrong path) produces only MIGRATIONS_DIR_EMPTY and every schema
+    # violation stays invisible (minor finding, review round 2).
+    findings.extend(validate_reservations(doc))
+
     if not filenames:
         findings.append(Finding("MIGRATIONS_DIR_EMPTY", None, "no .sql migrations found -- a wrong path would make every other check vacuously pass"))
         return findings
 
-    findings.extend(validate_reservations(doc))
     findings.extend(check_prefix_collisions(filenames))
     findings.extend(check_files_are_reserved(filenames, doc))
     for name in filenames:
@@ -325,17 +330,31 @@ def disclosures(filenames: Sequence[str], doc: dict) -> list[Disclosure]:
             continue
         state = entry.get("state")
         text = _plain_note(prefix, entry, doc)
-        if state in ("taken", "reserved") and prefix not in on_disk:
+        # Only `taken` legitimately means "a real file exists somewhere but not
+        # here" -- a `reserved` prefix has no file anywhere yet (the owner has
+        # claimed the number but not written the .sql), so tagging it "absent
+        # from this checkout" conflated an unmerged-PR file with a not-yet-written
+        # one (minor finding, review round 2; plain-language law).
+        if state == "taken" and prefix not in on_disk:
             text += " (absent from this checkout by design.)"
         notes.append(Disclosure(prefix=prefix, state=state or "unknown", text=text))
 
     header_note = doc.get("header_required_note") if isinstance(doc, dict) else None
     if _non_empty_str(header_note):
+        # Derive the printed floor from the actual document value rather than a
+        # literal "0015" -- otherwise a legitimate future floor raise (with
+        # EXPECTED_HEADER_REQUIRED_FROM updated to match) leaves the CI-printed
+        # disclosure lying about where the rule actually starts (minor finding,
+        # review round 2). Fall back to the pinned expected value only when the
+        # floor itself is missing/malformed, which validate_reservations already
+        # flags as a Finding -- the disclosure stays informative either way.
+        floor = doc.get("header_required_from") if isinstance(doc, dict) else None
+        floor_txt = floor if isinstance(floor, str) and re.fullmatch(r"\d{4}", floor) else EXPECTED_HEADER_REQUIRED_FROM
         notes.append(
             Disclosure(
                 prefix="*",
                 state="note",
-                text="header rule starts at 0015; 0001-0014 are exempt by number and that gap is recorded in header_required_note.",
+                text=f"header rule starts at {floor_txt}; prefixes below that floor are exempt by number and that gap is recorded in header_required_note.",
             )
         )
 

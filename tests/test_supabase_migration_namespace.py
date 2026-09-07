@@ -10,6 +10,8 @@ from __future__ import annotations
 import warnings
 from pathlib import Path
 
+import pytest
+
 from scripts.check_supabase_migration_namespace import (
     EXPECTED_HEADER_REQUIRED_FROM,
     HEADER_SCAN_LINES,
@@ -174,33 +176,64 @@ def test_taken_prefix_present_and_absent_is_not_an_error_on_the_real_tree():
     """Acceptance 4, proved against the REAL checkout, not a synthetic fixture.
 
     The commission premise ("green on a checkout missing 0013/0014") went stale
-    the moment PR #513 merged 0013_alert_runs_outbox.sql to master -- 0012 and
-    0013 are both `taken` with their files present on disk; 0014 (PR #514,
-    still open) is `taken` with its file still absent. This test proves BOTH
-    shapes -- file present, file absent -- against the actual RESERVATIONS.json
-    and the actual supabase/migrations/ directory, so it cannot go stale silently
-    the way the old synthetic-fixture version did.
+    the moment PR #513 merged 0013_alert_runs_outbox.sql to master. This test
+    must not go stale the same way a second time: it does NOT hard-assert which
+    specific prefix is present vs. absent (review round 2, MAJOR 1 -- a fixture
+    naming "0014 is absent" reddens `master` itself the instant sibling PR #514
+    merges, even though the guard has zero real namespace violation in that
+    state). Instead it derives the present/absent split from the ledger x disk
+    join for every `taken` entry, and only asserts the SHAPE: file-on-disk means
+    no "absent" disclosure tag, file-absent means the tag is present and names
+    the owning PR -- and that both shapes are exercised by the real tree, so the
+    test still proves something rather than vacuously passing on an empty split.
     """
     doc = load_reservations(RESERVATIONS_PATH)
     on_disk = sorted(p.name for p in MIGRATIONS_DIR.glob("*.sql"))
-
-    assert "0012_thesis_objects.sql" in on_disk, "0012 (PR #502, merged) should be present"
-    assert "0013_alert_runs_outbox.sql" in on_disk, "0013 (PR #513, merged) should be present"
-    assert "0014_tenancy_foundation.sql" not in on_disk, "0014 (PR #514, still open) should be absent"
+    on_disk_set = set(on_disk)
 
     findings = check_files_are_reserved(on_disk, doc)
     assert findings == []
 
     notes = disclosures(on_disk, doc)
-    text_012 = next(n.text for n in notes if n.prefix == "0012")
-    text_013 = next(n.text for n in notes if n.prefix == "0013")
-    text_014 = next(n.text for n in notes if n.prefix == "0014")
+    notes_by_prefix = {n.prefix: n.text for n in notes}
 
-    # file-present case: no "absent from this checkout" tag
-    assert "absent from this checkout by design" not in text_012
-    assert "absent from this checkout by design" not in text_013
-    # file-absent case: the tag is present, naming the open PR
-    assert "#514" in text_014 and "absent from this checkout by design" in text_014
+    taken_prefixes = {
+        prefix: entry
+        for prefix, entry in doc["prefixes"].items()
+        if isinstance(entry, dict) and entry.get("state") == "taken"
+    }
+    assert taken_prefixes, "the real ledger must have at least one 'taken' entry for this test to mean anything"
+
+    present_class = []
+    absent_class = []
+    for prefix, entry in taken_prefixes.items():
+        expected_file = entry.get("file")
+        text = notes_by_prefix[prefix]
+        if expected_file in on_disk_set:
+            present_class.append(prefix)
+            assert "absent from this checkout by design" not in text, (
+                f"{prefix}: file is present on disk, disclosure must not claim it is absent"
+            )
+        else:
+            absent_class.append(prefix)
+            pr = entry.get("pr")
+            assert "absent from this checkout by design" in text, (
+                f"{prefix}: file is absent from disk, disclosure must say so"
+            )
+            assert pr is not None and f"#{pr}" in text, (
+                f"{prefix}: absent-file disclosure must name its owning pull request"
+            )
+
+    # Both shapes are what makes this test mean something -- but the real
+    # tree's shape changes over time as PRs merge (that is exactly what made
+    # the previous 0014-naming version a time bomb), so an empty class is a
+    # skip-with-reason, never a hard failure: this test's job is to prove the
+    # guard's behaviour on whichever shapes the real tree currently has, not to
+    # freeze the tree's shape in place.
+    if not present_class:
+        pytest.skip("no 'taken' prefix currently has its file present on disk -- present-file shape not exercised")
+    if not absent_class:
+        pytest.skip("no 'taken' prefix currently has its file absent from disk -- absent-file shape not exercised")
 
 
 # --- 11 -----------------------------------------------------------------------
@@ -449,3 +482,46 @@ def test_disclosure_survives_a_missing_header_floor():
     doc = reservations_doc(header_required_from=None)
     notes = disclosures([], doc)
     assert any("header rule starts at 0015" in n.text for n in notes)
+
+
+# --- 16 (minor fix, review round 2: disclosure text tracks the real floor) ---
+
+
+def test_disclosure_reflects_the_actual_header_floor_value():
+    """Before this fix the printed floor was the literal string "0015",
+    independent of `header_required_from` -- a later legitimate floor raise
+    (with EXPECTED_HEADER_REQUIRED_FROM updated to match) would leave the
+    CI-printed disclosure silently lying about where the rule actually starts.
+    Pin a doc whose floor is a valid-shaped but non-default value and assert
+    the disclosure names THAT value, not the old hardcoded one.
+    """
+    doc = reservations_doc(header_required_from="0020")
+    notes = disclosures([], doc)
+    text = next(n.text for n in notes if n.prefix == "*")
+    assert "header rule starts at 0020" in text
+    assert "0015" not in text
+
+
+def test_disclosure_falls_back_to_expected_floor_when_floor_is_malformed():
+    doc = reservations_doc(header_required_from="abcd")
+    notes = disclosures([], doc)
+    text = next(n.text for n in notes if n.prefix == "*")
+    assert f"header rule starts at {EXPECTED_HEADER_REQUIRED_FROM}" in text
+
+
+# --- 17 (minor fix, review round 2: validate_reservations runs even on an
+# empty/wrong migrations dir) ---------------------------------------------
+
+
+def test_check_all_validates_reservations_even_with_no_sql_files():
+    """Before this fix, `check_all`'s empty-`filenames` branch returned before
+    `validate_reservations(doc)` ran, so a checkout with no .sql files (a wrong
+    path, or a genuinely empty migrations dir) reported only
+    MIGRATIONS_DIR_EMPTY and hid every ledger-schema violation. A corrupt
+    ledger must be visible regardless of what is on disk.
+    """
+    doc = reservations_doc(header_required_from=None)  # invalid: triggers MISSING_HEADER_FLOOR
+    findings = check_all([], {}, doc)
+    codes = {f.code for f in findings}
+    assert "MIGRATIONS_DIR_EMPTY" in codes
+    assert "MISSING_HEADER_FLOOR" in codes
