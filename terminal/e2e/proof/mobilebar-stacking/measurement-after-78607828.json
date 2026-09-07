@@ -1,11 +1,11 @@
 {
-  "label": "BEFORE-be898be5",
-  "port": 4791,
-  "capturedAtHead": "a92330aaf5c08737488342e47930c39e33091457",
+  "label": "after-78607828",
+  "port": 3195,
+  "capturedAtHead": "7860782888fb27e6a3198d89b3d393f3c7776ad1",
   "viewports": {
     "1440x900": {
       "mobilebar": {
-        "zIndex": "1",
+        "zIndex": "95",
         "position": "relative",
         "top": "auto",
         "rect": {
@@ -27,6 +27,10 @@
         {
           "selector": ".obs-ambient > *",
           "zIndex": "1"
+        },
+        {
+          "selector": ".analysis-route .mobilebar",
+          "zIndex": "95"
         }
       ],
       "finPane": {
@@ -80,11 +84,11 @@
       },
       "mobilebarOverlapsFinPane": false,
       "finHeadCoveredByMobilebar": false,
-      "screenshot": "BEFORE-be898be5-1440x900.png"
+      "screenshot": "1440x900-after-78607828.png"
     },
     "390x844": {
       "mobilebar": {
-        "zIndex": "1",
+        "zIndex": "95",
         "position": "relative",
         "top": "0px",
         "rect": {
@@ -106,18 +110,22 @@
         {
           "selector": ".obs-ambient > *",
           "zIndex": "1"
+        },
+        {
+          "selector": ".analysis-route .mobilebar",
+          "zIndex": "95"
         }
       ],
       "finPane": {
         "zIndex": "90",
         "position": "fixed",
-        "top": "0px",
+        "top": "52px",
         "rect": {
           "x": 0,
-          "y": 0,
+          "y": 52,
           "width": 390,
-          "height": 844,
-          "top": 0,
+          "height": 792,
+          "top": 52,
           "bottom": 844,
           "left": 0,
           "right": 390
@@ -129,11 +137,11 @@
         "top": "auto",
         "rect": {
           "x": 0,
-          "y": 0,
+          "y": 52,
           "width": 390,
           "height": 52,
-          "top": 0,
-          "bottom": 52,
+          "top": 52,
+          "bottom": 104,
           "left": 0,
           "right": 390
         }
@@ -154,12 +162,12 @@
         }
       },
       "menuHitTest": {
-        "hitElementTag": "svg",
-        "hitElementIsMenuButton": false
+        "hitElementTag": "path",
+        "hitElementIsMenuButton": true
       },
-      "mobilebarOverlapsFinPane": true,
-      "finHeadCoveredByMobilebar": true,
-      "screenshot": "BEFORE-be898be5-390x844.png"
+      "mobilebarOverlapsFinPane": false,
+      "finHeadCoveredByMobilebar": false,
+      "screenshot": "390x844-after-78607828.png"
     }
   }
 }

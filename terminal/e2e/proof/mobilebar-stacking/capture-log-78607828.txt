@@ -1,0 +1,50 @@
+PR #490 evidence capture log — Meta-CEO B ruling r5 (MAJOR-1/2 protocol)
+
+CODE_HEAD (commit these artifacts sit on top of, and the sha every artifact's
+capturedAtHead field states): 7860782888fb27e6a3198d89b3d393f3c7776ad1
+
+Protocol: commit the code first (CODE_HEAD, above), then run the committed
+tool terminal/e2e/tools/measure-analysis-mobilebar-stacking.mjs from that
+exact, git-clean tree for BEFORE and AFTER, swapping only app/globals.css in
+the working tree between runs (never committing the swap) — so `git rev-parse
+HEAD` is CODE_HEAD for both runs, matching each JSON's own capturedAtHead
+field. Both runs used a real `next dev --webpack` server on 127.0.0.1:3195,
+with `.next` deleted before each restart (a stale Turbopack-compiled
+stylesheet was a real bug an earlier round found and fixed the same way).
+
+BEFORE = commit be898be5's app/globals.css (an ancestor of origin/master,
+byte-identical to this branch's merge-base 7ca25472's copy — origin/master's
+current tip, abc116bb, has since gained an unrelated rule elsewhere in the
+file (`.s-universe-failed`, nothing to do with this fix); using be898be5
+isolates exactly this PR's own CSS diff instead of also confounding the
+comparison with that unrelated later change).
+AFTER = CODE_HEAD's app/globals.css, unmodified.
+
+Wall-clock timestamps (UTC), this pass:
+  2026-09-07T01:11:40Z  capture pass started
+  2026-09-07T01:11:50Z  app/globals.css swapped to be898be5 (BEFORE); `git status --short app/globals.css` showed the expected diff
+  2026-09-07T01:11:50Z  `.next` cleared; dev server started (PID 81935)
+  2026-09-07T01:12:07Z  BEFORE measurement run started (node e2e/tools/measure-analysis-mobilebar-stacking.mjs 3195 before-78607828 e2e/proof/mobilebar-stacking)
+  2026-09-07T01:12:23Z  BEFORE measurement run finished; server killed
+  2026-09-07T01:12:33Z  app/globals.css restored to CODE_HEAD's committed version; `git status --short app/globals.css` empty (byte-identical to HEAD)
+  2026-09-07T01:12:33Z  `.next` cleared; dev server restarted (PID 85809)
+  2026-09-07T01:12:54Z  AFTER measurement run started (node e2e/tools/measure-analysis-mobilebar-stacking.mjs 3195 after-78607828 e2e/proof/mobilebar-stacking)
+  2026-09-07T01:13:09Z  AFTER measurement run finished; server killed
+
+Result summary (full detail in measurement-{before,after}-78607828.json):
+  390x844  (the fix's target breakpoint, @media max-width:860px):
+    .mobilebar z-index          1  -> 95
+    .fin-pane--workspace top    0px -> 52px
+    mobilebarOverlapsFinPane    true -> false
+    Menu hit-test               svg (not the button) -> path inside the button (is the button)
+    pixel diff vs BEFORE crop: mean 19.1/255, 37.7% of pixels differ by >8/255 — a real,
+    visible difference, matching the fix.
+  1440x900 (desktop, >860px, where the CSS override is media-gated and never applies):
+    .mobilebar stays display:none (0x0 box) in both runs; .fin-pane--workspace bounding box
+    is identical in both runs ({x:60,y:112,w:1380,h:760}).
+    The two 1440x900 PNGs are byte-identical (mean pixel diff 0.0/255, max 0). This is
+    reported as-is, not disguised as "recaptured but different": the fix has no effect at
+    this viewport BY DESIGN (the override is scoped `@media (max-width:860px)`), and the two
+    runs above were captured independently, ~47 seconds apart, against two separately started
+    dev server processes (PIDs 81935 and 85809) — the identical bytes are the correct result
+    of a real fix that does nothing at this width, not one blob reused under two names.
