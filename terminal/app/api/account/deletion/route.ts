@@ -206,6 +206,13 @@ export async function POST(req: Request): Promise<Response> {
           .select("receipt_code,status,requested_at,kind")
           .eq("user_id", session.userId)
           .eq("kind", "deletion")
+          // Only the two statuses the partial unique index itself treats as "open" (0016:
+          // `where kind = 'deletion' and status in ('received', 'in_progress')`) may ever be
+          // reported back as "already_open" — ordering by recency alone (review MINOR round 3)
+          // could otherwise surface a newer but DEAD (cancelled/failed) row as if the request
+          // were still recorded and pending, which is a false statement about a request that
+          // did nothing.
+          .in("status", ["received", "in_progress"])
           .order("requested_at", { ascending: false })
           .limit(1);
       } catch (cause) {

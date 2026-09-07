@@ -33,12 +33,21 @@ function filterByEq(rows: Array<Record<string, unknown>>, eqs: Array<[string, un
   return rows.filter((row) => eqs.every(([col, val]) => !(col in row) || row[col] === val));
 }
 
+// Same shape for `.in(col, vals)`: a row missing the column is never excluded; a row that HAS
+// the column must have a value inside `vals`. Needed to actually exercise the deletion route's
+// `.in("status", ["received", "in_progress"])` re-read filter (review MINOR round 3) rather than
+// letting the mock hand back an un-filtered canned row regardless of what the route asked for.
+function filterByIn(rows: Array<Record<string, unknown>>, ins: Array<[string, unknown[]]>) {
+  return rows.filter((row) => ins.every(([col, vals]) => !(col in row) || vals.includes(row[col])));
+}
+
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: vi.fn(async () => ({ data: { user: H.user } })) },
     from: vi.fn((table: string) => {
       let mode: "read" | "insert" = "read";
       const localEq: Array<[string, unknown]> = [];
+      const localIn: Array<[string, unknown[]]> = [];
       const q: Record<string, unknown> = {};
       q.select = vi.fn(() => q);
       q.eq = vi.fn((col: string, val: unknown) => {
@@ -47,7 +56,10 @@ vi.mock("@/lib/supabase/server", () => ({
         return q;
       });
       q.limit = vi.fn(() => q);
-      q.in = vi.fn(() => q);
+      q.in = vi.fn((col: string, vals: unknown[]) => {
+        localIn.push([col, vals]);
+        return q;
+      });
       q.order = vi.fn(() => q);
       q.insert = vi.fn(() => {
         mode = "insert";
@@ -70,7 +82,18 @@ vi.mock("@/lib/supabase/server", () => ({
                   ? H.positionRows
                   : { data: filterByEq(H.positionTable, localEq), error: null }
                 : table === "account_lifecycle_requests"
-                  ? H.lifecycleSelectResult
+                  ? H.lifecycleSelectResult.error
+                    ? H.lifecycleSelectResult
+                    : {
+                        data: filterByIn(
+                          filterByEq(
+                            (H.lifecycleSelectResult.data as Array<Record<string, unknown>>) || [],
+                            localEq,
+                          ),
+                          localIn,
+                        ),
+                        error: null,
+                      }
                   : { data: [], error: null };
         return Promise.resolve(result).then(resolve, reject);
       };
@@ -220,6 +243,51 @@ describe("POST /api/account/deletion", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.already_open).toBe(true);
+  });
+
+  // Review MINOR round 3: the 23505 re-read ordered by recency alone, with no status filter,
+  // so a DEAD (cancelled/failed) row could be handed back as "already_open" — a false statement
+  // that a request is recorded and pending when it actually removed nothing and is not blocking
+  // anything. The re-read must only ever surface a row the partial unique index itself would
+  // call "open" (`status in ('received', 'in_progress')`).
+  it("23505 re-read never returns a cancelled prior receipt as already_open — falls through to request_not_recorded instead", async () => {
+    H.lifecycleInsertResult = { data: null, error: { code: "23505", message: "duplicate" } };
+    H.lifecycleSelectResult = {
+      data: [{ receipt_code: "MMX-DEL-20260904-DEAD0001", status: "cancelled", requested_at: "2026-09-04T00:00:00Z", kind: "deletion" }],
+      error: null,
+    };
+    const res = await deletionPOST(
+      req("https://x.test/api/account/deletion", {
+        method: "POST",
+        body: JSON.stringify({ confirm_email: "a@example.com" }),
+      }),
+    );
+    const body = await res.json();
+    expect(body.already_open).not.toBe(true);
+    expect(JSON.stringify(body)).not.toContain("MMX-DEL-20260904-DEAD0001");
+    expect(res.status).toBe(503);
+    expect(body.error).toBe("request_not_recorded");
+  });
+
+  it("23505 re-read still surfaces a genuinely open (in_progress) row as already_open, ignoring an older dead row in the same table", async () => {
+    H.lifecycleInsertResult = { data: null, error: { code: "23505", message: "duplicate" } };
+    H.lifecycleSelectResult = {
+      data: [
+        { receipt_code: "MMX-DEL-20260906-OPEN0001", status: "in_progress", requested_at: "2026-09-06T00:00:00Z", kind: "deletion" },
+        { receipt_code: "MMX-DEL-20260901-DEAD0002", status: "failed", requested_at: "2026-09-01T00:00:00Z", kind: "deletion" },
+      ],
+      error: null,
+    };
+    const res = await deletionPOST(
+      req("https://x.test/api/account/deletion", {
+        method: "POST",
+        body: JSON.stringify({ confirm_email: "a@example.com" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.already_open).toBe(true);
+    expect(body.receipt.receipt_code).toBe("MMX-DEL-20260906-OPEN0001");
   });
 
   it("table missing (42P01) returns 503 request_not_recorded with no receipt in the body", async () => {

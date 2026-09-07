@@ -216,6 +216,15 @@ export function serializeCsv(doc: AccountExportDoc): string {
   }
 
   for (const list of doc.watchlists) {
+    // An empty watchlist (a real list the owner named but never added a symbol to) had zero
+    // iterations of the inner loop below, so its `list_name` — the only place its existence was
+    // recorded in this CSV — was never written and the list silently disappeared from the export
+    // (review MINOR round 3). A 0-symbol list now gets exactly one `list_name` row of its own;
+    // a populated list keeps the prior per-symbol row shape unchanged.
+    if (list.symbols.length === 0) {
+      out += csvRow(["data", "watchlists", list.id, "list_name", list.name]);
+      continue;
+    }
     for (const sym of list.symbols) {
       out += csvRow(["data", "watchlists", list.id, "list_name", list.name]);
       out += csvRow(["data", "watchlists", list.id, "symbol", sym.symbol]);

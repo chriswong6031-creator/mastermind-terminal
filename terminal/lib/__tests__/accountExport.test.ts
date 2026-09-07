@@ -177,6 +177,22 @@ describe("serializeCsv", () => {
     const csv = serializeCsv(doc);
     expect(csv).toContain("coverage,not_included,chart_layouts_and_drawings");
   });
+
+  it("emits a row for an empty watchlist (name, 0 symbols) so it never disappears from the export (review MINOR round 3)", () => {
+    const emptyList: ServerWatchlist = { id: "list-empty", name: "Someday", position: 0, symbols: [] };
+    const src = baseSources();
+    src.watchlists = { ok: true, lists: [emptyList] };
+    const doc = buildAccountExport(src);
+    const csv = serializeCsv(doc);
+    expect(csv).toContain("data,watchlists,list-empty,list_name,Someday");
+  });
+
+  it("still emits a name row for a populated list alongside its symbol rows (unchanged shape)", () => {
+    const doc = buildAccountExport({ ...baseSources(), watchlists: { ok: true, lists: [listWithSymbol("Core", "core")] } });
+    const csv = serializeCsv(doc);
+    expect(csv).toContain("data,watchlists,list-1,list_name,Core");
+    expect(csv).toContain("data,watchlists,list-1,symbol,AAPL");
+  });
 });
 
 describe("assertNoSecrets", () => {
