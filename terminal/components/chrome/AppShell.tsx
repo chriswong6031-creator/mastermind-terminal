@@ -118,9 +118,13 @@ export default function AppShell({
           overflow:hidden}`), and this outer .app2 root is a different element entirely — a
           shared name here would let that inner-only rule also match THIS div (same
           specificity, source order decides), replacing .app2's own `display:grid` grid
-          template with a flex column site-wide on /analysis. See app/globals.css's comment
-          above `.analysis-route .mobilebar` for how that exact collision broke this shell's
-          desktop layout before this class was renamed. */}
+          template with a flex column. The rename removes that real naming tie (see
+          app/globals.css's comment above `.analysis-route .mobilebar` and
+          lib/__tests__/appShellAnalysisZIndex.test.ts, which reproduces the tie against
+          the real stylesheets); this PR's own committed evidence never isolated whether that
+          tie was actually causing a specific observed layout break, so treat the rename as a
+          real fix to a real naming tie, not as a proven explanation of any one crop or
+          CI failure. */}
       <div className={`app2 obs obs-ambient${path.startsWith("/analysis") ? " analysis-route" : ""}`}>
         <MobileNav email={email} fromMacro={fromMacro} onBack={onBack} />
         <header className="topbar">

@@ -2367,13 +2367,19 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
  * intelligence.css's `.analysis-shell{display:flex;flex-direction:column;overflow:hidden}` —
  * a rule meant for that one inner element. AppShell's .app2 root (a different element
  * entirely) once reused that same class name; both selectors have equal (one-class)
- * specificity, and because company-intelligence.css loads after this file in the page's CSS
- * chunk order, its `.analysis-shell{display:flex;...}` won the tie and replaced .app2's own
- * `display:grid` (declared above, `.app2{display:grid;grid-template-columns:60px minmax(0,1fr);
- * ...}`) with a flex column, breaking the shared desktop grid layout for every element under
- * .app2 on /analysis. Renaming the outer route class removes the collision entirely — the two
- * rules can no longer match the same element — see lib/__tests__/appShellAnalysisZIndex.test.ts
- * for the regression guard.
+ * specificity, so on that shared name company-intelligence.css's `.analysis-shell{display:
+ * flex;...}` could win the tie against .app2's own `display:grid` (declared above, `.app2{
+ * display:grid;grid-template-columns:60px minmax(0,1fr);...}`) — see
+ * lib/__tests__/appShellAnalysisZIndex.test.ts, which reproduces that exact swap against the
+ * real stylesheets. Renaming the outer route class removes that naming tie, so the two rules
+ * can no longer match the same element. Honest scope of this claim: the rename removes a real
+ * naming tie; whether that tie was actually producing any specific layout break
+ * observed in this PR's own captured evidence was never isolated by the committed receipts
+ * (the before/after measurement runs held AppShell.tsx's class name constant, varying only
+ * this file), so no receipt here proves the rename changed any rendered page. The rename is
+ * kept because the naming tie itself is real and worth removing regardless; the
+ * measured, receipt-backed fix for the mobilebar/fin-pane stacking problem is the z-index/top
+ * rules below, not this rename.
  *
  * The mechanism above is asserted by `terminal/e2e/company-intelligence-rctx.spec.ts` itself:
  * at <=860px it performs a REAL `page.getByRole("button", { name: "Menu" }).click()` while the

@@ -157,6 +157,18 @@ export default function BrainWidget({
 
     // CFG is seeded either way (above); only the <script> append is gated on an existing
     // host — a second script tag in that state races and can replace the live one.
+    //
+    // UNVERIFIED (review minor, `hostAlreadyMounted` path specifically): this seeds
+    // `w.MM_BRAIN_CFG` AFTER the external host script has already run and (presumably)
+    // already read whatever config existed at its own load time. Whether the real production
+    // `mm_brain.js` re-reads `window.MM_BRAIN_CFG` on demand (in which case this seed makes
+    // symbol/onCommand/onAnnotate/onAuthRequired/getAiContext live going forward) or only
+    // reads it once at load and caches a stale/absent reference (in which case this seed is
+    // inert for that host) is not established by anything in this repo — the production
+    // script is a third-party file this repo does not own or execute in tests. The unit test
+    // for this path (`lib/__tests__/brainWidgetColdSymbol.test.ts`) proves only that
+    // `MM_BRAIN_CFG` becomes populated and readable in jsdom; it cannot and does not prove a
+    // real external host re-reads it afterward.
     if (hostAlreadyMounted || document.querySelector(`script[src="${SCRIPT_SRC}"]`)) return;
 
     const s = document.createElement("script");

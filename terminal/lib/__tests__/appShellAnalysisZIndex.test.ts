@@ -239,25 +239,23 @@ describe(".analysis-route .mobilebar really outranks the ambient-background rese
   });
 });
 
-// Reviewer BLOCKER: `Terminal typecheck + tests` failed at head 790b759c on a real desktop-
-// width layout defect (`.ci-workspace`/`.ci-lenses` overlap in e2e/company-intelligence.spec.ts),
-// and the reviewer separately flagged the committed 1440x900 before/after crop pair as showing
-// an unexplained layout break (nav rail relocated, `.fin-pane--workspace` moved from a
-// grid-column box to a full-width stacked box). Root cause for both: AppShell.tsx's outer
-// `.app2` route wrapper reused the exact class name `analysis-shell`, which already belongs to
-// AnalysisWorkspace's own INNER content wrapper (`main2 ws-shell analysis-shell`) and is scoped
-// by app/company-intelligence.css's `.analysis-shell{display:flex;flex-direction:column;
-// overflow:hidden}` — a rule meant for that one inner element. Both selectors tie on
-// specificity (one class each), and because company-intelligence.css loads after this file in
-// the page's CSS chunk order, its `display:flex` won and replaced `.app2`'s own
-// `display:grid` (declared in this file: `.app2{display:grid;grid-template-columns:60px
-// minmax(0,1fr);...}`) site-wide on /analysis — exactly the kind of layout break the crop pair
-// showed, and a plausible cause of the sticky `.ci-lenses`/`.ci-workspace` geometry the CI spec
-// checks (an `overflow:hidden` ancestor changes which element is the nearest scrolling ancestor
-// a `position:sticky` descendant resolves against). Fixed by renaming the outer wrapper's route
-// class to `analysis-route`, which cannot match company-intelligence.css's `.analysis-shell`
-// selector. This block pins that fix with a real getComputedStyle cascade (not a string
-// comparison) so a future rename back to `analysis-shell` — or any other name that happens to
+// AppShell.tsx's outer `.app2` route wrapper once reused the exact class name `analysis-shell`,
+// which already belongs to AnalysisWorkspace's own INNER content wrapper (`main2 ws-shell
+// analysis-shell`) and is scoped by app/company-intelligence.css's `.analysis-shell{display:
+// flex;flex-direction:column;overflow:hidden}` — a rule meant for that one inner element. Both
+// selectors tie on specificity (one class each), so on that shared name company-
+// intelligence.css's `display:flex` could win against `.app2`'s own `display:grid` (declared in
+// this file: `.app2{display:grid;grid-template-columns:60px minmax(0,1fr);...}`). This is a
+// real, reproduced naming tie (the second test case below demonstrates it directly against
+// the real stylesheets) — it is NOT a confirmed explanation of any specific observed layout
+// break (the 1440x900 crop pair, or the `.ci-workspace`/`.ci-lenses` CI failure at head
+// `790b759c`): this PR's own committed measurement runs held AppShell.tsx's class name constant
+// across their before/after comparison, so they never isolated whether this tie was the
+// cause of either. Fixed by renaming the outer wrapper's route class to `analysis-route`, which
+// cannot match company-intelligence.css's `.analysis-shell` selector — kept because the naming
+// tie is real and worth removing regardless. This block pins that fix with a real
+// getComputedStyle cascade (not a string comparison) so a future rename back to `analysis-shell`
+// — or any other name that happens to
 // collide with a future company-intelligence.css single-class rule — fails here instead of
 // only in a browser nobody happened to check.
 describe("AppShell's outer .app2 route class does not collide with company-intelligence.css's own single-class rules", () => {
@@ -267,6 +265,14 @@ describe("AppShell's outer .app2 route class does not collide with company-intel
     expect(rootClassName![0]).not.toMatch(/\banalysis-shell\b/);
   });
 
+  // Honest scope of the fixture below (review minor): concatenating GLOBALS_CSS then
+  // COMPANY_INTEL_CSS bakes in an assumed cascade order (company-intelligence.css last, so it
+  // wins the specificity tie in the next test) — that ordering was never measured against the
+  // real page's actual CSS chunk order, only assumed. It does not weaken these two cases: the
+  // FIRST case below passes because `.app2.analysis-route` no longer shares a selector string
+  // with `.analysis-shell` at all, which holds regardless of which stylesheet loads first; the
+  // SECOND case (old class name) demonstrates that a tie CAN produce this exact bug under one
+  // concrete, plausible ordering — not that this fixture's ordering is the real page's own.
   it("real getComputedStyle: .app2.analysis-route keeps display:grid — company-intelligence.css's .analysis-shell{display:flex} rule does not match it", () => {
     const css = `${GLOBALS_CSS.replace(/@import[^;]+;/g, "")}\n${COMPANY_INTEL_CSS}`;
     const dom = new JSDOM(
@@ -278,7 +284,7 @@ describe("AppShell's outer .app2 route class does not collide with company-intel
     expect(computed.overflow).not.toBe("hidden");
   });
 
-  it("documents the collision this fix removes: the SAME markup with the old class name really did lose the grid (guards against a future revert)", () => {
+  it("documents the naming tie this fix removes: the SAME markup with the old class name really did lose the grid (guards against a future revert)", () => {
     const css = `${GLOBALS_CSS.replace(/@import[^;]+;/g, "")}\n${COMPANY_INTEL_CSS}`;
     const dom = new JSDOM(
       `<!doctype html><html><head><style>${css}</style></head><body><div id="t" class="app2 obs obs-ambient analysis-shell"></div></body></html>`,

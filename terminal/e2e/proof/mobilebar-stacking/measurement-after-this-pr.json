@@ -1,6 +1,6 @@
 {
   "label": "AFTER-this-pr",
-  "port": 3911,
+  "port": 4790,
   "viewports": {
     "1440x900": {
       "mobilebar": {
@@ -28,7 +28,7 @@
           "zIndex": "1"
         },
         {
-          "selector": ".analysis-shell .mobilebar",
+          "selector": ".analysis-route .mobilebar",
           "zIndex": "95"
         }
       ],
@@ -37,13 +37,13 @@
         "position": "relative",
         "top": "0px",
         "rect": {
-          "x": 0,
-          "y": 469,
-          "width": 1440,
-          "height": 431,
-          "top": 469,
-          "bottom": 900,
-          "left": 0,
+          "x": 60,
+          "y": 112,
+          "width": 1380,
+          "height": 760,
+          "top": 112,
+          "bottom": 872,
+          "left": 60,
           "right": 1440
         }
       },
@@ -52,13 +52,13 @@
         "position": "static",
         "top": "auto",
         "rect": {
-          "x": 0,
-          "y": 469,
-          "width": 1440,
+          "x": 60,
+          "y": 112,
+          "width": 1380,
           "height": 52,
-          "top": 469,
-          "bottom": 521,
-          "left": 0,
+          "top": 112,
+          "bottom": 164,
+          "left": 60,
           "right": 1440
         }
       },
@@ -83,7 +83,7 @@
       },
       "mobilebarOverlapsFinPane": false,
       "finHeadCoveredByMobilebar": false,
-      "screenshot": "/tmp/mo490_stacking_final/AFTER-this-pr-1440x900.png"
+      "screenshot": "/private/tmp/claude-501/-Users-chriswong-Documents-Cluade-Macro-Dashboard--claude-worktrees-market-ontology-meta-ceo-b-fc4eef/7cd4fae1-1ed9-41c2-adb4-1e5c6b0fbc5b/scratchpad/pr490_measure/capture/AFTER-PENDING-1440x900.png"
     },
     "390x844": {
       "mobilebar": {
@@ -111,7 +111,7 @@
           "zIndex": "1"
         },
         {
-          "selector": ".analysis-shell .mobilebar",
+          "selector": ".analysis-route .mobilebar",
           "zIndex": "95"
         }
       ],
@@ -166,7 +166,7 @@
       },
       "mobilebarOverlapsFinPane": false,
       "finHeadCoveredByMobilebar": false,
-      "screenshot": "/tmp/mo490_stacking_final/AFTER-this-pr-390x844.png"
+      "screenshot": "/private/tmp/claude-501/-Users-chriswong-Documents-Cluade-Macro-Dashboard--claude-worktrees-market-ontology-meta-ceo-b-fc4eef/7cd4fae1-1ed9-41c2-adb4-1e5c6b0fbc5b/scratchpad/pr490_measure/capture/AFTER-PENDING-390x844.png"
     }
   }
 }

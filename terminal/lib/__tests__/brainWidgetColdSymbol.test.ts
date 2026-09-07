@@ -218,6 +218,12 @@ describe("useShellBrainSymbol re-hands-off on a route-originated announce, throu
 // onAuthRequired/getAiContext were never bound at all. None of the suites above constructs
 // that exact state (they only ever delete both `MMBrain` and `MM_BRAIN_CFG`, or let a normal
 // mount set both together).
+// UNVERIFIED scope (review minor, restated): this describe block proves MM_BRAIN_CFG becomes
+// populated and readable in jsdom after BrainWidget mounts against a pre-existing `w.MMBrain`.
+// It does NOT prove that a real production `mm_brain.js` host re-reads `window.MM_BRAIN_CFG`
+// after its own load — that script is a third-party file this repo neither owns nor executes
+// in tests, so whether the fix is live for a real "host already mounted" page (versus inert
+// against a host that cached its config once at load) is not established here.
 describe("BrainWidget seeds MM_BRAIN_CFG even when window.MMBrain already exists without it (reviewer minor)", () => {
   let container: HTMLDivElement;
   let root: Root | undefined;
