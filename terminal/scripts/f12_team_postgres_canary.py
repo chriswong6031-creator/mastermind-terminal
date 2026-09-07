@@ -190,29 +190,33 @@ def main() -> int:
         result2 = cur.fetchone()[0]
     proof.check("rpc:accept_twice_is_already_used", isinstance(result2, dict) and result2.get("reason") == "already_used", str(result2))
 
-    # rpc:accept_cannot_mint_owner (round-2 review MAJOR-3): the prior version of this check only
-    # re-counted owners after a MEMBER-role invite was accepted, so it could never fail -- no path
-    # in that scenario could have minted an owner in the first place. This exercises the real
-    # property: insert an OWNER-role invite directly (bypassing the app layer's createInvite
-    # guard, exactly as a buggy/compromised writer would) and prove the RPC itself refuses it.
+    # rpc:accept_cannot_mint_owner (round-2 review MAJOR-3, revised after a real-Postgres finding):
+    # the prior version of this check only re-counted owners after a MEMBER-role invite was
+    # accepted, so it could never fail -- no path in that scenario could have minted an owner in
+    # the first place. The first fix attempt tried inserting an OWNER-role team_invites row
+    # directly (as admin, bypassing RLS) and having the invitee accept it -- but running this
+    # canary for real revealed that 0014_tenancy_foundation.sql's team_invites.role column carries
+    # `check (role in ('admin','member'))`, so an owner-role row can NEVER exist in team_invites,
+    # not even via a superuser INSERT (a CHECK constraint binds every writer, RLS-bypassing or
+    # not). That is a STRONGER guarantee than an RLS policy or an RPC-level guard could provide --
+    # so this now proves the actual property directly: the schema itself refuses to store the row
+    # that would be needed to mint an owner through acceptance.
     f_user = str(uuid.uuid4())
     with admin.cursor() as cur:
         cur.execute("insert into auth.users (id, email) values (%s, 'f@a.example')", (f_user,))
-        owner_token = "canaryownertoken" + uuid.uuid4().hex
-        owner_token_hash = hashlib.sha256(owner_token.encode("utf8")).hexdigest()
-        cur.execute(
-            "insert into public.team_invites (team_id, email, role, token_hash, invited_by, expires_at) values (%s,'f@a.example','owner',%s,%s, now() + interval '14 days')",
-            (team_a, owner_token_hash, a_owner),
-        )
 
-    f_conn = actor_connection(dsn, f_user)
-    with f_conn.cursor() as cur:
-        cur.execute("select public.accept_team_invite(%s)", (owner_token,))
-        owner_result = cur.fetchone()[0]
+    def insert_owner_invite():
+        with admin.cursor() as cur:
+            cur.execute(
+                "insert into public.team_invites (team_id, email, role, token_hash, invited_by, expires_at)"
+                " values (%s,'f@a.example','owner','deadbeefdeadbeefdeadbeefdeadbeef',%s, now() + interval '14 days')",
+                (team_a, a_owner),
+            )
+
     proof.check(
         "rpc:accept_cannot_mint_owner",
-        isinstance(owner_result, dict) and owner_result.get("reason") == "invalid_role",
-        str(owner_result),
+        expect_database_error(insert_owner_invite, "23514"),
+        "an owner-role team_invites row must be impossible to store (check_violation), even for the admin connection",
     )
 
     with admin.cursor() as cur:
