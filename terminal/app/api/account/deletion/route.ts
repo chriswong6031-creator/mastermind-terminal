@@ -60,16 +60,34 @@ const NOT_RECORDED_MESSAGE: Bilingual = [
 // "nothing has been removed yet" sentence for a completed request was the MAJOR acceptance-2
 // finding.
 function stepsFor(receiptCode: string, status: string): LifecycleStep[] {
+  // Every branch here is a real outcome, never inferred: "completed" is the only status where
+  // anything was actually removed, and "cancelled"/"failed" must say so plainly rather than
+  // reusing the pending sentence — review MAJOR (round 2): a cancelled/failed request was
+  // rendering "Nothing has been removed yet… removed by our team after this request", a false
+  // statement about a request that is dead, not pending.
   const asyncDone = status === "completed";
-  const asyncText: Bilingual = asyncDone
-    ? [
-        "Your watchlists and positions from this account have been removed.",
-        "你的自选与持仓已从此账户中移除。",
-      ]
-    : [
-        "Nothing has been removed yet. Your watchlists and positions are removed by our team after this request, not the moment you file it.",
-        "目前尚未删除任何内容。你的自选与持仓会在此请求提交后由我们的团队处理，而不是在你提交的当下。",
-      ];
+  let asyncText: Bilingual;
+  if (asyncDone) {
+    asyncText = [
+      "Your watchlists and positions from this account have been removed.",
+      "你的自选与持仓已从此账户中移除。",
+    ];
+  } else if (status === "cancelled") {
+    asyncText = [
+      "This request was cancelled. Nothing was removed under it. You can file a new request below.",
+      "此请求已被取消，未删除任何内容。你可以在下方提交新的请求。",
+    ];
+  } else if (status === "failed") {
+    asyncText = [
+      "This request could not be completed and nothing was removed under it. You can file a new request below.",
+      "此请求未能完成，未删除任何内容。你可以在下方提交新的请求。",
+    ];
+  } else {
+    asyncText = [
+      "Nothing has been removed yet. Your watchlists and positions are removed by our team after this request, not the moment you file it.",
+      "目前尚未删除任何内容。你的自选与持仓会在此请求提交后由我们的团队处理，而不是在你提交的当下。",
+    ];
+  }
   return [
     {
       phase: "immediate",

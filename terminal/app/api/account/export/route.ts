@@ -39,7 +39,11 @@ async function resolveSession(): Promise<{ db: PortfolioDb; userId: string; emai
 
 const unauthenticated = () => NextResponse.json({ error: "unauthenticated" }, { status: 401 });
 
-// Per-session throttle: at most one export per 60s. Deliberately shorter than macro's 15-minute
+// Per-user, in-process throttle: at most one export per 60s. This is process memory, not a
+// shared store — on a multi-instance deployment each instance enforces its own 60s independently,
+// so the guarantee is "at most one per 60s per instance you happen to hit", not truly global
+// (review MINOR round 2: the prior "per-session" wording overstated it; UNVERIFIED here whether
+// the Terminal deploy is single-instance). Deliberately shorter than macro's 15-minute
 // whole-account export (#515 §2.2) — proportionate for a two-table read; a stated divergence.
 const THROTTLE_MS = 60_000;
 // Keyed by user+format (not just user): the obvious first action is downloading BOTH JSON and

@@ -115,6 +115,45 @@ describe("serializeCsv", () => {
     expect(csv).toContain("'+1 note");
   });
 
+  it("never mangles a genuine negative number (shares/entry_price) with the formula-injection quote (review MINOR round 2)", () => {
+    const src = baseSources();
+    const position: Position = {
+      id: "p1",
+      ticker: "AAPL",
+      shares: -100,
+      entryPrice: -12.5,
+      entryDate: "2026-01-01",
+      notes: null,
+      status: "open",
+      createdAt: "2026-01-01T00:00:00Z",
+    };
+    src.positions = { ok: true, positions: [position] };
+    const doc = buildAccountExport(src);
+    const csv = serializeCsv(doc);
+    expect(csv).toContain(",shares,-100\r\n");
+    expect(csv).toContain(",entry_price,-12.5\r\n");
+    expect(csv).not.toContain("'-100");
+    expect(csv).not.toContain("'-12.5");
+  });
+
+  it("still guards a note that merely LOOKS numeric-negative but is a string (formula-injection risk lives in text fields)", () => {
+    const src = baseSources();
+    const position: Position = {
+      id: "p1",
+      ticker: "AAPL",
+      shares: 1,
+      entryPrice: 1,
+      entryDate: "2026-01-01",
+      notes: "-2+3+cmd|' /c calc'!A1",
+      status: "open",
+      createdAt: "2026-01-01T00:00:00Z",
+    };
+    src.positions = { ok: true, positions: [position] };
+    const doc = buildAccountExport(src);
+    const csv = serializeCsv(doc);
+    expect(csv).toContain("'-2+3+cmd");
+  });
+
   it("renders null as empty string, never the literal 'null'", () => {
     const src = baseSources();
     const position: Position = {

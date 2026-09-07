@@ -138,3 +138,78 @@ Applying the real migration remains a separate, later operator/Meta-CEO act,
 expected after migrations `0014`/`0015` land (see the PR body's acceptance-7
 note). This receipt closes the "does the DDL work against this catalog"
 question, not the "is the real table live" question.
+
+## Round 2 (2026-09-06) — closes review MINORs 1 and 2
+
+Round 1 above proved the table, the 3 named indexes, RLS-enabled, and the two
+policies. The round-2 review correctly noted two gaps: the readback never
+queried `pg_constraint` (so the FK to `auth.users` — the one statement in
+`0016` whose success depends on cross-schema privileges, and the one that
+differs most between a canary schema and `public`) was only indirectly
+evidenced by the clean apply, and the transformed canary DDL itself was
+never committed, so "the same 7 columns as `0016`" rested on prose, not a
+diffable artifact.
+
+Both are closed here. The exact transformed DDL is committed alongside this
+receipt as
+[`0016_account_lifecycle_requests_canary_round2.sql`](./0016_account_lifecycle_requests_canary_round2.sql)
+— diff it against `supabase/migrations/0016_account_lifecycle_requests.sql`
+yourself: every substantive line is identical except `public.` →
+`canary_b_f12_4_r2.` and the index/policy name prefixes (the same transform
+round 1 described in prose, now inspectable).
+
+- **Run at:** 2026-09-06 (same live project as round 1; a fresh schema name
+  `canary_b_f12_4_r2` was used so this run could not depend on, or collide
+  with, round 1's already-dropped `canary_b_f12_4`).
+- **Method:** identical to round 1 — Supabase Management API,
+  `POST /v1/projects/{ref}/database/query`, no secrets in this file.
+
+### What ran (round 2)
+
+1. **Apply, round 1** — the committed SQL file, verbatim, in one call.
+   → HTTP 201, `[]`.
+2. **Apply, round 2** — the same file re-run, to reconfirm idempotency.
+   → HTTP 201, `[]`.
+3. **Readback — the same 5 queries as round 1**, scoped to
+   `canary_b_f12_4_r2` (schema, columns, indexes, RLS, policies) — same
+   shape as round 1's results, confirming the fresh schema behaves
+   identically. Omitted verbatim here since round 1 already shows the shape;
+   the two NEW readbacks below are what round 2 adds.
+4. **NEW — constraints** (`pg_constraint` filtered on
+   `conrelid = 'canary_b_f12_4_r2.account_lifecycle_requests'::regclass`):
+   ```json
+   [
+     {"conname": "account_lifecycle_requests_pkey", "contype": "p", "references_table": "-"},
+     {"conname": "account_lifecycle_requests_user_id_fkey", "contype": "f", "references_table": "auth.users"}
+   ]
+   ```
+   This is the direct proof the round-1 receipt was missing: the
+   `references auth.users(id) on delete cascade` foreign key was actually
+   created — not merely implied by a clean HTTP 201 — and it resolves to
+   `auth.users`, proving this project grants the privilege to reference that
+   table from a new schema.
+5. **NEW — comments** (`obj_description` for the table,
+   `col_description` for `receipt_code`):
+   ```json
+   [{"table_comment": "User-visible intake + receipt for account data export / deletion requests. Owner-readable, insert-only for the owner; status is advanced by the operator (service_role). No email or token is stored here - the address is read from the session at display time."}]
+   [{"receipt_code_comment": "Human-readable reference shown to the user, e.g. MMX-DEL-20260906-3F7K2Q8A. Not a secret and not an authorization token."}]
+   ```
+   Both `comment on` statements in `0016` land and read back exactly as
+   written.
+6. **Teardown** — `drop schema if exists canary_b_f12_4_r2 cascade` → HTTP
+   201, `[]`. Re-queried `pg_namespace` for `canary_b_f12_4_r2` afterward →
+   `[]` (schema confirmed gone).
+
+### What round 2 proves, and what it still does not
+
+**Proves, additively to round 1:** every object `0016` creates — table,
+7 columns, 3 named indexes, the primary-key constraint, the foreign-key
+constraint to `auth.users`, RLS enabled, both policies, and both `comment on`
+statements — applies to the live catalog, reads back exactly as declared,
+and leaves nothing behind after teardown. The transformed DDL that produced
+this result is a committed file, not prose.
+
+**Still does not prove:** the same "is the real table live" gap as round 1 —
+`0016` remains unapplied against `public.` (see
+`supabase/migrations/README.md`), and applying it stays a separate, later
+operator/Meta-CEO act.

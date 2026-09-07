@@ -256,6 +256,50 @@ describe("GET /api/account/deletion", () => {
     const res = await deletionGET();
     expect(res.status).toBe(503);
   });
+
+  // Review MAJOR round 2: a cancelled/failed row was rendering the pending sentence
+  // ("Nothing has been removed yet… removed by our team after this request") — a false
+  // statement about a dead request — and asyncDone had no branch for either status at all.
+  it("a cancelled request is not asyncDone and never claims pending removal", async () => {
+    H.lifecycleSelectResult = {
+      data: [{ receipt_code: "MMX-DEL-20260906-CANCEL01", status: "cancelled", requested_at: "2026-09-06T00:00:00Z", kind: "deletion" }],
+      error: null,
+    };
+    const res = await deletionGET();
+    const body = await res.json();
+    const receipt = body.requests[0];
+    expect(receipt.status).toBe("cancelled");
+    const asyncStep = receipt.steps.find((s: { phase: string }) => s.phase === "asynchronous");
+    expect(asyncStep.done).toBe(false);
+    expect(asyncStep.text[0]).not.toContain("Nothing has been removed yet");
+    expect(asyncStep.text[0]).toContain("cancelled");
+    expect(asyncStep.text[1]).toContain("取消");
+  });
+
+  it("a failed request is not asyncDone and never claims pending removal", async () => {
+    H.lifecycleSelectResult = {
+      data: [{ receipt_code: "MMX-DEL-20260906-FAILED01", status: "failed", requested_at: "2026-09-06T00:00:00Z", kind: "deletion" }],
+      error: null,
+    };
+    const res = await deletionGET();
+    const body = await res.json();
+    const receipt = body.requests[0];
+    const asyncStep = receipt.steps.find((s: { phase: string }) => s.phase === "asynchronous");
+    expect(asyncStep.done).toBe(false);
+    expect(asyncStep.text[0]).not.toContain("Nothing has been removed yet");
+    expect(asyncStep.text[0].toLowerCase()).toContain("could not be completed");
+  });
+
+  it("a completed request is still the only status that is asyncDone", async () => {
+    H.lifecycleSelectResult = {
+      data: [{ receipt_code: "MMX-DEL-20260906-DONE0001", status: "completed", requested_at: "2026-09-06T00:00:00Z", kind: "deletion" }],
+      error: null,
+    };
+    const res = await deletionGET();
+    const body = await res.json();
+    const asyncStep = body.requests[0].steps.find((s: { phase: string }) => s.phase === "asynchronous");
+    expect(asyncStep.done).toBe(true);
+  });
 });
 
 describe("lifecycle step copy", () => {

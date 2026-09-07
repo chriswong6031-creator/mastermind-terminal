@@ -175,8 +175,14 @@ const FORMULA_LEAD = /^[=+\-@\t\r]/;
 
 function csvField(raw: unknown): string {
   if (raw === null || raw === undefined) return "";
+  // The formula-injection guard is a text-field concern (a name/note typed by the user, or a
+  // spreadsheet app's own reader deciding a leading char makes a cell a formula). A genuine
+  // `number` (shares, entry_price) is never spreadsheet-executable text — escaping it corrupted
+  // every negative value (`-100` -> `'-100`, a fidelity loss on a data-portability artifact;
+  // review MINOR round 2). Only string-typed values get the guard.
+  const isNumber = typeof raw === "number";
   let value = typeof raw === "string" ? raw : String(raw);
-  if (FORMULA_LEAD.test(value)) value = "'" + value;
+  if (!isNumber && FORMULA_LEAD.test(value)) value = "'" + value;
   if (NEEDS_QUOTE.test(value)) value = '"' + value.replace(/"/g, '""') + '"';
   return value;
 }

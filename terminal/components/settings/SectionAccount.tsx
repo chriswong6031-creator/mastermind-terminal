@@ -18,6 +18,16 @@ type DeletionReceipt = {
   steps: { phase: string; done: boolean; text: [string, string] }[];
 };
 
+// A "cancelled" or "failed" request is a dead request: the account is not going anywhere and
+// the control below must still let the owner file a new one. Only "received"/"in_progress"
+// (still open — the DB's own partial unique index enforces at most one of these) and
+// "completed" (a real outcome worth keeping visible) permanently occupy this row. Exported so
+// the review MAJOR ("permanently removes the ability to file another") has a unit test that
+// does not need a DOM.
+export function isActiveDeletionStatus(status: string): boolean {
+  return status === "received" || status === "in_progress" || status === "completed";
+}
+
 function providerLabelKey(p: string): string {
   if (p === "google") return "acsProvGoogle";
   if (p === "twitter") return "acsProvX";
@@ -266,8 +276,10 @@ export default function SectionAccount({ t, lang, email, user, onClose, onPatchM
     else legacy();
   }
 
-  const editBtn = (kind: EditKind) => (
-    <button type="button" className="acs-edit" onClick={() => openEdit(kind)}>{t("acsEdit")}</button>
+  // `labelKey` lets one row use its own action word (review MAJOR round 2: reusing the generic
+  // "Edit"/"编辑" on the "Delete my account" row does not name the action).
+  const editBtn = (kind: EditKind, labelKey: string = "acsEdit") => (
+    <button type="button" className="acs-edit" onClick={() => openEdit(kind)}>{t(labelKey)}</button>
   );
 
   return (
@@ -413,13 +425,16 @@ export default function SectionAccount({ t, lang, email, user, onClose, onPatchM
               )}
             />
             {dlMsg ? <Msg text={dlMsg.text} kind={dlMsg.kind} /> : null}
-            {filed ? (
+            {filed && isActiveDeletionStatus(filed.status) ? (
               <Row label={t("acsDeleteFiled")} value={filed.receipt_code} desc={stepText(filed)} />
             ) : (
               <Row
                 label={t("acsDelete")}
-                desc={t("acsDeleteDesc")}
-                control={editing === "del" ? undefined : editBtn("del")}
+                // A prior cancelled/failed request is disclosed honestly rather than hidden —
+                // it removed nothing, so it must never block filing a new one (review MAJOR
+                // round 2).
+                desc={filed ? `${t("acsDeleteDesc")} ${stepText(filed)}` : t("acsDeleteDesc")}
+                control={editing === "del" ? undefined : editBtn("del", "acsDeleteBtn")}
                 editing={editing === "del"}
               >
                 <div className="acs-form">

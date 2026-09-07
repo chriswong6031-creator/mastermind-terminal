@@ -1904,6 +1904,10 @@ export const LEX: Record<string, [string, string]> = {
   acsDownloadDesc: ["A file with your watchlists and your recorded positions. It also lists, in plain words, what it does not include.", "一个文件，包含你的自选列表与记录的持仓；文件中也会用明确的语言列出未包含的内容。"],
   acsDownloadWait: ["Preparing your file…", "正在准备文件…"],
   acsDownloadErr: ["We could not build your file. Nothing was changed. Try again in a few minutes.", "暂时无法生成文件。你的数据没有任何改动。请几分钟后再试。"],
+  // The row's OWN entry-point control, not the generic "acsEdit" used by name/email/password
+  // rows — review MAJOR (round 2): reusing "Edit"/"编辑" on the row titled "Delete my account"
+  // does not name the action and reads as editing the account.
+  acsDeleteBtn: ["Delete", "删除"],
   acsDelete: ["Delete my account", "删除我的账户"],
   acsDeleteDesc: ["Ask us to delete your account. Download your data first if you want a copy.", "请求我们删除你的账户。如需保留副本，请先下载你的数据。"],
   acsDeleteConfirm: ["This files a deletion request. Nothing is removed the moment you send it, and your sign-in is removed separately on the account service.", "这将提交一个删除请求。提交当下不会删除任何内容，你的登录身份会在账户服务端另行删除。"],
