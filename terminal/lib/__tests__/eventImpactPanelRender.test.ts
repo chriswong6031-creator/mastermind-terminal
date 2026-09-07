@@ -143,11 +143,16 @@ describe("EventImpactPanel render (acceptance 2)", () => {
   // BLOCKER 1 (review r2): the upstream artifact is regwalled in production, so a 401/403/timeout
   // must render its OWN typed, plain-language state — never a blank panel, and never the
   // `no_events` claim "no event touches your positions" (the source was never actually checked).
-  it("renders the upstream-locked disclosure, never the no-events claim, when the source is locked out", async () => {
+  it("renders the upstream-locked disclosure, never the no-events claim nor a fine/unaffected claim, when the source is locked out", async () => {
     await renderWith({ state: "upstream_locked" });
     const node = container.querySelector('[data-testid="event-impact-upstream-locked"]');
     expect(node).toBeTruthy();
-    expect(node?.textContent).toContain("We could not read the event calendar right now");
+    // MAJOR COPY RULING (r4): the withdrawn r2 string asserted "your positions are unaffected" —
+    // a fact this state never checked. The current sentence says only that the calendar could
+    // not be checked, never anything about the positions themselves.
+    expect(node?.textContent).toContain("We couldn't check the event calendar just now");
+    expect(node?.textContent).not.toContain("unaffected");
+    expect(node?.textContent).not.toContain("Your positions are unaffected");
     expect(container.querySelector('[data-testid="event-impact-empty"]')).toBeNull();
   });
 

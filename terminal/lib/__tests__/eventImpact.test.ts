@@ -303,4 +303,45 @@ describe("eventImpact join", () => {
       expect(zh.includes("您")).toBe(false);
     }
   });
+
+  it("15. no unread/locked state's copy claims positions are fine/unaffected, except calendar_unreadable's own sentence (MAJOR COPY RULING, r4)", () => {
+    // RED before the fix: eiUpstreamLocked read "We could not read the event calendar right
+    // now. Your positions are unaffected." / "...你的持仓不受影响。" — the unchecked state
+    // asserting a fact (positions are fine) it never checked. The r2-frozen string is WITHDRAWN
+    // by r4: `upstream_locked` means the calendar could not be read at all, so nothing about the
+    // user's positions can be said. `eiCalendarUnreadable` is the one legitimate exception,
+    // because there the positions data WAS actually read — only the calendar is missing.
+    const file = fs.readFileSync(
+      path.join(process.cwd(), "components", "EventImpactPanel.tsx"),
+      "utf8"
+    );
+    const copyMatch = file.match(/const COPY: Record<string, \[string, string\]> = \{([\s\S]*?)\n\};/);
+    expect(copyMatch).not.toBeNull();
+    const body = copyMatch![1];
+    // Same wrap-tolerant tuple regex as test 14, but this one also captures the key name so each
+    // string can be checked against the state it actually belongs to.
+    const keyed = new Map<string, [string, string]>();
+    for (const m of body.matchAll(/(\w+):\s*\[\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,?\s*\]/g)) {
+      keyed.set(m[1], [m[2], m[3]]);
+    }
+    expect(keyed.size).toBe(18);
+
+    const bannedEn = /\bunaffected\b|\bfine\b/i;
+    const bannedZh = /不受影响/;
+
+    const upstreamLocked = keyed.get("eiUpstreamLocked");
+    expect(upstreamLocked).toBeDefined();
+    expect(bannedEn.test(upstreamLocked![0])).toBe(false);
+    expect(bannedZh.test(upstreamLocked![1])).toBe(false);
+
+    // calendar_unreadable is the sole named exception — its own sentence may say the positions
+    // are fine, because that state's positions read actually succeeded.
+    expect(keyed.get("eiCalendarUnreadable")).toBeDefined();
+
+    for (const [key, [en, zh]] of keyed) {
+      if (key === "eiCalendarUnreadable") continue;
+      expect(bannedEn.test(en)).toBe(false);
+      expect(bannedZh.test(zh)).toBe(false);
+    }
+  });
 });

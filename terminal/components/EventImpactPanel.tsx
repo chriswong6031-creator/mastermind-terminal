@@ -52,12 +52,17 @@ const COPY: Record<string, [string, string]> = {
     "We can't read the macro calendar right now. Your positions are fine — the event list is the part that's missing.",
     "我们暂时读不到宏观日历。你的持仓没有问题，缺的是事件列表。",
   ],
-  // Exact copy per the RULING (B-F08-5 review r2, BLOCKER 1) — distinct from eiCalendarUnreadable
-  // above: this is specifically "we are locked out of the source", never "no event touches your
-  // positions" (which `upstream_locked` must never render as).
+  // Exact copy per the MAJOR COPY RULING (Meta-CEO B, r4, 2026-09-07 02:05Z) — this WITHDRAWS
+  // the earlier r2-frozen string ("Your positions are unaffected"), which asserted a fact this
+  // state never checked. `upstream_locked` means the calendar could not be read at all, so the
+  // panel cannot say anything about whether it touches the user's positions — unlike
+  // `eiCalendarUnreadable` below, where the positions data WAS read and the calendar is the only
+  // missing part. Never collapse this into "no event touches your positions" (B-F08-5 review r2,
+  // BLOCKER 1) and never claim the positions are fine/unaffected (r4 MAJOR COPY RULING) — see
+  // test 15 in eventImpact.test.ts.
   eiUpstreamLocked: [
-    "We could not read the event calendar right now. Your positions are unaffected.",
-    "目前无法读取事件日历，你的持仓不受影响。",
+    "We couldn't check the event calendar just now, so this panel can't say anything about your positions yet. Try again shortly.",
+    "刚才没能读取事件日历，所以这里暂时无法判断你的持仓是否受影响。请稍后再试。",
   ],
   eiChecking: [
     "Checking your positions…",
