@@ -42,9 +42,9 @@ Cloudflare 1010 block.
 
 Because application is manual and per-file, **the files here can be applied out of numeric order,
 and have been.** Application status (baseline census 2026-08-21; the `0011`, `0012`, and `0013`
-rows were updated 2026-09-06, each recording its own date — `0011`'s DDL was applied 2026-09-05
-(readback receipt posted 2026-09-06); `0012`'s DDL was applied 2026-09-06; `0013` merged to
-`master` as `be898be5` on 2026-09-06 via PR #513):
+rows each record their own date — `0011`'s DDL was applied 2026-09-05
+(readback receipt posted 2026-09-06); `0012`'s DDL was applied 2026-09-06; `0013`'s DDL was applied
+2026-09-07 (merged to `master` as `be898be5` on 2026-09-06 via PR #513)):
 
 | file | object it creates | in production? |
 |---|---|---|
@@ -181,8 +181,8 @@ DDL applied out of band on 2026-09-07 via a direct Management API query (the met
 above in "How DDL actually lands"), used instead of the apply script `scripts/supabase_apply.py`
 (PR #516) because of a readback-parser bug in that script (readback receipt posted on PR #513,
 comment `5563321750`) — merged = yes, applied = yes. `0014` (PR #514) remains an open pull
-request (merged = no, applied = no). The "in production?" table above now agrees with the
-Reservations table below on `0013`: both read applied 2026-09-07 (round-13 Meta-CEO B ruling,
+request (merged = no, applied = no). The "in production?" table and the Reservations table
+above now agree on `0013`: both read applied 2026-09-07 (round-13 Meta-CEO B ruling,
 resolving the round-11/round-12 wording split between the two tables).
 
 This table is re-verified at merge time, not just at the moment this pull request opened. A later
