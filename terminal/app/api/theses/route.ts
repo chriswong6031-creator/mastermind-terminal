@@ -58,8 +58,13 @@ export async function GET(request: Request) {
 
   const batch = search.getAll("ids");
   if (batch.length > 0) {
+    // Round-2 review minor: `ids.length > 0` here was unreachable dead code — every
+    // path above this point either returns (ids.length > 1, or ids.length === 1) or
+    // leaves `ids` empty, so this branch is only ever reached with `ids.length === 0`.
+    // The PR's own thesesRoute.test.ts already documents (and asserts) that a single
+    // `id` alongside `ids` resolves through the pre-existing single-id branch above,
+    // never this one.
     if (
-      ids.length > 0 ||
       search.getAll("subjectOwner").length > 0 ||
       search.getAll("subjectKind").length > 0 ||
       search.getAll("subjectKey").length > 0
@@ -73,12 +78,17 @@ export async function GET(request: Request) {
     ) {
       return jsonError("invalid_thesis_ids", 400);
     }
+    // Round-2 review minor: reads run concurrently (was a sequential `for`+`await`
+    // loop of up to 10 store round-trips on the interactive path). Order is preserved
+    // by mapping over `batch` itself; a fault on any id still returns 503 with no
+    // partial array — same contract, just not serialized.
+    const results = await Promise.all(batch.map((id) => readThesis(session.db, session.userId, id)));
     const batchResults: unknown[] = [];
     const missing: string[] = [];
-    for (const id of batch) {
-      const result = await readThesis(session.db, session.userId, id);
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
       if (result.ok) batchResults.push(result.thesis);
-      else if (result.status === "not_found") missing.push(id);
+      else if (result.status === "not_found") missing.push(batch[i]);
       else {
         console.error("thesis GET batch failed:", result.error);
         return jsonError("thesis_store_unavailable", 503);

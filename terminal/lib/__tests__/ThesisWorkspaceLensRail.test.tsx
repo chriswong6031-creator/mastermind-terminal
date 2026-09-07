@@ -399,4 +399,187 @@ describe("ThesisWorkspace lens rail (B-F11-2, M2)", () => {
 
     expect(idsCalls.length).toBe(1);
   });
+
+  it("bounded hydration: a faulted batch shows a retry action, not a permanent dead end (round-2 review MAJOR)", async () => {
+    const active = Array.from({ length: 3 }, (_, i) =>
+      ({
+        id: `r${i}`,
+        currentVersion: 1,
+        lifecycleState: "active" as const,
+        subject: subject("AAA", "Alpha Co"),
+        title: `Thesis ${i}`,
+        updatedAt: new Date(2026, 0, i + 1).toISOString(),
+      }) satisfies ThesisSummary,
+    );
+    const details = new Map(active.map((s) => [s.id, detailFor(s, { catalysts: [`cat-${s.id}`] })]));
+    let batchCalls = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(raw, "https://x.test");
+      if (url.pathname !== "/api/theses") return jsonResponse({ error: "not_found" }, 404);
+      const ids = url.searchParams.getAll("ids");
+      if (ids.length > 0) {
+        batchCalls += 1;
+        // First batch faults (e.g. the route's own 503 fault path); the retry must
+        // use the SAME explicit-user-action mechanism as "Show 10 more" and succeed.
+        if (batchCalls === 1) return jsonResponse({ error: "thesis_store_unavailable" }, 503);
+        const batch = ids.map((id) => details.get(id)).filter((d): d is ThesisDetail => !!d);
+        return jsonResponse({ batch, missing: [] });
+      }
+      return jsonResponse({ theses: active, truncated: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const el = await mount({ ownerKey: "owner-hydration-retry" });
+
+    await act(async () => {
+      tabs(el).find((b) => b.dataset.view === "catalysts")!.click();
+    });
+    await flush();
+
+    const unavailablePanel = el.querySelector('[data-testid="rms-hydration-unavailable"]');
+    expect(unavailablePanel, "expected the hydration-unavailable panel after a faulted batch").not.toBeNull();
+    // "Show 10 more" is deliberately hidden while this panel shows — it must not be
+    // the ONLY way out, or a faulted batch is a permanent dead end.
+    expect(Array.from(el.querySelectorAll("button")).some((b) => b.textContent === "Show 10 more")).toBe(false);
+    const retryButton = Array.from(unavailablePanel!.querySelectorAll("button")).find(
+      (b) => b.textContent === "Try again",
+    ) as HTMLButtonElement;
+    expect(retryButton, "expected a retry action inside the hydration-unavailable panel").toBeTruthy();
+
+    await act(async () => {
+      retryButton.click();
+    });
+    await flush();
+
+    expect(el.querySelector('[data-testid="rms-hydration-unavailable"]')).toBeNull();
+    expect(batchCalls).toBe(2);
+    expect(Array.from(el.querySelectorAll('[data-testid="rms-line-row"]')).length).toBe(3);
+  });
+
+  it("Coverage subject filter names the subject and offers a labeled way back even after the filtered subject's last thesis leaves a later list refresh (round-2 review MAJOR)", async () => {
+    const alphaId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+    const betaId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1";
+    const alpha: ThesisSummary = { id: alphaId, currentVersion: 1, lifecycleState: "active", subject: subject("AAA", "Alpha Co"), title: "Alpha thesis", updatedAt: "2026-09-02T00:00:00.000Z" };
+    const beta: ThesisSummary = { id: betaId, currentVersion: 1, lifecycleState: "active", subject: subject("BBB", "Beta Co"), title: "Beta thesis", updatedAt: "2026-08-30T00:00:00.000Z" };
+    const details = new Map([[alphaId, detailFor(alpha)], [betaId, detailFor(beta)]]);
+    let listCalls = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(raw, "https://x.test");
+      if (url.pathname !== "/api/theses") return jsonResponse({ error: "not_found" }, 404);
+      if ((init?.method ?? "GET") === "POST") {
+        // Archives Alpha's one thesis.
+        return jsonResponse({ thesisId: alphaId, version: 2, lifecycleState: "archived", replayed: false });
+      }
+      const id = url.searchParams.get("id");
+      if (id) {
+        const d = details.get(id);
+        return d ? jsonResponse({ thesis: d }) : jsonResponse({ error: "thesis_not_found" }, 404);
+      }
+      listCalls += 1;
+      if (listCalls === 1) return jsonResponse({ theses: [alpha, beta], truncated: false });
+      // The reload after the archive: Alpha's subject has moved out of this view
+      // entirely (re-keyed/removed) while the filter is still active — the exact
+      // round-2 review trigger.
+      return jsonResponse({ theses: [beta], truncated: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const el = await mount({ ownerKey: "owner-subject-filter-refresh" });
+
+    const coverageTab = tabs(el).find((b) => b.dataset.view === "coverage")!;
+    await act(async () => coverageTab.click());
+    const alphaCoverageRow = Array.from(el.querySelectorAll('[data-testid="thesis-list-pane"] button')).find((b) =>
+      b.textContent?.includes("Alpha Co"),
+    ) as HTMLButtonElement;
+    await act(async () => alphaCoverageRow.click());
+
+    expect(el.querySelector("[class*='lensWhat']")?.textContent).toBe("Only what you have written about Alpha Co.");
+    let chip = el.querySelector('[data-testid="rms-subject-chip"]') as HTMLButtonElement;
+    expect(chip.textContent).toBe("Alpha Co · Show everything");
+
+    const alphaThesisRow = Array.from(el.querySelectorAll('[data-testid="thesis-list-pane"] .thesisList button, [data-testid="rms-lens-panel"] button')).find(
+      (b) => b.textContent?.includes("Alpha thesis"),
+    ) as HTMLButtonElement;
+    expect(alphaThesisRow, "expected the filtered Alpha thesis row").toBeTruthy();
+    await act(async () => alphaThesisRow.click());
+    await flush();
+
+    const archiveButton = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "Archive") as HTMLButtonElement;
+    expect(archiveButton, "expected an Archive action on the open Alpha thesis").toBeTruthy();
+    await act(async () => archiveButton.click());
+    await flush();
+    await flush();
+
+    // The filter survives the refresh: never the forbidden "Everything you have
+    // written." sentence, never a bare " · Show everything" chip, and never the
+    // false "No theses yet." empty state while Beta's thesis still exists.
+    expect(el.querySelector("[class*='lensWhat']")?.textContent).toBe("Only what you have written about Alpha Co.");
+    expect(el.querySelector("[class*='lensWhat']")?.textContent).not.toBe("Everything you have written.");
+    chip = el.querySelector('[data-testid="rms-subject-chip"]') as HTMLButtonElement;
+    expect(chip, "expected the subject chip to survive the refresh").toBeTruthy();
+    expect(chip.textContent).toBe("Alpha Co · Show everything");
+    expect(el.querySelector('[data-testid="thesis-empty"]')).toBeNull();
+    const filteredEmpty = el.querySelector('[data-testid="rms-filtered-empty"]');
+    expect(filteredEmpty, "expected the distinct filtered-empty state, not the false 'No theses yet.'").not.toBeNull();
+    expect(filteredEmpty!.textContent).toBe("Nothing written about Alpha Co right now. Clear the filter to see every thesis.");
+  });
+
+  it("lens rail keyboard nav is disabled while the carrier is locked (round-2 review minor)", async () => {
+    const t1: ThesisSummary = { id: "t1", currentVersion: 1, lifecycleState: "active", subject: subject("AAA", "Alpha Co"), title: "Alpha", updatedAt: "2026-09-01T00:00:00.000Z" };
+    // A blocked carrier (corrupt localStorage entry for this owner) keeps
+    // `carrierLocked` true for the life of the mount.
+    window.localStorage.setItem("mm.thesis.pending.v2:owner-locked-nav:broken", "not json");
+    installFetch([t1], new Map());
+    const el = await mount({ ownerKey: "owner-locked-nav" });
+
+    const list = el.querySelector('[role="tablist"]')!;
+    expect(tabs(el).every((b) => b.disabled)).toBe(true);
+    await act(async () => {
+      list.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true }));
+    });
+    // Still on the default "theses" lens — the keyboard handler must not switch lenses
+    // while every tab is disabled, even though the listener lives on the <ul> and the
+    // individual `disabled` attribute alone does not stop it from firing.
+    expect(tabs(el).find((b) => b.dataset.view === "theses")!.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("narrow-mode (<=600px) tablist: ArrowRight/ArrowLeft rove the same as ArrowDown/ArrowUp", async () => {
+    const t1: ThesisSummary = { id: "t1", currentVersion: 1, lifecycleState: "active", subject: subject("AAA", "Alpha Co"), title: "Alpha", updatedAt: "2026-09-01T00:00:00.000Z" };
+    installFetch([t1], new Map());
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) =>
+      ({
+        matches: query === "(max-width: 600px)",
+        media: query,
+        addListener() {},
+        removeListener() {},
+        addEventListener() {},
+        removeEventListener() {},
+        dispatchEvent() {
+          return false;
+        },
+      }) as unknown as MediaQueryList) as typeof window.matchMedia;
+    try {
+      const el = await mount({ ownerKey: "owner-narrow-nav" });
+      const list = el.querySelector('[role="tablist"]')!;
+      await act(async () => {
+        list.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+      });
+      expect(tabs(el).find((b) => b.dataset.view === "reviews")!.getAttribute("aria-selected")).toBe("true");
+      await act(async () => {
+        list.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }));
+      });
+      expect(tabs(el).find((b) => b.dataset.view === "theses")!.getAttribute("aria-selected")).toBe("true");
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
+  it("an unsaved new thesis renders no condition line (nothing to check the condition of) (round-2 review minor)", async () => {
+    installFetch([], new Map());
+    const el = await mount({ ownerKey: "owner-new-thesis-condition" });
+    const newThesisButton = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "New thesis") as HTMLButtonElement;
+    await act(async () => newThesisButton.click());
+    expect(el.querySelector('[data-testid="thesis-condition"]')).toBeNull();
+  });
 });

@@ -257,6 +257,10 @@ export type RmsCopy = {
   /** {subject} placeholder. */
   filteredBySubject: string;
   clearFilter: string;
+  /** {subject} placeholder — shown instead of `empty.theses` when a Coverage subject
+   *  filter is active and resolves to zero rows; never claims "No theses yet." while
+   *  the workspace actually holds theses (round-2 review MAJOR). */
+  filteredEmpty: string;
 };
 
 export const RMS_COPY: { en: RmsCopy; zh: RmsCopy } = {
@@ -309,6 +313,7 @@ export const RMS_COPY: { en: RmsCopy; zh: RmsCopy } = {
     coverageRatio: "{active} active of {theses} written",
     filteredBySubject: "Only what you have written about {subject}.",
     clearFilter: "Show everything",
+    filteredEmpty: "Nothing written about {subject} right now. Clear the filter to see every thesis.",
   },
   zh: {
     lensRailLabel: "研究视角",
@@ -356,5 +361,6 @@ export const RMS_COPY: { en: RmsCopy; zh: RmsCopy } = {
     coverageRatio: "共写了 {theses} 条，其中 {active} 条活跃",
     filteredBySubject: "仅显示关于 {subject} 的内容。",
     clearFilter: "显示全部",
+    filteredEmpty: "目前没有关于 {subject} 的论点。清除筛选可查看全部论点。",
   },
 };

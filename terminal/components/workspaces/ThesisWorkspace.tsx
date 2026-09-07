@@ -76,7 +76,6 @@ const PENDING_ACTIONS = new Set<ThesisAction>(["create", "revise", "archive", "i
 const COPY = {
   en: {
     eyebrow: "RESEARCH WORKSPACE", title: "Thesis workspace", newThesis: "New thesis", list: "Your theses",
-    empty: "No theses yet", emptyBody: "Start with a view you could be wrong about. Every save becomes part of its history.",
     loading: "Loading your theses…", unavailable: "Your thesis store did not answer", retry: "Try again",
     unavailableBody: "Nothing has been changed. This is not an empty workspace.", expired: "Your session expired",
     expiredBody: "Sign in again before reading or changing private theses.", invalidLink: "This thesis link is invalid",
@@ -108,7 +107,6 @@ const COPY = {
   },
   zh: {
     eyebrow: "研究工作区", title: "研究论点工作区", newThesis: "新建论点", list: "你的论点",
-    empty: "暂无论点", emptyBody: "从一个你可能判断错的观点开始。每次保存都会进入历史记录。",
     loading: "正在加载你的论点…", unavailable: "论点存储未响应", retry: "重试",
     unavailableBody: "没有任何更改。这并不代表工作区为空。", expired: "登录会话已过期",
     expiredBody: "请重新登录，再读取或修改你的私人论点。", invalidLink: "论点链接无效",
@@ -418,6 +416,13 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   const [mobilePane, setMobilePane] = useState<MobilePane>(initialThesisId || seededSymbol ? "detail" : "list");
   const [view, setView] = useState<RmsViewId>(RMS_DEFAULT_VIEW);
   const [subjectFilterKey, setSubjectFilterKey] = useState<string | null>(null);
+  // Stored alongside subjectFilterKey at the moment of selection (never re-derived by
+  // looking the key back up in the current row set) — round-2 review MAJOR: deriving
+  // it via `allThesesViewRows.find(...)` returned `null` on a miss (the filtered
+  // subject's last thesis edited/removed after the filter was applied), which fell
+  // back to the forbidden "Everything you have written." sentence and a bare
+  // " · Show everything" chip while the filter was still active.
+  const [subjectFilterLabel, setSubjectFilterLabel] = useState<string | null>(null);
   const [hydratedDetails, setHydratedDetails] = useState<Map<string, ThesisDetail>>(new Map());
   const [hydrating, setHydrating] = useState(false);
   const [hydrationUnavailable, setHydrationUnavailable] = useState(false);
@@ -429,9 +434,19 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   const restoringPop = useRef(false);
   /** M4 (round-2 review): hydration is one automatic batch, ever, per mount — never a
    *  chain. Without this, a batch that comes back all-`missing` (hydratedDetails stays
-   *  empty) kept re-firing the effect because `missingIds` grew and was in its deps. */
+   *  empty) kept re-firing the effect because `missingIds` grew and was in its deps.
+   *  Reset per-owner (round-2 review minor): otherwise switching `ownerKey` within one
+   *  mount permanently skips the automatic batch for the new owner. */
   const autoHydrationAttempted = useRef(false);
+  useEffect(() => {
+    autoHydrationAttempted.current = false;
+  }, [ownerKey]);
   const pending = pendingQueue[0] ?? null;
+  // Computed early (round-2 review minor) so the lens rail's keyboard handler below can
+  // read it: a locked carrier already disables every tab button, but the keydown
+  // listener lives on the enclosing <ul> and previously kept switching lenses via
+  // keyboard even while every tab was `disabled`.
+  const carrierLocked = !pendingHydrated || carrierBlocked || pendingQueue.length > 0;
   const isDirty = useMemo(
     () => subjectDraft !== baseline.subject || !draftEquals(draft, baseline.draft),
     [baseline, draft, subjectDraft],
@@ -508,6 +523,7 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   const selectView = useCallback((id: RmsViewId) => {
     setView(id);
     setSubjectFilterKey(null);
+    setSubjectFilterLabel(null);
     try {
       window.localStorage.setItem(`mm.thesis.lens.v1:${ownerKey}`, id);
     } catch {
@@ -517,6 +533,9 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
 
   const filterBySubject = useCallback((row: CoverageRow) => {
     setSubjectFilterKey(row.key);
+    // Captured at the moment of selection — never re-derived by looking `row.key` back
+    // up in a later row snapshot (round-2 review MAJOR; see the state declaration above).
+    setSubjectFilterLabel(row.display);
     setView("theses");
     try {
       window.localStorage.setItem(`mm.thesis.lens.v1:${ownerKey}`, "theses");
@@ -526,6 +545,10 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   }, [ownerKey]);
 
   const onLensKeyDown = useCallback((event: React.KeyboardEvent<HTMLUListElement>) => {
+    // Round-2 review minor: every tab is `disabled={carrierLocked}`, but the keydown
+    // listener lives on the enclosing <ul>, not the (disabled) buttons — without this
+    // guard, arrow/Home/End keys could still switch lenses while the carrier is locked.
+    if (carrierLocked) return;
     const idx = RMS_VIEWS.findIndex((v) => v.id === view);
     if (idx < 0) return;
     const isNarrow = typeof window !== "undefined" && window.matchMedia("(max-width: 600px)").matches;
@@ -539,7 +562,7 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
     const nextId = RMS_VIEWS[nextIdx].id;
     selectView(nextId);
     requestAnimationFrame(() => lensRefs.current[nextId]?.focus());
-  }, [selectView, view]);
+  }, [carrierLocked, selectView, view]);
 
   const hydrateBatch = useCallback(async (ids: string[]) => {
     if (ids.length === 0) return;
@@ -614,14 +637,19 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
     () => (subjectFilterKey ? allThesesViewRows.filter((r) => r.subjectGroupKey === subjectFilterKey) : allThesesViewRows),
     [allThesesViewRows, subjectFilterKey],
   );
-  // M3 (round-2 review): the subject a Coverage row filtered to, for the chip + the
-  // lens-head sentence. Read from the unfiltered rows so it resolves even if the
-  // filtered set is empty.
-  const filteredSubjectDisplay = useMemo(
-    () => (subjectFilterKey ? allThesesViewRows.find((r) => r.subjectGroupKey === subjectFilterKey)?.subjectDisplay ?? null : null),
-    [allThesesViewRows, subjectFilterKey],
-  );
-  const clearSubjectFilter = useCallback(() => setSubjectFilterKey(null), []);
+  // M3 (round-2 review, MAJOR fix): the subject a Coverage row filtered to, for the
+  // chip + the lens-head sentence + the filtered-empty message. This used to be
+  // re-derived by looking `subjectFilterKey` back up in `allThesesViewRows` — which
+  // returned `null` (falling back to the forbidden "Everything you have written."
+  // sentence and a bare " · Show everything" chip) the moment the filtered subject's
+  // last thesis was edited to a different subject or removed from the loaded list
+  // while the filter stayed active. `subjectFilterLabel` is captured once, at the
+  // moment of selection, and never re-looked-up.
+  const filteredSubjectDisplay = subjectFilterKey ? subjectFilterLabel : null;
+  const clearSubjectFilter = useCallback(() => {
+    setSubjectFilterKey(null);
+    setSubjectFilterLabel(null);
+  }, []);
   const reviewViewRows = useMemo(() => reviewRows(theses, new Date(), conditions), [theses, conditions]);
   const catalystViewRows = useMemo(() => catalystRows(detailListRows), [detailListRows]);
   const riskViewRows = useMemo(() => riskRows(detailListRows), [detailListRows]);
@@ -649,7 +677,14 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   const scopeSentence = scope.complete
     ? rms.scopeComplete.replace("{total}", String(scope.total))
     : rms.scope.replace("{loaded}", String(scope.loaded)).replace("{total}", String(scope.total));
-  const detailCondition = detail ? (readConditionStates([detail.id]).get(detail.id) ?? { source: "unavailable" as const }) : { source: "unavailable" as const };
+  // Round-2 review minor: memoized (was recomputed on every render via an inline call),
+  // and `null` rather than a fabricated `{source:"unavailable"}` when there is no
+  // `detail` yet — an unsaved NEW thesis is not an object whose condition can be
+  // "not connected"; it does not exist. The render site below gates on `detail`.
+  const detailCondition = useMemo(
+    () => (detail ? (readConditionStates([detail.id]).get(detail.id) ?? { source: "unavailable" as const }) : null),
+    [detail],
+  );
 
   useEffect(() => {
     if (!isDirty && !pending) return;
@@ -1068,7 +1103,6 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
   const lifecycle = detail?.lifecycleState ?? "active";
   const editable = !detail || lifecycle === "active";
   const ambiguous = pendingQueue.length > 0 && !saving;
-  const carrierLocked = !pendingHydrated || carrierBlocked || pendingQueue.length > 0;
   const history = useMemo(() => detail?.history ?? [], [detail?.history]);
   const inspected = useMemo<ThesisVersion | null>(
     () => history.find((entry) => entry.version === inspectedVersion) ?? null,
@@ -1151,6 +1185,13 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
               {listState === "ready" && activeViewDef.requiresContent && hydrationUnavailable && (
                 <div className={styles.railState} role="status" data-testid="rms-hydration-unavailable">
                   <strong>{copy.unavailable}</strong><p>{rms.unavailableLens}</p>
+                  {/* Round-2 review MAJOR: a faulted or malformed hydration batch used to
+                      leave this the terminal state — the automatic effect only ever fires
+                      once per mount (M4) and "Show 10 more" below is deliberately hidden
+                      while this panel is showing, so there was no way back in. Retrying
+                      is the same explicit user action as "Show 10 more" (ruling item 6:
+                      further batches only ever via an explicit action, never automatic). */}
+                  <button type="button" onClick={hydrateMore} disabled={hydrating}>{copy.retry}</button>
                 </div>
               )}
               {listState === "ready" && view === "coverage" && (
@@ -1171,7 +1212,15 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
                   // asserts `getByTestId("thesis-empty")` for that exact first-run empty
                   // state (a sibling repair on this branch caught this PR's rail rewrite
                   // silently dropping it) — every other lens still reads "rms-empty".
-                  ? <div className={styles.emptyLens} data-testid={view === "theses" ? "thesis-empty" : "rms-empty"}><p>{rms.empty[view]}</p></div>
+                  // Round-2 review MAJOR: a subject filter that resolves to zero rows is
+                  // NOT the first-run empty state — the workspace is not empty, only the
+                  // filtered slice is — so it never reuses `rms.empty.theses` ("No theses
+                  // yet.", false while theses exist) and never claims `thesis-empty`.
+                  ? (view === "theses" && subjectFilterKey
+                    ? <div className={styles.emptyLens} data-testid="rms-filtered-empty">
+                      <p>{rms.filteredEmpty.replace("{subject}", filteredSubjectDisplay ?? "")}</p>
+                    </div>
+                    : <div className={styles.emptyLens} data-testid={view === "theses" ? "thesis-empty" : "rms-empty"}><p>{rms.empty[view]}</p></div>)
                   : <div className={styles.thesisList}>
                     {(view === "ideas" ? ideaViewRows : view === "reviews" ? reviewViewRows : thesesViewRows).map((row) => (
                       <button key={row.id} type="button" disabled={carrierLocked} className={selectedId === row.id ? styles.selected : ""} onClick={() => beginDetailLoad(row.id)}>
@@ -1213,11 +1262,13 @@ export default function ThesisWorkspace({ ownerKey, initialSymbol, initialThesis
                       <div><small>{detail ? statusLabel(lifecycle, copy) : copy.newThesis}</small><h1>{detail ? (detail.subject.identityState === "listing_scoped" ? `${detail.subject.key} · ${copy.listingScoped}` : detail.subject.display) : (subjectDraft || copy.newThesis)}</h1><p>{detail?.subject.identityState === "listing_scoped" || !detail ? copy.listingScoped : detail.subject.owner}</p></div>
                       {detail && <span className={styles.versionBadge}>{copy.version} {detail.currentVersion} · {copy.current}</span>}
                     </div>
-                    <p className={styles.conditionLine} data-testid="thesis-condition"
-                      data-source={detailCondition.source}
-                      data-state={detailCondition.source === "monitor" ? detailCondition.state : undefined}>
-                      {conditionLine(detailCondition, lang)}
-                    </p>
+                    {detail && detailCondition && (
+                      <p className={styles.conditionLine} data-testid="thesis-condition"
+                        data-source={detailCondition.source}
+                        data-state={detailCondition.source === "monitor" ? detailCondition.state : undefined}>
+                        {conditionLine(detailCondition, lang)}
+                      </p>
+                    )}
                     {conflict && <div className={styles.conflict} role="alert" data-testid="thesis-conflict"><div><strong>{copy.conflict}</strong><p>{copy.conflictBody} {copy.current}: {copy.version} {conflict.currentVersion} · {statusLabel(conflict.lifecycleState, copy)}</p></div><div><button onClick={reloadAfterConflict}>{copy.reload}</button><button onClick={() => void copyDraft()}>{copy.copyDraft}</button></div></div>}
                     {message && <p className={styles.message} role="status">{message}</p>}
                     {isDirty && !pending && <div className={styles.dirtyDraft} role="status" data-testid="thesis-dirty-draft"><div><strong>{copy.unsaved}</strong><p>{copy.unsavedBody}</p></div><button type="button" onClick={() => void copyDraft()}>{copy.copyDraft}</button></div>}
