@@ -1380,3 +1380,63 @@ def test_apply_receipt_carries_readback_excluded_matching_the_dry_run_list(tmp_p
     receipt = json.loads(receipt_path.read_text())
     assert "readback_excluded" in receipt
     assert receipt["readback_excluded"] == expected_dropped
+
+
+# --- Regression tests: review findings on PR #516, round-3 review --------
+
+def test_idempotency_findings_flags_a_down_block_where_drop_only_opens_a_sentence():
+    # Round-3 review MAJOR-1, RED-FIRST against the pre-fix parser: rule (c)
+    # matched any line whose first token is a SQL keyword, and "Drop these
+    # by hand, there is no automated undo." starts with the word "Drop" --
+    # so the down-block guard reported OK for a down block that is prose
+    # only, exactly the shape the guard's own comment says it must catch.
+    # Postgres' DROP grammar always requires an object-type keyword
+    # (FUNCTION/TABLE/POLICY/...) directly after DROP; this sentence has
+    # none, so it must be treated as prose like any other non-keyword line.
+    text = """
+create table if not exists public.t (id bigint generated always as identity primary key);
+
+-- down:
+-- Drop these by hand, there is no automated undo.
+
+-- readback:
+-- select 1;
+"""
+    findings = idempotency_findings(text, split_statements(text))
+    assert any("down:" in f and "prose" in f for f in findings), findings
+
+
+def test_idempotency_findings_still_accepts_the_0012_down_block_from_disk():
+    # Companion to the test above: 0012_thesis_objects.sql's real down block
+    # opens with prose that ALSO happens to start with the word "drop" --
+    # "drop public.apply_thesis_version_v1(...) and ... Run manually; not
+    # part of any automated rollback." -- immediately followed by a real
+    # `begin; drop function ...; ...; commit;` undo block in the next
+    # paragraph. The object-type-keyword check must reject the former
+    # while still keeping the latter, so this real migration's own down
+    # block is never falsely flagged not-idempotent by the MAJOR-1 fix
+    # above.
+    text = Path("supabase/migrations/0012_thesis_objects.sql").read_text()
+    stmts = split_statements(text)
+    findings = idempotency_findings(text, stmts)
+    assert not any("down:" in f and "prose" in f for f in findings), findings
+
+
+def test_readback_excluded_names_a_header_sharing_its_paragraph_with_a_statement():
+    # Round-3 review MINOR-1, RED-FIRST against the pre-fix parser: each of
+    # the four header shapes the review measured -- header-adjacent (no
+    # ';', no blank line) to a real statement -- parsed to the right SQL
+    # ('select 1 from pg_class') but the excluded list came back EMPTY, so
+    # --apply's readback_excluded receipt field (and --dry-run's "note:
+    # excluded" line) had nothing to show for the header that was actually
+    # dropped.
+    for header in (
+        "Set of checks to run after apply:",
+        "Copy each query into psql:",
+        "Show these to the operator:",
+        "Call the DBA before running:",
+    ):
+        text = f"-- readback:\n-- {header}\n-- select 1 from pg_class\n"
+        stmts, dropped = readback_statements_detailed(text)
+        assert stmts == ["select 1 from pg_class"], (header, stmts)
+        assert dropped == [header], (header, dropped)

@@ -299,11 +299,58 @@ _STATEMENT_KEYWORD_RE = re.compile(
     r")\b"
 )
 
+# Postgres' DROP grammar always requires an object-type keyword directly
+# after DROP (DROP FUNCTION ..., DROP TABLE ..., DROP POLICY ... ON ...) --
+# `DROP <qualified.name>` with no object type is not valid SQL at all. That
+# makes the following token after DROP a free, syntax-grounded check for
+# whether a DROP-leading line is really SQL or an English sentence that
+# happens to start with the word "Drop" (round-3 review MAJOR-1).
+_DROP_OBJECT_KEYWORDS = frozenset({
+    "function", "table", "index", "policy", "trigger", "view", "materialized",
+    "type", "schema", "sequence", "extension", "role", "database", "owned",
+    "aggregate", "cast", "collation", "conversion", "domain", "language",
+    "operator", "publication", "rule", "statistics", "subscription",
+    "tablespace", "user", "group", "foreign", "text", "event",
+})
 
-def _process_paragraph(para: str) -> Optional[str]:
+
+def _is_sql_statement_start(line: str) -> bool:
+    """True when `line` plausibly opens a real SQL statement, not English
+    prose whose first word happens to match the keyword list.
+
+    Meta-CEO B ruling r3 round-2 review MAJOR-1 (this round): rule (c) as
+    first implemented matched ANY line whose first token was a SQL
+    keyword, including "Drop these by hand, there is no automated undo."
+    and this repo's own 0012_thesis_objects.sql down-block prose ("drop
+    public.apply_thesis_version_v1(...) and ... Run manually") -- neither
+    is valid SQL, because Postgres requires the object-type keyword
+    (FUNCTION/TABLE/POLICY/INDEX/...) right after DROP, which English
+    narration of a drop does not supply. Every real DROP statement in this
+    repo's migrations (0001, 0002, 0006, 0012, 0013) carries that
+    object-type keyword, so requiring it here closes the false-green
+    without touching any keyword other than DROP -- the one this round's
+    review measured as broken. Every other keyword keeps its prior
+    bare-first-word behavior (that remains a known residual gap for
+    keywords like COPY/SET that can also open an English sentence --
+    round-3 review MINOR-2, not required by this ruling).
+    """
+    m = _STATEMENT_KEYWORD_RE.match(line)
+    if not m:
+        return False
+    if m.group(1).lower() != "drop":
+        return True
+    rest = line[m.end():].lstrip()
+    next_token = re.match(r"[A-Za-z]+", rest)
+    return bool(next_token) and next_token.group(0).lower() in _DROP_OBJECT_KEYWORDS
+
+
+def _process_paragraph(para: str) -> tuple[Optional[str], list[str]]:
     """Decide whether one blank-line-delimited paragraph of a `-- readback:`/
     `-- down:` block is SQL, prose, or a mix of both -- and if it is a mix,
-    return only the SQL part.
+    return only the SQL part, plus the raw heading lines rule (b) dropped
+    along the way (round-3 review MINOR-1: the excluded header text from a
+    mixed paragraph must be recoverable so it can land in the receipt's
+    `readback_excluded`, not vanish silently).
 
     Meta-CEO B ruling r3 (review-#516 round-2 BLOCKER + MAJOR): prose vs SQL
     is NOT decided by a paragraph's first word alone. Rules, in order,
@@ -340,12 +387,17 @@ def _process_paragraph(para: str) -> Optional[str]:
     pre-r3 order) is what let a header and a real statement end up sharing
     ONE all-or-nothing chunk in the first place.
 
-    Returns the paragraph's SQL text (verbatim, ';' still unsplit), or
-    ``None`` when the whole paragraph is prose.
+    Returns ``(sql_text, excluded_headings)``: ``sql_text`` is the
+    paragraph's SQL text (verbatim, ';' still unsplit), or ``None`` when the
+    whole paragraph is prose; ``excluded_headings`` is the raw heading
+    line(s) rule (b) dropped from an otherwise-kept paragraph (empty when
+    ``sql_text`` is ``None`` -- the caller records the whole raw paragraph
+    in that case, so a separate heading list would only duplicate it).
     """
     lines = para.split("\n")
     i = 0
     n = len(lines)
+    excluded: list[str] = []
     while i < n:
         line = lines[i]
         stripped = line.strip()
@@ -353,14 +405,16 @@ def _process_paragraph(para: str) -> Optional[str]:
             i += 1
             continue
         if stripped.endswith(":"):
+            excluded.append(line.strip())
             i += 1
-            while i < n and not _STATEMENT_KEYWORD_RE.match(lines[i]):
+            while i < n and not _is_sql_statement_start(lines[i]):
+                excluded.append(lines[i].strip())
                 i += 1
             continue
-        if _STATEMENT_KEYWORD_RE.match(line):
-            return "\n".join(lines[i:])
-        return None
-    return None
+        if _is_sql_statement_start(line):
+            return "\n".join(lines[i:]), excluded
+        return None, []
+    return None, []
 
 
 def _block_statements(block: str) -> tuple[list[str], list[str]]:
@@ -375,9 +429,13 @@ def _block_statements(block: str) -> tuple[list[str], list[str]]:
     drags that statement down with it (Meta-CEO B ruling r3).
 
     Returns (kept, dropped): `kept` is every parsed statement; `dropped` is
-    the raw (pre-strip) text of every paragraph that was ALL prose, so
-    callers can report what was excluded instead of silently reducing the
-    statement count (round-2 review MINOR 1).
+    the raw (pre-strip) text of every paragraph that was ALL prose (round-2
+    review MINOR 1), PLUS the raw heading line(s) excluded from an
+    otherwise-kept mixed paragraph (round-3 review MINOR-1: a header
+    sharing its paragraph with a real statement must still be recorded as
+    excluded, not just silently removed from the SQL side) -- so callers
+    can report everything that was excluded instead of silently reducing
+    the statement count.
     """
     paragraphs = re.split(r"\n[ \t]*\n", block)
     kept_texts: list[str] = []
@@ -385,11 +443,13 @@ def _block_statements(block: str) -> tuple[list[str], list[str]]:
     for para in paragraphs:
         if not para.strip():
             continue
-        cleaned = _process_paragraph(para)
+        cleaned, excluded = _process_paragraph(para)
         if cleaned is None:
             dropped.append(para.strip())
         else:
             kept_texts.append(cleaned)
+            if excluded:
+                dropped.append("\n".join(excluded))
     combined = "\n\n".join(kept_texts).strip()
     kept = split_statements(strip_sql_comments(combined)) if combined else []
     return kept, dropped
